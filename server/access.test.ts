@@ -1,0 +1,43 @@
+import { describe, expect, it } from "vitest";
+import { appRouter } from "./routers";
+import type { TrpcContext } from "./_core/context";
+
+function contextFor(role: "user" | "admin" | "seller" | "finance" | "service"): TrpcContext {
+  return {
+    user: { id: 99, openId: `test-${role}`, email: `${role}@example.com`, name: role, loginMethod: "test", role, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() },
+    req: { protocol: "https", headers: {} } as TrpcContext["req"],
+    res: { clearCookie: () => undefined } as TrpcContext["res"],
+  };
+}
+
+describe("perfis internos", () => {
+  it("bloqueia usuário sem perfil operacional no CRM, agenda e contratos", async () => {
+    const caller = appRouter.createCaller(contextFor("user"));
+    await expect(caller.customers.list()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.operations.tasks()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.contracts.list()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("bloqueia vendedor no financeiro e na operação de reservas", async () => {
+    const caller = appRouter.createCaller(contextFor("seller"));
+    await expect(caller.finance.entries()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.operations.reservations()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("bloqueia atendimento do funil comercial", async () => {
+    const caller = appRouter.createCaller(contextFor("service"));
+    await expect(caller.sales.pipeline()).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("permite os caminhos operacionais compatíveis para cada perfil", async () => {
+    const service = appRouter.createCaller(contextFor("service"));
+    const seller = appRouter.createCaller(contextFor("seller"));
+    const finance = appRouter.createCaller(contextFor("finance"));
+    await expect(service.customers.list()).resolves.toBeInstanceOf(Array);
+    await expect(service.operations.reservations()).resolves.toBeInstanceOf(Array);
+    await expect(seller.sales.pipeline()).resolves.toBeInstanceOf(Array);
+    await expect(finance.contracts.list()).resolves.toBeInstanceOf(Array);
+    await expect(finance.finance.entries()).resolves.toBeInstanceOf(Array);
+    await expect(finance.dashboard.summary()).resolves.toMatchObject({ activeContracts: expect.any(Number) });
+  });
+});

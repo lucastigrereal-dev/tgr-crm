@@ -1,33 +1,13 @@
-import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import { Streamdown } from 'streamdown';
+import { MetricCard, PageHeader, StatusPill, money, dateLabel } from "@/components/crm/ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { trpc } from "@/lib/trpc";
+import { BadgeDollarSign, CalendarCheck2, FileCheck2, TriangleAlert, UsersRound } from "lucide-react";
 
-/**
- * All content in this page are only for example, replace with your own feature implementation
- * When building pages, remember your instructions in Frontend Workflow, Frontend Best Practices, Design Guide and Common Pitfalls
- */
 export default function Home() {
-  // The useAuth hook provides authentication state.
-  // To implement login/logout, call logout(), or start login from an event
-  // handler: onClick={() => startLogin()} (imported from "@/const"). Never call
-  // startLogin() during render (no href={startLogin()}) — it mints a one-time
-  // nonce cookie and must run only at the moment of navigation.
-  let { user, loading, error, isAuthenticated, logout } = useAuth();
-
-  // If theme is switchable in App.tsx, we can implement theme toggling like this:
-  // const { theme, toggleTheme } = useTheme();
-
-  return (
-    <div className="min-h-screen flex flex-col">
-      <main>
-        {/* Example: lucide-react for icons */}
-        <Loader2 className="animate-spin" />
-        Example Page
-        {/* Example: Streamdown for markdown rendering */}
-        <Streamdown>Any **markdown** content</Streamdown>
-        <Button variant="default">Example Button</Button>
-      </main>
-    </div>
-  );
+  const customers = trpc.customers.list.useQuery();
+  const contracts = trpc.contracts.list.useQuery();
+  const pipeline = trpc.sales.pipeline.useQuery();
+  const summary = trpc.dashboard.summary.useQuery();
+  const loading = customers.isLoading || contracts.isLoading || pipeline.isLoading || summary.isLoading;
+  return <div className="space-y-8"><PageHeader eyebrow="Operação em foco" title="Bom dia. Vamos colocar a casa em ordem." description="Acompanhe o pulso comercial, contratual e financeiro da operação sem abrir doze planilhas e perder a vontade de viver." /><section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><MetricCard label="Contratos ativos" value={loading ? "—" : summary.data?.activeContracts ?? 0} detail="Base contratual vigente" icon={FileCheck2} tone="dark" /><MetricCard label="Inadimplência" value={loading ? "—" : money(summary.data?.overdueAmount)} detail="Parcelas que exigem ação" icon={TriangleAlert} tone="gold" /><MetricCard label="Ocupação do mês" value={loading ? "—" : `${summary.data?.occupancy ?? 0}%`} detail="Uso das unidades ativas" icon={CalendarCheck2} tone="sage" /><MetricCard label="Tarefas pendentes" value={loading ? "—" : summary.data?.pendingTasks ?? 0} detail="Follow-ups e rotinas abertas" icon={UsersRound} tone="cream" /></section><section className="grid gap-5 xl:grid-cols-[1.55fr_1fr]"><Card className="rounded-[1.5rem] border-[#e8e3d9] shadow-sm"><CardHeader className="flex flex-row items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Contratos recentes</p><CardTitle className="mt-1 font-serif text-2xl text-[#1d2b2a]">Pasta contratual</CardTitle></div><CalendarCheck2 className="h-5 w-5 text-[#b18f4b]" /></CardHeader><CardContent className="space-y-3">{contracts.data?.slice(0, 5).map(({ contract, customerName }) => <div key={contract.id} className="flex items-center justify-between gap-3 rounded-xl bg-[#faf8f3] px-4 py-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-[#1d2b2a]">{contract.number} <span className="font-normal text-muted-foreground">· {customerName}</span></p><p className="mt-1 text-xs text-muted-foreground">Criado {dateLabel(contract.createdAt)} · {money(contract.totalAmount)}</p></div><StatusPill value={contract.status} /></div>)}{!contracts.data?.length && !loading ? <p className="rounded-xl bg-[#faf8f3] p-5 text-sm text-muted-foreground">Ainda não há contratos. Comece pela área de formalização.</p> : null}</CardContent></Card><Card className="rounded-[1.5rem] border-[#e8e3d9] bg-[#1d2b2a] text-white shadow-sm"><CardHeader><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#d6b774]">Radar comercial</p><CardTitle className="mt-1 font-serif text-2xl text-white">Oportunidades em curso</CardTitle></CardHeader><CardContent className="space-y-3">{pipeline.data?.filter(item => !["won", "lost"].includes(item.opportunity.stage)).slice(0, 5).map(({ opportunity, customerName }) => <div key={opportunity.id} className="rounded-xl border border-white/10 bg-white/5 p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold">{opportunity.title}</p><p className="mt-1 text-xs text-white/55">{customerName} · {money(opportunity.expectedAmount)}</p></div><span className="text-xs font-bold text-[#d6b774]">{opportunity.probability}%</span></div></div>)}{!pipeline.data?.filter(item => !["won", "lost"].includes(item.opportunity.stage)).length && !loading ? <p className="rounded-xl border border-white/10 bg-white/5 p-5 text-sm text-white/60">Nenhuma oportunidade em andamento. Bora alimentar esse funil.</p> : null}</CardContent></Card></section></div>;
 }

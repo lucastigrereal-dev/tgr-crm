@@ -21,15 +21,21 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
+import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Users, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+  { icon: LayoutDashboard, label: "Visão geral", path: "/" },
+  { icon: UsersRound, label: "Clientes", path: "/clientes" },
+  { icon: ChartNoAxesCombined, label: "Comercial", path: "/vendas" },
+  { icon: FileSignature, label: "Contratos", path: "/contratos" },
+  { icon: CalendarDays, label: "Reservas", path: "/reservas" },
+  { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" },
+  { icon: CalendarDays, label: "Agenda", path: "/agenda" },
+  { icon: ShieldCheck, label: "Equipe", path: "/equipe" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -58,23 +64,24 @@ export default function DashboardLayout({
 
   if (!user) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
+      <div className="flex min-h-screen items-center justify-center bg-[#f2efe8] p-5">
+        <div className="relative flex w-full max-w-4xl overflow-hidden rounded-[2rem] bg-[#1d2b2a] shadow-2xl">
+          <div className="hidden w-1/2 bg-cover bg-center lg:block" style={{ backgroundImage: "linear-gradient(120deg, rgba(25,40,38,.42), rgba(25,40,38,.75)), url('/manus-storage/tse-lobby-unsplash_1650f5f7.jpg')" }} />
+          <div className="flex min-h-[520px] w-full flex-col items-center justify-center gap-8 p-10 lg:w-1/2">
           <div className="flex flex-col items-center gap-6">
-            <h1 className="text-2xl font-semibold tracking-tight text-center">
-              Sign in to continue
-            </h1>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access to this dashboard requires authentication. Continue to launch the login flow.
-            </p>
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#c7a35a] font-serif text-2xl text-[#1d2b2a]">T</div>
+            <p className="text-[10px] font-bold uppercase tracking-[.24em] text-[#d7bf82]">TimeShare Exclusive</p>
+            <h1 className="font-serif text-4xl tracking-tight text-center text-white">Sua operação em ordem.</h1>
+            <p className="max-w-sm text-center text-sm leading-6 text-white/65">Entre para cuidar de relacionamento, contratos, reservas e financeiro em um só lugar.</p>
           </div>
           <Button
             onClick={() => startLogin()}
             size="lg"
-            className="w-full shadow-lg hover:shadow-xl transition-all"
+            className="w-full bg-[#c7a35a] text-[#1d2b2a] shadow-lg hover:bg-[#d6b774]"
           >
-            Sign in
+            Acessar o CRM
           </Button>
+        </div>
         </div>
       </div>
     );
@@ -154,30 +161,28 @@ function DashboardLayoutContent({
       <div className="relative" ref={sidebarRef}>
         <Sidebar
           collapsible="icon"
-          className="border-r-0"
+          className="border-r border-[#33514b] bg-[#1d2b2a] text-[#edf2eb]"
           disableTransition={isResizing}
         >
-          <SidebarHeader className="h-16 justify-center">
+          <SidebarHeader className="h-20 justify-center">
             <div className="flex items-center gap-3 px-2 transition-all w-full">
               <button
                 onClick={toggleSidebar}
-                className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
+                className="h-8 w-8 flex items-center justify-center rounded-lg transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7a35a] shrink-0"
                 aria-label="Toggle navigation"
               >
                 <PanelLeft className="h-4 w-4 text-muted-foreground" />
               </button>
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold tracking-tight truncate">
-                    Navigation
-                  </span>
+                  <div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#d7bf82]/50 bg-[#29433d] font-serif text-xs font-bold tracking-[.08em] text-[#e8d092]">T</span><div><span className="font-serif text-lg tracking-tight truncate">TSE <b className="text-[#d7bf82]">Exclusive</b></span><p className="mt-0.5 text-[9px] font-bold uppercase tracking-[.16em] text-white/45">Operação & relacionamento</p></div></div>
                 </div>
               ) : null}
             </div>
           </SidebarHeader>
 
           <SidebarContent className="gap-0">
-            <SidebarMenu className="px-2 py-1">
+            <SidebarMenu className="px-3 py-2">
               {menuItems.map(item => {
                 const isActive = location === item.path;
                 return (
@@ -186,10 +191,10 @@ function DashboardLayoutContent({
                       isActive={isActive}
                       onClick={() => setLocation(item.path)}
                       tooltip={item.label}
-                      className={`h-10 transition-all font-normal`}
+                      className={`h-10 rounded-xl text-white/70 transition-all hover:bg-white/10 hover:text-white data-[active=true]:bg-[#c7a35a] data-[active=true]:text-[#1d2b2a] data-[active=true]:font-semibold`}
                     >
                       <item.icon
-                        className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
+                        className={`h-4 w-4 ${isActive ? "text-[#1d2b2a]" : ""}`}
                       />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
@@ -202,17 +207,17 @@ function DashboardLayoutContent({
           <SidebarFooter className="p-3">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <Avatar className="h-9 w-9 border shrink-0">
-                    <AvatarFallback className="text-xs font-medium">
+                <button className="flex w-full items-center gap-3 rounded-xl px-1 py-1 text-left transition-colors hover:bg-white/10 group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7a35a]">
+                  <Avatar className="h-9 w-9 border-0 bg-[#36534d] shrink-0">
+                    <AvatarFallback className="bg-[#36534d] text-xs font-medium text-white">
                       {user?.name?.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                    <p className="text-sm font-medium truncate leading-none">
+                    <p className="text-sm font-medium truncate leading-none text-white">
                       {user?.name || "-"}
                     </p>
-                    <p className="text-xs text-muted-foreground truncate mt-1.5">
+                    <p className="mt-1.5 truncate text-xs text-white/45">
                       {user?.email || "-"}
                     </p>
                   </div>
@@ -242,7 +247,7 @@ function DashboardLayoutContent({
 
       <SidebarInset>
         {isMobile && (
-          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
+          <div className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur">
             <div className="flex items-center gap-2">
               <SidebarTrigger className="h-9 w-9 rounded-lg bg-background" />
               <div className="flex items-center gap-3">
@@ -255,7 +260,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main className="flex-1 p-4">{children}</main>
+        <main className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{children}</main>
       </SidebarInset>
     </>
   );

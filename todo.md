@@ -1,0 +1,24 @@
+# Project TODO
+
+- [x] Inventariar o repositório existente e preservar componentes, dados e convenções úteis.
+- [x] Pesquisar referências funcionais públicas de operações de timeshare e cooperativas.
+- [x] Definir modelo de dados proprietário, sem suporte multiempresa.
+- [x] Implementar cadastro completo de clientes/associados, documentos, contatos e histórico de interações.
+- [x] Implementar gestão de contratos de timeshare, parcelas, status e anexos documentais.
+- [x] Implementar funil comercial, oportunidades, propostas, metas e desempenho por vendedor.
+- [x] Implementar calendário de disponibilidade, reservas, check-in, check-out e histórico por cliente.
+- [x] Implementar lançamentos financeiros, repasses, inadimplência, registro de cobrança e visão de receitas/despesas.
+- [x] Implementar dashboard com KPIs operacionais, comerciais, financeiros e tarefas pendentes.
+- [x] Implementar agenda, tarefas, lembretes de parcelas e follow-ups.
+- [x] Implementar perfis internos de acesso para administração, vendas, financeiro e atendimento.
+- [x] Aplicar identidade visual elegante, refinada, responsiva e acessível em toda a interface.
+- [x] Cobrir regras críticas com testes automatizados e validar os fluxos principais.
+- [x] Documentar decisões, limites de referência e próximos passos de evolução.
+- [x] Concluir os fluxos ponta a ponta de cliente, comercial, contrato, financeiro, reserva e tarefa sem depender de configuração futura.
+- [x] Validar que a reimplementação proprietária usa apenas referências funcionais do TSE e não incorpora binários, dados ou código de terceiros.
+- [x] Entregar o sistema rodando e a base pronta para a posterior padronização com as regras reais da operação.
+- [x] Adicionar edição completa da ficha de associado, incluindo dados pessoais, endereço e contatos.
+- [x] Integrar contratos e parcelas à agenda para gerar lembretes automáticos de vencimento e follow-up.
+- [x] Completar a gestão de usuários e reforçar permissões consistentes por módulo para administração, vendas, financeiro e atendimento.
+- [x] Adicionar testes automatizados dos fluxos críticos de cliente, contrato, reserva, financeiro e tarefa.
+- [x] Validar os fluxos ponta a ponta restantes com caminhos de sucesso e erro documentados.

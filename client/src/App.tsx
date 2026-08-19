@@ -1,42 +1,40 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
+import DashboardLayout from "./components/DashboardLayout";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import Contracts from "./pages/Contracts";
+import ContractDetail from "./pages/ContractDetail";
+import Agenda from "./pages/Agenda";
+import CustomerDetail from "./pages/CustomerDetail";
+import Customers from "./pages/Customers";
+import Finance from "./pages/Finance";
 import Home from "./pages/Home";
+import NotFound from "./pages/NotFound";
+import Sales from "./pages/Sales";
+import Team from "./pages/Team";
+import Reservations from "./pages/Reservations";
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
-  return (
-    <Switch>
-      <Route path={"/"} component={Home} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
-      <Route component={NotFound} />
-    </Switch>
-  );
+  return <DashboardLayout><Switch>
+    <Route path="/" component={Home} />
+    <Route path="/clientes" component={Customers} />
+    <Route path="/clientes/:id" component={CustomerDetail} />
+    <Route path="/vendas" component={Sales} />
+    <Route path="/contratos" component={Contracts} />
+    <Route path="/contratos/:id" component={ContractDetail} />
+    <Route path="/reservas" component={Reservations} />
+    <Route path="/financeiro" component={Finance} />
+    <Route path="/agenda" component={Agenda} />
+    <Route path="/equipe" component={Team} />
+    <Route path="/404" component={NotFound} />
+    <Route component={NotFound} />
+  </Switch></DashboardLayout>;
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
-  return (
-    <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="light"
-        // switchable
-      >
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
-      </ThemeProvider>
-    </ErrorBoundary>
-  );
+  return <ErrorBoundary><ThemeProvider defaultTheme="light"><TooltipProvider><Toaster /><Router /></TooltipProvider></ThemeProvider></ErrorBoundary>;
 }
 
 export default App;
