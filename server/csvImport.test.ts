@@ -38,4 +38,9 @@ describe("importação CSV", () => {
     expect(report).toContain("linha;campo;mensagem");
     expect(report).toContain("2;documento;Informe o documento do associado.");
   });
+
+  it("protege relatório de erros quando a mensagem contém ponto e vírgula", () => {
+    const report = buildImportErrorReport([{ line: 7, field: "email", message: "E-mail inválido; revise o campo." }]);
+    expect(report).toContain('7;email;"E-mail inválido; revise o campo."');
+  });
 });

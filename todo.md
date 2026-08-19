@@ -51,7 +51,7 @@
 - [x] Reforçar reversão de contratos importados contra documentos, reservas, tarefas, cobranças e lançamentos vinculados.
 - [ ] Adicionar testes automatizados de reversão efetiva e de geração dos exports filtrados.
 - [ ] Adicionar seletor visual de campanha na criação e edição de oportunidades.
-- [ ] Exibir progresso visual de cada vendedor em relação à meta na Central de Comissões.
+- [x] Exibir progresso visual de cada vendedor em relação à meta na Central de Comissões.
 - [ ] Criar testes ponta a ponta de reversão CSV e de exportação de propostas filtradas.
 - [x] Realizar benchmark documentado de CRM, ERP, timeshare, hotelaria, vendas, finanças e inteligência operacional.
 - [x] Consolidar 50 evoluções exponenciais priorizadas para o TSE Exclusivo.
