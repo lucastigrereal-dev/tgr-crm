@@ -15,6 +15,7 @@ import NotFound from "./pages/NotFound";
 import Sales from "./pages/Sales";
 import Team from "./pages/Team";
 import Reservations from "./pages/Reservations";
+import ImportCsv from "./pages/ImportCsv";
 
 function Router() {
   return <DashboardLayout><Switch>
@@ -28,6 +29,7 @@ function Router() {
     <Route path="/financeiro" component={Finance} />
     <Route path="/agenda" component={Agenda} />
     <Route path="/equipe" component={Team} />
+    <Route path="/importar" component={ImportCsv} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
   </Switch></DashboardLayout>;

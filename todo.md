@@ -22,3 +22,10 @@
 - [x] Completar a gestão de usuários e reforçar permissões consistentes por módulo para administração, vendas, financeiro e atendimento.
 - [x] Adicionar testes automatizados dos fluxos críticos de cliente, contrato, reserva, financeiro e tarefa.
 - [x] Validar os fluxos ponta a ponta restantes com caminhos de sucesso e erro documentados.
+- [x] Definir e documentar o layout CSV para associados e contratos, com regras de validação por linha.
+- [x] Implementar prévia, validação, importação transacional e relatório de erros para CSV de associados e contratos.
+- [x] Construir tela administrativa para importar arquivos CSV e baixar modelos de preenchimento.
+- [x] Adicionar gráfico de progresso das metas de vendas e gráfico do funil de propostas no painel principal.
+- [x] Cobrir importação e agregações dos gráficos com testes automatizados e validação visual.
+- [x] Restringir a importação CSV ao perfil administrativo no backend e na navegação.
+- [x] Adicionar testes de prévia CSV, bloqueio de importação inválida e estrutura de agregação comercial.

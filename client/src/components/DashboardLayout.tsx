@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Users, UsersRound } from "lucide-react";
+import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Upload, Users, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -36,6 +36,7 @@ const menuItems = [
   { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" },
   { icon: CalendarDays, label: "Agenda", path: "/agenda" },
   { icon: ShieldCheck, label: "Equipe", path: "/equipe" },
+  { icon: Upload, label: "Importar", path: "/importar" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -183,7 +184,7 @@ function DashboardLayoutContent({
 
           <SidebarContent className="gap-0">
             <SidebarMenu className="px-3 py-2">
-              {menuItems.map(item => {
+              {menuItems.filter(item => item.path !== "/importar" || user?.role === "admin").map(item => {
                 const isActive = location === item.path;
                 return (
                   <SidebarMenuItem key={item.path}>

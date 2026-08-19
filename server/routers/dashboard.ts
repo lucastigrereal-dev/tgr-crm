@@ -1,8 +1,9 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { contracts, financialTransactions, installments, opportunities, reservations, tasks, units } from "../../drizzle/schema";
+import { contracts, financialTransactions, installments, opportunities, reservations, salesGoals, tasks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
+import { buildCommercialCharts, funnelStages } from "../commercialMetrics";
 
 function monthBounds() {
   const now = new Date();
@@ -28,6 +29,16 @@ export const dashboardRouter = router({
     const overdueAmount = installmentRows.filter(item => item.status === "overdue" || (item.status === "open" && new Date(item.dueDate) < now)).reduce((sum, item) => sum + Number(item.amount), 0);
     const totalReservationDays = reservationRows.reduce((sum, item) => Math.max(0, sum + Math.ceil((new Date(item.checkOut).getTime() - new Date(item.checkIn).getTime()) / 86_400_000)), 0);
     const totalDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86_400_000) * Number(unitRows[0]?.total ?? 0));
-    return { activeContracts: Number(contractRows[0]?.total ?? 0), overdueAmount, occupancy: Math.min(100, Math.round((totalReservationDays / totalDays) * 100)), salesThisMonth: salesRows.reduce((sum, item) => sum + Number(item.expectedAmount), 0), pendingTasks: Number(taskRows[0]?.total ?? 0), openEntries: Number(entryRows[0]?.total ?? 0) };
+      return { activeContracts: Number(contractRows[0]?.total ?? 0), overdueAmount, occupancy: Math.min(100, Math.round((totalReservationDays / totalDays) * 100)), salesThisMonth: salesRows.reduce((sum, item) => sum + Number(item.expectedAmount), 0), pendingTasks: Number(taskRows[0]?.total ?? 0), openEntries: Number(entryRows[0]?.total ?? 0) };
+    }),
+  commercialCharts: internalProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [] };
+    const { start, end } = monthBounds();
+    const [opportunityRows, goalRows] = await Promise.all([
+      db.select().from(opportunities),
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)),
+    ]);
+    return buildCommercialCharts(opportunityRows, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end);
   }),
 });

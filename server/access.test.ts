@@ -29,6 +29,15 @@ describe("perfis internos", () => {
     await expect(caller.sales.pipeline()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("deixa a prévia CSV exclusivamente nas mãos da administração", async () => {
+    const admin = appRouter.createCaller(contextFor("admin"));
+    const seller = appRouter.createCaller(contextFor("seller"));
+    const csv = "nome_completo;documento\nAna da Silva;12345678900";
+    await expect(admin.imports.preview({ kind: "customers", csv })).resolves.toMatchObject({ valid: true, totalRows: 1 });
+    await expect(seller.imports.preview({ kind: "customers", csv })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(admin.imports.commit({ kind: "customers", csv: "nome_completo;documento\nA;" })).resolves.toMatchObject({ committed: false });
+  });
+
   it("permite os caminhos operacionais compatíveis para cada perfil", async () => {
     const service = appRouter.createCaller(contextFor("service"));
     const seller = appRouter.createCaller(contextFor("seller"));
@@ -39,5 +48,6 @@ describe("perfis internos", () => {
     await expect(finance.contracts.list()).resolves.toBeInstanceOf(Array);
     await expect(finance.finance.entries()).resolves.toBeInstanceOf(Array);
     await expect(finance.dashboard.summary()).resolves.toMatchObject({ activeContracts: expect.any(Number) });
+    await expect(finance.dashboard.commercialCharts()).resolves.toMatchObject({ funnel: expect.any(Array), goals: expect.any(Array) });
   });
 });
