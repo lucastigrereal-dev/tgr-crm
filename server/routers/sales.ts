@@ -10,6 +10,7 @@ import { resolveFollowUpAt } from "../domain";
 const opportunityInput = z.object({
   customerId: z.number().int().positive(),
   sellerId: z.number().int().positive().optional().nullable(),
+  campaignId: z.number().int().positive().optional().nullable(),
   title: z.string().trim().min(3).max(255),
   stage: z.enum(["new", "qualified", "proposal", "negotiation", "won", "lost"]).default("new"),
   source: z.string().trim().max(120).optional().nullable(),

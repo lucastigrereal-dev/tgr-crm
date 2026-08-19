@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, customers, installments, users } from "../../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, reservations, tasks, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
@@ -11,77 +11,44 @@ import { adminProcedure } from "./access";
 const inputSchema = z.object({ kind: z.enum(["customers", "contracts"]), csv: z.string().min(2).max(2_000_000), mapping: z.record(z.string(), z.string()).optional() });
 const parse = (kind: ImportKind, csv: string) => kind === "customers" ? parseCustomersCsv(csv) : parseContractsCsv(csv);
 const canonicalCsv = (input: { csv: string; mapping?: CsvColumnMapping }) => applyCsvMapping(input.csv, input.mapping);
-const importSummary = (totalRows: number, created: number, updated: number, issues: ImportIssue[]) => ({
-  processed: totalRows,
-  created,
-  updated,
-  rejected: new Set(issues.map(issue => issue.line)).size,
-  successful: created + updated,
-  issuesByField: Object.entries(issues.reduce<Record<string, number>>((acc, issue) => ({ ...acc, [issue.field]: (acc[issue.field] ?? 0) + 1 }), {})).map(([field, count]) => ({ field, count })),
-});
+const importSummary = (totalRows: number, created: number, updated: number, issues: ImportIssue[]) => ({ processed: totalRows, created, updated, rejected: new Set(issues.map(issue => issue.line)).size, successful: created + updated, issuesByField: Object.entries(issues.reduce<Record<string, number>>((acc, issue) => ({ ...acc, [issue.field]: (acc[issue.field] ?? 0) + 1 }), {})).map(([field, count]) => ({ field, count })) });
+const customerValues = (row: ReturnType<typeof parseCustomersCsv>["records"][number]) => ({ fullName: row.fullName, documentNumber: row.documentNumber, email: row.email, phone: row.phone, birthDate: row.birthDate ? new Date(`${row.birthDate}T12:00:00Z`) : null, maritalStatus: row.maritalStatus, occupation: row.occupation, zipCode: row.zipCode, address: row.address, addressNumber: row.addressNumber, complement: row.complement, neighborhood: row.neighborhood, city: row.city, state: row.state, acquisitionSource: row.acquisitionSource, status: row.status, notes: row.notes });
+const restoreCustomerValues = (snapshot: Record<string, unknown>) => ({ fullName: String(snapshot.fullName ?? ""), documentNumber: snapshot.documentNumber ? String(snapshot.documentNumber) : null, email: snapshot.email ? String(snapshot.email) : null, phone: snapshot.phone ? String(snapshot.phone) : null, birthDate: snapshot.birthDate ? new Date(String(snapshot.birthDate)) : null, maritalStatus: snapshot.maritalStatus ? String(snapshot.maritalStatus) : null, occupation: snapshot.occupation ? String(snapshot.occupation) : null, zipCode: snapshot.zipCode ? String(snapshot.zipCode) : null, address: snapshot.address ? String(snapshot.address) : null, addressNumber: snapshot.addressNumber ? String(snapshot.addressNumber) : null, complement: snapshot.complement ? String(snapshot.complement) : null, neighborhood: snapshot.neighborhood ? String(snapshot.neighborhood) : null, city: snapshot.city ? String(snapshot.city) : null, state: snapshot.state ? String(snapshot.state) : null, acquisitionSource: snapshot.acquisitionSource ? String(snapshot.acquisitionSource) : null, status: (snapshot.status ?? "prospect") as "active" | "inactive" | "prospect", notes: snapshot.notes ? String(snapshot.notes) : null });
 
 export const importsRouter = router({
   suggestMapping: adminProcedure.input(z.object({ kind: z.enum(["customers", "contracts"]), csv: z.string().min(2).max(2_000_000) })).mutation(({ input }) => suggestCsvMapping(input.csv, input.kind)),
-  preview: adminProcedure.input(inputSchema).mutation(({ input }) => {
-    const parsed = parse(input.kind, canonicalCsv(input));
-    return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) };
-  }),
-  errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => {
-    const parsed = parse(input.kind, canonicalCsv(input));
-    return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length };
-  }),
-
+  preview: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) }; }),
+  errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length }; }),
+  latestBatch: adminProcedure.query(async () => { const db = await getDb(); if (!db) return null; const batch = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); if (!batch[0]) return null; const itemCount = await db.select().from(csvImportItems).where(eq(csvImportItems.batchId, batch[0].id)); return { ...batch[0], itemCount: itemCount.length, canUndo: batch[0].status === "completed" }; }),
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const csv = canonicalCsv(input);
-    const parsed = parse(input.kind, csv);
-    const issues: ImportIssue[] = [...parsed.issues];
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const csv = canonicalCsv(input); const parsed = parse(input.kind, csv); const issues: ImportIssue[] = [...parsed.issues];
     if (input.kind === "customers") {
-      const rows = parseCustomersCsv(csv).records;
-      const documents = rows.map(row => row.documentNumber).filter(Boolean);
-      const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : [];
-      const existingByDocument = new Map(existing.map(item => [item.documentNumber, item]));
+      const rows = parseCustomersCsv(csv).records; const documents = rows.map(row => row.documentNumber).filter(Boolean); const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : []; const existingByDocument = new Map(existing.map(item => [item.documentNumber, item]));
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [], summary: importSummary(rows.length, 0, 0, issues) };
-      let created = 0; let updated = 0;
+      let created = 0; let updated = 0; let batchId = 0;
       await db.transaction(async tx => {
-        for (const row of rows) {
-          const values = { fullName: row.fullName, documentNumber: row.documentNumber, email: row.email, phone: row.phone, birthDate: row.birthDate ? new Date(`${row.birthDate}T12:00:00Z`) : null, maritalStatus: row.maritalStatus, occupation: row.occupation, zipCode: row.zipCode, address: row.address, addressNumber: row.addressNumber, complement: row.complement, neighborhood: row.neighborhood, city: row.city, state: row.state, acquisitionSource: row.acquisitionSource, status: row.status, notes: row.notes };
-          if (existingByDocument.has(row.documentNumber)) { await tx.update(customers).set(values).where(eq(customers.documentNumber, row.documentNumber)); updated += 1; }
-          else { await tx.insert(customers).values(values); created += 1; }
-        }
+        const createdBatch = await tx.insert(csvImportBatches).values({ kind: "customers", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." });
+        for (const row of rows) { const values = customerValues(row); const before = existingByDocument.get(row.documentNumber); if (before) { await tx.update(customers).set(values).where(eq(customers.id, before.id)); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before) }); updated += 1; } else { const inserted = await tx.insert(customers).values(values).$returningId(); const entityId = inserted[0]?.id; if (!entityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o associado importado." }); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId, action: "created" }); created += 1; } }
+        await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: updated, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId));
       });
-      await recordAudit(ctx.user.id, "csv_import", 0, "completed", `Importação de associados: ${created} criados e ${updated} atualizados.`);
-      return { valid: true, committed: true, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
+      await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: associados — ${created} criados e ${updated} atualizados.`);
+      return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
     }
-
-    const rows = parseContractsCsv(csv).records;
-    const [customerRows, userRows, contractRows] = await Promise.all([
-      db.select().from(customers), db.select().from(users), db.select({ number: contracts.number }).from(contracts),
-    ]);
-    const customerByDocument = new Map(customerRows.map(item => [item.documentNumber, item]));
-    const userByEmail = new Map(userRows.filter(item => item.email).map(item => [item.email!.toLowerCase(), item]));
-    const existingNumbers = new Set(contractRows.map(item => item.number));
-    rows.forEach((row, index) => {
-      const line = index + 2;
-      if (!customerByDocument.has(row.customerDocument)) issues.push({ line, field: "documento_associado", message: "Associado não encontrado; importe os associados antes dos contratos." });
-      if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." });
-      if (row.sellerEmail && !userByEmail.has(row.sellerEmail)) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail." });
-    });
+    const rows = parseContractsCsv(csv).records; const [customerRows, userRows, contractRows] = await Promise.all([db.select().from(customers), db.select().from(users), db.select({ number: contracts.number }).from(contracts)]); const customerByDocument = new Map(customerRows.map(item => [item.documentNumber, item])); const userByEmail = new Map(userRows.filter(item => item.email).map(item => [item.email!.toLowerCase(), item])); const existingNumbers = new Set(contractRows.map(item => item.number));
+    rows.forEach((row, index) => { const line = index + 2; if (!customerByDocument.has(row.customerDocument)) issues.push({ line, field: "documento_associado", message: "Associado não encontrado; importe os associados antes dos contratos." }); if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." }); if (row.sellerEmail && !userByEmail.has(row.sellerEmail)) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail." }); });
     if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
-    let created = 0;
+    let created = 0; let batchId = 0;
+    await db.transaction(async tx => { const createdBatch = await tx.insert(csvImportBatches).values({ kind: "contracts", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." }); for (const row of rows) { const customer = customerByDocument.get(row.customerDocument)!; const seller = row.sellerEmail ? userByEmail.get(row.sellerEmail) : undefined; const createdContract = await tx.insert(contracts).values({ number: row.number, customerId: customer.id, sellerId: seller?.id ?? ctx.user.id, usageModel: row.usageModel, status: row.status, totalAmount: row.totalAmount.toFixed(2), activatedAt: row.status === "active" ? new Date() : null, notes: row.notes }).$returningId(); const contractId = createdContract[0]?.id; if (!contractId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o contrato importado." }); const schedule = buildInstallmentSchedule(row.totalAmount, row.installmentCount, row.firstDueDate); await tx.insert(installments).values(schedule.map(item => ({ contractId, sequence: item.sequence, dueDate: item.dueDate, amount: item.amount, status: "open" as const }))); await tx.insert(csvImportItems).values({ batchId, entityType: "contract", entityId: contractId, action: "created" }); created += 1; } await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: 0, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId)); });
+    await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: ${created} contratos criados.`);
+    return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, 0, []) };
+  }),
+  undoLast: adminProcedure.input(z.object({ confirm: z.literal(true) })).mutation(async ({ ctx }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." }); const batches = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); const batch = batches[0]; if (!batch) throw new TRPCError({ code: "NOT_FOUND", message: "Ainda não há lote de importação para desfazer." }); if (batch.status !== "completed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O último lote já foi revertido e não pode ser desfeito novamente." }); const items = await db.select().from(csvImportItems).where(eq(csvImportItems.batchId, batch.id));
     await db.transaction(async tx => {
-      for (const row of rows) {
-        const customer = customerByDocument.get(row.customerDocument)!; const seller = row.sellerEmail ? userByEmail.get(row.sellerEmail) : undefined;
-        const createdContract = await tx.insert(contracts).values({ number: row.number, customerId: customer.id, sellerId: seller?.id ?? ctx.user.id, usageModel: row.usageModel, status: row.status, totalAmount: row.totalAmount.toFixed(2), activatedAt: row.status === "active" ? new Date() : null, notes: row.notes }).$returningId();
-        const contractId = createdContract[0]?.id;
-        if (!contractId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o contrato importado." });
-        const schedule = buildInstallmentSchedule(row.totalAmount, row.installmentCount, row.firstDueDate);
-        await tx.insert(installments).values(schedule.map(item => ({ contractId, sequence: item.sequence, dueDate: item.dueDate, amount: item.amount, status: "open" as const })));
-        created += 1;
-      }
+      if (batch.kind === "customers") { const createdIds = items.filter(item => item.entityType === "customer" && item.action === "created").map(item => item.entityId); if (createdIds.length) { const dependencies = await tx.select({ id: contracts.id }).from(contracts).where(inArray(contracts.customerId, createdIds)); if (dependencies.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já possui contrato vinculado." }); await tx.delete(customers).where(inArray(customers.id, createdIds)); } for (const item of items.filter(item => item.entityType === "customer" && item.action === "updated" && item.beforeSnapshot)) await tx.update(customers).set(restoreCustomerValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(customers.id, item.entityId)); } else { const contractIds = items.filter(item => item.entityType === "contract" && item.action === "created").map(item => item.entityId); if (contractIds.length) { const installmentRows = await tx.select({ id: installments.id }).from(installments).where(inArray(installments.contractId, contractIds)); const installmentIds = installmentRows.map(item => item.id); const [docs, bookings, taskRows, financial, billings] = await Promise.all([tx.select({ id: contractDocuments.id }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)), tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.contractId, contractIds)), tx.select({ id: tasks.id }).from(tasks).where(inArray(tasks.contractId, contractIds)), tx.select({ id: financialTransactions.id }).from(financialTransactions).where(inArray(financialTransactions.contractId, contractIds)), installmentIds.length ? tx.select({ id: billingRecords.id }).from(billingRecords).where(inArray(billingRecords.installmentId, installmentIds)) : Promise.resolve([])]); if (docs.length || bookings.length || taskRows.length || financial.length || billings.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança ou lançamento financeiro vinculado." }); await tx.delete(installments).where(inArray(installments.contractId, contractIds)); await tx.delete(contracts).where(inArray(contracts.id, contractIds)); } }
+      await tx.update(csvImportBatches).set({ status: "reverted", revertedAt: new Date(), revertedByUserId: ctx.user.id }).where(eq(csvImportBatches.id, batch.id));
     });
-    await recordAudit(ctx.user.id, "csv_import", 0, "completed", `Importação de contratos: ${created} contratos criados.`);
-    return { valid: true, committed: true, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, 0, []) };
+    await recordAudit(ctx.user.id, "csv_import", batch.id, "reverted", `Lote ${batch.id} revertido com ${items.length} item(ns) auditado(s).`); return { batchId: batch.id, revertedItems: items.length, kind: batch.kind };
   }),
 });

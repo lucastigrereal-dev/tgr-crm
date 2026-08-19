@@ -15,6 +15,13 @@
       "when": 1787157940200,
       "tag": "0001_burly_blur",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1787170896710,
+      "tag": "0002_woozy_the_leader",
+      "breakpoints": true
     }
   ]
 }

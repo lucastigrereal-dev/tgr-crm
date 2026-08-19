@@ -27,6 +27,7 @@ describe("perfis internos", () => {
   it("bloqueia atendimento do funil comercial", async () => {
     const caller = appRouter.createCaller(contextFor("service"));
     await expect(caller.sales.pipeline()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller.commissions.overview()).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("deixa a prévia CSV exclusivamente nas mãos da administração", async () => {
@@ -39,6 +40,7 @@ describe("perfis internos", () => {
     await expect(admin.imports.suggestMapping({ kind: "customers", csv: "Nome;CPF\nAna da Silva;12345678900" })).resolves.toMatchObject({ suggestedMapping: { nome_completo: "Nome", documento: "CPF" } });
     await expect(admin.imports.errorReport({ kind: "customers", csv: "nome_completo;documento\nA;" })).resolves.toMatchObject({ filename: "erros-importacao-customers.csv", totalIssues: 2 });
     await expect(seller.imports.errorReport({ kind: "customers", csv })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(seller.imports.undoLast({ confirm: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("permite os caminhos operacionais compatíveis para cada perfil", async () => {
@@ -53,5 +55,6 @@ describe("perfis internos", () => {
     await expect(finance.dashboard.summary()).resolves.toMatchObject({ activeContracts: expect.any(Number) });
     await expect(finance.dashboard.commercialCharts()).resolves.toMatchObject({ funnel: expect.any(Array), goals: expect.any(Array) });
     await expect(finance.dashboard.funnelDetails({ stage: "proposal" })).resolves.toBeInstanceOf(Array);
+    await expect(finance.commissions.overview()).resolves.toMatchObject({ campaigns: expect.any(Array), ranking: expect.any(Array), entries: expect.any(Array) });
   });
 });

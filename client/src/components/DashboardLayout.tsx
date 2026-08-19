@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Upload, Users, UsersRound } from "lucide-react";
+import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Trophy, Upload, Users, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -31,6 +31,7 @@ const menuItems = [
   { icon: LayoutDashboard, label: "Visão geral", path: "/" },
   { icon: UsersRound, label: "Clientes", path: "/clientes" },
   { icon: ChartNoAxesCombined, label: "Comercial", path: "/vendas" },
+  { icon: Trophy, label: "Comissões", path: "/comissoes" },
   { icon: FileSignature, label: "Contratos", path: "/contratos" },
   { icon: CalendarDays, label: "Reservas", path: "/reservas" },
   { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" },

@@ -42,3 +42,11 @@
 - [x] Cobrir os novos fluxos com testes de mapeamento, relatório de erros, filtro e autorização.
 - [x] Testar `dashboard.funnelDetails` com recortes distintos de etapa, período e vendedor.
 - [x] Adicionar teste de integração do procedimento `dashboard.funnelDetails` com etapa, período e vendedor.
+- [x] Definir persistência auditável da importação CSV e política de reversão segura da última carga.
+- [x] Implementar backend e tela de comissões dos vendedores, com ranking filtrável por campanha.
+- [x] Implementar exportação da lista detalhada de propostas filtradas em Excel e PDF.
+- [x] Implementar reversão administrativa, transacional e auditada da última importação CSV.
+- [x] Cobrir com testes as permissões, os cálculos de comissão, a reversão e as exportações.
+- [ ] Permitir vincular e editar campanha nas oportunidades para alimentar o ranking comercial.
+- [ ] Reforçar reversão de contratos importados contra documentos, reservas, tarefas, cobranças e lançamentos vinculados.
+- [ ] Adicionar testes automatizados de reversão efetiva e de geração dos exports filtrados.

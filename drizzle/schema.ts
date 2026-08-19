@@ -23,6 +23,19 @@ export const users = mysqlTable("users", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export const salesCampaigns = mysqlTable("sales_campaigns", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 180 }).notNull(),
+  code: varchar("code", { length: 64 }).notNull().unique(),
+  description: text("description"),
+  startsAt: date("startsAt"),
+  endsAt: date("endsAt"),
+  commissionRate: decimal("commissionRate", { precision: 5, scale: 2 }).default("0.00").notNull(),
+  status: mysqlEnum("status", ["draft", "active", "closed"]).default("draft").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export const customers = mysqlTable(
   "customers",
   {
@@ -105,6 +118,7 @@ export const opportunities = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     customerId: int("customerId").notNull().references(() => customers.id),
     sellerId: int("sellerId").references(() => users.id),
+    campaignId: int("campaignId").references(() => salesCampaigns.id),
     title: varchar("title", { length: 255 }).notNull(),
     stage: mysqlEnum("stage", ["new", "qualified", "proposal", "negotiation", "won", "lost"]).default("new").notNull(),
     source: varchar("source", { length: 120 }),
@@ -141,6 +155,27 @@ export const salesGoals = mysqlTable("sales_goals", {
   targetContracts: int("targetContracts").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+export const salesCommissions = mysqlTable(
+  "sales_commissions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    sellerId: int("sellerId").notNull().references(() => users.id),
+    campaignId: int("campaignId").references(() => salesCampaigns.id),
+    opportunityId: int("opportunityId").references(() => opportunities.id),
+    contractId: int("contractId").references(() => contracts.id),
+    baseAmount: decimal("baseAmount", { precision: 14, scale: 2 }).notNull(),
+    rate: decimal("rate", { precision: 5, scale: 2 }).notNull(),
+    amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+    status: mysqlEnum("status", ["pending", "approved", "paid", "cancelled"]).default("pending").notNull(),
+    notes: text("notes"),
+    approvedAt: timestamp("approvedAt"),
+    paidAt: timestamp("paidAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId)],
+);
 
 export const contracts = mysqlTable(
   "contracts",
@@ -289,6 +324,30 @@ export const auditLogs = mysqlTable("audit_logs", {
   summary: text("summary"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+export const csvImportBatches = mysqlTable("csv_import_batches", {
+  id: int("id").autoincrement().primaryKey(),
+  kind: mysqlEnum("kind", ["customers", "contracts"]).notNull(),
+  status: mysqlEnum("status", ["completed", "reverted"]).default("completed").notNull(),
+  actorUserId: int("actorUserId").notNull().references(() => users.id),
+  totalRows: int("totalRows").default(0).notNull(),
+  createdCount: int("createdCount").default(0).notNull(),
+  updatedCount: int("updatedCount").default(0).notNull(),
+  rejectedCount: int("rejectedCount").default(0).notNull(),
+  revertedAt: timestamp("revertedAt"),
+  revertedByUserId: int("revertedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("csv_batches_recent_idx").on(table.createdAt, table.status)]);
+
+export const csvImportItems = mysqlTable("csv_import_items", {
+  id: int("id").autoincrement().primaryKey(),
+  batchId: int("batchId").notNull().references(() => csvImportBatches.id),
+  entityType: mysqlEnum("entityType", ["customer", "contract"]).notNull(),
+  entityId: int("entityId").notNull(),
+  action: mysqlEnum("action", ["created", "updated"]).notNull(),
+  beforeSnapshot: text("beforeSnapshot"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("csv_items_batch_idx").on(table.batchId)]);
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

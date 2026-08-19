@@ -28,5 +28,6 @@ export const financeProcedure = protectedProcedure.use(({ ctx, next }) => {
 
 export const internalProcedure = roleProcedure(["admin", "seller", "finance", "service"], "Perfil interno necessário para acessar a operação.");
 export const salesProcedure = roleProcedure(["admin", "seller"], "Acesso comercial não autorizado.");
+export const commissionsProcedure = roleProcedure(["admin", "seller", "finance"], "Acesso a comissões não autorizado.");
 export const serviceProcedure = roleProcedure(["admin", "service"], "Acesso de atendimento/reservas não autorizado.");
 export const contractsProcedure = roleProcedure(["admin", "seller", "finance", "service"], "Acesso contratual não autorizado.");

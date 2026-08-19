@@ -16,6 +16,7 @@ import Sales from "./pages/Sales";
 import Team from "./pages/Team";
 import Reservations from "./pages/Reservations";
 import ImportCsv from "./pages/ImportCsv";
+import Commissions from "./pages/Commissions";
 
 function Router() {
   return <DashboardLayout><Switch>
@@ -23,6 +24,7 @@ function Router() {
     <Route path="/clientes" component={Customers} />
     <Route path="/clientes/:id" component={CustomerDetail} />
     <Route path="/vendas" component={Sales} />
+    <Route path="/comissoes" component={Commissions} />
     <Route path="/contratos" component={Contracts} />
     <Route path="/contratos/:id" component={ContractDetail} />
     <Route path="/reservas" component={Reservations} />
