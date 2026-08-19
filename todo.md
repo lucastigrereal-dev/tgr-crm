@@ -29,3 +29,10 @@
 - [x] Cobrir importação e agregações dos gráficos com testes automatizados e validação visual.
 - [x] Restringir a importação CSV ao perfil administrativo no backend e na navegação.
 - [x] Adicionar testes de prévia CSV, bloqueio de importação inválida e estrutura de agregação comercial.
+- [x] Inventariar e comparar os arquivos técnicos recebidos com a base TSE já auditada, sem reutilizar código ou dados proprietários.
+- [x] Adicionar filtros de período e equipe de vendas aos gráficos do painel principal.
+- [x] Criar exportação em PDF do painel para reuniões de gestão.
+- [x] Adicionar barra de progresso e resumo detalhado de sucesso/erros à importação CSV.
+- [x] Criar habilidade reutilizável para projetar e evoluir CRM especializado a partir de referência funcional lícita.
+- [x] Substituir a porcentagem simulada do CSV por etapas reais de leitura, validação e gravação.
+- [x] Ampliar o recibo CSV com totais verificáveis de criados, atualizados, rejeitados, processados e erros por linha/categoria.

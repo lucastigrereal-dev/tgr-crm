@@ -10,11 +10,19 @@ import { adminProcedure } from "./access";
 
 const inputSchema = z.object({ kind: z.enum(["customers", "contracts"]), csv: z.string().min(2).max(2_000_000) });
 const parse = (kind: ImportKind, csv: string) => kind === "customers" ? parseCustomersCsv(csv) : parseContractsCsv(csv);
+const importSummary = (totalRows: number, created: number, updated: number, issues: ImportIssue[]) => ({
+  processed: totalRows,
+  created,
+  updated,
+  rejected: new Set(issues.map(issue => issue.line)).size,
+  successful: created + updated,
+  issuesByField: Object.entries(issues.reduce<Record<string, number>>((acc, issue) => ({ ...acc, [issue.field]: (acc[issue.field] ?? 0) + 1 }), {})).map(([field, count]) => ({ field, count })),
+});
 
 export const importsRouter = router({
   preview: adminProcedure.input(inputSchema).mutation(({ input }) => {
     const parsed = parse(input.kind, input.csv);
-    return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5) };
+    return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) };
   }),
 
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
@@ -27,7 +35,7 @@ export const importsRouter = router({
       const documents = rows.map(row => row.documentNumber).filter(Boolean);
       const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : [];
       const existingByDocument = new Map(existing.map(item => [item.documentNumber, item]));
-      if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [] };
+      if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [], summary: importSummary(rows.length, 0, 0, issues) };
       let created = 0; let updated = 0;
       await db.transaction(async tx => {
         for (const row of rows) {
@@ -37,7 +45,7 @@ export const importsRouter = router({
         }
       });
       await recordAudit(ctx.user.id, "csv_import", 0, "completed", `Importação de associados: ${created} criados e ${updated} atualizados.`);
-      return { valid: true, committed: true, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [] };
+      return { valid: true, committed: true, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
     }
 
     const rows = parseContractsCsv(input.csv).records;
@@ -53,7 +61,7 @@ export const importsRouter = router({
       if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." });
       if (row.sellerEmail && !userByEmail.has(row.sellerEmail)) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail." });
     });
-    if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [] };
+    if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
     let created = 0;
     await db.transaction(async tx => {
       for (const row of rows) {
@@ -67,6 +75,6 @@ export const importsRouter = router({
       }
     });
     await recordAudit(ctx.user.id, "csv_import", 0, "completed", `Importação de contratos: ${created} contratos criados.`);
-    return { valid: true, committed: true, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [] };
+    return { valid: true, committed: true, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, 0, []) };
   }),
 });

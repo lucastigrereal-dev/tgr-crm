@@ -33,9 +33,9 @@ describe("perfis internos", () => {
     const admin = appRouter.createCaller(contextFor("admin"));
     const seller = appRouter.createCaller(contextFor("seller"));
     const csv = "nome_completo;documento\nAna da Silva;12345678900";
-    await expect(admin.imports.preview({ kind: "customers", csv })).resolves.toMatchObject({ valid: true, totalRows: 1 });
+    await expect(admin.imports.preview({ kind: "customers", csv })).resolves.toMatchObject({ valid: true, totalRows: 1, summary: { processed: 1, rejected: 0, issuesByField: [] } });
     await expect(seller.imports.preview({ kind: "customers", csv })).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(admin.imports.commit({ kind: "customers", csv: "nome_completo;documento\nA;" })).resolves.toMatchObject({ committed: false });
+    await expect(admin.imports.commit({ kind: "customers", csv: "nome_completo;documento\nA;" })).resolves.toMatchObject({ committed: false, summary: { processed: 1, rejected: 1 } });
   });
 
   it("permite os caminhos operacionais compatíveis para cada perfil", async () => {
