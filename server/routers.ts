@@ -4,6 +4,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { contractsRouter } from "./routers/contracts";
 import { commissionsRouter } from "./routers/commissions";
+import { campaignsRouter } from "./routers/campaigns";
 import { customersRouter } from "./routers/customers";
 import { dashboardRouter } from "./routers/dashboard";
 import { financeRouter } from "./routers/finance";
@@ -28,6 +29,7 @@ export const appRouter = router({
   customers: customersRouter,
   sales: salesRouter,
   commissions: commissionsRouter,
+  campaigns: campaignsRouter,
   contracts: contractsRouter,
   team: teamRouter,
   operations: operationsRouter,

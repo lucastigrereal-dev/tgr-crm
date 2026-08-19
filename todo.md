@@ -48,5 +48,14 @@
 - [x] Implementar reversão administrativa, transacional e auditada da última importação CSV.
 - [x] Cobrir com testes as permissões, os cálculos de comissão, a reversão e as exportações.
 - [ ] Permitir vincular e editar campanha nas oportunidades para alimentar o ranking comercial.
-- [ ] Reforçar reversão de contratos importados contra documentos, reservas, tarefas, cobranças e lançamentos vinculados.
+- [x] Reforçar reversão de contratos importados contra documentos, reservas, tarefas, cobranças e lançamentos vinculados.
 - [ ] Adicionar testes automatizados de reversão efetiva e de geração dos exports filtrados.
+- [ ] Adicionar seletor visual de campanha na criação e edição de oportunidades.
+- [ ] Exibir progresso visual de cada vendedor em relação à meta na Central de Comissões.
+- [ ] Criar testes ponta a ponta de reversão CSV e de exportação de propostas filtradas.
+- [x] Realizar benchmark documentado de CRM, ERP, timeshare, hotelaria, vendas, finanças e inteligência operacional.
+- [x] Consolidar 50 evoluções exponenciais priorizadas para o TSE Exclusivo.
+- [x] Consolidar 50 pilares de experiência, confiabilidade, governança de dados e preparação para IA.
+- [x] Produzir roteiro de evolução com prioridades, dependências e critérios de implantação.
+- [x] Priorizar explicitamente as 50 evoluções por impacto, esforço, dependência e onda.
+- [x] Detalhar dependências e critérios de aceite das frentes prioritárias do roteiro.
