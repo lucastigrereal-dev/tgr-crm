@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gt, inArray, lt, ne } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, customers, installments, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { contracts, customers, installments, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
@@ -56,6 +56,18 @@ export const operationsRouter = router({
       .innerJoin(units, eq(reservations.unitId, units.id))
       .innerJoin(resorts, eq(units.resortId, resorts.id))
       .orderBy(desc(reservations.checkIn)).limit(200);
+  }),
+
+  waitlist: serviceProcedure.query(async () => {
+    const db = await getDb(); if (!db) return [];
+    return db.select({ item: reservationWaitlist, customerName: customers.fullName, resortName: resorts.name }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).leftJoin(resorts, eq(reservationWaitlist.resortId, resorts.id)).where(inArray(reservationWaitlist.status, ["waiting", "offered"])).orderBy(desc(reservationWaitlist.priorityScore), reservationWaitlist.desiredCheckIn).limit(200);
+  }),
+
+  joinWaitlist: serviceProcedure.input(z.object({ customerId: z.number().int().positive(), contractId: z.number().int().positive().nullable().optional(), resortId: z.number().int().positive().nullable().optional(), desiredCheckIn: z.string().date(), desiredCheckOut: z.string().date(), partySize: z.number().int().min(1).max(30).default(1), priorityScore: z.number().int().min(0).max(999).default(0), preferenceNotes: z.string().trim().max(2000).nullable().optional() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const checkIn = dateValue(input.desiredCheckIn), checkOut = dateValue(input.desiredCheckOut); if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída desejada precisa ser posterior à entrada." });
+    const created = await db.insert(reservationWaitlist).values({ customerId: input.customerId, contractId: input.contractId ?? null, resortId: input.resortId ?? null, desiredCheckIn: checkIn, desiredCheckOut: checkOut, partySize: input.partySize, priorityScore: input.priorityScore, preferenceNotes: input.preferenceNotes || null, createdByUserId: ctx.user.id }).$returningId(); const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível entrar na fila." });
+    await recordAudit(ctx.user.id, "reservation_waitlist", id, "created", `Fila de espera criada com prioridade ${input.priorityScore}.`); return { id };
   }),
 
   availableUnits: serviceProcedure.input(z.object({ checkIn: z.string().date(), checkOut: z.string().date(), resortId: z.number().int().positive().optional() }))
