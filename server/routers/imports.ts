@@ -4,12 +4,13 @@ import { z } from "zod";
 import { contracts, customers, installments, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
-import { parseContractsCsv, parseCustomersCsv, type ImportIssue, type ImportKind } from "../csvImport";
+import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
 
-const inputSchema = z.object({ kind: z.enum(["customers", "contracts"]), csv: z.string().min(2).max(2_000_000) });
+const inputSchema = z.object({ kind: z.enum(["customers", "contracts"]), csv: z.string().min(2).max(2_000_000), mapping: z.record(z.string(), z.string()).optional() });
 const parse = (kind: ImportKind, csv: string) => kind === "customers" ? parseCustomersCsv(csv) : parseContractsCsv(csv);
+const canonicalCsv = (input: { csv: string; mapping?: CsvColumnMapping }) => applyCsvMapping(input.csv, input.mapping);
 const importSummary = (totalRows: number, created: number, updated: number, issues: ImportIssue[]) => ({
   processed: totalRows,
   created,
@@ -20,18 +21,24 @@ const importSummary = (totalRows: number, created: number, updated: number, issu
 });
 
 export const importsRouter = router({
+  suggestMapping: adminProcedure.input(z.object({ kind: z.enum(["customers", "contracts"]), csv: z.string().min(2).max(2_000_000) })).mutation(({ input }) => suggestCsvMapping(input.csv, input.kind)),
   preview: adminProcedure.input(inputSchema).mutation(({ input }) => {
-    const parsed = parse(input.kind, input.csv);
+    const parsed = parse(input.kind, canonicalCsv(input));
     return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) };
+  }),
+  errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => {
+    const parsed = parse(input.kind, canonicalCsv(input));
+    return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length };
   }),
 
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const parsed = parse(input.kind, input.csv);
+    const csv = canonicalCsv(input);
+    const parsed = parse(input.kind, csv);
     const issues: ImportIssue[] = [...parsed.issues];
     if (input.kind === "customers") {
-      const rows = parseCustomersCsv(input.csv).records;
+      const rows = parseCustomersCsv(csv).records;
       const documents = rows.map(row => row.documentNumber).filter(Boolean);
       const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : [];
       const existingByDocument = new Map(existing.map(item => [item.documentNumber, item]));
@@ -48,7 +55,7 @@ export const importsRouter = router({
       return { valid: true, committed: true, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
     }
 
-    const rows = parseContractsCsv(input.csv).records;
+    const rows = parseContractsCsv(csv).records;
     const [customerRows, userRows, contractRows] = await Promise.all([
       db.select().from(customers), db.select().from(users), db.select({ number: contracts.number }).from(contracts),
     ]);

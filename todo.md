@@ -36,3 +36,9 @@
 - [x] Criar habilidade reutilizável para projetar e evoluir CRM especializado a partir de referência funcional lícita.
 - [x] Substituir a porcentagem simulada do CSV por etapas reais de leitura, validação e gravação.
 - [x] Ampliar o recibo CSV com totais verificáveis de criados, atualizados, rejeitados, processados e erros por linha/categoria.
+- [x] Implementar exportação de relatório CSV dos erros de importação para correção e nova tentativa.
+- [x] Implementar sugestão e confirmação de mapeamento de colunas CSV no backend e na interface.
+- [x] Implementar detalhamento clicável das propostas por etapa do funil, com filtros aplicados.
+- [x] Cobrir os novos fluxos com testes de mapeamento, relatório de erros, filtro e autorização.
+- [x] Testar `dashboard.funnelDetails` com recortes distintos de etapa, período e vendedor.
+- [x] Adicionar teste de integração do procedimento `dashboard.funnelDetails` com etapa, período e vendedor.

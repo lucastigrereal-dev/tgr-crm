@@ -36,6 +36,9 @@ describe("perfis internos", () => {
     await expect(admin.imports.preview({ kind: "customers", csv })).resolves.toMatchObject({ valid: true, totalRows: 1, summary: { processed: 1, rejected: 0, issuesByField: [] } });
     await expect(seller.imports.preview({ kind: "customers", csv })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(admin.imports.commit({ kind: "customers", csv: "nome_completo;documento\nA;" })).resolves.toMatchObject({ committed: false, summary: { processed: 1, rejected: 1 } });
+    await expect(admin.imports.suggestMapping({ kind: "customers", csv: "Nome;CPF\nAna da Silva;12345678900" })).resolves.toMatchObject({ suggestedMapping: { nome_completo: "Nome", documento: "CPF" } });
+    await expect(admin.imports.errorReport({ kind: "customers", csv: "nome_completo;documento\nA;" })).resolves.toMatchObject({ filename: "erros-importacao-customers.csv", totalIssues: 2 });
+    await expect(seller.imports.errorReport({ kind: "customers", csv })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("permite os caminhos operacionais compatíveis para cada perfil", async () => {
@@ -49,5 +52,6 @@ describe("perfis internos", () => {
     await expect(finance.finance.entries()).resolves.toBeInstanceOf(Array);
     await expect(finance.dashboard.summary()).resolves.toMatchObject({ activeContracts: expect.any(Number) });
     await expect(finance.dashboard.commercialCharts()).resolves.toMatchObject({ funnel: expect.any(Array), goals: expect.any(Array) });
+    await expect(finance.dashboard.funnelDetails({ stage: "proposal" })).resolves.toBeInstanceOf(Array);
   });
 });

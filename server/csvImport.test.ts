@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseContractsCsv, parseCustomersCsv } from "./csvImport";
+import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, suggestCsvMapping } from "./csvImport";
 
 describe("importação CSV", () => {
   it("lê associados com cabeçalho em português e separador ponto e vírgula", () => {
@@ -23,5 +23,19 @@ describe("importação CSV", () => {
     const result = parseContractsCsv(csv);
     expect(result.issues).toEqual([]);
     expect(result.records).toMatchObject([{ number: "TS-2026-001", customerDocument: "12345678900", usageModel: "flexible_week", status: "active", totalAmount: 12500, installmentCount: 12, firstDueDate: "2026-09-10" }]);
+  });
+
+  it("sugere mapeamento de cabeçalhos comuns e aplica o formato canônico", () => {
+    const source = "Nome do Cliente;CPF;E-mail;Celular\nAna da Silva;12345678900;ana@exemplo.com;17999999999";
+    const suggestion = suggestCsvMapping(source, "customers");
+    expect(suggestion.suggestedMapping).toMatchObject({ nome_completo: "Nome do Cliente", documento: "CPF", email: "E-mail", telefone: "Celular" });
+    const normalized = applyCsvMapping(source, suggestion.suggestedMapping);
+    expect(parseCustomersCsv(normalized).issues).toEqual([]);
+  });
+
+  it("gera relatório CSV de erros por linha para correção", () => {
+    const report = buildImportErrorReport([{ line: 2, field: "documento", message: "Informe o documento do associado." }]);
+    expect(report).toContain("linha;campo;mensagem");
+    expect(report).toContain("2;documento;Informe o documento do associado.");
   });
 });

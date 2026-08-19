@@ -1,10 +1,10 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, financialTransactions, installments, opportunities, reservations, salesGoals, tasks, units, users } from "../../drizzle/schema";
+import { contracts, customers, financialTransactions, installments, opportunities, reservations, salesGoals, tasks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
-import { buildCommercialCharts, funnelStages } from "../commercialMetrics";
+import { buildCommercialCharts, filterFunnelDetails, funnelStages } from "../commercialMetrics";
 
 function monthBounds() {
   const now = new Date();
@@ -14,6 +14,7 @@ function monthBounds() {
 }
 
 const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional() }).optional();
+const funnelDetailsInput = z.object({ stage: z.enum(funnelStages), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional() });
 function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const fallback = monthBounds();
   const start = input?.startDate ? new Date(`${input.startDate}T00:00:00Z`) : fallback.start;
@@ -42,5 +43,12 @@ export const dashboardRouter = router({
       db.select().from(opportunities), db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)), db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")),
     ]);
     return { ...buildCommercialCharts(opportunityRows, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), range: { start, end } };
+  }),
+  funnelDetails: internalProcedure.input(funnelDetailsInput).query(async ({ input }) => {
+    const db = await getDb(); const { start, end } = resolveRange(input);
+    if (!db) return [];
+    const rows = await db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id));
+    const selectedIds = new Set(filterFunnelDetails(rows.map(({ opportunity }) => opportunity), input.stage, start, end, input.sellerId).map(item => item.id));
+    return rows.filter(({ opportunity }) => selectedIds.has(opportunity.id)).map(({ opportunity, customerName, sellerName }) => ({ opportunity, customerName, sellerName: sellerName || "Sem vendedor" }));
   }),
 });

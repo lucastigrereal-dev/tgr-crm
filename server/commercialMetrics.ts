@@ -9,6 +9,10 @@ const withinRange = (value: Date | string | null, start: Date, end: Date) => {
   return date >= start && date < end;
 };
 
+export function filterFunnelDetails<T extends OpportunityMetric>(opportunities: T[], stage: string, start: Date, end: Date, sellerId?: number) {
+  return opportunities.filter(item => item.stage === stage && (!sellerId || item.sellerId === sellerId) && withinRange(item.closedAt ?? item.createdAt, start, end));
+}
+
 export function buildCommercialCharts(opportunities: OpportunityMetric[], goals: GoalMetric[], start: Date, end: Date, sellerId?: number) {
   const selectedOpportunities = sellerId ? opportunities.filter(item => item.sellerId === sellerId) : opportunities;
   const periodOpportunities = selectedOpportunities.filter(item => withinRange(item.closedAt ?? item.createdAt, start, end));
