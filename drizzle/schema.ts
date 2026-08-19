@@ -241,6 +241,23 @@ export const billingRecords = mysqlTable("billing_records", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const installmentRenegotiations = mysqlTable("installment_renegotiations", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  originalInstallmentId: int("originalInstallmentId").notNull().references(() => installments.id),
+  originalAmount: decimal("originalAmount", { precision: 14, scale: 2 }).notNull(),
+  proposedAmount: decimal("proposedAmount", { precision: 14, scale: 2 }).notNull(),
+  proposedDueDate: date("proposedDueDate").notNull(),
+  discountAmount: decimal("discountAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
+  notes: text("notes"),
+  status: mysqlEnum("status", ["draft", "approved", "applied", "rejected", "cancelled"]).default("draft").notNull(),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  approvedByUserId: int("approvedByUserId").references(() => users.id),
+  appliedAt: timestamp("appliedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [index("renegotiations_contract_idx").on(table.contractId, table.status), index("renegotiations_installment_idx").on(table.originalInstallmentId, table.status)]);
+
 export const financialTransactions = mysqlTable(
   "financial_transactions",
   {
