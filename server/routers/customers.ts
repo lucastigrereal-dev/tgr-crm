@@ -10,7 +10,7 @@ import {
   opportunities,
   reservations,
 } from "../../drizzle/schema";
-import { getDb, recordAudit } from "../db";
+import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { internalProcedure } from "./access";

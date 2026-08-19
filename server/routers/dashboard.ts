@@ -23,6 +23,8 @@ function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   return { start, end: input?.endDate ? new Date(end.getTime() + 86_400_000) : end };
 }
 
+// Toda leitura executiva usa intervalo explícito para manter filtros, exports e futuros agentes de IA na mesma verdade temporal.
+
 export const dashboardRouter = router({
   summary: internalProcedure.query(async () => {
     const db = await getDb();

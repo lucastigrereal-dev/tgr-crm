@@ -293,6 +293,32 @@ export const reservations = mysqlTable(
   table => [index("reservations_unit_dates_idx").on(table.unitId, table.checkIn, table.checkOut), index("reservations_customer_idx").on(table.customerId)],
 );
 
+export const ownershipEntitlements = mysqlTable("ownership_entitlements", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  resortId: int("resortId").references(() => resorts.id),
+  unitId: int("unitId").references(() => units.id),
+  entitlementType: mysqlEnum("entitlementType", ["fixed_week", "flexible_week", "points", "exchange"]).notNull(),
+  fixedWeek: int("fixedWeek"),
+  annualPoints: int("annualPoints").default(0).notNull(),
+  priorityLevel: int("priorityLevel").default(1).notNull(),
+  validFrom: date("validFrom"),
+  validUntil: date("validUntil"),
+  status: mysqlEnum("status", ["active", "suspended", "expired", "cancelled"]).default("active").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("entitlements_contract_idx").on(table.contractId), index("entitlements_resort_idx").on(table.resortId, table.status)]);
+
+export const unitMaintenanceBlocks = mysqlTable("unit_maintenance_blocks", {
+  id: int("id").autoincrement().primaryKey(),
+  unitId: int("unitId").notNull().references(() => units.id),
+  startsAt: date("startsAt").notNull(),
+  endsAt: date("endsAt").notNull(),
+  reason: varchar("reason", { length: 255 }).notNull(),
+  status: mysqlEnum("status", ["planned", "active", "completed", "cancelled"]).default("planned").notNull(),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("maintenance_unit_dates_idx").on(table.unitId, table.startsAt, table.endsAt)]);
+
 export const tasks = mysqlTable(
   "tasks",
   {
@@ -324,6 +350,16 @@ export const auditLogs = mysqlTable("audit_logs", {
   summary: text("summary"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+export const domainEvents = mysqlTable("domain_events", {
+  id: int("id").autoincrement().primaryKey(),
+  eventName: varchar("eventName", { length: 120 }).notNull(),
+  aggregateType: varchar("aggregateType", { length: 80 }).notNull(),
+  aggregateId: varchar("aggregateId", { length: 80 }).notNull(),
+  actorUserId: int("actorUserId").references(() => users.id),
+  payload: text("payload"),
+  occurredAt: timestamp("occurredAt").defaultNow().notNull(),
+}, table => [index("domain_events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.occurredAt), index("domain_events_name_idx").on(table.eventName, table.occurredAt)]);
 
 export const csvImportBatches = mysqlTable("csv_import_batches", {
   id: int("id").autoincrement().primaryKey(),

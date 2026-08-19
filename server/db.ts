@@ -1,6 +1,6 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, auditLogs, users } from "../drizzle/schema";
+import { InsertUser, auditLogs, domainEvents, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -50,6 +50,24 @@ export async function recordAudit(actorUserId: number | null, entityType: string
   const db = await getDb();
   if (!db) return;
   await db.insert(auditLogs).values({ actorUserId, entityType, entityId: String(entityId), action, summary: summary ?? null });
+}
+
+export async function recordDomainEvent(input: {
+  eventName: string;
+  aggregateType: string;
+  aggregateId: number | string;
+  actorUserId?: number | null;
+  payload?: Record<string, unknown>;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(domainEvents).values({
+    eventName: input.eventName,
+    aggregateType: input.aggregateType,
+    aggregateId: String(input.aggregateId),
+    actorUserId: input.actorUserId ?? null,
+    payload: input.payload ? JSON.stringify(input.payload) : null,
+  });
 }
 
 export async function recentAudit(limit = 20) {

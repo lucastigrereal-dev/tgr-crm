@@ -59,3 +59,13 @@
 - [x] Produzir roteiro de evolução com prioridades, dependências e critérios de implantação.
 - [x] Priorizar explicitamente as 50 evoluções por impacto, esforço, dependência e onda.
 - [x] Detalhar dependências e critérios de aceite das frentes prioritárias do roteiro.
+- [ ] Consolidar contrato de dados, catálogo de eventos, auditoria e cobertura crítica de testes.
+- [ ] Implementar direitos de uso, inventário avançado, prioridade e bloqueios de manutenção.
+- [ ] Implementar lista de espera, experiência de chegada/saída e gestão de acompanhantes.
+- [ ] Implementar régua de cobrança, renegociação, conciliação e DRE por campanha.
+- [ ] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
+- [ ] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
+- [ ] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
+- [ ] Implementar contratos de integração, eventos e extensibilidade segura.
+- [ ] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
+- [ ] Implementar busca e assistência de IA com permissões, evidências, avaliação e aprovação humana.

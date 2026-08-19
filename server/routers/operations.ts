@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gt, inArray, lt, ne } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, customers, installments, reservations, resorts, tasks, units, users } from "../../drizzle/schema";
+import { contracts, customers, installments, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
@@ -69,7 +69,10 @@ export const operationsRouter = router({
       const busy = await db.select({ unitId: reservations.unitId }).from(reservations).where(and(
         lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),
       ));
-      const busyIds = new Set(busy.map(item => item.unitId));
+      const maintenance = await db.select({ unitId: unitMaintenanceBlocks.unitId }).from(unitMaintenanceBlocks).where(and(
+        lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]),
+      ));
+      const busyIds = new Set([...busy.map(item => item.unitId), ...maintenance.map(item => item.unitId)]);
       return available.filter(item => !busyIds.has(item.unit.id));
     }),
 

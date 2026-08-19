@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { customers, opportunities, proposals, salesGoals, tasks, users } from "../../drizzle/schema";
-import { getDb, recordAudit } from "../db";
+import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
@@ -58,6 +58,7 @@ export const salesRouter = router({
       createdByUserId: ctx.user.id,
     });
     await recordAudit(ctx.user.id, "opportunity", id, "created", `Oportunidade ${input.title} criada.`);
+    await recordDomainEvent({ eventName: "opportunity.created", aggregateType: "opportunity", aggregateId: id, actorUserId: ctx.user.id, payload: { campaignId: input.campaignId ?? null, sellerId: input.sellerId ?? ctx.user.id, stage: input.stage, expectedAmount: input.expectedAmount } });
     return { id };
   }),
 
@@ -73,6 +74,7 @@ export const salesRouter = router({
       closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
     }).where(eq(opportunities.id, input.id));
     await recordAudit(ctx.user.id, "opportunity", input.id, "updated", `Oportunidade atualizada para ${input.data.stage}.`);
+    await recordDomainEvent({ eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: input.id, actorUserId: ctx.user.id, payload: { campaignId: input.data.campaignId ?? null, stage: input.data.stage, expectedAmount: input.data.expectedAmount } });
     return { success: true };
   }),
 
@@ -98,6 +100,7 @@ export const salesRouter = router({
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
     await db.update(opportunities).set({ stage: input.status === "approved" ? "won" : "proposal", updatedAt: new Date() }).where(eq(opportunities.id, input.opportunityId));
     await recordAudit(ctx.user.id, "proposal", id, "created", `Proposta ${input.reference} criada.`);
+    await recordDomainEvent({ eventName: "proposal.created", aggregateType: "proposal", aggregateId: id, actorUserId: ctx.user.id, payload: { opportunityId: input.opportunityId, status: input.status, totalAmount: input.totalAmount } });
     return { id };
   }),
 

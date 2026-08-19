@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, contracts, customers, financialTransactions, financialTransfers, installments } from "../../drizzle/schema";
-import { getDb, recordAudit } from "../db";
+import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
 
@@ -48,6 +48,7 @@ export const financeRouter = router({
         await tx.insert(financialTransactions).values({ contractId: item.contractId, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: item.amount, dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });
       });
       await recordAudit(ctx.user.id, "installment", input.id, "paid", `Parcela ${item.sequence} baixada como paga.`);
+      await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, sequence: item.sequence, amount: item.amount } });
       return { success: true };
     }),
 
