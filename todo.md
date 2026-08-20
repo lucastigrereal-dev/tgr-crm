@@ -84,3 +84,8 @@
 - [x] Completar inventário avançado com status, filtros e visão consolidada de empreendimentos e unidades.
 - [x] Aplicar e testar `priorityLevel` nas regras de disponibilidade, direito de uso ou fila de espera.
 - [x] Cobrir de forma integrada os fluxos de direitos e bloqueios, incluindo seu impacto na disponibilidade.
+- [x] Converter oferta confirmada da lista de espera em reserva real com teste integrado do caminho confirmado.
+- [x] Amarrar e testar a chegada e saída completa da reserva com acompanhantes, incluindo o estado após check-in e check-out principal.
+- [ ] Cobrir os novos fluxos operacionais de lista de espera e acompanhantes com testes integrados de roteador e interface.
+- [x] Adicionar teste integrado da sequência reserva em check-in, presença de acompanhantes e checkout principal com estado final verificado.
+- [x] Configurar Playwright com fixture autenticada efêmera e comprovar a Central de Reservas e a Lista de Espera em navegador real.

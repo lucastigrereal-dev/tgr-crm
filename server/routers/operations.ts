@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gt, inArray, lt, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, customers, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { contracts, customers, installments, ownershipEntitlements, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
@@ -86,6 +86,40 @@ export const operationsRouter = router({
     await recordAudit(ctx.user.id, "reservation_waitlist", id, "created", `Fila de espera criada com prioridade efetiva ${effectivePriorityScore}.`); return { id, priorityScore: effectivePriorityScore, entitlementScore };
   }),
 
+  updateWaitlistStatus: serviceProcedure.input(z.object({ id: z.number().int().positive(), status: z.enum(["waiting", "offered", "confirmed", "expired", "cancelled"]) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const now = new Date();
+    await db.update(reservationWaitlist).set({ status: input.status, offeredAt: input.status === "offered" ? now : undefined, expiresAt: input.status === "offered" ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : undefined }).where(eq(reservationWaitlist.id, input.id));
+    await recordAudit(ctx.user.id, "reservation_waitlist", input.id, "status_updated", `Fila de espera atualizada para ${input.status}.`);
+    return { success: true };
+  }),
+
+  convertWaitlistToReservation: serviceProcedure.input(z.object({ waitlistId: z.number().int().positive(), unitId: z.number().int().positive(), notes: z.string().trim().max(3000).optional().nullable() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const item = (await db.select().from(reservationWaitlist).where(eq(reservationWaitlist.id, input.waitlistId)).limit(1))[0];
+    if (!item || item.status !== "offered") throw new TRPCError({ code: "BAD_REQUEST", message: "A fila precisa estar com oferta ativa para virar reserva." });
+    const unit = (await db.select().from(units).where(and(eq(units.id, input.unitId), eq(units.status, "active"))).limit(1))[0];
+    if (!unit) throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para confirmar a reserva." });
+    if (item.resortId && unit.resortId !== item.resortId) throw new TRPCError({ code: "BAD_REQUEST", message: "A unidade escolhida não pertence ao empreendimento solicitado." });
+    const conflict = await db.select({ id: reservations.id }).from(reservations).where(and(eq(reservations.unitId, input.unitId), lt(reservations.checkIn, item.desiredCheckOut), gt(reservations.checkOut, item.desiredCheckIn), ne(reservations.status, "cancelled"))).limit(1);
+    if (conflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade escolhida ficou indisponível neste período." });
+    const maintenanceConflict = await db.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, item.desiredCheckOut), gt(unitMaintenanceBlocks.endsAt, item.desiredCheckIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
+    if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade está bloqueada para manutenção neste período." });
+    if (item.contractId) {
+      const contract = (await db.select().from(contracts).where(and(eq(contracts.id, item.contractId), eq(contracts.customerId, item.customerId))).limit(1))[0];
+      if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato da fila não pertence ao associado." });
+    }
+    const reservationId = await db.transaction(async tx => {
+      const created = await tx.insert(reservations).values({ customerId: item.customerId, contractId: item.contractId, unitId: input.unitId, checkIn: item.desiredCheckIn, checkOut: item.desiredCheckOut, adults: item.partySize, children: 0, notes: input.notes || item.preferenceNotes || null, status: "confirmed", createdByUserId: ctx.user.id }).$returningId();
+      const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar a reserva da fila." });
+      await tx.update(reservationWaitlist).set({ status: "confirmed" }).where(eq(reservationWaitlist.id, item.id));
+      return id;
+    });
+    await recordAudit(ctx.user.id, "reservation", reservationId, "created_from_waitlist", `Reserva criada da fila ${item.id}.`);
+    await recordAudit(ctx.user.id, "reservation_waitlist", item.id, "converted_to_reservation", `Fila convertida na reserva ${reservationId}.`);
+    return { reservationId };
+  }),
+
   availableUnits: serviceProcedure.input(z.object({ checkIn: z.string().date(), checkOut: z.string().date(), resortId: z.number().int().positive().optional() }))
     .query(async ({ input }) => {
       const db = await getDb();
@@ -140,10 +174,32 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      await db.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? new Date() : undefined, checkedOutAt: input.status === "completed" ? new Date() : undefined }).where(eq(reservations.id, input.id));
+      const now = new Date();
+      await db.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(eq(reservations.id, input.id));
+      if (input.status === "completed") await db.update(reservationGuests).set({ checkedOutAt: now }).where(and(eq(reservationGuests.reservationId, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
       await recordAudit(ctx.user.id, "reservation", input.id, "status_updated", `Reserva atualizada para ${input.status}.`);
       return { success: true };
     }),
+
+  reservationGuests: serviceProcedure.input(z.object({ reservationId: z.number().int().positive() })).query(async ({ input }) => {
+    const db = await getDb(); if (!db) return [];
+    return db.select().from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).orderBy(reservationGuests.createdAt);
+  }),
+
+  addReservationGuest: serviceProcedure.input(z.object({ reservationId: z.number().int().positive(), fullName: z.string().trim().min(3).max(255), documentNumber: z.string().trim().max(32).nullable().optional(), relationship: z.string().trim().max(80).nullable().optional(), birthDate: z.string().date().nullable().optional() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const created = await db.insert(reservationGuests).values({ reservationId: input.reservationId, fullName: input.fullName, documentNumber: input.documentNumber || null, relationship: input.relationship || null, birthDate: input.birthDate ? dateValue(input.birthDate) : null }).$returningId();
+    const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o acompanhante." });
+    await recordAudit(ctx.user.id, "reservation_guest", id, "created", `Acompanhante ${input.fullName} incluído na reserva ${input.reservationId}.`);
+    return { id };
+  }),
+
+  updateGuestPresence: serviceProcedure.input(z.object({ id: z.number().int().positive(), action: z.enum(["check_in", "check_out"]) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    await db.update(reservationGuests).set(input.action === "check_in" ? { checkedInAt: new Date() } : { checkedOutAt: new Date() }).where(eq(reservationGuests.id, input.id));
+    await recordAudit(ctx.user.id, "reservation_guest", input.id, input.action, `Presença de acompanhante registrada: ${input.action}.`);
+    return { success: true };
+  }),
 
   tasks: internalProcedure.input(z.object({ includeDone: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();

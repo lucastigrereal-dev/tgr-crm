@@ -57,6 +57,13 @@
       "when": 1787185131730,
       "tag": "0007_adorable_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1787188998755,
+      "tag": "0008_sour_silver_samurai",
+      "breakpoints": true
     }
   ]
 }

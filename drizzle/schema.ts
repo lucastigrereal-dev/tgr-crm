@@ -338,6 +338,23 @@ export const reservations = mysqlTable(
   table => [index("reservations_unit_dates_idx").on(table.unitId, table.checkIn, table.checkOut), index("reservations_customer_idx").on(table.customerId)],
 );
 
+export const reservationGuests = mysqlTable(
+  "reservation_guests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    reservationId: int("reservationId").notNull().references(() => reservations.id),
+    fullName: varchar("fullName", { length: 255 }).notNull(),
+    documentNumber: varchar("documentNumber", { length: 32 }),
+    relationship: varchar("relationship", { length: 80 }),
+    birthDate: date("birthDate"),
+    checkedInAt: timestamp("checkedInAt"),
+    checkedOutAt: timestamp("checkedOutAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [index("reservation_guests_reservation_idx").on(table.reservationId), index("reservation_guests_document_idx").on(table.documentNumber)],
+);
+
 export const ownershipEntitlements = mysqlTable("ownership_entitlements", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull().references(() => contracts.id),

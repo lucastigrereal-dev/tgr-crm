@@ -2,7 +2,7 @@
 
 ## Comprovado nesta base
 
-O projeto executa checagem de tipos e 33 testes automatizados de regras de domínio, permissões, CSV, funil, comissão, autenticação, reversão controlada e exportação. O backend valida formato de importação, relatórios de erro e filtros comerciais sem depender do navegador.
+O projeto executa checagem de tipos e 53 testes automatizados de regras de domínio, permissões, CSV, funil, comissão, autenticação, reversão controlada, exportação, inventário, lista de espera e acompanhantes. O backend valida formato de importação, relatórios de erro, filtros comerciais, conversão da fila em reserva e check-in/check-out de acompanhantes sem depender do navegador.
 
 A reversão foi exercitada com uma infraestrutura de banco controlada: associados criados são removidos, associados atualizados recuperam o snapshot anterior, contratos importados são removidos junto das parcelas quando não há dependências, e documentos, reservas, tarefas, cobranças, lançamentos financeiros ou contratos dependentes bloqueiam a exclusão. A exportação filtrada possui contrato determinístico para etapa, dados da proposta, data e nome do arquivo, além de testes que comprovam a entrega dessas linhas aos escritores XLSX e PDF.
 
@@ -12,4 +12,6 @@ A reversão de um lote CSV altera associados, contratos e parcelas. A execução
 
 ## Condição para E2E completo
 
-Para comprovar reversão e downloads em navegador de ponta a ponta, o projeto precisa de um ambiente de homologação isolado, usuário de teste e dados descartáveis. O runner Playwright e Chromium já estão instalados; falta apenas essa fronteira de dados segura.
+O projeto agora possui Playwright configurado com uma sessão de proprietário legítima e efêmera, criada pelo próprio SDK e nunca gravada no repositório. Dois testes de navegador confirmam que a Central de Reservas abre autenticada e que a Lista de Espera apresenta o vínculo contratual que ativa prioridade de direito de uso.
+
+Para comprovar reversão e downloads reais de Excel/PDF em navegador de ponta a ponta, o projeto ainda precisa de um ambiente de homologação isolado, usuário de teste e dados descartáveis. Essa fronteira evita semear ou reverter registros artificiais no banco operacional compartilhado.

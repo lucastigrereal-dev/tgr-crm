@@ -109,6 +109,11 @@ temp/
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
 
+# Browser-test artifacts and ephemeral authenticated state
+test-results/
+playwright-report/
+e2e/.auth/
+
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 .project-config.json
