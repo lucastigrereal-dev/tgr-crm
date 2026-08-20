@@ -66,7 +66,7 @@
 - [x] Implementar régua de cobrança, renegociação, conciliação e DRE por campanha.
 - [x] Implementar proposta de renegociação auditável de parcela, com simulação antes de aplicar.
 - [x] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
-- [ ] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
+- [x] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
 - [ ] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
 - [ ] Implementar contratos de integração, eventos e extensibilidade segura.
 - [ ] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
@@ -89,3 +89,5 @@
 - [ ] Cobrir os novos fluxos operacionais de lista de espera e acompanhantes com testes integrados de roteador e interface.
 - [x] Adicionar teste integrado da sequência reserva em check-in, presença de acompanhantes e checkout principal com estado final verificado.
 - [x] Configurar Playwright com fixture autenticada efêmera e comprovar a Central de Reservas e a Lista de Espera em navegador real.
+- [x] Implementar central unificada na ficha do associado consolidando interações, próximos contatos, tarefas e contexto operacional em uma única visão.
+- [x] Cobrir em teste integrado o payload de radar/onboarding de `customers.detail` e a experiência autenticada da ficha do associado.
