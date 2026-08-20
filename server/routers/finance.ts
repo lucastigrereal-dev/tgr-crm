@@ -1,10 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
+import { getCollectionStage } from "../domain";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
@@ -15,6 +16,21 @@ export const financeRouter = router({
     return db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
       .from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
       .orderBy(desc(installments.dueDate)).limit(300);
+  }),
+
+  collectionQueue: financeProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    const now = new Date();
+    const rows = await db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
+      .from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
+      .where(inArray(installments.status, ["open", "overdue"]))
+      .orderBy(installments.dueDate).limit(120);
+    return rows.map(item => {
+      const dueDate = new Date(item.installment.dueDate);
+      const collection = getCollectionStage(dueDate, now);
+      return { ...item, collection, daysPastDue: Math.max(0, Math.floor((now.getTime() - dueDate.getTime()) / 86_400_000)) };
+    });
   }),
 
   billing: financeProcedure.query(async () => {

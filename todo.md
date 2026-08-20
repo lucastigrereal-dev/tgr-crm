@@ -72,3 +72,4 @@
 - [ ] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
 - [ ] Implementar busca e assistência de IA com permissões, evidências, avaliação e aprovação humana.
 - [x] Implementar motor de estágios da régua de cobrança com prioridade, prazo de ação, criação deduplicada de tarefas e testes unitários.
+- [x] Expor a régua de cobrança na Central Financeira com fila priorizada, estágio, prazo de ação e atalhos de cobrar, renegociar e baixar.
