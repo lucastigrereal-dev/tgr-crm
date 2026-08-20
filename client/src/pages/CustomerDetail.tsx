@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { ArrowLeft, CalendarClock, CheckCircle2, FileUp, MessageSquarePlus, Paperclip, Radar } from "lucide-react";
+import { ArrowLeft, CalendarClock, CheckCircle2, FileUp, MessageSquarePlus, Paperclip, Radar, ShieldCheck, Sparkles } from "lucide-react";
 import { ChangeEvent, FormEvent, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { toast } from "sonner";
@@ -27,6 +27,9 @@ export default function CustomerDetail() {
   const [profileStatus, setProfileStatus] = useState<"prospect" | "active" | "inactive">("prospect");
   const [category, setCategory] = useState("Documento pessoal");
   const [file, setFile] = useState<File | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantQuestion, setAssistantQuestion] = useState("");
+  const [assistantResult, setAssistantResult] = useState<{ answer: string; confidence: "high" | "medium" | "low"; evidence: Array<{ id: string; kind: string; title: string; detail: string }>; recommendedActions: Array<{ title: string; rationale: string; requiresHumanApproval: true }>; limitations: string[] } | null>(null);
   const utils = trpc.useUtils();
   const detail = trpc.customers.detail.useQuery({ id }, { enabled: Boolean(id) });
   const addInteraction = trpc.customers.addInteraction.useMutation({
@@ -53,6 +56,10 @@ export default function CustomerDetail() {
       setEditOpen(false);
       toast.success("Cadastro atualizado.");
     },
+    onError: error => toast.error(error.message),
+  });
+  const askAssistant = trpc.ai.analyzeCustomer.useMutation({
+    onSuccess: result => setAssistantResult(result),
     onError: error => toast.error(error.message),
   });
 
@@ -117,6 +124,12 @@ export default function CustomerDetail() {
     });
   };
 
+  const submitAssistant = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!assistantQuestion.trim()) return toast.error("Escreva uma pergunta para a assistência.");
+    askAssistant.mutate({ customerId: id, question: assistantQuestion });
+  };
+
   if (detail.isLoading) return <p className="text-sm text-muted-foreground">Abrindo ficha do cliente...</p>;
   if (!detail.data) {
     return <EmptyState title="Cliente não encontrado" body="Essa ficha não existe mais ou o endereço foi digitado errado." action={<Button asChild className="bg-[#1d2b2a]"><Link href="/clientes">Voltar para clientes</Link></Button>} />;
@@ -128,6 +141,18 @@ export default function CustomerDetail() {
   return <div className="space-y-8">
     <Link href="/clientes" className="inline-flex items-center gap-2 text-xs font-semibold text-[#8a6b2d]"><ArrowLeft className="h-3.5 w-3.5" />Clientes</Link>
     <PageHeader eyebrow="Ficha do associado" title={customer.fullName} description={description} action={<div className="flex flex-wrap gap-2">
+      <Dialog open={assistantOpen} onOpenChange={open => { setAssistantOpen(open); if (!open) { setAssistantQuestion(""); setAssistantResult(null); } }}>
+        <DialogTrigger asChild><Button variant="outline" className="rounded-xl border-[#b18f4b] text-[#5d461d] hover:bg-[#fff7e5]"><Sparkles className="mr-2 h-4 w-4" />Consultar IA</Button></DialogTrigger>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl"><DialogHeader><DialogTitle className="font-serif text-2xl">Copiloto do associado</DialogTitle></DialogHeader>
+          <div className="rounded-xl border border-[#eadbb8] bg-[#fffaf0] p-3 text-sm text-[#6b5324]"><div className="flex items-center gap-2 font-semibold"><ShieldCheck className="h-4 w-4" />Consulta fundamentada e sem execução automática</div><p className="mt-1 text-xs leading-5">A IA só enxerga o contexto permitido para o seu perfil, cita as evidências usadas e sugere ações que exigem decisão humana.</p></div>
+          <form className="grid gap-3 py-2" onSubmit={submitAssistant}><Label htmlFor="assistant-question">Pergunta sobre este associado</Label><Textarea id="assistant-question" value={assistantQuestion} onChange={event => setAssistantQuestion(event.target.value)} maxLength={800} required placeholder="Ex.: Qual é a próxima melhor ação para destravar este relacionamento?" /><Button disabled={askAssistant.isPending} className="bg-[#1d2b2a] hover:bg-[#29413e]"><Sparkles className="mr-2 h-4 w-4" />{askAssistant.isPending ? "Analisando evidências..." : "Analisar com evidências"}</Button></form>
+          {assistantResult ? <div className="space-y-4 border-t border-[#eee9df] pt-4"><div className="rounded-2xl bg-[#f7f5ef] p-4"><div className="flex items-center justify-between gap-3"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#b18f4b]">Resposta fundamentada</p><Badge className="border-0 bg-[#eaf0ea] text-xs text-[#24403d]">Confiança {assistantResult.confidence === "high" ? "alta" : assistantResult.confidence === "medium" ? "média" : "baixa"}</Badge></div><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[#1d2b2a]">{assistantResult.answer}</p></div>
+            {assistantResult.recommendedActions.length ? <div><p className="text-sm font-semibold text-[#1d2b2a]">Ações sugeridas</p><div className="mt-2 space-y-2">{assistantResult.recommendedActions.map(action => <div key={action.title} className="rounded-xl border border-[#e8e3d9] p-3"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold text-[#1d2b2a]">{action.title}</p><Badge className="border-0 bg-[#fff2d8] text-[10px] text-[#6b5324]">Aprovação humana obrigatória</Badge></div><p className="mt-1 text-xs leading-5 text-muted-foreground">{action.rationale}</p></div>)}</div></div> : null}
+            {assistantResult.evidence.length ? <div><p className="text-sm font-semibold text-[#1d2b2a]">Evidências consultadas</p><div className="mt-2 space-y-2">{assistantResult.evidence.map(evidence => <div key={evidence.id} className="rounded-xl bg-[#faf8f3] p-3 text-xs"><p className="font-semibold text-[#1d2b2a]">{evidence.id} · {evidence.kind} · {evidence.title}</p><p className="mt-1 leading-5 text-muted-foreground">{evidence.detail}</p></div>)}</div></div> : null}
+            {assistantResult.limitations.length ? <p className="rounded-xl border border-dashed border-[#d9cfbd] p-3 text-xs leading-5 text-muted-foreground">Limites: {assistantResult.limitations.join(" · ")}</p> : null}
+          </div> : null}
+        </DialogContent>
+      </Dialog>
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogTrigger asChild><Button variant="outline" className="rounded-xl border-[#d9cfbd]" onClick={() => setProfileStatus(customer.status)}>Editar cadastro</Button></DialogTrigger>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle className="font-serif text-2xl">Cadastro completo do associado</DialogTitle></DialogHeader>
