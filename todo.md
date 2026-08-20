@@ -49,7 +49,7 @@
 - [x] Cobrir com testes as permissões, os cálculos de comissão, a reversão e as exportações.
 - [x] Permitir vincular e editar campanha nas oportunidades para alimentar o ranking comercial.
 - [x] Reforçar reversão de contratos importados contra documentos, reservas, tarefas, cobranças e lançamentos vinculados.
-- [ ] Adicionar testes automatizados de reversão efetiva e de geração dos exports filtrados.
+- [x] Adicionar testes automatizados de reversão efetiva e de geração dos exports filtrados.
 - [x] Adicionar seletor visual de campanha na criação e edição de oportunidades.
 - [x] Exibir progresso visual de cada vendedor em relação à meta na Central de Comissões.
 - [ ] Criar testes ponta a ponta de reversão CSV e de exportação de propostas filtradas.
@@ -74,3 +74,5 @@
 - [x] Implementar motor de estágios da régua de cobrança com prioridade, prazo de ação, criação deduplicada de tarefas e testes unitários.
 - [x] Expor a régua de cobrança na Central Financeira com fila priorizada, estágio, prazo de ação e atalhos de cobrar, renegociar e baixar.
 - [x] Expor playbooks comerciais por etapa, cadastro administrativo auditado e fluxo visual de solicitação e decisão de desconto.
+- [x] Testar a reversão de contratos importados, incluindo bloqueios por parcelas, cobranças, documentos, reservas, tarefas e lançamentos.
+- [x] Testar o caminho real de exportação filtrada para XLSX e PDF, comprovando dados e nome de arquivo.

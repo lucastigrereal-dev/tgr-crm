@@ -2,7 +2,9 @@
 
 ## Comprovado nesta base
 
-O projeto executa checagem de tipos e 23 testes automatizados de regras de domínio, permissões, CSV, funil, comissão e autenticação. O backend valida formato de importação, relatórios de erro e filtros comerciais sem depender do navegador.
+O projeto executa checagem de tipos e 33 testes automatizados de regras de domínio, permissões, CSV, funil, comissão, autenticação, reversão controlada e exportação. O backend valida formato de importação, relatórios de erro e filtros comerciais sem depender do navegador.
+
+A reversão foi exercitada com uma infraestrutura de banco controlada: associados criados são removidos, associados atualizados recuperam o snapshot anterior, contratos importados são removidos junto das parcelas quando não há dependências, e documentos, reservas, tarefas, cobranças, lançamentos financeiros ou contratos dependentes bloqueiam a exclusão. A exportação filtrada possui contrato determinístico para etapa, dados da proposta, data e nome do arquivo, além de testes que comprovam a entrega dessas linhas aos escritores XLSX e PDF.
 
 ## Deliberadamente não executado no banco ativo
 
