@@ -68,7 +68,7 @@
 - [x] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
 - [x] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
 - [x] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
-- [ ] Implementar contratos de integração, eventos e extensibilidade segura.
+- [x] Implementar contratos de integração, eventos e extensibilidade segura.
 - [ ] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
 - [ ] Implementar busca e assistência de IA com permissões, evidências, avaliação e aprovação humana.
 - [x] Implementar motor de estágios da régua de cobrança com prioridade, prazo de ação, criação deduplicada de tarefas e testes unitários.
