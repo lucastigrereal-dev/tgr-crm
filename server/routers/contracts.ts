@@ -1,11 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { contractDocuments, contracts, customers, installments, proposals, users } from "../../drizzle/schema";
+import { captureRecords, commercialProjectSettings, contractDocuments, contracts, customers, installments, opportunities, proposals, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { buildInstallmentSchedule } from "../domain";
+import { parseCancellationPolicy } from "../projectPolicy";
+import { simulateCancellation } from "../cancellationDomain";
 import { contractsProcedure, salesProcedure } from "./access";
 
 export const contractsRouter = router({
@@ -71,6 +73,15 @@ export const contractsRouter = router({
       db.select().from(contractDocuments).where(eq(contractDocuments.contractId, input.id)).orderBy(desc(contractDocuments.createdAt)),
     ]);
     return { ...contract, installments: schedule, documents };
+  }),
+
+  simulateCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)); const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0);
+    const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
+    const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
+    return { contractId: contract.id, resortId: resortId ?? null, policy: parseCancellationPolicy(settings?.cancellationPolicy), ...simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }) };
   }),
 
   updateStatus: salesProcedure.input(z.object({
