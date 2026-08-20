@@ -32,6 +32,7 @@ export const salesCampaigns = mysqlTable("sales_campaigns", {
   startsAt: date("startsAt"),
   endsAt: date("endsAt"),
   commissionRate: decimal("commissionRate", { precision: 5, scale: 2 }).default("0.00").notNull(),
+  targetAmount: decimal("targetAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
   status: mysqlEnum("status", ["draft", "active", "closed"]).default("draft").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

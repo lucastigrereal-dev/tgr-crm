@@ -1,0 +1,1 @@
+ALTER TABLE `sales_campaigns` ADD `targetAmount` decimal(14,2) DEFAULT '0.00' NOT NULL;

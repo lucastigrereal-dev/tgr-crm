@@ -110,8 +110,8 @@
 - [x] Criar módulo dedicado de campanhas, metas e playbooks com visão gerencial e ações administrativas.
 - [x] Aplicar TGR-CRM como nome de trabalho na navegação e identificação visível do sistema.
 - [ ] Preparar emissão de boleto e PIX por gateway nos contratos, sem simular cobrança antes da conexão segura.
-- [ ] Adicionar dashboard visual de progresso de metas em tempo real à Central de Campanhas.
-- [ ] Destacar e ampliar o acesso aos modelos CSV de associados, contratos e unidades na Central de Importação.
+- [x] Adicionar dashboard visual de progresso de metas em tempo real à Central de Campanhas.
+- [x] Destacar e ampliar o acesso aos modelos CSV de associados, contratos e unidades na Central de Importação.
 - [x] Produzir matriz comparativa entre TGR-CRM e a referência TSE enviada, com cobertura, lacunas, riscos e plano priorizado.
 - [ ] Migrar para domínio do TGR-CRM a comissão proporcional por parcela de entrada, calendário de fechamento e borderô executivo.
 - [ ] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
@@ -142,3 +142,6 @@
 - [x] Identificar o repositório GitHub existente do TGR-CRM/TSExplorer e comparar o histórico antes de qualquer sincronização externa.
 - [x] Auditar o repositório tgsolutions e decidir formalmente entre espelhamento documental, integração seletiva ou separação total do código.
 - [x] Criar o repositório privado independente `tgr-crm` no GitHub e sincronizar o estado validado do produto, sem incluir conteúdo do tgsolutions.
+- [x] Adicionar alvo de vendas auditável à campanha e visual de progresso por campanha na Central de Campanhas.
+- [x] Tornar os três modelos CSV visíveis em cards de acesso rápido, com explicação de cada carga e download direto.
+- [x] Adicionar atualização automática por polling ao painel de metas da Central de Campanhas e validar o comportamento.
