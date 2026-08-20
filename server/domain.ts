@@ -7,6 +7,21 @@ export function shouldCreatePaymentReminder(dueDate: Date, now: Date, leadDays =
   return dueDate.getTime() <= threshold.getTime();
 }
 
+export type CollectionStage = {
+  code: "pre_due" | "due_today" | "late_soft" | "late_urgent";
+  label: string;
+  priority: "normal" | "high" | "urgent";
+  actionWithinHours: number;
+};
+
+export function getCollectionStage(dueDate: Date, now = new Date()): CollectionStage {
+  const daysFromDue = Math.floor((now.getTime() - dueDate.getTime()) / 86_400_000);
+  if (daysFromDue < 0) return { code: "pre_due", label: "Pré-vencimento", priority: "normal", actionWithinHours: 48 };
+  if (daysFromDue === 0) return { code: "due_today", label: "Vence hoje", priority: "high", actionWithinHours: 24 };
+  if (daysFromDue <= 15) return { code: "late_soft", label: "Atraso inicial", priority: "high", actionWithinHours: 24 };
+  return { code: "late_urgent", label: "Atraso crítico", priority: "urgent", actionWithinHours: 8 };
+}
+
 export function resolveFollowUpAt(value: string | null | undefined, now = new Date()) {
   return value ? new Date(value) : new Date(now.getTime() + 48 * 60 * 60 * 1000);
 }

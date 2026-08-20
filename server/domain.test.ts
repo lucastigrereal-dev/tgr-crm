@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInstallmentSchedule, isValidReservationPeriod, resolveFollowUpAt, shouldCreatePaymentReminder } from "./domain";
+import { buildInstallmentSchedule, getCollectionStage, isValidReservationPeriod, resolveFollowUpAt, shouldCreatePaymentReminder } from "./domain";
 
 describe("regras operacionais", () => {
   it("distribui parcelas preservando o valor total em centavos", () => {
@@ -21,6 +21,14 @@ describe("regras operacionais", () => {
     expect(shouldCreatePaymentReminder(new Date("2026-09-08T12:00:00Z"), now)).toBe(true);
     expect(shouldCreatePaymentReminder(new Date("2026-08-28T12:00:00Z"), now)).toBe(true);
     expect(shouldCreatePaymentReminder(new Date("2026-09-09T12:00:00Z"), now)).toBe(false);
+  });
+
+  it("classifica a régua de cobrança por proximidade e atraso", () => {
+    const now = new Date("2026-09-10T12:00:00Z");
+    expect(getCollectionStage(new Date("2026-09-14T12:00:00Z"), now)).toMatchObject({ code: "pre_due", priority: "normal" });
+    expect(getCollectionStage(new Date("2026-09-10T12:00:00Z"), now)).toMatchObject({ code: "due_today", priority: "high" });
+    expect(getCollectionStage(new Date("2026-09-04T12:00:00Z"), now)).toMatchObject({ code: "late_soft", priority: "high" });
+    expect(getCollectionStage(new Date("2026-08-20T12:00:00Z"), now)).toMatchObject({ code: "late_urgent", priority: "urgent" });
   });
 
   it("cria follow-up comercial em 48 horas se o vendedor não informar data", () => {

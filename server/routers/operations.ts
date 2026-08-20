@@ -5,7 +5,7 @@ import { contracts, customers, installments, reservationWaitlist, reservations, 
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
-import { isValidReservationPeriod, shouldCreatePaymentReminder } from "../domain";
+import { getCollectionStage, isValidReservationPeriod, shouldCreatePaymentReminder } from "../domain";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const dateTimeValue = (value: string | null | undefined) => value ? new Date(value) : null;
@@ -138,14 +138,15 @@ export const operationsRouter = router({
     const existingPaymentTaskKeys = new Set(openPaymentTasks.map(task => `${task.contractId}:${task.title}`));
     const reminders = dueInstallments.filter(({ installment }) => shouldCreatePaymentReminder(new Date(installment.dueDate), now));
     for (const { installment, customerId } of reminders) {
-      const title = `Cobrar parcela #${installment.sequence}`;
+      const stage = getCollectionStage(new Date(installment.dueDate), now);
+      const title = `[${stage.label}] Cobrar parcela #${installment.sequence}`;
       const key = `${installment.contractId}:${title}`;
       if (existingPaymentTaskKeys.has(key)) continue;
       await db.insert(tasks).values({
         title,
-        description: `Lembrete automático: parcela com vencimento em ${new Date(installment.dueDate).toLocaleDateString("pt-BR")}.`,
+        description: `Régua de cobrança · ${stage.label}. Vencimento em ${new Date(installment.dueDate).toLocaleDateString("pt-BR")}. Ação recomendada em até ${stage.actionWithinHours}h.`,
         type: "payment",
-        priority: new Date(installment.dueDate) < now ? "urgent" : "high",
+        priority: stage.priority,
         customerId,
         contractId: installment.contractId,
         assignedToUserId: ctx.user.id,
