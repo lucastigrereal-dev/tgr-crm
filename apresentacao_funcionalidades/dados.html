@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    .slide-container { width: 1280px; min-height: 720px; background: #E3E8EC; color: #0F172A; }
+    .wrap { padding-top: 60px; padding-left: 88px; padding-right: 88px; }
+    .ey { font: 700 14px/1 Arial, sans-serif; letter-spacing: 3px; text-transform: uppercase; color: #059669; }
+    h1 { font: 700 46px/1 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 16px; }
+    .rule { border-top: 1px dotted #64748B; margin-top: 22px; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 62px; margin-top: 42px; }
+    .lead { font: 300 23px/1.35 Georgia, serif; color: #334155; max-width: 660px; }
+    .flow { margin-top: 26px; border-top: 2px solid #059669; }
+    .row { display: grid; grid-template-columns: 62px 220px 1fr; gap: 16px; min-height: 62px; align-items: center; border-bottom: 1px dotted #64748B; }
+    .num { font: 700 31px/1 Impact, Arial Narrow, sans-serif; color: #059669; }
+    .name { font: 700 17px/1 Arial, sans-serif; text-transform: uppercase; color: #0F172A; }
+    .copy { font: 300 17px/1.25 Georgia, serif; color: #475569; }
+    .right { border-left: 4px solid #059669; padding-left: 29px; padding-top: 4px; }
+    .label { font: 700 14px/1 Arial, sans-serif; letter-spacing: 2px; text-transform: uppercase; color: #059669; }
+    .big { font: 700 39px/1.05 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 19px; }
+    .body { font: 300 21px/1.36 Georgia, serif; color: #334155; margin-top: 17px; }
+    .proof { border-top: 1px dotted #64748B; margin-top: 32px; padding-top: 18px; font: 700 15px/1.35 Arial, sans-serif; letter-spacing: .6px; text-transform: uppercase; color: #0F172A; }
+    .small { font: 300 17px/1.35 Georgia, serif; color: #475569; margin-top: 11px; }
+  </style>
+</head>
+<body>
+  <div class="slide-container"><div class="wrap">
+    <div class="ey">10 · Dados e implantação</div>
+    <h1>Dados entram sem roleta russa</h1>
+    <div class="rule"></div>
+    <div class="grid">
+      <div>
+        <div class="lead">Importar associado e contrato não é jogar arquivo na base e rezar. A entrada já nasce com etapa, prova e volta segura.</div>
+        <div class="flow">
+          <div class="row"><div class="num">01</div><div class="name">Modelo & mapeamento</div><div class="copy">Arquivo padrão e sugestão automática de coluna para reduzir gambiarra.</div></div>
+          <div class="row"><div class="num">02</div><div class="name">Prévia & validação</div><div class="copy">Cada linha é examinada antes de comprometer associado ou contrato.</div></div>
+          <div class="row"><div class="num">03</div><div class="name">Recibo & erro</div><div class="copy">Sucesso, falha e relatório para correção saem do mesmo lote.</div></div>
+          <div class="row"><div class="num">04</div><div class="name">Commit auditável</div><div class="copy">O lote deixa rastro de quem importou, quando e o que alterou.</div></div>
+        </div>
+      </div>
+      <div class="right">
+        <div class="label">Freio de emergência</div>
+        <div class="big">Reversão segura<br>e imediata</div>
+        <div class="body">Depois de um commit bem-sucedido, o sistema disponibiliza a reversão sem F5. Dados criados saem; snapshots atualizados voltam ao estado anterior.</div>
+        <div class="proof">Dependência bloqueia exclusão</div>
+        <div class="small">Se já houver parcela, documento, reserva, tarefa, cobrança ou lançamento ligado ao lote, a reversão trava em vez de apagar história no escuro.</div>
+      </div>
+    </div>
+  </div></div>
+</body>
+</html>

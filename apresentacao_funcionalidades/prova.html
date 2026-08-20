@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    .slide-container { width: 1280px; min-height: 720px; background: #E3E8EC; color: #0F172A; }
+    .wrap { padding-top: 60px; padding-left: 88px; padding-right: 88px; }
+    .eyebrow { font: 700 14px/1 Arial, sans-serif; letter-spacing: 3px; text-transform: uppercase; color: #059669; }
+    h1 { font: 700 47px/1 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 16px; }
+    .rule { border-top: 1px dotted #64748B; margin-top: 22px; }
+    .lead { font: 300 23px/1.34 Georgia, serif; color: #334155; margin-top: 25px; max-width: 865px; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; column-gap: 70px; row-gap: 24px; margin-top: 42px; }
+    .metric { border-top: 2px solid #059669; padding-top: 16px; min-height: 126px; }
+    .number { font: 700 58px/0.9 Impact, Arial Narrow, sans-serif; color: #059669; }
+    .title { font: 700 18px/1.1 Arial, sans-serif; text-transform: uppercase; letter-spacing: .6px; margin-top: 10px; }
+    .desc { font: 300 17px/1.32 Georgia, serif; color: #475569; margin-top: 7px; }
+    .proof { display: grid; grid-template-columns: 250px 1fr; gap: 30px; border-top: 1px dotted #64748B; margin-top: 36px; padding-top: 21px; }
+    .proof-label { font: 700 14px/1.2 Arial, sans-serif; letter-spacing: 2px; text-transform: uppercase; color: #059669; }
+    .proof-copy { font: 300 20px/1.34 Georgia, serif; color: #0F172A; }
+    .proof-copy strong { font-family: Arial, sans-serif; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="slide-container"><div class="wrap">
+    <div class="eyebrow">12 · Prova de qualidade</div>
+    <h1>Não é promessa: foi testado</h1>
+    <div class="rule"></div>
+    <div class="lead">A estrutura foi validada em regra de negócio, navegador e laboratório isolado. O sistema não precisa de fé, vela ou abraço na planilha para ficar de pé.</div>
+    <div class="metrics">
+      <div class="metric"><div class="number">71</div><div class="title">Testes unitários e integração</div><div class="desc">Domínio, permissões, CSV, financeiro, reservas, analytics, integração e IA.</div></div>
+      <div class="metric"><div class="number">9</div><div class="title">E2Es autenticados</div><div class="desc">Navegação, relacionamento, dashboard, IA, download e fluxos operacionais.</div></div>
+      <div class="metric"><div class="number">3</div><div class="title">E2Es estritos</div><div class="desc">Backend e MySQL isolados para reversão, exportação e jornada de reserva.</div></div>
+      <div class="metric"><div class="number">382,8</div><div class="title">KB gzip no app crítico</div><div class="desc">Abaixo do limite de 450 KB; Excel e PDF carregam sob demanda.</div></div>
+    </div>
+    <div class="proof"><div class="proof-label">Portão final</div><div class="proof-copy"><strong>Build de produção aprovado.</strong> Segurança, acessibilidade e orçamento de bundle passaram; o laboratório temporário foi limpo depois da validação para não deixar prato sujo no sandbox.</div></div>
+  </div></div>
+</body>
+</html>

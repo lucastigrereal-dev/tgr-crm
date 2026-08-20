@@ -1,0 +1,165 @@
+{
+  "project_info": {
+    "title": "TSE CRM Exclusivo",
+    "created": 1787250405.632,
+    "last_updated": 1787250718.113,
+    "total_slides": 15
+  },
+  "slides": [
+    {
+      "id": "capa",
+      "state": "edited",
+      "pageNum": 1
+    },
+    {
+      "id": "nao_planilha",
+      "state": "edited",
+      "pageNum": 2
+    },
+    {
+      "id": "problema",
+      "state": "edited",
+      "pageNum": 3
+    },
+    {
+      "id": "espinha_dorsal",
+      "state": "edited",
+      "pageNum": 4
+    },
+    {
+      "id": "comercial",
+      "state": "edited",
+      "pageNum": 5
+    },
+    {
+      "id": "contratos",
+      "state": "edited",
+      "pageNum": 6
+    },
+    {
+      "id": "cobranca",
+      "state": "edited",
+      "pageNum": 7
+    },
+    {
+      "id": "reservas",
+      "state": "edited",
+      "pageNum": 8
+    },
+    {
+      "id": "chegada",
+      "state": "edited",
+      "pageNum": 9
+    },
+    {
+      "id": "gestao",
+      "state": "edited",
+      "pageNum": 10
+    },
+    {
+      "id": "dados",
+      "state": "edited",
+      "pageNum": 11
+    },
+    {
+      "id": "ia",
+      "state": "edited",
+      "pageNum": 12
+    },
+    {
+      "id": "prova",
+      "state": "edited",
+      "pageNum": 13
+    },
+    {
+      "id": "operacao_real",
+      "state": "edited",
+      "pageNum": 14
+    },
+    {
+      "id": "encerramento",
+      "state": "edited",
+      "pageNum": 15
+    }
+  ],
+  "outline": [
+    {
+      "id": "capa",
+      "title": "TSE CRM Exclusivo",
+      "summary": "Capa minimalista com o nome provisório do produto e seu propósito operacional."
+    },
+    {
+      "id": "nao_planilha",
+      "title": "Não é mais uma planilha com login",
+      "summary": "Apresenta o sistema proprietário, de empresa única, que concentra a operação de timeshare."
+    },
+    {
+      "id": "problema",
+      "title": "O problema que a operação enfrenta",
+      "summary": "Expõe os silos de informação, decisões por memória e riscos de processo que o produto elimina."
+    },
+    {
+      "id": "espinha_dorsal",
+      "title": "A espinha dorsal já está montada",
+      "summary": "Mostra CRM, eventos, auditoria e perfis de acesso como fundação única da operação.",
+      "image_plan": "/home/ubuntu/tse-crm-exclusivo/test-results/artifacts/customer-relationship.auth-651d2--com-o-contrato-consolidado-chromium/test-failed-1.png - Screenshot of the CRM 360 interface showing associate profile and relationship radar"
+    },
+    {
+      "id": "comercial",
+      "title": "Comercial com método e consequência",
+      "summary": "Mostra funil, campanhas, metas, playbooks, desconto e ranking de qualidade."
+    },
+    {
+      "id": "contratos",
+      "title": "Contrato deixa de ser arquivo morto",
+      "summary": "Mostra contratos, parcelas, documentos, agenda e renegociação auditável."
+    },
+    {
+      "id": "cobranca",
+      "title": "Cobrança enxerga a urgência certa",
+      "summary": "Apresenta régua de inadimplência, ações rápidas, conciliação e DRE por campanha.",
+      "image_plan": "/home/ubuntu/tse-crm-exclusivo/test-results/artifacts/waitlist-and-guests.authen-584b9-egistra-presença-individual-chromium/test-failed-1.png - Dashboard template illustrating financial and KPI management reporting"
+    },
+    {
+      "id": "reservas",
+      "title": "Reserva virou operação, não calendário",
+      "summary": "Mostra inventário, direitos de uso, manutenção, disponibilidade e fila de espera."
+    },
+    {
+      "id": "chegada",
+      "title": "A chegada também ficou dentro do sistema",
+      "summary": "Mostra acompanhantes, check-in, check-out e fechamento operacional de presença.",
+      "image_plan": "/home/ubuntu/tse-crm-exclusivo/test-results/artifacts/exports-and-import-undo.au-06859-ltimo-lote-CSV-na-interface-chromium/test-failed-1.png - Interface/system view for check-in and guest management"
+    },
+    {
+      "id": "gestao",
+      "title": "Gestão olha primeiro para o que queima",
+      "summary": "Apresenta dashboard de exceções, drill-down, adoção e data mart operacional lógico."
+    },
+    {
+      "id": "dados",
+      "title": "Dados entram sem roleta russa",
+      "summary": "Mostra importação CSV com mapeamento, validação, relatório de erros e reversão segura."
+    },
+    {
+      "id": "ia",
+      "title": "A IA entrou de coleira curta",
+      "summary": "Explica o copiloto permissionado, evidências, auditoria e aprovação humana obrigatória."
+    },
+    {
+      "id": "prova",
+      "title": "Não é promessa: foi testado",
+      "summary": "Apresenta 71 testes, 9 E2Es de navegador, 3 E2Es estritos, build e orçamento de bundle."
+    },
+    {
+      "id": "operacao_real",
+      "title": "A base está pronta. Agora entra a operação real.",
+      "summary": "Organiza os passos de marca, dados reais, configuração operacional e gateway de cobrança."
+    },
+    {
+      "id": "encerramento",
+      "title": "Próxima decisão: batizar e operar",
+      "summary": "Encerramento minimalista com foco em transformar software em rotina, dado e resultado."
+    }
+  ]
+}

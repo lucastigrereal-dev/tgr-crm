@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    .slide-container { width: 1280px; min-height: 720px; background: #E3E8EC; color: #0F172A; }
+    .wrap { padding-top: 60px; padding-left: 88px; padding-right: 88px; }
+    .ey { font: 700 14px/1 Arial, sans-serif; letter-spacing: 3px; color: #059669; text-transform: uppercase; }
+    h1 { font: 700 46px/1 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 16px; }
+    .rule { border-top: 1px dotted #64748B; margin-top: 22px; }
+    .grid { display: grid; grid-template-columns: 390px 1fr; gap: 56px; margin-top: 46px; }
+    .statement { font: 300 28px/1.27 Georgia, serif; color: #334155; }
+    .accent { color: #059669; font-style: italic; }
+    .small { font: 300 18px/1.38 Georgia, serif; color: #475569; margin-top: 27px; }
+    .exception-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 2px solid #059669; }
+    .exception { min-height: 125px; padding-top: 20px; padding-left: 22px; padding-right: 18px; border-right: 1px dotted #64748B; border-bottom: 1px dotted #64748B; }
+    .exception:nth-child(2n) { border-right: none; }
+    .type { font: 700 13px/1 Arial, sans-serif; letter-spacing: 1.8px; text-transform: uppercase; color: #059669; }
+    h2 { font: 700 23px/1.08 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 12px; }
+    p { font: 300 16px/1.3 Georgia, serif; color: #334155; margin-top: 8px; }
+    .data-mart { display: grid; grid-template-columns: 190px 1fr 155px; gap: 22px; align-items: center; margin-top: 40px; border-top: 1px dotted #64748B; padding-top: 20px; }
+    .label { font: 700 14px/1 Arial, sans-serif; letter-spacing: 1.5px; text-transform: uppercase; color: #059669; }
+    .mart-copy { font: 300 18px/1.32 Georgia, serif; color: #334155; }
+    .metric { font: 700 22px/1 Impact, Arial Narrow, sans-serif; text-transform: uppercase; color: #0F172A; text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="slide-container"><div class="wrap">
+    <div class="ey">09 · Gestão executiva</div>
+    <h1>Gestão olha primeiro para o que queima</h1>
+    <div class="rule"></div>
+    <div class="grid">
+      <div>
+        <div class="statement">O painel deixa de perguntar “como foi o mês?” e passa a perguntar <span class="accent">“o que exige ação agora?”</span></div>
+        <div class="small">Cada exceção abre seu próprio contexto operacional. O gestor sai do gráfico e entra no caso real, sem caçar associação entre cinco abas e duas planilhas.</div>
+      </div>
+      <div>
+        <div class="exception-grid">
+          <div class="exception"><div class="type">Financeiro</div><h2>Parcela crítica</h2><p>Inadimplência priorizada por estágio, prazo e ação.</p></div>
+          <div class="exception"><div class="type">Comercial</div><h2>Follow-up vencido</h2><p>Oportunidade parada deixa de morar no esquecimento.</p></div>
+          <div class="exception"><div class="type">Inventário</div><h2>Manutenção ativa</h2><p>Unidade bloqueada aparece antes de virar conflito de reserva.</p></div>
+          <div class="exception"><div class="type">Atendimento</div><h2>Fila expirada</h2><p>Oferta sem conversão pede decisão, não silêncio.</p></div>
+        </div>
+        <div class="data-mart"><div class="label">Data mart<br>operacional</div><div class="mart-copy">Leitura lógica e documentada das exceções e da adoção. A fonte transacional continua sendo a verdade; o painel transforma sinal espalhado em decisão acessível.</div><div class="metric">Drill-down<br>+ adoção</div></div>
+      </div>
+    </div>
+  </div></div>
+</body>
+</html>

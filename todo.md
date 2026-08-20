@@ -102,5 +102,7 @@
 - [x] Provisionar homologação isolada temporária e controlada para E2E estrito, sem exigir configuração técnica manual do usuário.
 - [x] Corrigir atualização da tela de importação para disponibilizar a reversão imediatamente após um commit CSV bem-sucedido.
 - [x] Estabilizar a suíte Playwright para execução serial no sandbox, evitando queda de navegador por pressão de memória.
+- [x] Criar apresentação executiva e relatório completo das funcionalidades, provas e limites do sistema.
+- [x] Marcar o nome atual do produto como provisório até a definição de posicionamento e marca.
 - [x] Executar E2E estrito em homologação isolada cobrindo a fila desde `waiting`, clicando `Ofertar vaga` e convertendo a oferta em reserva real.
 - [x] Executar no cenário isolado o `Check-in` principal da reserva confirmada antes da presença de acompanhantes e do `Check-out` final.

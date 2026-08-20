@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    .slide-container { width: 1280px; min-height: 720px; background: #E3E8EC; color: #0F172A; }
+    .wrap { padding-top: 60px; padding-left: 88px; padding-right: 88px; }
+    .eyebrow { font: 700 14px/1 Arial, sans-serif; letter-spacing: 3px; text-transform: uppercase; color: #059669; }
+    h1 { font: 700 47px/1 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 16px; }
+    .rule { border-top: 1px dotted #64748B; margin-top: 22px; }
+    .lead { font: 300 23px/1.35 Georgia, serif; color: #334155; max-width: 900px; margin-top: 25px; }
+    .flow { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 52px; border-top: 2px solid #059669; }
+    .stage { min-height: 220px; padding-top: 25px; padding-left: 22px; padding-right: 20px; border-right: 1px dotted #64748B; }
+    .stage:last-child { border-right: none; }
+    .num { font: 700 34px/1 Impact, Arial Narrow, sans-serif; color: #059669; }
+    h2 { font: 700 21px/1.08 Impact, Arial Narrow, sans-serif; text-transform: uppercase; margin-top: 15px; }
+    p { font: 300 17px/1.35 Georgia, serif; color: #334155; margin-top: 11px; }
+    .guardrail { display: grid; grid-template-columns: 255px 1fr; gap: 28px; border-top: 1px dotted #64748B; margin-top: 44px; padding-top: 21px; }
+    .guardrail-label { font: 700 15px/1.2 Arial, sans-serif; letter-spacing: 1.7px; text-transform: uppercase; color: #059669; }
+    .guardrail-copy { font: 700 20px/1.32 Georgia, serif; color: #0F172A; }
+    .limits { font: 300 16px/1.34 Georgia, serif; color: #475569; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="slide-container">
+    <div class="wrap">
+      <div class="eyebrow">11 · Inteligência operacional</div>
+      <h1>A IA entrou de coleira curta</h1>
+      <div class="rule"></div>
+      <div class="lead">Ela ajuda a ler o dossiê do associado. Não vira usuária do CRM, não recebe carta branca e não sai baixando parcela igual maluca.</div>
+      <div class="flow">
+        <div class="stage"><div class="num">01</div><h2>Pergunta humana</h2><p>A consulta acontece somente quando uma pessoa autorizada pede ajuda na ficha 360°.</p></div>
+        <div class="stage"><div class="num">02</div><h2>Contexto permitido</h2><p>O servidor filtra evidências conforme o perfil: comercial, financeiro, atendimento ou administração.</p></div>
+        <div class="stage"><div class="num">03</div><h2>Resposta com prova</h2><p>O copiloto devolve resposta estruturada, confiança, limites e referências às evidências usadas.</p></div>
+        <div class="stage"><div class="num">04</div><h2>Decisão humana</h2><p>A recomendação fica visível e auditada; qualquer ação continua sendo executada por gente autorizada.</p></div>
+      </div>
+      <div class="guardrail">
+        <div class="guardrail-label">O que ela nunca faz sozinha</div>
+        <div><div class="guardrail-copy">Não cria reserva, não baixa parcela, não aprova desconto, não altera contrato e não acessa CPF, anexos ou observações privadas bloqueadas.</div><div class="limits">Cada consulta gera auditoria. No feed de integração saem apenas metadados seguros — nunca pergunta, resposta ou contexto do associado.</div></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
