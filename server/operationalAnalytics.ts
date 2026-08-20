@@ -1,0 +1,30 @@
+export type OperationalExceptionSource = {
+  id: number;
+  kind: "installment" | "task" | "maintenance" | "waitlist";
+  label: string;
+  dueAt?: Date | null;
+  status: string;
+  amount?: string | number;
+};
+
+export type OperationalException = {
+  id: string;
+  severity: "critical" | "attention";
+  module: "finance" | "sales" | "reservations";
+  title: string;
+  description: string;
+};
+
+export function buildOperationalInsights(input: { exceptions: OperationalExceptionSource[]; eventsLast30Days: { actorUserId: number | null }[]; interactionsLast30Days: number }, now = new Date()) {
+  const exceptions: OperationalException[] = input.exceptions.flatMap<OperationalException>(item => {
+    if (item.kind === "installment" && (item.status === "overdue" || (item.status === "open" && item.dueAt && item.dueAt < now))) {
+      const overdueDays = item.dueAt ? Math.max(0, Math.floor((now.getTime() - item.dueAt.getTime()) / 86_400_000)) : 0;
+      return [{ id: `installment-${item.id}`, severity: overdueDays >= 15 ? "critical" : "attention", module: "finance", title: `Parcela em atraso · ${item.label}`, description: `${overdueDays} dia(s) de atraso · R$ ${Number(item.amount ?? 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}` }];
+    }
+    if (item.kind === "task" && item.dueAt && item.dueAt < now && ["open", "in_progress"].includes(item.status)) return [{ id: `task-${item.id}`, severity: "attention", module: "sales", title: `Follow-up vencido · ${item.label}`, description: `Prazo estourado em ${item.dueAt.toLocaleDateString("pt-BR")}` }];
+    if (item.kind === "maintenance" && ["planned", "active"].includes(item.status)) return [{ id: `maintenance-${item.id}`, severity: item.status === "active" ? "critical" : "attention", module: "reservations", title: `Manutenção ${item.status === "active" ? "ativa" : "programada"} · ${item.label}`, description: item.dueAt ? `Início em ${item.dueAt.toLocaleDateString("pt-BR")}` : "Sem data de início" }];
+    if (item.kind === "waitlist" && item.status === "offered" && item.dueAt && item.dueAt < now) return [{ id: `waitlist-${item.id}`, severity: "attention", module: "reservations", title: `Oferta de lista de espera expirou · ${item.label}`, description: `Venceu em ${item.dueAt.toLocaleDateString("pt-BR")}` }];
+    return [];
+  }).sort((a, b) => (a.severity === "critical" ? -1 : 1) - (b.severity === "critical" ? -1 : 1));
+  return { exceptions, adoption: { eventsLast30Days: input.eventsLast30Days.length, activeOperators: new Set(input.eventsLast30Days.map(event => event.actorUserId).filter(Boolean)).size, interactionsLast30Days: input.interactionsLast30Days } };
+}

@@ -67,7 +67,7 @@
 - [x] Implementar proposta de renegociação auditável de parcela, com simulação antes de aplicar.
 - [x] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
 - [x] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
-- [ ] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
+- [x] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
 - [ ] Implementar contratos de integração, eventos e extensibilidade segura.
 - [ ] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
 - [ ] Implementar busca e assistência de IA com permissões, evidências, avaliação e aprovação humana.
@@ -91,3 +91,5 @@
 - [x] Configurar Playwright com fixture autenticada efêmera e comprovar a Central de Reservas e a Lista de Espera em navegador real.
 - [x] Implementar central unificada na ficha do associado consolidando interações, próximos contatos, tarefas e contexto operacional em uma única visão.
 - [x] Cobrir em teste integrado o payload de radar/onboarding de `customers.detail` e a experiência autenticada da ficha do associado.
+- [x] Formalizar e versionar o contrato do data mart operacional, com grão, fontes, atualização e consumidores.
+- [x] Cobrir em teste integrado o procedimento `dashboard.operationalPulse` para provar o read model completo de exceções e adoção.
