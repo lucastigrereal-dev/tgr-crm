@@ -21,6 +21,7 @@ import Campaigns from "./pages/Campaigns";
 import Capture from "./pages/Capture";
 import SalesRoom from "./pages/SalesRoom";
 import SalesAnalytics from "./pages/SalesAnalytics";
+import ProjectSettings from "./pages/ProjectSettings";
 
 function Router() {
   return <DashboardLayout><Switch>
@@ -40,6 +41,7 @@ function Router() {
     <Route path="/agenda" component={Agenda} />
     <Route path="/equipe" component={Team} />
     <Route path="/importar" component={ImportCsv} />
+    <Route path="/configuracoes-projeto" component={ProjectSettings} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
   </Switch></DashboardLayout>;
