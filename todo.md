@@ -149,3 +149,6 @@
 - [ ] Implementar calendário de fechamento de comissão e borderô executivo com valores previstos, liberados, travados e cancelados.
 - [ ] Integrar a baixa real de parcela de contrato à geração idempotente de comissão proporcional por papel e ao lifecycle do borderô.
 - [x] Aplicar regra FTB como papel exclusivo de Front Back, impedindo acúmulo indevido de liner e fechador na mesma venda.
+- [ ] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
+- [ ] Criar configuração comercial por projeto para regras de distrato, campos obrigatórios, papéis de corretor/captador e divisão de comissão.
+- [ ] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.

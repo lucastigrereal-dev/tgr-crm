@@ -113,6 +113,13 @@
       "when": 1787261682405,
       "tag": "0015_simple_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1787262948246,
+      "tag": "0016_spotty_marvel_zombies",
+      "breakpoints": true
     }
   ]
 }

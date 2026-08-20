@@ -99,6 +99,18 @@ export const resorts = mysqlTable("resorts", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const commercialProjectSettings = mysqlTable("commercial_project_settings", {
+  id: int("id").autoincrement().primaryKey(),
+  resortId: int("resortId").notNull().references(() => resorts.id).unique(),
+  cancellationPolicy: text("cancellationPolicy"),
+  requiredCaptureFields: text("requiredCaptureFields"),
+  commercialRoles: text("commercialRoles"),
+  commissionPolicy: text("commissionPolicy"),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export const units = mysqlTable(
   "units",
   {
