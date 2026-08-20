@@ -138,3 +138,7 @@
 - [x] Definir métricas auditáveis de conversão entre captação, chegada, tour, sem-tour, encerramento e oportunidade comercial.
 - [x] Implementar leitura analítica de conversão por campanha, promotor, liner, fechador e período.
 - [x] Criar visão gerencial de conversão da sala com filtros, funil e evidências por etapa.
+- [ ] Sincronizar no GitHub o marco de sala operacional e análise de conversão validado no checkpoint 99680521.
+- [ ] Identificar o repositório GitHub existente do TGR-CRM/TSExplorer e comparar o histórico antes de qualquer sincronização externa.
+- [ ] Auditar o repositório tgsolutions e decidir formalmente entre espelhamento documental, integração seletiva ou separação total do código.
+- [ ] Criar o repositório privado independente `tgr-crm` no GitHub e sincronizar o estado validado do produto, sem incluir conteúdo do tgsolutions.
