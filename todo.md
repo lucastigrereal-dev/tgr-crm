@@ -147,3 +147,5 @@
 - [x] Adicionar atualização automática por polling ao painel de metas da Central de Campanhas e validar o comportamento.
 - [x] Modelar comissão proporcional por parcela de entrada, papel comercial e status financeiro como domínio testável.
 - [ ] Implementar calendário de fechamento de comissão e borderô executivo com valores previstos, liberados, travados e cancelados.
+- [ ] Integrar a baixa real de parcela de contrato à geração idempotente de comissão proporcional por papel e ao lifecycle do borderô.
+- [x] Aplicar regra FTB como papel exclusivo de Front Back, impedindo acúmulo indevido de liner e fechador na mesma venda.

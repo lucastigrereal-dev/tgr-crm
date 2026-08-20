@@ -3,6 +3,7 @@ export type CommissionStatus = "expected" | "awaiting_customer_payment" | "closi
 export type PaymentMethod = "pix" | "debit" | "credit" | "boleto" | "cash" | "cheque" | "other";
 
 export const commissionRates: Record<CommissionRole, number> = { liner: 0.0191, closer: 0.0151, ftb: 0.0342 };
+export function commissionAssignments(input: { linerId: number | null; closerId: number | null }) { if (input.linerId && input.linerId === input.closerId) return [{ userId: input.linerId, role: "ftb" as const }]; return [{ userId: input.linerId, role: "liner" as const }, { userId: input.closerId, role: "closer" as const }].filter((item): item is { userId: number; role: "liner" | "closer" } => Boolean(item.userId)); }
 const money = (value: number) => Math.round(value * 100) / 100;
 const endOfMonth = (date: Date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
 const nextMonthDay = (date: Date, day: number) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, day));
