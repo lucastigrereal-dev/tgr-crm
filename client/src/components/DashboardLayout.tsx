@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, PanelLeft, ShieldCheck, Trophy, Upload, Users, UsersRound } from "lucide-react";
+import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, ShieldCheck, Trophy, Upload, Users, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -31,6 +31,7 @@ const menuItems = [
   { icon: LayoutDashboard, label: "Visão geral", path: "/" },
   { icon: UsersRound, label: "Clientes", path: "/clientes" },
   { icon: ChartNoAxesCombined, label: "Comercial", path: "/vendas" },
+  { icon: Megaphone, label: "Campanhas", path: "/campanhas" },
   { icon: Trophy, label: "Comissões", path: "/comissoes" },
   { icon: FileSignature, label: "Contratos", path: "/contratos" },
   { icon: CalendarDays, label: "Reservas", path: "/reservas" },
@@ -72,7 +73,7 @@ export default function DashboardLayout({
           <div className="flex min-h-[520px] w-full flex-col items-center justify-center gap-8 p-10 lg:w-1/2">
           <div className="flex flex-col items-center gap-6">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#c7a35a] font-serif text-2xl text-[#1d2b2a]">T</div>
-            <p className="text-[10px] font-bold uppercase tracking-[.24em] text-[#d7bf82]">TimeShare Exclusive</p>
+            <p className="text-[10px] font-bold uppercase tracking-[.24em] text-[#d7bf82]">TGR-CRM</p>
             <h1 className="font-serif text-4xl tracking-tight text-center text-white">Sua operação em ordem.</h1>
             <p className="max-w-sm text-center text-sm leading-6 text-white/65">Entre para cuidar de relacionamento, contratos, reservas e financeiro em um só lugar.</p>
           </div>
@@ -180,7 +181,7 @@ function DashboardLayoutContent({
               </button>
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#d7bf82]/50 bg-[#29433d] font-serif text-xs font-bold tracking-[.08em] text-[#e8d092]">T</span><div><span className="font-serif text-lg tracking-tight truncate">TSE <b className="text-[#d7bf82]">Exclusive</b></span><p className="mt-0.5 text-[9px] font-bold uppercase tracking-[.16em] text-white/45">Operação & relacionamento</p></div></div>
+                  <div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#d7bf82]/50 bg-[#29433d] font-serif text-xs font-bold tracking-[.08em] text-[#e8d092]">T</span><div><span className="font-serif text-lg tracking-tight truncate">TGR-<b className="text-[#d7bf82]">CRM</b></span><p className="mt-0.5 text-[9px] font-bold uppercase tracking-[.16em] text-white/45">Operação & relacionamento</p></div></div>
                 </div>
               ) : null}
             </div>

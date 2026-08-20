@@ -105,5 +105,9 @@
 - [x] Criar apresentação executiva e relatório completo das funcionalidades, provas e limites do sistema.
 - [x] Marcar o nome atual do produto como provisório até a definição de posicionamento e marca.
 - [x] Atualizar materiais executivos e decisão de produto para o nome de trabalho TGR-CRM.
+- [x] Criar central unificada de importação em lote para associados, contratos e unidades.
+- [x] Implementar importação CSV segura de empreendimentos e unidades com validação, prévia, recibo e reversão auditável.
+- [x] Criar módulo dedicado de campanhas, metas e playbooks com visão gerencial e ações administrativas.
+- [x] Aplicar TGR-CRM como nome de trabalho na navegação e identificação visível do sistema.
 - [x] Executar E2E estrito em homologação isolada cobrindo a fila desde `waiting`, clicando `Ofertar vaga` e convertendo a oferta em reserva real.
 - [x] Executar no cenário isolado o `Check-in` principal da reserva confirmada antes da presença de acompanhantes e do `Check-out` final.

@@ -447,7 +447,7 @@ export const domainEvents = mysqlTable("domain_events", {
 
 export const csvImportBatches = mysqlTable("csv_import_batches", {
   id: int("id").autoincrement().primaryKey(),
-  kind: mysqlEnum("kind", ["customers", "contracts"]).notNull(),
+  kind: mysqlEnum("kind", ["customers", "contracts", "units"]).notNull(),
   status: mysqlEnum("status", ["completed", "reverted"]).default("completed").notNull(),
   actorUserId: int("actorUserId").notNull().references(() => users.id),
   totalRows: int("totalRows").default(0).notNull(),
@@ -462,7 +462,7 @@ export const csvImportBatches = mysqlTable("csv_import_batches", {
 export const csvImportItems = mysqlTable("csv_import_items", {
   id: int("id").autoincrement().primaryKey(),
   batchId: int("batchId").notNull().references(() => csvImportBatches.id),
-  entityType: mysqlEnum("entityType", ["customer", "contract"]).notNull(),
+  entityType: mysqlEnum("entityType", ["customer", "contract", "resort", "unit"]).notNull(),
   entityId: int("entityId").notNull(),
   action: mysqlEnum("action", ["created", "updated"]).notNull(),
   beforeSnapshot: text("beforeSnapshot"),

@@ -36,7 +36,7 @@ export function MetricCard({ label, value, detail, icon: Icon, tone = "dark" }: 
 }
 
 export function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
-  return <div className="relative overflow-hidden rounded-[1.35rem] border border-dashed border-[#d9d1c2] bg-[#fdfcf9] px-6 py-11 text-center"><div className="pointer-events-none absolute inset-x-12 top-5 h-px bg-[#e8decb]" /><div className="pointer-events-none absolute inset-x-20 bottom-5 h-px bg-[#e8decb]" /><div className="relative"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#d7bf82] bg-[#faf4e7] font-serif text-sm font-bold tracking-[.08em] text-[#8a6b2d]">TSE</div><p className="mt-4 font-serif text-xl text-[#1d2b2a]">{title}</p><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">{body}</p>{action ? <div className="mt-5">{action}</div> : null}</div></div>;
+  return <div className="relative overflow-hidden rounded-[1.35rem] border border-dashed border-[#d9d1c2] bg-[#fdfcf9] px-6 py-11 text-center"><div className="pointer-events-none absolute inset-x-12 top-5 h-px bg-[#e8decb]" /><div className="pointer-events-none absolute inset-x-20 bottom-5 h-px bg-[#e8decb]" /><div className="relative"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#d7bf82] bg-[#faf4e7] font-serif text-sm font-bold tracking-[.08em] text-[#8a6b2d]">TGR</div><p className="mt-4 font-serif text-xl text-[#1d2b2a]">{title}</p><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">{body}</p>{action ? <div className="mt-5">{action}</div> : null}</div></div>;
 }
 
 const statusStyles: Record<string, string> = {

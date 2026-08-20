@@ -1,0 +1,2 @@
+ALTER TABLE `csv_import_batches` MODIFY COLUMN `kind` enum('customers','contracts','units') NOT NULL;--> statement-breakpoint
+ALTER TABLE `csv_import_items` MODIFY COLUMN `entityType` enum('customer','contract','resort','unit') NOT NULL;

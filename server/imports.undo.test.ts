@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, reservations, tasks } from "../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { importsRouter } from "./routers/imports";
 
-type Batch = { id: number; kind: "customers" | "contracts"; status: "completed" | "reverted" };
-type Item = { entityType: "customer" | "contract"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
+type Batch = { id: number; kind: "customers" | "contracts" | "units"; status: "completed" | "reverted" };
+type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
 
-function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }> } = {}) {
+function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }> } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
@@ -23,6 +23,10 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
           if (table === tasks) return options.tasks ?? [];
           if (table === financialTransactions) return options.financial ?? [];
           if (table === billingRecords) return options.billings ?? [];
+          if (table === ownershipEntitlements) return options.entitlements ?? [];
+          if (table === unitMaintenanceBlocks) return options.maintenance ?? [];
+          if (table === reservationWaitlist) return options.waitlist ?? [];
+          if (table === units) return options.units ?? [];
           return [];
         },
       }),
@@ -123,5 +127,32 @@ describe("imports.undoLast", () => {
     await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect(fixture.deletes).toEqual([]);
     expect(fixture.updates).toEqual([]);
+  });
+
+  it("remove unidade importada sem dependência operacional", async () => {
+    const fixture = makeDb({ id: 86, kind: "units", status: "completed" }, [
+      { entityType: "unit", entityId: 801, action: "created", beforeSnapshot: null },
+    ]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).resolves.toEqual({ batchId: 86, revertedItems: 1, kind: "units" });
+
+    expect(fixture.deletes).toContain(units);
+    expect(fixture.updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: csvImportBatches, values: expect.objectContaining({ status: "reverted", revertedByUserId: 9 }) }),
+    ]));
+  });
+
+  it("bloqueia reversão de unidade que já ganhou reserva", async () => {
+    const fixture = makeDb(
+      { id: 87, kind: "units", status: "completed" },
+      [{ entityType: "unit", entityId: 802, action: "created", beforeSnapshot: null }],
+      [],
+      { reservations: [{ id: 4301 }] },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(fixture.deletes).toEqual([]);
   });
 });

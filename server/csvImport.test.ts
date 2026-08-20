@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, suggestCsvMapping } from "./csvImport";
+import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping } from "./csvImport";
 
 describe("importação CSV", () => {
   it("lê associados com cabeçalho em português e separador ponto e vírgula", () => {
@@ -23,6 +23,14 @@ describe("importação CSV", () => {
     const result = parseContractsCsv(csv);
     expect(result.issues).toEqual([]);
     expect(result.records).toMatchObject([{ number: "TS-2026-001", customerDocument: "12345678900", usageModel: "flexible_week", status: "active", totalAmount: 12500, installmentCount: 12, firstDueDate: "2026-09-10" }]);
+  });
+
+  it("lê empreendimento e unidade com capacidade, camas e status", () => {
+    const source = "empreendimento;cidade;uf;unidade;categoria;capacidade;camas;status_unidade\nResort Águas Quentes;Olímpia;SP;A-120;Premium;6;3;manutencao";
+    const normalized = applyCsvMapping(source, suggestCsvMapping(source, "units").suggestedMapping);
+    const result = parseUnitsCsv(normalized);
+    expect(result.issues).toEqual([]);
+    expect(result.records).toMatchObject([{ resortName: "Resort Águas Quentes", resortCity: "Olímpia", resortState: "SP", code: "A-120", category: "Premium", capacity: 6, beds: 3, status: "maintenance" }]);
   });
 
   it("sugere mapeamento de cabeçalhos comuns e aplica o formato canônico", () => {
