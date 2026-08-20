@@ -145,3 +145,5 @@
 - [x] Adicionar alvo de vendas auditável à campanha e visual de progresso por campanha na Central de Campanhas.
 - [x] Tornar os três modelos CSV visíveis em cards de acesso rápido, com explicação de cada carga e download direto.
 - [x] Adicionar atualização automática por polling ao painel de metas da Central de Campanhas e validar o comportamento.
+- [x] Modelar comissão proporcional por parcela de entrada, papel comercial e status financeiro como domínio testável.
+- [ ] Implementar calendário de fechamento de comissão e borderô executivo com valores previstos, liberados, travados e cancelados.

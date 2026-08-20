@@ -1,0 +1,16 @@
+export type CommissionRole = "liner" | "closer" | "ftb";
+export type CommissionStatus = "expected" | "awaiting_customer_payment" | "closing" | "cancellation_window" | "payable" | "paid" | "cancelled" | "overdue";
+export type PaymentMethod = "pix" | "debit" | "credit" | "boleto" | "cash" | "cheque" | "other";
+
+export const commissionRates: Record<CommissionRole, number> = { liner: 0.0191, closer: 0.0151, ftb: 0.0342 };
+const money = (value: number) => Math.round(value * 100) / 100;
+const endOfMonth = (date: Date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
+const nextMonthDay = (date: Date, day: number) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, day));
+
+export function totalCommission(baseAmount: number, role: CommissionRole) { return baseAmount > 0 ? money(baseAmount * commissionRates[role]) : 0; }
+export function releasedCommission(installmentAmount: number, entryTotal: number, commissionTotal: number) { return installmentAmount > 0 && entryTotal > 0 ? money(commissionTotal * installmentAmount / entryTotal) : 0; }
+export function commissionDates(method: PaymentMethod, compensatedAt: Date) { const closing = endOfMonth(method === "credit" ? new Date(Date.UTC(compensatedAt.getUTCFullYear(), compensatedAt.getUTCMonth() + 1, 1)) : compensatedAt); return { closingAt: closing, cancellationDeadlineAt: nextMonthDay(closing, 7), expectedPaymentAt: nextMonthDay(closing, 25) }; }
+export function commissionStatus(input: { compensatedAt: Date | null; receivedAt: Date | null; cancelledAt: Date | null; closingAt: Date; cancellationDeadlineAt: Date; expectedPaymentAt: Date; now: Date }) : CommissionStatus {
+  if (input.receivedAt) return "paid"; if (!input.compensatedAt) return "awaiting_customer_payment"; if (input.cancelledAt && input.cancelledAt <= input.cancellationDeadlineAt) return "cancelled"; if (input.now <= input.closingAt) return "closing"; if (input.now <= input.cancellationDeadlineAt) return "cancellation_window"; if (input.now > input.expectedPaymentAt) return "overdue"; return "payable";
+}
+export function borderoSummary(rows: { amount: number; status: CommissionStatus; expectedPaymentAt: Date }[]) { const totals = { expected: 0, payable: 0, paid: 0, locked: 0, cancelled: 0, overdue: 0, installments: rows.length }; rows.forEach(row => { totals.expected += row.amount; if (row.status === "paid") totals.paid += row.amount; else if (row.status === "payable" || row.status === "awaiting_customer_payment") totals.payable += row.amount; else if (row.status === "closing" || row.status === "cancellation_window") totals.locked += row.amount; else if (row.status === "cancelled") totals.cancelled += row.amount; else if (row.status === "overdue") totals.overdue += row.amount; }); return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, typeof value === "number" && key !== "installments" ? money(value) : value])) as typeof totals; }
