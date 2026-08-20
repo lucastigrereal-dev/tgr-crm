@@ -18,6 +18,7 @@ import Reservations from "./pages/Reservations";
 import ImportCsv from "./pages/ImportCsv";
 import Commissions from "./pages/Commissions";
 import Campaigns from "./pages/Campaigns";
+import Capture from "./pages/Capture";
 
 function Router() {
   return <DashboardLayout><Switch>
@@ -25,6 +26,7 @@ function Router() {
     <Route path="/clientes" component={Customers} />
     <Route path="/clientes/:id" component={CustomerDetail} />
     <Route path="/vendas" component={Sales} />
+    <Route path="/captacao" component={Capture} />
     <Route path="/comissoes" component={Commissions} />
     <Route path="/campanhas" component={Campaigns} />
     <Route path="/contratos" component={Contracts} />

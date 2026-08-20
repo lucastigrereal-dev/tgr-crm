@@ -8,6 +8,7 @@ import {
   mysqlTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
 
@@ -131,6 +132,66 @@ export const opportunities = mysqlTable(
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   table => [index("opportunities_stage_idx").on(table.stage), index("opportunities_seller_idx").on(table.sellerId)],
+);
+
+export const captureRecords = mysqlTable(
+  "capture_records",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    customerId: int("customerId").notNull().references(() => customers.id),
+    opportunityId: int("opportunityId").references(() => opportunities.id),
+    campaignId: int("campaignId").references(() => salesCampaigns.id),
+    promoterId: int("promoterId").references(() => users.id),
+    linerId: int("linerId").references(() => users.id),
+    closerId: int("closerId").references(() => users.id),
+    salesRoom: varchar("salesRoom", { length: 180 }),
+    captureLocation: varchar("captureLocation", { length: 180 }),
+    lodgingLocation: varchar("lodgingLocation", { length: 180 }),
+    transportation: varchar("transportation", { length: 100 }),
+    isPasserby: boolean("isPasserby").default(false).notNull(),
+    scheduledAt: timestamp("scheduledAt"),
+    checkedInAt: timestamp("checkedInAt"),
+    presentationStatus: mysqlEnum("presentationStatus", ["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).default("captured").notNull(),
+    qualificationStatus: mysqlEnum("qualificationStatus", ["pending", "qualified", "disqualified"]).default("pending").notNull(),
+    qualificationReason: text("qualificationReason"),
+    noTourReason: text("noTourReason"),
+    partnerName: varchar("partnerName", { length: 255 }),
+    partnerAge: int("partnerAge"),
+    partnerProfession: varchar("partnerProfession", { length: 120 }),
+    partnerProfessionNotes: text("partnerProfessionNotes"),
+    relationshipStatus: varchar("relationshipStatus", { length: 64 }),
+    relationshipYears: int("relationshipYears"),
+    relationshipMonths: int("relationshipMonths"),
+    childrenCount: int("childrenCount").default(0).notNull(),
+    childrenNames: text("childrenNames"),
+    primaryProfessionNotes: text("primaryProfessionNotes"),
+    averageIncome: decimal("averageIncome", { precision: 14, scale: 2 }),
+    vehicleBrand: varchar("vehicleBrand", { length: 100 }),
+    vehicleModel: varchar("vehicleModel", { length: 120 }),
+    vehicleYear: int("vehicleYear"),
+    hasCreditCard: boolean("hasCreditCard"),
+    creditCardBrands: text("creditCardBrands"),
+    acceptsCheque: boolean("acceptsCheque"),
+    ownsHome: boolean("ownsHome"),
+    ownsPropertyInCity: boolean("ownsPropertyInCity"),
+    travelWeeksPerYear: decimal("travelWeeksPerYear", { precision: 4, scale: 1 }),
+    usualTravelSeason: varchar("usualTravelSeason", { length: 180 }),
+    dreamTrips: text("dreamTrips"),
+    lastTrip: text("lastTrip"),
+    averageHotelSpend: decimal("averageHotelSpend", { precision: 14, scale: 2 }),
+    nextFamilyTrip: text("nextFamilyTrip"),
+    socialNetworks: text("socialNetworks"),
+    giftDescription: varchar("giftDescription", { length: 255 }),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    index("captures_customer_idx").on(table.customerId, table.createdAt),
+    index("captures_promoter_status_idx").on(table.promoterId, table.presentationStatus, table.createdAt),
+    index("captures_campaign_status_idx").on(table.campaignId, table.presentationStatus),
+    index("captures_opportunity_idx").on(table.opportunityId),
+  ],
 );
 
 export const proposals = mysqlTable("proposals", {
@@ -260,14 +321,40 @@ export const billingRecords = mysqlTable("billing_records", {
   installmentId: int("installmentId").notNull().references(() => installments.id),
   type: mysqlEnum("type", ["boleto", "pix", "card", "transfer"]).default("boleto").notNull(),
   status: mysqlEnum("status", ["pending", "generated", "paid", "expired", "cancelled"]).default("pending").notNull(),
+  gatewayProvider: mysqlEnum("gatewayProvider", ["manual", "asaas"]).default("manual").notNull(),
+  gatewayPaymentId: varchar("gatewayPaymentId", { length: 128 }),
+  gatewayStatus: varchar("gatewayStatus", { length: 64 }),
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   dueDate: date("dueDate").notNull(),
   externalReference: varchar("externalReference", { length: 255 }),
   digitableLine: varchar("digitableLine", { length: 255 }),
   pixCopyPaste: text("pixCopyPaste"),
+  pixQrCodeBase64: text("pixQrCodeBase64"),
+  invoiceUrl: text("invoiceUrl"),
+  bankSlipUrl: text("bankSlipUrl"),
   generatedAt: timestamp("generatedAt"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status)]);
+
+export const paymentGatewayCustomers = mysqlTable("payment_gateway_customers", {
+  id: int("id").autoincrement().primaryKey(),
+  customerId: int("customerId").notNull().references(() => customers.id),
+  gatewayProvider: mysqlEnum("gatewayProvider", ["asaas"]).notNull(),
+  gatewayCustomerId: varchar("gatewayCustomerId", { length: 128 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex("payment_gateway_customer_unique").on(table.customerId, table.gatewayProvider), uniqueIndex("payment_gateway_external_unique").on(table.gatewayProvider, table.gatewayCustomerId)]);
+
+export const paymentGatewayWebhookEvents = mysqlTable("payment_gateway_webhook_events", {
+  id: int("id").autoincrement().primaryKey(),
+  gatewayProvider: mysqlEnum("gatewayProvider", ["asaas"]).notNull(),
+  gatewayEventId: varchar("gatewayEventId", { length: 128 }).notNull(),
+  eventType: varchar("eventType", { length: 96 }).notNull(),
+  billingRecordId: int("billingRecordId").references(() => billingRecords.id),
+  processedAt: timestamp("processedAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("payment_gateway_webhook_unique").on(table.gatewayProvider, table.gatewayEventId), index("payment_gateway_webhook_billing_idx").on(table.billingRecordId, table.createdAt)]);
 
 export const installmentRenegotiations = mysqlTable("installment_renegotiations", {
   id: int("id").autoincrement().primaryKey(),

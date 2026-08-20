@@ -1,0 +1,27 @@
+Archive:  /home/ubuntu/upload/ComocriarumsistemasimilaraoTSE_(1).zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+     1818  2026-08-19 16:55   todo.md
+     1809  2026-08-19 16:55   arquitetura_sistema_superior.mmd
+     3215  2026-08-19 16:55   modelo_dados.mmd
+    21304  2026-08-19 16:55   Engenharia Reversa do TSE e Arquitetura do Sistema Superior.md
+   358366  2026-08-19 16:55   arquitetura_sistema_superior.png
+   207081  2026-08-19 16:55   modelo_dados.png
+     4959  2026-08-19 16:55   notas_descobertas.md
+     2804  2026-08-19 16:55   lib-storage.ts
+    33899  2026-08-19 16:55   repositorio.ifgoiano.edu.br_bitstream_prefix_4206_1_Relat_C3_B3rio_20de_20pr_C3_A1tica_20profissiona_1784853316132.md
+     3614  2026-08-19 16:55   lib-supabase-clients.ts
+     2667  2026-08-19 16:55   lib-datasComissao.ts
+     4798  2026-08-19 16:55   lib-mensagens.ts
+     2353  2026-08-19 16:55   lib-followups.ts
+     3406  2026-08-19 16:55   lib-cancelamento.ts
+     2951  2026-08-19 16:55   lib-bordero.ts
+     2055  2026-08-19 16:55   lib-comissoes.ts
+     3028  2026-08-19 16:55   lib-format.ts
+      183  2026-08-19 16:55   tailwind.config.ts
+     3406  2026-08-19 16:55   lib-cancelamento(1).ts
+     2667  2026-08-19 16:55   lib-datasComissao(1).ts
+197777607  2026-08-19 16:55   Tss.Tse.View.Win.ConexaoDb.dll.zip
+ 67108864  2026-08-19 16:55   TSExplorer_Pacote_Auditado_v5.zip.005(2).part
+---------                     -------
+265552854                     22 files

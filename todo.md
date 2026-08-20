@@ -109,5 +109,15 @@
 - [x] Implementar importação CSV segura de empreendimentos e unidades com validação, prévia, recibo e reversão auditável.
 - [x] Criar módulo dedicado de campanhas, metas e playbooks com visão gerencial e ações administrativas.
 - [x] Aplicar TGR-CRM como nome de trabalho na navegação e identificação visível do sistema.
+- [ ] Preparar emissão de boleto e PIX por gateway nos contratos, sem simular cobrança antes da conexão segura.
+- [ ] Adicionar dashboard visual de progresso de metas em tempo real à Central de Campanhas.
+- [ ] Destacar e ampliar o acesso aos modelos CSV de associados, contratos e unidades na Central de Importação.
+- [ ] Produzir matriz comparativa entre TGR-CRM e a referência TSE enviada, com cobertura, lacunas, riscos e plano priorizado.
+- [x] Implementar ficha digital de captação baseada no modelo real, com casal, qualificação, viagem, veículo, brinde e roteamento comercial.
+- [x] Cruzar dados da ficha de captação com associado, oportunidade, agendamento, acompanhamento e campanha sem duplicar cadastro.
 - [x] Executar E2E estrito em homologação isolada cobrindo a fila desde `waiting`, clicando `Ofertar vaga` e convertendo a oferta em reserva real.
 - [x] Executar no cenário isolado o `Check-in` principal da reserva confirmada antes da presença de acompanhantes e do `Check-out` final.
+- [x] Expor data e hora de agendamento da captação na ficha digital e persistir o campo no fluxo real.
+- [x] Integrar captação com agenda e tarefas de acompanhamento, refletindo o vínculo na ficha do associado.
+- [x] Adicionar testes integrados de captação cobrindo deduplicação, campanha/oportunidade, agendamento e acompanhamento.
+- [x] Adicionar prova integrada de `campaignId` vinculado à ficha e à oportunidade criadas pela captação.

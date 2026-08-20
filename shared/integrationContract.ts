@@ -7,6 +7,7 @@ const allowedPayloadFields: Record<DomainEventName, readonly string[]> = {
   "contract.created": ["customerId", "status", "usageModel"], "contract.status.updated": ["status"], "contract.document.uploaded": ["contractId", "category", "filename"],
   "ownership.entitlement.created": ["contractId", "unitId", "priorityLevel"], "unit.maintenance.blocked": ["unitId", "startsAt", "endsAt"],
   "opportunity.created": ["customerId", "stage", "campaignId"], "opportunity.updated": ["stage", "campaignId"], "proposal.created": ["opportunityId", "amount"], "sales.playbook.created": ["stage", "title"],
+  "capture.created": ["customerId", "campaignId", "qualificationStatus"], "capture.status.updated": ["presentationStatus", "qualificationStatus"],
   "installment.renegotiation.proposed": ["installmentId", "proposalAmount"], "installment.paid": ["installmentId", "paidAmount"], "financial.entry.created": ["type", "amount", "campaignId"], "financial.entry.reconciled": ["reference", "reconciledAt"], "financial.transfer.created": ["amount", "recipient"], "ai.assistance.requested": ["role", "evidenceCount", "model"],
 };
 

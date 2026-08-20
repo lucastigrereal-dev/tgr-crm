@@ -5,6 +5,7 @@ import {
   contracts,
   customerDocuments,
   customerInteractions,
+  captureRecords,
   customers,
   installments,
   opportunities,
@@ -124,7 +125,7 @@ export const customersRouter = router({
     if (!db) return null;
     const customer = (await db.select().from(customers).where(eq(customers.id, input.id)).limit(1))[0];
     if (!customer) return null;
-    const [interactions, documents, customerContracts, customerOpportunities, customerReservations, customerInstallments, relationshipTasks] = await Promise.all([
+    const [interactions, documents, customerContracts, customerOpportunities, customerReservations, customerInstallments, relationshipTasks, captures] = await Promise.all([
       db.select().from(customerInteractions).where(eq(customerInteractions.customerId, input.id)).orderBy(desc(customerInteractions.occurredAt)).limit(50),
       db.select().from(customerDocuments).where(eq(customerDocuments.customerId, input.id)).orderBy(desc(customerDocuments.createdAt)),
       db.select().from(contracts).where(eq(contracts.customerId, input.id)).orderBy(desc(contracts.createdAt)),
@@ -132,9 +133,10 @@ export const customersRouter = router({
       db.select().from(reservations).where(eq(reservations.customerId, input.id)).orderBy(desc(reservations.checkIn)),
       db.select({ status: installments.status }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(eq(contracts.customerId, input.id)),
       db.select().from(tasks).where(and(eq(tasks.customerId, input.id), inArray(tasks.status, ["open", "in_progress"]))).orderBy(tasks.dueAt).limit(20),
+      db.select().from(captureRecords).where(eq(captureRecords.customerId, input.id)).orderBy(desc(captureRecords.createdAt)).limit(20),
     ]);
     const radar = buildRelationshipRadar({ hasEmail: Boolean(customer.email), hasPhone: Boolean(customer.phone), interactionDates: interactions.map(item => item.occurredAt), documentCount: documents.length, contractStatuses: customerContracts.map(item => item.status), reservationDates: customerReservations.map(item => item.checkIn), installmentStatuses: customerInstallments.map(item => item.status) });
-    return { customer, interactions, documents, contracts: customerContracts, opportunities: customerOpportunities, reservations: customerReservations, relationshipTasks, radar };
+    return { customer, interactions, documents, contracts: customerContracts, opportunities: customerOpportunities, reservations: customerReservations, relationshipTasks, captures, radar };
   }),
 
   addInteraction: internalProcedure.input(z.object({

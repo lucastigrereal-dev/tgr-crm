@@ -1,0 +1,124 @@
+erDiagram
+    PESSOA {
+        uuid id PK
+        text nome
+        text cpf
+        text telefone
+        date data_nascimento
+        text renda_estimada
+    }
+
+    OPERADOR {
+        uuid id PK
+        text nome
+        text email
+        enum perfil "promotor|linhador|fechador|ftb|gerente|admin"
+        uuid id_empresa FK
+    }
+
+    EMPRESA {
+        uuid id PK
+        text razao_social
+        text cnpj
+    }
+
+    UNIDADE_NEGOCIO {
+        uuid id PK
+        text nome
+        text endereco
+        uuid id_empresa FK
+    }
+
+    LOCAL_CAPTACAO {
+        uuid id PK
+        text nome
+        text tipo "rua|praia|terminal|evento"
+        uuid id_unidade_negocio FK
+    }
+
+    ATENDIMENTO {
+        uuid id PK
+        enum status "abordado|agendado|atendido|comprou|nao_comprou|cancelado"
+        timestamp data_hora
+        uuid id_operador_promotor FK
+        uuid id_casal_principal FK
+        uuid id_local_captacao FK
+        uuid id_unidade_negocio FK
+    }
+
+    COUPLE_PESSOA {
+        uuid id_atendimento FK
+        uuid id_pessoa FK
+        enum papel "titular|conjuge"
+    }
+
+    PROPOSTA {
+        uuid id PK
+        numeric valor_total
+        numeric valor_entrada
+        int numero_parcelas
+        enum papel_comissao "linear|fechador|ftb"
+        uuid id_atendimento FK
+        uuid id_operador_linhador FK
+        uuid id_operador_fechador FK
+        uuid id_operador_ftb FK
+        date data_venda
+        date data_compensacao
+        enum forma_pagamento "pix|credito|debito|boleto|especie|cheque"
+    }
+
+    PARCELA_COMISSAO {
+        uuid id PK
+        numeric valor
+        enum status "prevista|aguardando_pagamento_cliente|em_fechamento|janela_cancelamento|a_receber|recebida|cancelada_nao_paga|atrasada"
+        date data_prevista
+        date data_fechamento
+        date data_limite_cancelamento
+        uuid id_proposta FK
+        uuid id_operador_recebedor FK
+    }
+
+    CONTRATO {
+        uuid id PK
+        enum status "assinado|pendente|cancelado|revertido"
+        numeric vgv
+        uuid id_proposta FK
+        uuid id_cliente FK
+        text hash_assinatura_digital
+    }
+
+    FRACTION_UNIT {
+        uuid id PK
+        text codigo_apartamento
+        enum tipo "semana_fixa|semana_flutuante|pontos"
+        int ano_utilizacao
+        int numero_semana
+    }
+
+    RESERVA {
+        uuid id PK
+        date data_checkin
+        date data_checkout
+        uuid id_contrato FK
+        uuid id_fraction_unit FK
+    }
+
+    FOLLOWUP {
+        uuid id PK
+        enum tipo "pos_venda|recuperacao|novidade|indicacao|reativacao"
+        date data_programada
+        enum status "pendente|enviado|respondido|ignorado"
+        uuid id_atendimento FK
+    }
+
+    PESSOA ||--o{ COUPLE_PESSOA : "compoe o casal"
+    ATENDIMENTO ||--|{ COUPLE_PESSOA : "vincula"
+    OPERADOR }o--|| EMPRESA : "pertence"
+    ATENDIMENTO }o--|| OPERADOR : "captado por"
+    ATENDIMENTO ||--|{ PROPOSTA : "gera"
+    PROPOSTA ||--|{ PARCELA_COMISSAO : "libera"
+    PROPOSTA ||--o| CONTRATO : "originou"
+    ATENDIMENTO ||--o{ FOLLOWUP : "dispara régua"
+    CONTRATO ||--o{ RESERVA : "usa frações"
+    FRACTION_UNIT ||--o{ RESERVA : "alocada em"
+    UNIDADE_NEGOCIO ||--o{ LOCAL_CAPTACAO : "opera locais"

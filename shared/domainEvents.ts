@@ -10,6 +10,8 @@ export const domainEventCatalog = {
   "unit.maintenance.blocked": { aggregateType: "unit_maintenance_block", description: "Unidade bloqueada para manutenção." },
   "opportunity.created": { aggregateType: "opportunity", description: "Oportunidade comercial criada." },
   "opportunity.updated": { aggregateType: "opportunity", description: "Oportunidade comercial atualizada." },
+  "capture.created": { aggregateType: "capture", description: "Ficha de captação registrada." },
+  "capture.status.updated": { aggregateType: "capture", description: "Status da ficha de captação atualizado." },
   "proposal.created": { aggregateType: "proposal", description: "Proposta comercial criada." },
   "sales.playbook.created": { aggregateType: "sales_playbook", description: "Playbook comercial publicado." },
   "installment.renegotiation.proposed": { aggregateType: "installment_renegotiation", description: "Renegociação proposta." },

@@ -1,0 +1,51 @@
+graph TD
+    %% Atores
+    Promotor["PROMOTOR (Captador)<br/>App Mobile — Offline First"]
+    Recepcao["RECEPÇÃO / LINER<br/>Painel Web — Sala de Vendas"]
+    Admin["BACKOFFICE<br/>Financeiro / Contratos / Gestão"]
+    Cliente["CLIENTE FINAL<br/>Portal do Multiproprietário"]
+
+    %% Frontends
+    AppM["App Mobile (React Native)<br/>• Captação offline<br/>• Voucher / Brinde<br/>• Ranking gamificado"]
+    WebSV["Web — Sala de Vendas<br/>• Fila de mesas<br/>• Cronômetro de tour<br/>• Atendimento em tempo real"]
+    WebERP["Web — ERP / Backoffice<br/>• Frações e estoque<br/>• Contratos<br/>• Comissões em cascata"]
+    PortalC["Portal do Cliente<br/>• Boletos e Pix<br/>• Agenda de uso<br/>• 2ª via"]
+
+    %% Infra
+    API["API Gateway / BFF<br/>Next.js API Routes<br/>+ PostgreSQL (Supabase)"]
+
+    subgraph Backend ["Cérebro (Supabase + Edge Functions)"]
+        ModCapta["Módulo Captação<br/>e Leads"]
+        ModEstoque["Módulo Estoque<br/>e Frações"]
+        ModFinan["Módulo Financeiro<br/>e Comissões"]
+        ModContr["Módulo Contratos<br/>e Assinatura Digital"]
+    end
+
+    %% Externos
+    Pix["Gateway de Pagamento<br/>Pix / Cartão / Boleto"]
+    WhatsApp["API WhatsApp<br/>Régua automática"]
+    Assinatura["Assinatura Digital<br/>ex.: Clicksign"]
+
+    %% Fluxo atores -> frontends
+    Promotor --> AppM
+    Recepcao --> WebSV
+    Admin --> WebERP
+    Cliente --> PortalC
+
+    %% Frontends -> API
+    AppM -->|Sync offline| API
+    WebSV -->|Tempo real| API
+    WebERP --> API
+    PortalC --> API
+
+    %% API -> módulos
+    API --> ModCapta
+    API --> ModEstoque
+    API --> ModFinan
+    API --> ModContr
+
+    %% Módulos -> externos
+    ModFinan --> Pix
+    ModCapta --> WhatsApp
+    ModFinan --> WhatsApp
+    ModContr --> Assinatura
