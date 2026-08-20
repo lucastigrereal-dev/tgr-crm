@@ -60,7 +60,7 @@
 - [x] Produzir roteiro de evolução com prioridades, dependências e critérios de implantação.
 - [x] Priorizar explicitamente as 50 evoluções por impacto, esforço, dependência e onda.
 - [x] Detalhar dependências e critérios de aceite das frentes prioritárias do roteiro.
-- [ ] Consolidar contrato de dados, catálogo de eventos, auditoria e cobertura crítica de testes.
+- [x] Consolidar contrato de dados, catálogo de eventos, auditoria e cobertura crítica de testes.
 - [ ] Implementar direitos de uso, inventário avançado, prioridade e bloqueios de manutenção.
 - [ ] Implementar lista de espera, experiência de chegada/saída e gestão de acompanhantes.
 - [ ] Implementar régua de cobrança, renegociação, conciliação e DRE por campanha.
@@ -76,3 +76,8 @@
 - [x] Expor playbooks comerciais por etapa, cadastro administrativo auditado e fluxo visual de solicitação e decisão de desconto.
 - [x] Testar a reversão de contratos importados, incluindo bloqueios por parcelas, cobranças, documentos, reservas, tarefas e lançamentos.
 - [x] Testar o caminho real de exportação filtrada para XLSX e PDF, comprovando dados e nome de arquivo.
+- [x] Testar a emissão integrada de auditoria e eventos nos fluxos de cliente e contrato.
+- [x] Cobrir payload, agregado e ator nos fluxos recém-eventados de CRM e contratos.
+- [x] Revisar os emissores de auditoria/eventos sob o contrato central e documentar cobertura e pendências.
+- [x] Testar a emissão integrada de auditoria e eventos nos fluxos comercial, financeiro e de ownership já catalogados.
+- [x] Atualizar o contrato de dados com a cobertura integrada desses emissores e a fronteira residual de testes.

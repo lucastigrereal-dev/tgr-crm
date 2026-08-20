@@ -1,6 +1,7 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, auditLogs, domainEvents, users } from "../drizzle/schema";
+import type { DomainEventName } from "../shared/domainEvents";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -53,7 +54,7 @@ export async function recordAudit(actorUserId: number | null, entityType: string
 }
 
 export async function recordDomainEvent(input: {
-  eventName: string;
+  eventName: DomainEventName;
   aggregateType: string;
   aggregateId: number | string;
   actorUserId?: number | null;

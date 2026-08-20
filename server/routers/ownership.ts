@@ -24,6 +24,7 @@ export const ownershipRouter = router({
     const conflicts = await db.select().from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lte(unitMaintenanceBlocks.startsAt, new Date(input.endsAt)), gte(unitMaintenanceBlocks.endsAt, new Date(input.startsAt))));
     if (conflicts.some(item => item.status !== "cancelled" && item.status !== "completed")) throw new Error("Já existe bloqueio operacional neste período.");
     const [created] = await db.insert(unitMaintenanceBlocks).values({ unitId: input.unitId, startsAt: new Date(input.startsAt), endsAt: new Date(input.endsAt), reason: input.reason, createdByUserId: ctx.user.id }).$returningId();
+    await recordAudit(ctx.user.id, "unit_maintenance_block", created.id, "created", `Bloqueio de manutenção: ${input.reason}.`);
     await recordDomainEvent({ eventName: "unit.maintenance.blocked", aggregateType: "unit_maintenance_block", aggregateId: created.id, actorUserId: ctx.user.id, payload: input }); return created;
   }),
 });

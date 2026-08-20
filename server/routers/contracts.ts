@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { contractDocuments, contracts, customers, installments, proposals, users } from "../../drizzle/schema";
-import { getDb, recordAudit } from "../db";
+import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { buildInstallmentSchedule } from "../domain";
@@ -56,6 +56,7 @@ export const contractsRouter = router({
       return contractId;
     });
     await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
+    await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
     return { id: result };
   }),
 
@@ -86,6 +87,7 @@ export const contractsRouter = router({
       cancellationReason: input.status === "cancelled" ? input.cancellationReason?.trim() || "Cancelamento registrado" : null,
     }).where(eq(contracts.id, input.id));
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
+    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: input.status === "cancelled" ? input.cancellationReason ?? null : null } });
     return { success: true };
   }),
 
@@ -114,6 +116,7 @@ export const contractsRouter = router({
     }).$returningId();
     const id = created[0]?.id ?? 0;
     await recordAudit(ctx.user.id, "contract_document", id, "uploaded", `Documento ${input.filename} anexado.`);
+    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed: input.signed, filename: input.filename } });
     return { id, url: upload.url };
   }),
 });

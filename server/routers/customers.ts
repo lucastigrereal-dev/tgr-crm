@@ -87,6 +87,7 @@ export const customersRouter = router({
     const id = inserted[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o cliente." });
     await recordAudit(ctx.user.id, "customer", id, "created", `Cliente ${input.fullName} criado.`);
+    await recordDomainEvent({ eventName: "customer.created", aggregateType: "customer", aggregateId: id, actorUserId: ctx.user.id, payload: { status: input.status, acquisitionSource: input.acquisitionSource ?? null } });
     return { id };
   }),
 
@@ -112,6 +113,7 @@ export const customersRouter = router({
       notes: nullableText(input.data.notes),
     }).where(eq(customers.id, input.id));
     await recordAudit(ctx.user.id, "customer", input.id, "updated", `Cadastro de ${input.data.fullName} atualizado.`);
+    await recordDomainEvent({ eventName: "customer.updated", aggregateType: "customer", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.data.status, city: input.data.city ?? null, state: input.data.state ?? null } });
     return { success: true };
   }),
 
@@ -143,6 +145,7 @@ export const customersRouter = router({
     const id = result[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível salvar a interação." });
     await recordAudit(ctx.user.id, "customer_interaction", id, "created", `Interação ${input.type} registrada.`);
+    await recordDomainEvent({ eventName: "customer.interaction.created", aggregateType: "customer_interaction", aggregateId: id, actorUserId: ctx.user.id, payload: { customerId: input.customerId, type: input.type, direction: input.direction } });
     return { id };
   }),
 
@@ -167,6 +170,7 @@ export const customersRouter = router({
     }).$returningId();
     const id = result[0]?.id;
     await recordAudit(ctx.user.id, "customer_document", id ?? 0, "uploaded", `Anexo ${input.filename} incluído.`);
+    await recordDomainEvent({ eventName: "customer.document.uploaded", aggregateType: "customer_document", aggregateId: id ?? 0, actorUserId: ctx.user.id, payload: { customerId: input.customerId, category: input.category, filename: input.filename } });
     return { id, url: upload.url };
   }),
 
