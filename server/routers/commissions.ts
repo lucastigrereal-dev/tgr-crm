@@ -12,7 +12,7 @@ import { adminProcedure, commissionsProcedure, financeProcedure } from "./access
 const campaignInput = z.object({ name: z.string().min(3).max(180), code: z.string().min(2).max(64).transform(value => value.trim().toUpperCase().replace(/\s+/g, "-")), description: z.string().max(2000).optional(), startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), commissionRate: z.coerce.number().min(0).max(100), targetAmount: z.coerce.number().min(0).default(0), status: z.enum(["draft", "active", "closed"]).default("draft") });
 
 export const commissionsRouter = router({
-  overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional() }).optional()).query(async ({ ctx, input }) => {
+  overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional(), closingMonth: z.string().regex(/^\d{4}-\d{2}$/).optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) return { campaigns: [], ranking: [], entries: [] };
     const sellerId = ctx.user.role === "seller" ? ctx.user.id : input?.sellerId;
     const [campaigns, opportunityRows, commissionRows, sellerRows, goalRows] = await Promise.all([
@@ -23,7 +23,7 @@ export const commissionsRouter = router({
       db.select().from(salesGoals),
     ]);
     const selectedOpportunities = opportunityRows.filter(row => row.opportunity.stage === "won" && (!input?.campaignId || row.opportunity.campaignId === input.campaignId) && (!sellerId || row.opportunity.sellerId === sellerId));
-    const selectedCommissions = commissionRows.filter(row => (!input?.campaignId || row.commission.campaignId === input.campaignId) && (!sellerId || row.commission.sellerId === sellerId));
+    const selectedCommissions = commissionRows.filter(row => (!input?.campaignId || row.commission.campaignId === input.campaignId) && (!sellerId || row.commission.sellerId === sellerId) && (!input?.closingMonth || (row.commission.closingAt ?? row.commission.createdAt).toISOString().slice(0, 7) === input.closingMonth));
     const rank = new Map<number, { sellerId: number; sellerName: string; salesAmount: number; wonCount: number; commissionAmount: number; pendingAmount: number; paidAmount: number }>();
     selectedOpportunities.forEach(row => { if (!row.opportunity.sellerId) return; const item = rank.get(row.opportunity.sellerId) ?? { sellerId: row.opportunity.sellerId, sellerName: row.sellerName || row.sellerEmail || "Sem vendedor", salesAmount: 0, wonCount: 0, commissionAmount: 0, pendingAmount: 0, paidAmount: 0 }; item.salesAmount += Number(row.opportunity.expectedAmount); item.wonCount += 1; rank.set(item.sellerId, item); });
     selectedCommissions.forEach(row => { const item = rank.get(row.commission.sellerId) ?? { sellerId: row.commission.sellerId, sellerName: row.sellerName || "Vendedor", salesAmount: 0, wonCount: 0, commissionAmount: 0, pendingAmount: 0, paidAmount: 0 }; const value = Number(row.commission.amount); if (row.commission.status !== "cancelled") item.commissionAmount += value; if (row.commission.status === "pending" || row.commission.status === "approved") item.pendingAmount += value; if (row.commission.status === "paid") item.paidAmount += value; rank.set(item.sellerId, item); });
