@@ -27,6 +27,22 @@ export const salesRouter = router({
     return db.select().from(salesPlaybooks).where(eq(salesPlaybooks.active, true)).orderBy(salesPlaybooks.stage, desc(salesPlaybooks.updatedAt));
   }),
 
+  createPlaybook: adminProcedure.input(z.object({
+    name: z.string().trim().min(3).max(180),
+    stage: z.enum(["new", "qualified", "proposal", "negotiation", "won", "lost"]),
+    guidance: z.string().trim().min(10).max(5000),
+    checklist: z.string().trim().max(5000).optional().nullable(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const created = await db.insert(salesPlaybooks).values({ ...input, checklist: input.checklist || null, createdByUserId: ctx.user.id }).$returningId();
+    const id = created[0]?.id;
+    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível salvar o playbook." });
+    await recordAudit(ctx.user.id, "sales_playbook", id, "created", `Playbook ${input.name} criado para a etapa ${input.stage}.`);
+    await recordDomainEvent({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", aggregateId: id, actorUserId: ctx.user.id, payload: { stage: input.stage, name: input.name } });
+    return { id };
+  }),
+
   createDiscountRequest: salesProcedure.input(z.object({ proposalId: z.number().int().positive(), requestedAmount: z.coerce.number().positive(), rationale: z.string().trim().min(10).max(3000) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
