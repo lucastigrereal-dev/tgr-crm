@@ -6,6 +6,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
+import { buildSellerQualityRanking } from "../salesQuality";
 
 const opportunityInput = z.object({
   customerId: z.number().int().positive(),
@@ -80,6 +81,13 @@ export const salesRouter = router({
       .innerJoin(customers, eq(opportunities.customerId, customers.id))
       .leftJoin(users, eq(opportunities.sellerId, users.id))
       .orderBy(desc(opportunities.updatedAt)).limit(120);
+  }),
+
+  qualityRanking: salesProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    const rows = await db.select({ sellerId: opportunities.sellerId, sellerName: users.name, stage: opportunities.stage, expectedAmount: opportunities.expectedAmount, nextFollowUpAt: opportunities.nextFollowUpAt }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).orderBy(desc(opportunities.updatedAt)).limit(1000);
+    return buildSellerQualityRanking(rows);
   }),
 
   createOpportunity: salesProcedure.input(opportunityInput).mutation(async ({ ctx, input }) => {

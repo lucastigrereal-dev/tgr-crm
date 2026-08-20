@@ -65,7 +65,7 @@
 - [ ] Implementar lista de espera, experiência de chegada/saída e gestão de acompanhantes.
 - [x] Implementar régua de cobrança, renegociação, conciliação e DRE por campanha.
 - [x] Implementar proposta de renegociação auditável de parcela, com simulação antes de aplicar.
-- [ ] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
+- [x] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
 - [ ] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
 - [ ] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
 - [ ] Implementar contratos de integração, eventos e extensibilidade segura.
