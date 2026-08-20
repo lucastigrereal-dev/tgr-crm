@@ -12,6 +12,9 @@
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:performance": "pnpm build && node scripts/check-bundle-budget.mjs",
+    "test:e2e:isolation": "pnpm check && pnpm test -- e2eSafety && node scripts/check-e2e-isolation.mjs",
+    "seed:e2e:isolation": "node scripts/seed-e2e-isolated.mjs",
+    "clean:e2e:isolation": "node scripts/cleanup-e2e-isolated.mjs",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {

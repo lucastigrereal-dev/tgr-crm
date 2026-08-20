@@ -1,0 +1,29 @@
+import mysql from "mysql2/promise";
+
+const url = process.env.E2E_DATABASE_URL;
+if (!url) throw new Error("E2E_DATABASE_URL é obrigatória.");
+if (!/(?:_e2e|_test|_staging)(?:\?|$)/i.test(new URL(url).pathname + new URL(url).search)) throw new Error("Banco não parece isolado.");
+const openId = process.env.OWNER_OPEN_ID;
+if (!openId) throw new Error("OWNER_OPEN_ID é obrigatório.");
+const db = await mysql.createConnection(url);
+await db.execute("INSERT INTO users (openId, name, email, loginMethod, role) VALUES (?, ?, ?, 'e2e', 'admin') ON DUPLICATE KEY UPDATE role='admin', name=VALUES(name)", [openId, "TSE E2E Owner", "e2e-owner@tse.local"]);
+const [[owner]] = await db.execute("SELECT id FROM users WHERE openId = ?", [openId]);
+const ownerId = owner.id;
+
+await db.execute("INSERT INTO resorts (name, city, state, status) VALUES ('E2E Resort', 'Olímpia', 'SP', 'active')");
+const [[resort]] = await db.execute("SELECT id FROM resorts WHERE name='E2E Resort' ORDER BY id DESC LIMIT 1");
+await db.execute("INSERT INTO units (resortId, code, category, capacity, beds, status) VALUES (?, 'E2E-101', 'Suite', 4, 2, 'active'), (?, 'E2E-102', 'Suite', 4, 2, 'active')", [resort.id, resort.id]);
+const [unitRows] = await db.execute("SELECT id, code FROM units WHERE resortId = ? ORDER BY id", [resort.id]);
+const unitForGuest = unitRows[0].id; const unitForWaitlist = unitRows[1].id;
+await db.execute("INSERT INTO customers (fullName, documentNumber, email, phone, city, state, status) VALUES ('E2E Reserva Associado', '99100100100', 'reserva@e2e.local', '11999990001', 'Olímpia', 'SP', 'active'), ('E2E Comercial Associado', '99100100101', 'comercial@e2e.local', '11999990002', 'Olímpia', 'SP', 'active')");
+const [customerRows] = await db.execute("SELECT id, fullName FROM customers WHERE documentNumber IN ('99100100100', '99100100101') ORDER BY id");
+const reservationCustomerId = customerRows[0].id; const commercialCustomerId = customerRows[1].id;
+await db.execute("INSERT INTO contracts (number, customerId, sellerId, usageModel, status, totalAmount, activatedAt) VALUES ('E2E-CTR-001', ?, ?, 'flexible_week', 'active', 12000, NOW())", [reservationCustomerId, ownerId]);
+const [[contract]] = await db.execute("SELECT id FROM contracts WHERE number='E2E-CTR-001'");
+await db.execute("INSERT INTO reservations (customerId, contractId, unitId, checkIn, checkOut, adults, status, createdByUserId) VALUES (?, ?, ?, '2026-08-20', '2026-08-23', 2, 'confirmed', ?)", [reservationCustomerId, contract.id, unitForGuest, ownerId]);
+const [[reservation]] = await db.execute("SELECT id FROM reservations WHERE contractId = ? ORDER BY id DESC LIMIT 1", [contract.id]);
+await db.execute("INSERT INTO reservation_guests (reservationId, fullName, relationship) VALUES (?, 'E2E Acompanhante', 'Cônjuge')", [reservation.id]);
+await db.execute("INSERT INTO reservation_waitlist (customerId, contractId, resortId, desiredCheckIn, desiredCheckOut, partySize, priorityScore, status, createdByUserId) VALUES (?, ?, ?, '2026-09-10', '2026-09-14', 2, 10, 'waiting', ?)", [reservationCustomerId, contract.id, resort.id, ownerId]);
+await db.execute("INSERT INTO opportunities (customerId, sellerId, title, stage, source, expectedAmount, probability) VALUES (?, ?, 'E2E Proposta Filtrada', 'proposal', 'e2e', 15000, 70)", [commercialCustomerId, ownerId]);
+await db.end();
+console.log("Seed E2E isolado criado.");

@@ -52,8 +52,8 @@
 - [x] Adicionar testes automatizados de reversão efetiva e de geração dos exports filtrados.
 - [x] Adicionar seletor visual de campanha na criação e edição de oportunidades.
 - [x] Exibir progresso visual de cada vendedor em relação à meta na Central de Comissões.
-- [ ] Criar testes ponta a ponta de reversão CSV e de exportação de propostas filtradas.
-- [ ] Adicionar stack de teste de navegador e comprovar downloads de Excel/PDF em fluxo real.
+- [x] Criar testes ponta a ponta de reversão CSV e de exportação de propostas filtradas.
+- [x] Adicionar stack de teste de navegador e comprovar downloads de Excel/PDF em fluxo real.
 - [x] Realizar benchmark documentado de CRM, ERP, timeshare, hotelaria, vendas, finanças e inteligência operacional.
 - [x] Consolidar 50 evoluções exponenciais priorizadas para o TSE Exclusivo.
 - [x] Consolidar 50 pilares de experiência, confiabilidade, governança de dados e preparação para IA.
@@ -94,8 +94,13 @@
 - [x] Formalizar e versionar o contrato do data mart operacional, com grão, fontes, atualização e consumidores.
 - [x] Cobrir em teste integrado o procedimento `dashboard.operationalPulse` para provar o read model completo de exceções e adoção.
 - [x] Validar performance do frontend com orçamento e evidências objetivas, lazy-load de exportadores e medição do dashboard.
-- [ ] Concluir e provar em navegador os fluxos reais abertos de reversão CSV, download de exportação e lista de espera com acompanhantes.
+- [x] Concluir e provar em navegador os fluxos reais abertos de reversão CSV, download de exportação e lista de espera com acompanhantes.
 - [x] Documentar a fronteira final de segurança residual após `pnpm audit`, com decisão explícita sobre o advisory transitivo restante.
-- [ ] Executar E2E autenticado em homologação isolada para reversão CSV com lote descartável real e verificação do estado final no backend.
-- [ ] Executar E2E autenticado com geração/download real de XLSX/PDF a partir de dados reais do backend, sem interceptar respostas tRPC.
-- [ ] Executar E2E autenticado de lista de espera → oferta → reserva → acompanhantes → check-in/out com fixtures reais isoladas.
+- [x] Executar E2E autenticado em homologação isolada para reversão CSV com lote descartável real e verificação do estado final no backend.
+- [x] Executar E2E autenticado com geração/download real de XLSX/PDF a partir de dados reais do backend, sem interceptar respostas tRPC.
+- [x] Executar E2E autenticado de lista de espera → oferta → reserva → acompanhantes → check-in/out com fixtures reais isoladas.
+- [x] Provisionar homologação isolada temporária e controlada para E2E estrito, sem exigir configuração técnica manual do usuário.
+- [x] Corrigir atualização da tela de importação para disponibilizar a reversão imediatamente após um commit CSV bem-sucedido.
+- [x] Estabilizar a suíte Playwright para execução serial no sandbox, evitando queda de navegador por pressão de memória.
+- [x] Executar E2E estrito em homologação isolada cobrindo a fila desde `waiting`, clicando `Ofertar vaga` e convertendo a oferta em reserva real.
+- [x] Executar no cenário isolado o `Check-in` principal da reserva confirmada antes da presença de acompanhantes e do `Check-out` final.
