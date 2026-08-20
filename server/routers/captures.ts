@@ -1,11 +1,12 @@
 import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureRecords, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
+import { captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { receptionProcedure, salesProcedure } from "./access";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
+import { getProjectCaptureReadiness } from "../projectPolicy";
 import { activeRoomStatuses, assertReceptionAction, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
@@ -114,6 +115,11 @@ export const capturesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.transaction(async tx => {
+      if (input.resortId) {
+        const settings = (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0];
+        const readiness = getProjectCaptureReadiness({ customerName: input.customer?.fullName, phone: input.customer?.phone, city: input.customer?.city, promoterId: input.promoterId, captureLocation: input.captureLocation, averageIncome: input.averageIncome, travelWeeksPerYear: input.travelWeeksPerYear, qualificationStatus: input.qualificationStatus, vehicle: input.vehicleBrand || input.vehicleModel, homeOwnership: input.ownsHome === true ? "sim" : null }, settings?.requiredCaptureFields);
+        if (readiness.missing.some(field => field === "Veículo" || field === "Moradia")) throw new TRPCError({ code: "BAD_REQUEST", message: `Ficha incompleta para este empreendimento: ${readiness.missing.join(", ")}.` });
+      }
       let customerId = input.customerId;
       let customerName = "Associado";
       if (!customerId && input.customer) {
