@@ -152,3 +152,4 @@
 - [ ] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
 - [ ] Criar configuração comercial por projeto para regras de distrato, campos obrigatórios, papéis de corretor/captador e divisão de comissão.
 - [ ] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.
+- [ ] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.

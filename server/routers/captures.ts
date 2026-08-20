@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureRecords, customers, opportunities, salesCampaigns, tasks, users } from "../../drizzle/schema";
+import { captureRecords, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { receptionProcedure, salesProcedure } from "./access";
@@ -24,6 +24,7 @@ const captureInput = z.object({
     state: z.string().trim().toUpperCase().max(2).optional().nullable(),
   }).optional(),
   campaignId: z.number().int().positive().optional().nullable(),
+  resortId: z.number().int().positive().optional().nullable(),
   promoterId: z.number().int().positive().optional().nullable(),
   linerId: z.number().int().positive().optional().nullable(),
   closerId: z.number().int().positive().optional().nullable(),
@@ -89,12 +90,13 @@ function assertAction(state: Parameters<typeof assertReceptionAction>[0], action
 export const capturesRouter = router({
   selectors: receptionProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return { campaigns: [], sellers: [] };
-    const [campaigns, sellers] = await Promise.all([
+    if (!db) return { campaigns: [], sellers: [], resorts: [] };
+    const [campaigns, sellers, resortRows] = await Promise.all([
       db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)),
       db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts),
     ]);
-    return { campaigns, sellers };
+    return { campaigns, sellers, resorts: resortRows };
   }),
 
   list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ input }) => {
@@ -136,7 +138,7 @@ export const capturesRouter = router({
       }
       const appointmentPlan = getCaptureAppointmentPlan({ customerName, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, salesRoom: input.salesRoom });
       const inserted = await tx.insert(captureRecords).values({
-        customerId, opportunityId, campaignId: clean(input.campaignId), promoterId: clean(input.promoterId), linerId: clean(input.linerId), closerId: clean(input.closerId), salesRoom: nullIfBlank(input.salesRoom), captureLocation: nullIfBlank(input.captureLocation), lodgingLocation: nullIfBlank(input.lodgingLocation), transportation: nullIfBlank(input.transportation), isPasserby: input.isPasserby, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, presentationStatus: appointmentPlan.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), partnerName: nullIfBlank(input.partnerName), partnerAge: clean(input.partnerAge), partnerProfession: nullIfBlank(input.partnerProfession), partnerProfessionNotes: nullIfBlank(input.partnerProfessionNotes), relationshipStatus: nullIfBlank(input.relationshipStatus), relationshipYears: clean(input.relationshipYears), relationshipMonths: clean(input.relationshipMonths), childrenCount: input.childrenCount, childrenNames: nullIfBlank(input.childrenNames), primaryProfessionNotes: nullIfBlank(input.primaryProfessionNotes), averageIncome: input.averageIncome?.toFixed(2) ?? null, vehicleBrand: nullIfBlank(input.vehicleBrand), vehicleModel: nullIfBlank(input.vehicleModel), vehicleYear: clean(input.vehicleYear), hasCreditCard: clean(input.hasCreditCard), creditCardBrands: nullIfBlank(input.creditCardBrands), acceptsCheque: clean(input.acceptsCheque), ownsHome: clean(input.ownsHome), ownsPropertyInCity: clean(input.ownsPropertyInCity), travelWeeksPerYear: input.travelWeeksPerYear?.toFixed(1) ?? null, usualTravelSeason: nullIfBlank(input.usualTravelSeason), dreamTrips: nullIfBlank(input.dreamTrips), lastTrip: nullIfBlank(input.lastTrip), averageHotelSpend: input.averageHotelSpend?.toFixed(2) ?? null, nextFamilyTrip: nullIfBlank(input.nextFamilyTrip), socialNetworks: nullIfBlank(input.socialNetworks), giftDescription: nullIfBlank(input.giftDescription), notes: nullIfBlank(input.notes) }).$returningId();
+        customerId, resortId: clean(input.resortId), opportunityId, campaignId: clean(input.campaignId), promoterId: clean(input.promoterId), linerId: clean(input.linerId), closerId: clean(input.closerId), salesRoom: nullIfBlank(input.salesRoom), captureLocation: nullIfBlank(input.captureLocation), lodgingLocation: nullIfBlank(input.lodgingLocation), transportation: nullIfBlank(input.transportation), isPasserby: input.isPasserby, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, presentationStatus: appointmentPlan.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), partnerName: nullIfBlank(input.partnerName), partnerAge: clean(input.partnerAge), partnerProfession: nullIfBlank(input.partnerProfession), partnerProfessionNotes: nullIfBlank(input.partnerProfessionNotes), relationshipStatus: nullIfBlank(input.relationshipStatus), relationshipYears: clean(input.relationshipYears), relationshipMonths: clean(input.relationshipMonths), childrenCount: input.childrenCount, childrenNames: nullIfBlank(input.childrenNames), primaryProfessionNotes: nullIfBlank(input.primaryProfessionNotes), averageIncome: input.averageIncome?.toFixed(2) ?? null, vehicleBrand: nullIfBlank(input.vehicleBrand), vehicleModel: nullIfBlank(input.vehicleModel), vehicleYear: clean(input.vehicleYear), hasCreditCard: clean(input.hasCreditCard), creditCardBrands: nullIfBlank(input.creditCardBrands), acceptsCheque: clean(input.acceptsCheque), ownsHome: clean(input.ownsHome), ownsPropertyInCity: clean(input.ownsPropertyInCity), travelWeeksPerYear: input.travelWeeksPerYear?.toFixed(1) ?? null, usualTravelSeason: nullIfBlank(input.usualTravelSeason), dreamTrips: nullIfBlank(input.dreamTrips), lastTrip: nullIfBlank(input.lastTrip), averageHotelSpend: input.averageHotelSpend?.toFixed(2) ?? null, nextFamilyTrip: nullIfBlank(input.nextFamilyTrip), socialNetworks: nullIfBlank(input.socialNetworks), giftDescription: nullIfBlank(input.giftDescription), notes: nullIfBlank(input.notes) }).$returningId();
       const captureId = inserted[0]?.id;
       if (!captureId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a ficha de captação." });
       let taskId: number | null = null;

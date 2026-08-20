@@ -152,6 +152,7 @@ export const captureRecords = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     customerId: int("customerId").notNull().references(() => customers.id),
+    resortId: int("resortId").references(() => resorts.id),
     opportunityId: int("opportunityId").references(() => opportunities.id),
     campaignId: int("campaignId").references(() => salesCampaigns.id),
     promoterId: int("promoterId").references(() => users.id),

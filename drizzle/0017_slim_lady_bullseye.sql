@@ -1,0 +1,2 @@
+ALTER TABLE `capture_records` ADD `resortId` int;--> statement-breakpoint
+ALTER TABLE `capture_records` ADD CONSTRAINT `capture_records_resortId_resorts_id_fk` FOREIGN KEY (`resortId`) REFERENCES `resorts`(`id`) ON DELETE no action ON UPDATE no action;
