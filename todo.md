@@ -104,5 +104,6 @@
 - [x] Estabilizar a suíte Playwright para execução serial no sandbox, evitando queda de navegador por pressão de memória.
 - [x] Criar apresentação executiva e relatório completo das funcionalidades, provas e limites do sistema.
 - [x] Marcar o nome atual do produto como provisório até a definição de posicionamento e marca.
+- [x] Atualizar materiais executivos e decisão de produto para o nome de trabalho TGR-CRM.
 - [x] Executar E2E estrito em homologação isolada cobrindo a fila desde `waiting`, clicando `Ofertar vaga` e convertendo a oferta em reserva real.
 - [x] Executar no cenário isolado o `Check-in` principal da reserva confirmada antes da presença de acompanhantes e do `Check-out` final.

@@ -2,9 +2,9 @@
 
 ## Estado atual
 
-**TSE CRM Exclusivo** é apenas o **nome provisório de trabalho** usado durante a construção do sistema.
+**TGR-CRM** é o **nome de trabalho atual** escolhido pelo responsável pelo produto.
 
-Ele não deve ser tratado como marca definitiva, domínio, promessa comercial ou identidade visual final. Antes da implantação com dados reais, será conduzida uma decisão de posicionamento para definir nome, slogan, arquitetura de marca, domínio e identidade comercial.
+Ele ainda não deve ser tratado como marca registrada, domínio garantido ou identidade visual final. Antes da implantação com dados reais, será conduzida a decisão de posicionamento para definir slogan, arquitetura de marca, domínio e identidade comercial.
 
 > O produto já está funcional; o batismo comercial continua deliberadamente em aberto.
 

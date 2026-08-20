@@ -1,12 +1,12 @@
 # Relatório Executivo de Funcionalidades
 
-## Produto: **TSE CRM Exclusivo** — nome provisório de trabalho
+## Produto: **TGR-CRM** — nome de trabalho atual
 
 **Data:** 20 de agosto de 2026  
 **Responsável pelo produto:** Lucas Tigre / Tigre Digital Group  
 **Status:** Sistema proprietário funcional, pronto para receber padronização e dados reais.
 
-> **Importante:** “TSE CRM Exclusivo” não é a marca definitiva. É o nome usado durante a construção. O produto funciona; o batismo comercial, o domínio e a identidade final permanecem em aberto.
+> **Importante:** **TGR-CRM** é o nome de trabalho escolhido para esta fase. O produto funciona; o registro de marca, o domínio e a identidade final ainda serão definidos antes da implantação comercial.
 
 ## 1. O que foi construído
 
@@ -108,7 +108,7 @@ O sistema está pronto para a fase de padronização. O próximo ciclo não é �
 
 ## Conclusão
 
-O TSE CRM Exclusivo já é uma base operacional completa, proprietária e auditável. Ele foi construído para uma empresa, não para ser uma vitrine genérica de SaaS. O que falta agora não é software: é **marca, dados reais, regras internas padronizadas e uso disciplinado**.
+O TGR-CRM já é uma base operacional completa, proprietária e auditável. Ele foi construído para uma empresa, não para ser uma vitrine genérica de SaaS. O que falta agora não é software: é **marca, dados reais, regras internas padronizadas e uso disciplinado**.
 
 ### Evidências internas consultadas
 

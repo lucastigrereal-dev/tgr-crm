@@ -1,8 +1,8 @@
 ## Cover
 
-# TSE CRM Exclusivo
+# TGR-CRM
 ### Produto proprietário para operação de timeshare e multipropriedade
-### Nome provisório de trabalho · Lucas Tigre / Tigre Digital Group
+### Nome de trabalho atual · Lucas Tigre / Tigre Digital Group
 
 ## Slide 1
 
