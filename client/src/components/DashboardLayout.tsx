@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, ShieldCheck, Trophy, Upload, Users, UsersRound } from "lucide-react";
+import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, DoorOpen, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, ShieldCheck, TrendingUp, Trophy, Upload, Users, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -32,6 +32,8 @@ const menuItems = [
   { icon: UsersRound, label: "Clientes", path: "/clientes" },
   { icon: ChartNoAxesCombined, label: "Comercial", path: "/vendas" },
   { icon: ClipboardList, label: "Captação", path: "/captacao" },
+  { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" },
+  { icon: TrendingUp, label: "Análise de vendas", path: "/analise-de-vendas" },
   { icon: Megaphone, label: "Campanhas", path: "/campanhas" },
   { icon: Trophy, label: "Comissões", path: "/comissoes" },
   { icon: FileSignature, label: "Contratos", path: "/contratos" },

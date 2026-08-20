@@ -1,0 +1,51 @@
+import { EmptyState, MetricCard, PageHeader } from "@/components/crm/ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { trpc } from "@/lib/trpc";
+import { BarChart3, CalendarRange, CircleX, ContactRound, DoorOpen, Presentation, Trophy, UserRoundCheck } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+
+type Dimension = "campaigns" | "promoters" | "liners" | "closers";
+const dimensionCopy: Record<Dimension, { label: string; eyebrow: string; description: string }> = {
+  campaigns: { label: "Campanha", eyebrow: "Origem da operação", description: "Qual campanha está trazendo casal, tour e venda." },
+  promoters: { label: "Promotor", eyebrow: "Captação", description: "Quem coloca volume com qualidade na porta da sala." },
+  liners: { label: "Liner", eyebrow: "Recepção comercial", description: "Quem transforma chegada em apresentação." },
+  closers: { label: "Fechador", eyebrow: "Fechamento", description: "Quem converte apresentação em oportunidade ganha." },
+};
+
+const iso = (date: Date) => date.toISOString().slice(0, 10);
+const percent = (value: number) => `${value.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
+
+export default function SalesAnalytics() {
+  const [startDate, setStartDate] = useState(() => iso(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
+  const [endDate, setEndDate] = useState(() => iso(new Date()));
+  const [dimension, setDimension] = useState<Dimension>("campaigns");
+  const input = useMemo(() => ({ startDate, endDate }), [startDate, endDate]);
+  const analytics = trpc.dashboard.salesRoomConversion.useQuery(input, { refetchInterval: 30_000, refetchOnWindowFocus: true });
+  const metrics = analytics.data?.metrics;
+  const funnel = metrics ? [
+    { label: "Captadas", value: metrics.captures, color: "#c7a35a" },
+    { label: "Agendadas", value: metrics.scheduled, color: "#8d7b50" },
+    { label: "Chegaram", value: metrics.arrivals, color: "#4f7f70" },
+    { label: "Apresentaram", value: metrics.presentations, color: "#5c477b" },
+    { label: "Encerradas", value: metrics.completed, color: "#29413e" },
+    { label: "Ganharam", value: metrics.wins, color: "#b18f4b" },
+  ] : [];
+  const breakdown = analytics.data?.breakdowns[dimension] ?? [];
+  const selected = dimensionCopy[dimension];
+
+  return <div className="space-y-7">
+    <PageHeader eyebrow="Inteligência comercial" title="Análise de conversão" description="Enxerga o caminho inteiro: captação, chegada, tour, sem-tour e oportunidade ganha. Onde a conversão morre, o TGR-CRM aponta sem passar pano." />
+    <Card className="border-[#e8e1d4] bg-[#fcfbf7]"><CardContent className="flex flex-col gap-4 p-5 xl:flex-row xl:items-end xl:justify-between"><div className="grid gap-3 sm:grid-cols-2"><div className="grid gap-2"><Label htmlFor="conversion-start">Início</Label><Input id="conversion-start" type="date" value={startDate} max={endDate} onChange={event => setStartDate(event.target.value)} /></div><div className="grid gap-2"><Label htmlFor="conversion-end">Fim</Label><Input id="conversion-end" type="date" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)} /></div></div><div className="flex items-center gap-2 text-xs text-muted-foreground"><CalendarRange className="h-4 w-4 text-[#b18f4b]" />Atualização automática a cada 30 segundos.</div></CardContent></Card>
+
+    <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5"><MetricCard label="Captações" value={metrics?.captures ?? "—"} detail="Fichas no recorte" icon={ContactRound} tone="dark" /><MetricCard label="Chegada" value={metrics ? percent(metrics.arrivalRate) : "—"} detail="Chegaram ÷ agendadas" icon={UserRoundCheck} tone="sage" /><MetricCard label="Tour" value={metrics ? percent(metrics.tourRate) : "—"} detail="Apresentaram ÷ chegaram" icon={Presentation} tone="cream" /><MetricCard label="Conversão" value={metrics ? percent(metrics.closeRate) : "—"} detail="Ganhos ÷ apresentações" icon={Trophy} tone="gold" /><MetricCard label="Sem-tour" value={metrics ? percent(metrics.noTourRate) : "—"} detail="Sem-tour ÷ agendadas" icon={CircleX} tone="cream" /></section>
+
+    <section className="grid gap-5 xl:grid-cols-[1.05fr_.95fr]"><Card className="border-[#e8e1d4]"><CardHeader><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Funil da operação</p><CardTitle className="mt-1 font-serif text-2xl text-[#1d2b2a]">Do contato ao fechamento</CardTitle><p className="mt-1 text-xs text-muted-foreground">Uma apresentação só entra no funil quando o início de tour foi registrado.</p></div><BarChart3 className="h-5 w-5 text-[#b18f4b]" /></div></CardHeader><CardContent>{funnel.some(item => item.value) ? <div className="h-[320px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={funnel} layout="vertical" margin={{ left: 10 }}><CartesianGrid horizontal={false} stroke="#eee9df" /><XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} fontSize={10} /><YAxis type="category" dataKey="label" tickLine={false} axisLine={false} fontSize={11} width={95} /><Tooltip formatter={(value: number) => [value, "Fichas"]} /><Bar dataKey="value" name="Fichas" radius={[0, 7, 7, 0]}>{funnel.map(item => <Cell key={item.label} fill={item.color} />)}</Bar></BarChart></ResponsiveContainer></div> : <EmptyState title="Sem captações no recorte" body="Ajuste o período ou registre as fichas da sala. Sem dado, o gráfico não inventa milagre." />}</CardContent></Card>
+      <Card className="border-[#e8e1d4] bg-[#1d2b2a] text-white"><CardContent className="grid min-h-[350px] content-between p-6"><div><DoorOpen className="h-6 w-6 text-[#e8d092]" /><p className="mt-6 text-[10px] font-bold uppercase tracking-[.16em] text-[#e8d092]">Leitura rápida</p><h2 className="mt-2 font-serif text-3xl">{metrics?.presentations ?? 0} apresentação(ões) com {metrics?.wins ?? 0} oportunidade(s) ganha(s).</h2><p className="mt-4 max-w-md text-sm leading-6 text-white/65">A taxa de conversão só usa apresentações iniciadas. Sem-tour não infla performance e captação sem agenda continua visível como origem, não como venda fantasma.</p></div><div className="grid grid-cols-2 gap-3 border-t border-white/15 pt-5"><div><p className="text-2xl font-semibold">{metrics?.noTours ?? 0}</p><p className="mt-1 text-xs text-white/55">sem-tour com motivo</p></div><div><p className="text-2xl font-semibold">{metrics?.completed ?? 0}</p><p className="mt-1 text-xs text-white/55">apresentações encerradas</p></div></div></CardContent></Card></section>
+
+    <Card className="border-[#e8e1d4]"><CardHeader className="flex flex-col gap-4 border-b border-[#eee9df] sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">{selected.eyebrow}</p><CardTitle className="mt-1 font-serif text-2xl text-[#1d2b2a]">Conversão por {selected.label.toLowerCase()}</CardTitle><p className="mt-1 text-xs text-muted-foreground">{selected.description}</p></div><div className="w-full sm:w-56"><Label>Quebra gerencial</Label><Select value={dimension} onValueChange={value => setDimension(value as Dimension)}><SelectTrigger className="mt-2"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(dimensionCopy).map(([value, copy]) => <SelectItem key={value} value={value}>{copy.label}</SelectItem>)}</SelectContent></Select></div></CardHeader><CardContent className="p-0">{breakdown.length ? <div className="overflow-x-auto"><div className="min-w-[850px]"><div className="grid grid-cols-[1.4fr_repeat(6,.7fr)] gap-3 bg-[#faf8f3] px-6 py-3 text-[10px] font-bold uppercase tracking-[.1em] text-[#8a6b2d]"><span>Responsável / origem</span><span>Captações</span><span>Chegadas</span><span>Tour</span><span>Ganhos</span><span>Conv.</span><span>Sem-tour</span></div>{breakdown.map(row => <div key={`${row.id}-${row.label}`} className="grid grid-cols-[1.4fr_repeat(6,.7fr)] gap-3 border-t border-[#f1ede5] px-6 py-4 text-sm"><span className="font-medium text-[#1d2b2a]">{row.label}</span><span>{row.captures}</span><span>{row.arrivals}</span><span>{row.presentations}</span><span className="font-semibold text-[#285043]">{row.wins}</span><span className="font-semibold text-[#8a6b2d]">{percent(row.closeRate)}</span><span className={row.noTours ? "text-[#a64943]" : "text-muted-foreground"}>{row.noTours} · {percent(row.noTourRate)}</span></div>)}</div></div> : <EmptyState title="Nenhuma quebra no período" body="Quando a captação entrar com campanha e equipe, a análise expõe a conversão de cada etapa." />}</CardContent></Card>
+  </div>;
+}

@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { captureRecords, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, salesCampaigns, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
 import { buildCommercialCharts, filterFunnelDetails, funnelStages } from "../commercialMetrics";
 import { buildOperationalInsights } from "../operationalAnalytics";
+import { buildConversionBreakdown, calculateConversionMetrics, filterConversionCaptures } from "../salesRoomAnalytics";
 
 function monthBounds() {
   const now = new Date();
@@ -53,6 +54,27 @@ export const dashboardRouter = router({
     const rows = await db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id));
     const selectedIds = new Set(filterFunnelDetails(rows.map(({ opportunity }) => opportunity), input.stage, start, end, input.sellerId).map(item => item.id));
     return rows.filter(({ opportunity }) => selectedIds.has(opportunity.id)).map(({ opportunity, customerName, sellerName }) => ({ opportunity, customerName, sellerName: sellerName || "Sem vendedor" }));
+  }),
+  salesRoomConversion: internalProcedure.input(chartFilters).query(async ({ input }) => {
+    const db = await getDb(); const { start, end } = resolveRange(input);
+    if (!db) return { metrics: calculateConversionMetrics([]), breakdowns: { campaigns: [], promoters: [], liners: [], closers: [] }, range: { start, end } };
+    const [captureRows, campaignRows, userRows] = await Promise.all([
+      db.select({ capture: captureRecords, opportunityStage: opportunities.stage }).from(captureRecords).leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id)),
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+    ]);
+    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end);
+    const names = { campaigns: new Map(campaignRows.map(item => [item.id, item.name])), users: new Map(userRows.map(item => [item.id, item.name || item.email || `Usuário #${item.id}`])) };
+    return {
+      metrics: calculateConversionMetrics(captures),
+      breakdowns: {
+        campaigns: buildConversionBreakdown({ captures, dimension: "campaign", names }),
+        promoters: buildConversionBreakdown({ captures, dimension: "promoter", names }),
+        liners: buildConversionBreakdown({ captures, dimension: "liner", names }),
+        closers: buildConversionBreakdown({ captures, dimension: "closer", names }),
+      },
+      range: { start, end },
+    };
   }),
   operationalPulse: internalProcedure.query(async () => {
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };

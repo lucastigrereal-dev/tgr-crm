@@ -1,11 +1,12 @@
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureRecords, customers, opportunities, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
-import { salesProcedure } from "./access";
+import { receptionProcedure, salesProcedure } from "./access";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
+import { activeRoomStatuses, assertReceptionAction, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
 const optionalShort = z.string().trim().max(255).optional().nullable();
@@ -67,9 +68,26 @@ const captureInput = z.object({
 
 function nullIfBlank(value?: string | null) { return value?.trim() ? value.trim() : null; }
 const clean = <T>(value: T | undefined | null) => value ?? null;
+const presentationStatuses = ["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"] as const;
+
+async function findCaptureOrThrow(id: number) {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+  const capture = (await db.select().from(captureRecords).where(eq(captureRecords.id, id)).limit(1))[0];
+  if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+  return { db, capture };
+}
+
+function assertAction(state: Parameters<typeof assertReceptionAction>[0], action: Parameters<typeof assertReceptionAction>[1]) {
+  try {
+    assertReceptionAction(state, action);
+  } catch (error) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "Transição de recepção inválida." });
+  }
+}
 
 export const capturesRouter = router({
-  selectors: salesProcedure.query(async () => {
+  selectors: receptionProcedure.query(async () => {
     const db = await getDb();
     if (!db) return { campaigns: [], sellers: [] };
     const [campaigns, sellers] = await Promise.all([
@@ -79,7 +97,7 @@ export const capturesRouter = router({
     return { campaigns, sellers };
   }),
 
-  list: salesProcedure.input(z.object({ status: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).optional() }).optional()).query(async ({ input }) => {
+  list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
@@ -142,5 +160,72 @@ export const capturesRouter = router({
     await recordAudit(ctx.user.id, "capture", input.id, "status_updated", `Captação atualizada para ${input.presentationStatus}.`);
     await recordDomainEvent({ eventName: "capture.status.updated", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus ?? null } });
     return { success: true };
+  }),
+
+  receptionQueue: receptionProcedure.input(z.object({ date: z.string().date().optional(), salesRoom: optionalShort, includeCompleted: z.boolean().default(false) }).optional()).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const date = input?.date ?? new Date().toISOString().slice(0, 10);
+    const start = new Date(`${date}T00:00:00-03:00`);
+    const end = new Date(`${date}T23:59:59.999-03:00`);
+    const filters = [gte(captureRecords.scheduledAt, start), lt(captureRecords.scheduledAt, end)];
+    if (input?.salesRoom?.trim()) filters.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
+    if (!input?.includeCompleted) filters.push(inArray(captureRecords.presentationStatus, activeRoomStatuses));
+    const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
+      .innerJoin(customers, eq(captureRecords.customerId, customers.id))
+      .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
+      .where(and(...filters)).orderBy(captureRecords.scheduledAt);
+    return filterReceptionQueue(rows, { date, salesRoom: input?.salesRoom, includeCompleted: input?.includeCompleted }).map(row => ({ ...row, durationMinutes: tourDurationMinutes(row.capture.presentationStartedAt, row.capture.presentationEndedAt) }));
+  }),
+
+  checkIn: receptionProcedure.input(z.object({ id: z.number().int().positive(), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    assertAction(capture, "check_in");
+    const checkedInAt = new Date();
+    await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    await recordAudit(ctx.user.id, "capture", input.id, "checked_in", "Chegada confirmada pela recepção.");
+    await recordDomainEvent({ eventName: "capture.checked_in", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom } });
+    return { success: true, checkedInAt };
+  }),
+
+  assignRoom: receptionProcedure.input(z.object({ id: z.number().int().positive(), salesTable: z.string().trim().min(1).max(64), linerId: z.number().int().positive().optional().nullable(), closerId: z.number().int().positive().optional().nullable(), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    assertAction(capture, "assign_table");
+    const assignedAt = new Date();
+    await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    await recordAudit(ctx.user.id, "capture", input.id, "room_assigned", `Mesa ${input.salesTable} e equipe da sala atribuídas.`);
+    await recordDomainEvent({ eventName: "capture.room.assigned", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: input.salesTable, linerId: input.linerId ?? null, closerId: input.closerId ?? null } });
+    return { success: true, assignedAt };
+  }),
+
+  startPresentation: receptionProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    assertAction(capture, "start_presentation");
+    const presentationStartedAt = new Date();
+    await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(eq(captureRecords.id, input.id));
+    await recordAudit(ctx.user.id, "capture", input.id, "presentation_started", `Apresentação iniciada na mesa ${capture.salesTable}.`);
+    await recordDomainEvent({ eventName: "capture.presentation.started", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable } });
+    return { success: true, presentationStartedAt };
+  }),
+
+  endPresentation: receptionProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    assertAction(capture, "end_presentation");
+    const presentationEndedAt = new Date();
+    const durationMinutes = tourDurationMinutes(capture.presentationStartedAt, presentationEndedAt);
+    await db.update(captureRecords).set({ presentationStatus: "closed", presentationEndedAt }).where(eq(captureRecords.id, input.id));
+    await recordAudit(ctx.user.id, "capture", input.id, "presentation_ended", `Apresentação concluída e encerrada após ${durationMinutes} minutos.`);
+    await recordDomainEvent({ eventName: "capture.presentation.ended", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable, durationMinutes } });
+    return { success: true, presentationEndedAt, durationMinutes };
+  }),
+
+  markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(3).max(5000), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    assertAction(capture, "mark_no_tour");
+    const endedAt = new Date();
+    await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
+    await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: input.reason } });
+    return { success: true, endedAt };
   }),
 });

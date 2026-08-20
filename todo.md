@@ -112,7 +112,14 @@
 - [ ] Preparar emissão de boleto e PIX por gateway nos contratos, sem simular cobrança antes da conexão segura.
 - [ ] Adicionar dashboard visual de progresso de metas em tempo real à Central de Campanhas.
 - [ ] Destacar e ampliar o acesso aos modelos CSV de associados, contratos e unidades na Central de Importação.
-- [ ] Produzir matriz comparativa entre TGR-CRM e a referência TSE enviada, com cobertura, lacunas, riscos e plano priorizado.
+- [x] Produzir matriz comparativa entre TGR-CRM e a referência TSE enviada, com cobertura, lacunas, riscos e plano priorizado.
+- [ ] Migrar para domínio do TGR-CRM a comissão proporcional por parcela de entrada, calendário de fechamento e borderô executivo.
+- [ ] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
+- [ ] Implementar painel de recepção em tempo real estrito para chegada, mesa, liner, fechador e cronômetro de tour.
+- [ ] Implementar captação offline-first com fila local, sincronização, deduplicação e resolução de conflito.
+- [x] Implementar estados de recepção da captação: chegada, mesa, liner, fechador, início/fim de apresentação e sem-tour.
+- [x] Criar painel operacional de sala com fila, cronômetro, papéis comerciais e ações protegidas por perfil.
+- [x] Criar análise de conversão por captação, campanha, promotor, liner, fechador e etapa da sala de vendas.
 - [x] Implementar ficha digital de captação baseada no modelo real, com casal, qualificação, viagem, veículo, brinde e roteamento comercial.
 - [x] Cruzar dados da ficha de captação com associado, oportunidade, agendamento, acompanhamento e campanha sem duplicar cadastro.
 - [x] Executar E2E estrito em homologação isolada cobrindo a fila desde `waiting`, clicando `Ofertar vaga` e convertendo a oferta em reserva real.
@@ -121,3 +128,13 @@
 - [x] Integrar captação com agenda e tarefas de acompanhamento, refletindo o vínculo na ficha do associado.
 - [x] Adicionar testes integrados de captação cobrindo deduplicação, campanha/oportunidade, agendamento e acompanhamento.
 - [x] Adicionar prova integrada de `campaignId` vinculado à ficha e à oportunidade criadas pela captação.
+- [x] Transformar o fim da apresentação em estado operacional concluído e removê-lo da fila ativa da sala.
+- [x] Documentar atualização automática da fila operacional e reduzir o intervalo de consulta para uso de recepção.
+- [ ] Adicionar testes integrados da jornada de recepção: fila, chegada, mesa, início, fim e sem-tour.
+- [x] Implementar painel de recepção com atualização automática por polling a cada 5 segundos, mesa, liner, fechador e cronômetro de tour.
+- [x] Cobrir regras e procedimentos da recepção com testes de router usando banco simulado.
+- [ ] Adicionar teste da consulta `receptionQueue` para filtros, ordenação e exclusão de estados encerrados.
+- [ ] Executar jornada de recepção contra banco isolado ou E2E real: fila → chegada → mesa/equipe → início → fim/sem-tour.
+- [x] Definir métricas auditáveis de conversão entre captação, chegada, tour, sem-tour, encerramento e oportunidade comercial.
+- [x] Implementar leitura analítica de conversão por campanha, promotor, liner, fechador e período.
+- [x] Criar visão gerencial de conversão da sala com filtros, funil e evidências por etapa.

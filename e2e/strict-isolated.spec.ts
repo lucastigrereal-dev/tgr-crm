@@ -53,4 +53,38 @@ test.describe("homologação isolada estrita", () => {
     expect((guest as Array<{ checkedInAt: Date | null; checkedOutAt: Date | null }>)[0]?.checkedInAt).toBeTruthy();
     expect((guest as Array<{ checkedInAt: Date | null; checkedOutAt: Date | null }>)[0]?.checkedOutAt).toBeTruthy();
   });
+
+  test("opera a sala real: chegada, mesa, time, tour encerrado e sem-tour", async ({ page }) => {
+    await page.goto("/sala-de-vendas");
+    const tourCard = page.getByTestId("room-card").filter({ hasText: "E2E Sala Tour" });
+    await expect(tourCard).toBeVisible();
+    await tourCard.getByRole("button", { name: "Confirmar chegada" }).click();
+    await expect(tourCard.getByLabel("Mesa")).toBeVisible();
+    await tourCard.getByLabel("Mesa").fill("E2E-08");
+    await tourCard.getByRole("combobox").nth(0).click();
+    await tourCard.getByText("TSE E2E Owner").click();
+    await tourCard.getByRole("combobox").nth(1).click();
+    await tourCard.getByText("TSE E2E Owner").click();
+    await tourCard.getByRole("button", { name: "Salvar mesa" }).click();
+    await tourCard.getByRole("button", { name: "Iniciar tour" }).click();
+    await expect(tourCard.getByRole("button", { name: "Encerrar apresentação" })).toBeVisible();
+    await tourCard.getByRole("button", { name: "Encerrar apresentação" }).click();
+    await expect(tourCard).toHaveCount(0);
+
+    const noTourCard = page.getByTestId("room-card").filter({ hasText: "E2E Sala Sem Tour" });
+    await noTourCard.getByRole("button", { name: "Registrar sem-tour" }).click();
+    await noTourCard.getByLabel("Motivo do sem-tour *").fill("Casal desistiu da apresentação no teste isolado.");
+    await noTourCard.getByRole("button", { name: "Confirmar sem-tour" }).click();
+    await expect(noTourCard).toHaveCount(0);
+
+    const db = await mysql.createConnection(dbUrl!);
+    const [rows] = await db.execute("SELECT c.fullName, cr.presentationStatus, cr.salesTable, cr.linerId, cr.closerId, cr.presentationStartedAt, cr.presentationEndedAt, cr.noTourReason FROM capture_records cr JOIN customers c ON c.id=cr.customerId WHERE c.documentNumber IN ('99100100102', '99100100103') ORDER BY c.documentNumber");
+    await db.end();
+    const records = rows as Array<{ fullName: string; presentationStatus: string; salesTable: string | null; linerId: number | null; closerId: number | null; presentationStartedAt: Date | null; presentationEndedAt: Date | null; noTourReason: string | null }>;
+    const tour = records.find(record => record.fullName === "E2E Sala Tour");
+    const noTour = records.find(record => record.fullName === "E2E Sala Sem Tour");
+    expect(tour).toMatchObject({ presentationStatus: "closed", salesTable: "E2E-08" });
+    expect(tour?.linerId).toBeTruthy(); expect(tour?.closerId).toBeTruthy(); expect(tour?.presentationStartedAt).toBeTruthy(); expect(tour?.presentationEndedAt).toBeTruthy();
+    expect(noTour).toMatchObject({ presentationStatus: "no_tour", noTourReason: "Casal desistiu da apresentação no teste isolado." });
+  });
 });
