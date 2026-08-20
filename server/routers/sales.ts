@@ -1,10 +1,10 @@
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { customers, opportunities, proposals, salesGoals, tasks, users } from "../../drizzle/schema";
+import { customers, opportunities, proposalDiscountApprovals, proposals, salesGoals, salesPlaybooks, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
-import { salesProcedure } from "./access";
+import { adminProcedure, salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
 
 const opportunityInput = z.object({
@@ -21,6 +21,41 @@ const opportunityInput = z.object({
 });
 
 export const salesRouter = router({
+  playbooks: salesProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    return db.select().from(salesPlaybooks).where(eq(salesPlaybooks.active, true)).orderBy(salesPlaybooks.stage, desc(salesPlaybooks.updatedAt));
+  }),
+
+  createDiscountRequest: salesProcedure.input(z.object({ proposalId: z.number().int().positive(), requestedAmount: z.coerce.number().positive(), rationale: z.string().trim().min(10).max(3000) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const row = await db.select().from(proposals).where(eq(proposals.id, input.proposalId)).limit(1);
+    const proposal = row[0];
+    if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposta não encontrada." });
+    const original = Number(proposal.totalAmount);
+    if (input.requestedAmount >= original) throw new TRPCError({ code: "BAD_REQUEST", message: "O valor negociado precisa ser menor que o valor original." });
+    const discountPercent = ((original - input.requestedAmount) / original) * 100;
+    const created = await db.insert(proposalDiscountApprovals).values({ proposalId: input.proposalId, requestedByUserId: ctx.user.id, requestedAmount: input.requestedAmount.toFixed(2), discountPercent: discountPercent.toFixed(2), rationale: input.rationale }).$returningId();
+    const id = created[0]?.id;
+    await recordAudit(ctx.user.id, "proposal_discount", id ?? 0, "requested", `Desconto de ${discountPercent.toFixed(2)}% solicitado para proposta #${input.proposalId}.`);
+    return { id, discountPercent };
+  }),
+
+  discountApprovals: adminProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    return db.select({ approval: proposalDiscountApprovals, proposalReference: proposals.reference, requesterName: users.name }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).innerJoin(users, eq(proposalDiscountApprovals.requestedByUserId, users.id)).orderBy(desc(proposalDiscountApprovals.createdAt));
+  }),
+
+  decideDiscount: adminProcedure.input(z.object({ id: z.number().int().positive(), approve: z.boolean(), decisionNotes: z.string().trim().max(3000).optional() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    await db.update(proposalDiscountApprovals).set({ status: input.approve ? "approved" : "rejected", decidedByUserId: ctx.user.id, decisionNotes: input.decisionNotes || null, decidedAt: new Date() }).where(eq(proposalDiscountApprovals.id, input.id));
+    await recordAudit(ctx.user.id, "proposal_discount", input.id, input.approve ? "approved" : "rejected", "Pedido de desconto decidido pela administração.");
+    return { success: true };
+  }),
+
   pipeline: salesProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];

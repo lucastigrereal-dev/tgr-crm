@@ -147,6 +147,34 @@ export const proposals = mysqlTable("proposals", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const salesPlaybooks = mysqlTable("sales_playbooks", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 180 }).notNull(),
+  stage: mysqlEnum("stage", ["new", "qualified", "proposal", "negotiation", "won", "lost"]).notNull(),
+  guidance: text("guidance").notNull(),
+  checklist: text("checklist"),
+  active: boolean("active").default(true).notNull(),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [index("playbooks_stage_active_idx").on(table.stage, table.active)]);
+
+export const proposalDiscountApprovals = mysqlTable("proposal_discount_approvals", {
+  id: int("id").autoincrement().primaryKey(),
+  proposalId: int("proposalId").notNull().references(() => proposals.id),
+  requestedByUserId: int("requestedByUserId").notNull().references(() => users.id),
+  requestedAmount: decimal("requestedAmount", { precision: 14, scale: 2 }).notNull(),
+  approvedAmount: decimal("approvedAmount", { precision: 14, scale: 2 }),
+  discountPercent: decimal("discountPercent", { precision: 5, scale: 2 }).notNull(),
+  rationale: text("rationale").notNull(),
+  status: mysqlEnum("status", ["pending", "approved", "rejected", "cancelled"]).default("pending").notNull(),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decisionNotes: text("decisionNotes"),
+  decidedAt: timestamp("decidedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [index("discount_proposal_status_idx").on(table.proposalId, table.status), index("discount_requester_idx").on(table.requestedByUserId, table.status)]);
+
 export const salesGoals = mysqlTable("sales_goals", {
   id: int("id").autoincrement().primaryKey(),
   sellerId: int("sellerId").notNull().references(() => users.id),
