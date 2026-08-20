@@ -1,0 +1,58 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ownershipEntitlements, reservations, unitMaintenanceBlocks } from "../drizzle/schema";
+
+const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
+vi.mock("./db", () => dbMocks);
+
+import { operationsRouter } from "./routers/operations";
+
+function makeDb(options: { entitlementPriority?: number; maintenance?: boolean } = {}) {
+  const inserted: unknown[] = [];
+  const updates: unknown[] = [];
+  const db = {
+    select: vi.fn(() => ({
+      from: (table: unknown) => {
+        if (table === ownershipEntitlements) return { where: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] };
+        if (table === reservations) return { where: () => ({ limit: async () => [] }) };
+        if (table === unitMaintenanceBlocks) return { where: () => ({ limit: async () => options.maintenance ? [{ id: 700 }] : [] }) };
+        throw new Error("Tabela não prevista neste teste");
+      },
+    })),
+    insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 501 }] }; }) })),
+    update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })),
+  };
+  return { db, inserted, updates };
+}
+
+describe("prioridade de direitos e bloqueio operacional", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("eleva a prioridade da fila com base no direito ativo do contrato", async () => {
+    const fixture = makeDb({ entitlementPriority: 2 });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14", priorityScore: 15 })).resolves.toEqual({ id: 501, priorityScore: 90, entitlementScore: 90 });
+    expect(fixture.inserted[0]).toMatchObject({ contractId: 8, priorityScore: 90 });
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(12, "reservation_waitlist", 501, "created", expect.stringContaining("90"));
+  });
+
+  it("impede reserva direta em unidade bloqueada para manutenção", async () => {
+    const fixture = makeDb({ maintenance: true });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.createReservation({ customerId: 3, unitId: 18, checkIn: "2026-11-10", checkOut: "2026-11-14", status: "confirmed" })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("manutenção") });
+    expect(fixture.inserted).toEqual([]);
+  });
+
+  it("atualiza o status operacional da unidade e cria trilha de auditoria", async () => {
+    const fixture = makeDb();
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    await expect(caller.updateUnit({ id: 18, code: "1803", category: "Premium", capacity: 4, beds: 2, status: "maintenance" })).resolves.toEqual({ success: true });
+    expect(fixture.updates).toEqual([{ code: "1803", category: "Premium", capacity: 4, beds: 2, status: "maintenance" }]);
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(1, "unit", 18, "updated", expect.stringContaining("maintenance"));
+  });
+});

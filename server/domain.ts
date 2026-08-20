@@ -22,6 +22,12 @@ export function getCollectionStage(dueDate: Date, now = new Date()): CollectionS
   return { code: "late_urgent", label: "Atraso crítico", priority: "urgent", actionWithinHours: 8 };
 }
 
+/** Converte prioridade contratual (1 é máxima, 9 é mínima) em peso para a fila de espera. */
+export function entitlementPriorityScore(priorityLevel: number) {
+  const normalized = Math.min(9, Math.max(1, Math.round(priorityLevel)));
+  return 100 - (normalized - 1) * 10;
+}
+
 export function resolveFollowUpAt(value: string | null | undefined, now = new Date()) {
   return value ? new Date(value) : new Date(now.getTime() + 48 * 60 * 60 * 1000);
 }

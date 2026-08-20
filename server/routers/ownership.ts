@@ -1,5 +1,5 @@
-import { and, eq, lte, gte } from "drizzle-orm";
-import { ownershipEntitlements, unitMaintenanceBlocks } from "../../drizzle/schema";
+import { and, desc, eq, lte, gte } from "drizzle-orm";
+import { ownershipEntitlements, resorts, unitMaintenanceBlocks, units } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { contractsProcedure, serviceProcedure } from "./access";
@@ -9,6 +9,14 @@ export const ownershipRouter = router({
   listEntitlements: contractsProcedure.input(z.object({ contractId: z.number().optional() }).optional()).query(async ({ input }) => {
     const db = await getDb(); if (!db) return [];
     return input?.contractId ? db.select().from(ownershipEntitlements).where(eq(ownershipEntitlements.contractId, input.contractId)) : db.select().from(ownershipEntitlements);
+  }),
+  listMaintenanceBlocks: serviceProcedure.query(async () => {
+    const db = await getDb(); if (!db) return [];
+    return db.select({ block: unitMaintenanceBlocks, unitCode: units.code, resortName: resorts.name })
+      .from(unitMaintenanceBlocks)
+      .innerJoin(units, eq(unitMaintenanceBlocks.unitId, units.id))
+      .innerJoin(resorts, eq(units.resortId, resorts.id))
+      .orderBy(desc(unitMaintenanceBlocks.startsAt)).limit(100);
   }),
   createEntitlement: contractsProcedure.input(z.object({ contractId: z.number(), resortId: z.number().nullable().optional(), unitId: z.number().nullable().optional(), entitlementType: z.enum(["fixed_week", "flexible_week", "points", "exchange"]), fixedWeek: z.number().int().min(1).max(53).nullable().optional(), annualPoints: z.number().int().min(0).default(0), priorityLevel: z.number().int().min(1).max(9).default(1), validFrom: z.string().nullable().optional(), validUntil: z.string().nullable().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new Error("Banco indisponível");

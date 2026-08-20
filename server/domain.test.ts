@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInstallmentSchedule, getCollectionStage, isValidReservationPeriod, resolveFollowUpAt, shouldCreatePaymentReminder } from "./domain";
+import { buildInstallmentSchedule, entitlementPriorityScore, getCollectionStage, isValidReservationPeriod, resolveFollowUpAt, shouldCreatePaymentReminder } from "./domain";
 
 describe("regras operacionais", () => {
   it("distribui parcelas preservando o valor total em centavos", () => {
@@ -29,6 +29,14 @@ describe("regras operacionais", () => {
     expect(getCollectionStage(new Date("2026-09-10T12:00:00Z"), now)).toMatchObject({ code: "due_today", priority: "high" });
     expect(getCollectionStage(new Date("2026-09-04T12:00:00Z"), now)).toMatchObject({ code: "late_soft", priority: "high" });
     expect(getCollectionStage(new Date("2026-08-20T12:00:00Z"), now)).toMatchObject({ code: "late_urgent", priority: "urgent" });
+  });
+
+  it("converte prioridade de direito em peso de fila preservando o contrato mais prioritário na frente", () => {
+    expect(entitlementPriorityScore(1)).toBe(100);
+    expect(entitlementPriorityScore(5)).toBe(60);
+    expect(entitlementPriorityScore(9)).toBe(20);
+    expect(entitlementPriorityScore(0)).toBe(100);
+    expect(entitlementPriorityScore(99)).toBe(20);
   });
 
   it("cria follow-up comercial em 48 horas se o vendedor não informar data", () => {

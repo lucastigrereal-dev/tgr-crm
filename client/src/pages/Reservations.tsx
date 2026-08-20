@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { WaitlistDialog } from "@/components/WaitlistDialog";
 import { trpc } from "@/lib/trpc";
-import { CalendarDays, Plus, Settings2 } from "lucide-react";
+import { CalendarDays, Hammer, KeyRound, Plus, Settings2 } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -18,10 +18,14 @@ const dayLabel = (date: Date) => new Intl.DateTimeFormat("pt-BR", { weekday: "sh
 function InventoryDialog() {
   const [open, setOpen] = useState(false);
   const [resortId, setResortId] = useState("");
+  const [inventoryResort, setInventoryResort] = useState("all");
+  const [inventoryStatus, setInventoryStatus] = useState("all");
   const utils = trpc.useUtils();
   const resorts = trpc.operations.resorts.useQuery();
+  const units = trpc.operations.units.useQuery();
   const createResort = trpc.operations.createResort.useMutation({ onSuccess: () => { utils.operations.resorts.invalidate(); toast.success("Empreendimento cadastrado."); } });
   const createUnit = trpc.operations.createUnit.useMutation({ onSuccess: () => { utils.operations.units.invalidate(); toast.success("Unidade cadastrada."); } });
+  const updateUnit = trpc.operations.updateUnit.useMutation({ onSuccess: () => { utils.operations.units.invalidate(); toast.success("Status operacional da unidade atualizado."); }, onError: error => toast.error(error.message) });
   const submitResort = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
     createResort.mutate({ name: String(data.get("name") ?? ""), city: String(data.get("city") ?? ""), state: String(data.get("state") ?? "") });
@@ -33,11 +37,66 @@ function InventoryDialog() {
   };
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild><Button variant="outline" className="rounded-xl border-[#d9cfbd]"><Settings2 className="mr-2 h-4 w-4" />Inventário</Button></DialogTrigger>
-    <DialogContent className="sm:max-w-2xl"><DialogHeader><DialogTitle className="font-serif text-2xl">Empreendimentos & unidades</DialogTitle></DialogHeader>
+    <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl"><DialogHeader><DialogTitle className="font-serif text-2xl">Empreendimentos & unidades</DialogTitle></DialogHeader>
       <div className="grid gap-8 py-2 md:grid-cols-2">
         <form className="grid gap-3" onSubmit={submitResort}><p className="text-sm font-semibold text-[#1d2b2a]">Novo empreendimento</p><Input name="name" required placeholder="Nome do empreendimento" /><div className="grid grid-cols-3 gap-2"><Input className="col-span-2" name="city" placeholder="Cidade" /><Input name="state" maxLength={2} placeholder="UF" /></div><Button disabled={createResort.isPending} className="bg-[#1d2b2a] hover:bg-[#29413e]">Adicionar empreendimento</Button></form>
         <form className="grid gap-3 border-t pt-6 md:border-l md:border-t-0 md:pl-8 md:pt-0" onSubmit={submitUnit}><p className="text-sm font-semibold text-[#1d2b2a]">Nova unidade</p><Select value={resortId} onValueChange={setResortId}><SelectTrigger><SelectValue placeholder="Empreendimento" /></SelectTrigger><SelectContent>{resorts.data?.map(resort => <SelectItem key={resort.id} value={String(resort.id)}>{resort.name}</SelectItem>)}</SelectContent></Select><div className="grid grid-cols-2 gap-2"><Input name="code" required placeholder="Unidade 302" /><Input name="category" placeholder="Categoria" /></div><div className="grid grid-cols-2 gap-2"><Input name="capacity" type="number" min="1" defaultValue="2" /><Input name="beds" type="number" min="1" defaultValue="1" /></div><Button disabled={createUnit.isPending} className="bg-[#1d2b2a] hover:bg-[#29413e]">Adicionar unidade</Button></form>
       </div>
+      <div className="mt-3 rounded-2xl border border-[#e8e3d9]"><div className="flex flex-col gap-3 border-b border-[#eee9df] p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-[#1d2b2a]">Mapa operacional do inventário</p><p className="text-xs text-muted-foreground">Filtre e atualize o status sem procurar unidade em planilha jurássica.</p></div><div className="flex gap-2"><Select value={inventoryResort} onValueChange={setInventoryResort}><SelectTrigger className="w-44"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos os resorts</SelectItem>{resorts.data?.map(resort => <SelectItem key={resort.id} value={String(resort.id)}>{resort.name}</SelectItem>)}</SelectContent></Select><Select value={inventoryStatus} onValueChange={setInventoryStatus}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos status</SelectItem><SelectItem value="active">Ativas</SelectItem><SelectItem value="maintenance">Manutenção</SelectItem><SelectItem value="inactive">Inativas</SelectItem></SelectContent></Select></div></div><div className="max-h-64 overflow-y-auto">{units.data?.filter(({ unit }) => (inventoryResort === "all" || unit.resortId === Number(inventoryResort)) && (inventoryStatus === "all" || unit.status === inventoryStatus)).length ? units.data.filter(({ unit }) => (inventoryResort === "all" || unit.resortId === Number(inventoryResort)) && (inventoryStatus === "all" || unit.status === inventoryStatus)).map(({ unit, resortName }) => <div key={unit.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-[#f0ece4] px-4 py-3 last:border-b-0"><div><p className="text-sm font-semibold text-[#1d2b2a]">{resortName} · {unit.code}</p><p className="text-xs text-muted-foreground">{unit.category || "Sem categoria"} · {unit.capacity} hóspedes · {unit.beds} camas</p></div><Select value={unit.status} onValueChange={status => updateUnit.mutate({ id: unit.id, code: unit.code, category: unit.category, capacity: unit.capacity, beds: unit.beds, status: status as "active" | "maintenance" | "inactive" })}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Ativa</SelectItem><SelectItem value="maintenance">Manutenção</SelectItem><SelectItem value="inactive">Inativa</SelectItem></SelectContent></Select></div>) : <p className="p-5 text-sm text-muted-foreground">Nenhuma unidade encontrada neste filtro.</p>}</div></div>
+    </DialogContent>
+  </Dialog>;
+}
+
+function OwnershipOperationsDialog() {
+  const [open, setOpen] = useState(false);
+  const [contractId, setContractId] = useState("");
+  const [resortId, setResortId] = useState("none");
+  const [unitId, setUnitId] = useState("none");
+  const [entitlementType, setEntitlementType] = useState<"fixed_week" | "flexible_week" | "points" | "exchange">("flexible_week");
+  const [maintenanceUnitId, setMaintenanceUnitId] = useState("");
+  const utils = trpc.useUtils();
+  const contracts = trpc.contracts.list.useQuery();
+  const resorts = trpc.operations.resorts.useQuery();
+  const units = trpc.operations.units.useQuery();
+  const entitlements = trpc.ownership.listEntitlements.useQuery();
+  const maintenance = trpc.ownership.listMaintenanceBlocks.useQuery();
+  const createEntitlement = trpc.ownership.createEntitlement.useMutation({ onSuccess: () => { utils.ownership.listEntitlements.invalidate(); toast.success("Direito de uso registrado e auditado."); setContractId(""); }, onError: error => toast.error(error.message) });
+  const createMaintenance = trpc.ownership.createMaintenanceBlock.useMutation({ onSuccess: () => { utils.ownership.listMaintenanceBlocks.invalidate(); toast.success("Bloqueio de manutenção registrado no inventário."); setMaintenanceUnitId(""); }, onError: error => toast.error(error.message) });
+  const eligibleUnits = units.data?.filter(item => resortId === "none" || item.unit.resortId === Number(resortId)) ?? [];
+  const submitEntitlement = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const data = new FormData(event.currentTarget);
+    if (!contractId) return toast.error("Selecione o contrato que receberá o direito.");
+    createEntitlement.mutate({ contractId: Number(contractId), resortId: resortId === "none" ? null : Number(resortId), unitId: unitId === "none" ? null : Number(unitId), entitlementType, fixedWeek: entitlementType === "fixed_week" ? Number(data.get("fixedWeek") ?? 0) || null : null, annualPoints: entitlementType === "points" ? Number(data.get("annualPoints") ?? 0) : 0, priorityLevel: Number(data.get("priorityLevel") ?? 1), validFrom: String(data.get("validFrom") ?? "") || null, validUntil: String(data.get("validUntil") ?? "") || null });
+  };
+  const submitMaintenance = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const data = new FormData(event.currentTarget);
+    if (!maintenanceUnitId) return toast.error("Selecione a unidade para bloquear.");
+    createMaintenance.mutate({ unitId: Number(maintenanceUnitId), startsAt: String(data.get("startsAt") ?? ""), endsAt: String(data.get("endsAt") ?? ""), reason: String(data.get("reason") ?? "") });
+  };
+  const contractNumber = (id: number) => contracts.data?.find(item => item.contract.id === id)?.contract.number ?? `Contrato #${id}`;
+  return <Dialog open={open} onOpenChange={setOpen}>
+    <DialogTrigger asChild><Button variant="outline" className="rounded-xl border-[#d9cfbd]"><KeyRound className="mr-2 h-4 w-4" />Direitos & manutenção</Button></DialogTrigger>
+    <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl"><DialogHeader><DialogTitle className="font-serif text-2xl">Direitos de uso & integridade do inventário</DialogTitle></DialogHeader>
+      <p className="text-sm text-muted-foreground">Registre o que cada contrato pode usar e bloqueie unidade antes que uma manutenção vire overbooking com cheiro de enxofre.</p>
+      <div className="grid gap-8 py-2 lg:grid-cols-2">
+        <form className="grid gap-3 rounded-2xl border border-[#e8e3d9] bg-[#faf8f3] p-5" onSubmit={submitEntitlement}>
+          <div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Direito do associado</p><p className="mt-1 text-sm font-semibold text-[#1d2b2a]">Vincular contrato ao uso</p></div>
+          <Select value={contractId} onValueChange={setContractId}><SelectTrigger><SelectValue placeholder="Contrato" /></SelectTrigger><SelectContent>{contracts.data?.map(({ contract, customerName }) => <SelectItem key={contract.id} value={String(contract.id)}>{contract.number} · {customerName}</SelectItem>)}</SelectContent></Select>
+          <div className="grid grid-cols-2 gap-2"><Select value={resortId} onValueChange={value => { setResortId(value); setUnitId("none"); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Qualquer empreendimento</SelectItem>{resorts.data?.map(resort => <SelectItem key={resort.id} value={String(resort.id)}>{resort.name}</SelectItem>)}</SelectContent></Select><Select value={unitId} onValueChange={setUnitId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Sem unidade fixa</SelectItem>{eligibleUnits.map(({ unit, resortName }) => <SelectItem key={unit.id} value={String(unit.id)}>{resortName} · {unit.code}</SelectItem>)}</SelectContent></Select></div>
+          <Select value={entitlementType} onValueChange={value => setEntitlementType(value as typeof entitlementType)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="flexible_week">Semana flexível</SelectItem><SelectItem value="fixed_week">Semana fixa</SelectItem><SelectItem value="points">Pontos</SelectItem><SelectItem value="exchange">Intercâmbio</SelectItem></SelectContent></Select>
+          <div className="grid grid-cols-2 gap-2">{entitlementType === "fixed_week" ? <Input name="fixedWeek" type="number" min="1" max="53" placeholder="Semana (1–53)" required /> : entitlementType === "points" ? <Input name="annualPoints" type="number" min="1" placeholder="Pontos anuais" required /> : <Input disabled placeholder="Uso sem cota fixa" />}<Input name="priorityLevel" type="number" min="1" max="9" defaultValue="1" title="1 é maior prioridade" /></div>
+          <div className="grid grid-cols-2 gap-2"><Input name="validFrom" type="date" /><Input name="validUntil" type="date" /></div>
+          <Button disabled={createEntitlement.isPending} className="bg-[#1d2b2a] hover:bg-[#29413e]">{createEntitlement.isPending ? "Registrando..." : "Registrar direito"}</Button>
+        </form>
+        <form className="grid gap-3 rounded-2xl border border-[#e8e3d9] bg-[#faf8f3] p-5" onSubmit={submitMaintenance}>
+          <div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Proteção do inventário</p><p className="mt-1 text-sm font-semibold text-[#1d2b2a]">Bloquear manutenção</p></div>
+          <Select value={maintenanceUnitId} onValueChange={setMaintenanceUnitId}><SelectTrigger><SelectValue placeholder="Unidade" /></SelectTrigger><SelectContent>{units.data?.map(({ unit, resortName }) => <SelectItem key={unit.id} value={String(unit.id)}>{resortName} · {unit.code}</SelectItem>)}</SelectContent></Select>
+          <div className="grid grid-cols-2 gap-2"><div className="grid gap-1"><Label>Início</Label><Input name="startsAt" type="date" required /></div><div className="grid gap-1"><Label>Fim</Label><Input name="endsAt" type="date" required /></div></div>
+          <Textarea name="reason" minLength={3} required placeholder="Motivo do bloqueio: revisão hidráulica, pintura..." />
+          <Button disabled={createMaintenance.isPending} variant="outline" className="border-[#c9a75d] text-[#5d461d] hover:bg-[#fff7e5]">{createMaintenance.isPending ? "Bloqueando..." : "Bloquear unidade"}</Button>
+        </form>
+      </div>
+      <div className="grid gap-5 lg:grid-cols-2"><div className="rounded-2xl border border-[#e8e3d9]"><div className="flex items-center gap-2 border-b border-[#eee9df] px-4 py-3"><KeyRound className="h-4 w-4 text-[#b18f4b]" /><p className="text-sm font-semibold text-[#1d2b2a]">Direitos cadastrados</p></div><div className="max-h-56 overflow-y-auto">{entitlements.data?.length ? entitlements.data.map(item => <div key={item.id} className="border-b border-[#f0ece4] px-4 py-3 text-sm last:border-b-0"><p className="font-semibold text-[#1d2b2a]">{contractNumber(item.contractId)} · {item.entitlementType.replace("_", " ")}</p><p className="mt-1 text-xs text-muted-foreground">Prioridade {item.priorityLevel} {item.fixedWeek ? `· Semana ${item.fixedWeek}` : ""} {item.annualPoints ? `· ${item.annualPoints} pontos` : ""}</p></div>) : <p className="p-5 text-sm text-muted-foreground">Nenhum direito cadastrado ainda.</p>}</div></div><div className="rounded-2xl border border-[#e8e3d9]"><div className="flex items-center gap-2 border-b border-[#eee9df] px-4 py-3"><Hammer className="h-4 w-4 text-[#b18f4b]" /><p className="text-sm font-semibold text-[#1d2b2a]">Bloqueios de manutenção</p></div><div className="max-h-56 overflow-y-auto">{maintenance.data?.length ? maintenance.data.map(({ block, unitCode, resortName }) => <div key={block.id} className="border-b border-[#f0ece4] px-4 py-3 text-sm last:border-b-0"><p className="font-semibold text-[#1d2b2a]">{resortName} · {unitCode}</p><p className="mt-1 text-xs text-muted-foreground">{dateLabel(block.startsAt)} → {dateLabel(block.endsAt)} · {block.reason}</p></div>) : <p className="p-5 text-sm text-muted-foreground">Nenhum bloqueio operacional ativo.</p>}</div></div></div>
     </DialogContent>
   </Dialog>;
 }
@@ -83,7 +142,7 @@ export default function Reservations() {
   });
   const days = useMemo(() => Array.from({ length: 8 }, (_, index) => { const date = new Date(); date.setHours(12, 0, 0, 0); date.setDate(date.getDate() + index); return date; }), []);
   return <div className="space-y-8">
-    <PageHeader eyebrow="Utilização" title="Reservas & disponibilidade" description="Acompanhe unidades, períodos e hóspedes em um calendário objetivo — sem overbooking de susto às vésperas do check-in." action={<div className="flex gap-2"><InventoryDialog /><WaitlistDialog /><NewReservationDialog /></div>} />
+    <PageHeader eyebrow="Utilização" title="Reservas & disponibilidade" description="Acompanhe unidades, períodos e hóspedes em um calendário objetivo — sem overbooking de susto às vésperas do check-in." action={<div className="flex flex-wrap gap-2"><InventoryDialog /><OwnershipOperationsDialog /><WaitlistDialog /><NewReservationDialog /></div>} />
     {!units.data?.length ? <EmptyState title="Seu inventário ainda está vazio" body="Cadastre o empreendimento e as unidades primeiro. Depois o calendário começa a trabalhar sem te deixar na mão." action={<InventoryDialog />} /> : <div className="space-y-5">
       <Card className="overflow-hidden rounded-[1.5rem] border-[#e8e3d9]"><CardHeader><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Próximos oito dias</p><CardTitle className="mt-1 font-serif text-2xl text-[#1d2b2a]">Mapa de disponibilidade</CardTitle></div></CardHeader><CardContent className="overflow-x-auto"><div className="min-w-[840px]"><div className="grid grid-cols-[190px_repeat(8,minmax(76px,1fr))] border-b border-[#eee9df] text-center text-[10px] font-bold uppercase tracking-[.1em] text-muted-foreground"><div className="p-3 text-left">Unidade</div>{days.map(day => <div key={isoDay(day)} className="border-l border-[#eee9df] p-3">{dayLabel(day)}</div>)}</div>{units.data.map(({ unit, resortName }) => <div key={unit.id} className="grid min-h-16 grid-cols-[190px_repeat(8,minmax(76px,1fr))] border-b border-[#f0ece4] last:border-b-0"><div className="flex flex-col justify-center bg-[#faf8f3] px-3"><span className="text-sm font-semibold text-[#1d2b2a]">{unit.code}</span><span className="text-[11px] text-muted-foreground">{resortName}</span></div>{days.map(day => { const booking = reservations.data?.find(item => item.reservation.unitId === unit.id && new Date(item.reservation.checkIn) <= day && new Date(item.reservation.checkOut) > day && item.reservation.status !== "cancelled"); return <div key={isoDay(day)} className="border-l border-[#f0ece4] p-1.5">{booking ? <div title={booking.customerName} className="h-full min-h-12 rounded-lg bg-[#2d675f] p-1.5 text-[9px] font-semibold leading-tight text-white">{booking.customerName.split(" ")[0]}</div> : <div className="h-full min-h-12 rounded-lg bg-[#eaf0ea]" />}</div>; })}</div>)}</div></CardContent></Card>
       <div className="overflow-hidden rounded-[1.35rem] border border-[#e9e4da] bg-white"><div className="grid grid-cols-[1.35fr_1fr_1fr_1fr_auto_auto] gap-4 border-b border-[#eee9df] bg-[#faf8f3] px-6 py-3 text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground"><span>Hóspede</span><span>Unidade</span><span>Período</span><span>Contrato</span><span>Status</span><span>Ação</span></div>{reservations.data?.length ? reservations.data.map(({ reservation, customerName, unitCode, resortName, contractNumber }) => <div key={reservation.id} className="grid grid-cols-[1.35fr_1fr_1fr_1fr_auto_auto] items-center gap-4 px-6 py-4 text-sm hover:bg-[#fdfcf9]"><span className="font-semibold text-[#1d2b2a]">{customerName}</span><span>{resortName} · {unitCode}</span><span className="text-xs text-muted-foreground">{dateLabel(reservation.checkIn)} → {dateLabel(reservation.checkOut)}</span><span>{contractNumber || "—"}</span><StatusPill value={reservation.status} /><div>{reservation.status === "confirmed" ? <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: reservation.id, status: "checked_in" })}>Check-in</Button> : reservation.status === "checked_in" ? <Button size="sm" className="bg-[#1d2b2a] hover:bg-[#29413e]" onClick={() => updateStatus.mutate({ id: reservation.id, status: "completed" })}>Check-out</Button> : <span className="text-xs text-muted-foreground">—</span>}</div></div>) : <div className="p-8 text-center text-sm text-muted-foreground">Nenhuma reserva criada ainda.</div>}</div>

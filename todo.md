@@ -61,7 +61,7 @@
 - [x] Priorizar explicitamente as 50 evoluções por impacto, esforço, dependência e onda.
 - [x] Detalhar dependências e critérios de aceite das frentes prioritárias do roteiro.
 - [x] Consolidar contrato de dados, catálogo de eventos, auditoria e cobertura crítica de testes.
-- [ ] Implementar direitos de uso, inventário avançado, prioridade e bloqueios de manutenção.
+- [x] Implementar direitos de uso, inventário avançado, prioridade e bloqueios de manutenção.
 - [ ] Implementar lista de espera, experiência de chegada/saída e gestão de acompanhantes.
 - [ ] Implementar régua de cobrança, renegociação, conciliação e DRE por campanha.
 - [x] Implementar proposta de renegociação auditável de parcela, com simulação antes de aplicar.
@@ -81,3 +81,6 @@
 - [x] Revisar os emissores de auditoria/eventos sob o contrato central e documentar cobertura e pendências.
 - [x] Testar a emissão integrada de auditoria e eventos nos fluxos comercial, financeiro e de ownership já catalogados.
 - [x] Atualizar o contrato de dados com a cobertura integrada desses emissores e a fronteira residual de testes.
+- [x] Completar inventário avançado com status, filtros e visão consolidada de empreendimentos e unidades.
+- [x] Aplicar e testar `priorityLevel` nas regras de disponibilidade, direito de uso ou fila de espera.
+- [x] Cobrir de forma integrada os fluxos de direitos e bloqueios, incluindo seu impacto na disponibilidade.
