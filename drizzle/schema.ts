@@ -291,6 +291,7 @@ export const financialTransactions = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     contractId: int("contractId").references(() => contracts.id),
+    campaignId: int("campaignId").references(() => salesCampaigns.id),
     type: mysqlEnum("type", ["income", "expense"]).notNull(),
     category: varchar("category", { length: 120 }).notNull(),
     description: text("description").notNull(),
@@ -298,10 +299,13 @@ export const financialTransactions = mysqlTable(
     dueDate: date("dueDate"),
     paidAt: timestamp("paidAt"),
     status: mysqlEnum("status", ["open", "paid", "cancelled"]).default("open").notNull(),
+    reconciliationReference: varchar("reconciliationReference", { length: 255 }),
+    reconciledAt: timestamp("reconciledAt"),
+    reconciledByUserId: int("reconciledByUserId").references(() => users.id),
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("financial_transactions_status_idx").on(table.status, table.type)],
+  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status)],
 );
 
 export const financialTransfers = mysqlTable("financial_transfers", {

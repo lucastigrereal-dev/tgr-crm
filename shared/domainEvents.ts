@@ -15,6 +15,7 @@ export const domainEventCatalog = {
   "installment.renegotiation.proposed": { aggregateType: "installment_renegotiation", description: "Renegociação proposta." },
   "installment.paid": { aggregateType: "installment", description: "Parcela baixada." },
   "financial.entry.created": { aggregateType: "financial_transaction", description: "Lançamento financeiro criado." },
+  "financial.entry.reconciled": { aggregateType: "financial_transaction", description: "Lançamento financeiro conciliado." },
   "financial.transfer.created": { aggregateType: "financial_transfer", description: "Repasse financeiro criado." },
 } as const;
 

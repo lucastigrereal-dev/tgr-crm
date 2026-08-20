@@ -1,11 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments } from "../../drizzle/schema";
+import { billingRecords, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, salesCampaigns } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
+import { buildCampaignDre } from "../financeDre";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
@@ -77,7 +78,7 @@ export const financeRouter = router({
       await db.transaction(async tx => {
         await tx.update(installments).set({ status: "paid", paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(eq(installments.id, input.id));
         await tx.update(billingRecords).set({ status: "paid" }).where(eq(billingRecords.installmentId, input.id));
-        await tx.insert(financialTransactions).values({ contractId: item.contractId, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: item.amount, dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });
+        await tx.insert(financialTransactions).values({ contractId: item.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: item.amount, dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });
       });
       await recordAudit(ctx.user.id, "installment", input.id, "paid", `Parcela ${item.sequence} baixada como paga.`);
       await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, sequence: item.sequence, amount: item.amount } });
@@ -87,20 +88,46 @@ export const financeRouter = router({
   entries: financeProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    return db.select({ entry: financialTransactions, contractNumber: contracts.number }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).orderBy(desc(financialTransactions.createdAt)).limit(300);
+    return db.select({ entry: financialTransactions, contractNumber: contracts.number, campaignName: salesCampaigns.name }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(salesCampaigns, eq(financialTransactions.campaignId, salesCampaigns.id)).orderBy(desc(financialTransactions.createdAt)).limit(300);
   }),
 
-  createEntry: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))
+  campaigns: financeProcedure.query(async () => {
+    const db = await getDb(); if (!db) return [];
+    return db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(salesCampaigns.name).limit(200);
+  }),
+
+  dreByCampaign: financeProcedure.input(z.object({ from: z.string().date().optional(), to: z.string().date().optional() }).optional()).query(async ({ input }) => {
+    const db = await getDb(); if (!db) return [];
+    const [transactions, campaigns] = await Promise.all([
+      db.select({ entry: financialTransactions, inheritedCampaignId: opportunities.campaignId }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).where(and(eq(financialTransactions.status, "paid"), isNotNull(financialTransactions.paidAt), input?.from ? gte(financialTransactions.paidAt, dateValue(input.from)) : undefined, input?.to ? lte(financialTransactions.paidAt, new Date(`${input.to}T23:59:59Z`)) : undefined)),
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns),
+    ]);
+    const campaignNames = new Map(campaigns.map(campaign => [campaign.id, campaign.name]));
+    return buildCampaignDre(transactions.map(({ entry, inheritedCampaignId }) => { const campaignId = entry.campaignId ?? inheritedCampaignId ?? null; return { campaignId, campaignName: campaignId ? campaignNames.get(campaignId) ?? null : null, type: entry.type, amount: entry.amount }; }));
+  }),
+
+  createEntry: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), campaignId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const created = await db.insert(financialTransactions).values({ ...input, contractId: input.contractId ?? null, amount: input.amount.toFixed(2), dueDate: input.dueDate ? dateValue(input.dueDate) : null, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
+      const created = await db.insert(financialTransactions).values({ ...input, contractId: input.contractId ?? null, campaignId: input.campaignId ?? null, amount: input.amount.toFixed(2), dueDate: input.dueDate ? dateValue(input.dueDate) : null, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o lançamento." });
       await recordAudit(ctx.user.id, "financial_transaction", id, "created", `Lançamento ${input.type} criado.`);
-      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: id, actorUserId: ctx.user.id, payload: { type: input.type, category: input.category, amount: input.amount, contractId: input.contractId ?? null } });
+      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: id, actorUserId: ctx.user.id, payload: { type: input.type, category: input.category, amount: input.amount, contractId: input.contractId ?? null, campaignId: input.campaignId ?? null } });
       return { id };
     }),
+
+  reconcileEntry: financeProcedure.input(z.object({ id: z.number().int().positive(), reconciliationReference: z.string().trim().min(3).max(255) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const entry = (await db.select().from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
+    if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento não encontrado." });
+    if (entry.status !== "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Apenas lançamentos pagos podem ser conciliados." });
+    await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt: new Date(), reconciledByUserId: ctx.user.id }).where(eq(financialTransactions.id, input.id));
+    await recordAudit(ctx.user.id, "financial_transaction", input.id, "reconciled", `Lançamento conciliado pela referência ${input.reconciliationReference}.`);
+    await recordDomainEvent({ eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reconciliationReference: input.reconciliationReference } });
+    return { success: true };
+  }),
 
   transfers: financeProcedure.query(async () => {
     const db = await getDb();
