@@ -62,14 +62,14 @@
 - [x] Detalhar dependências e critérios de aceite das frentes prioritárias do roteiro.
 - [x] Consolidar contrato de dados, catálogo de eventos, auditoria e cobertura crítica de testes.
 - [x] Implementar direitos de uso, inventário avançado, prioridade e bloqueios de manutenção.
-- [ ] Implementar lista de espera, experiência de chegada/saída e gestão de acompanhantes.
+- [x] Implementar lista de espera, experiência de chegada/saída e gestão de acompanhantes.
 - [x] Implementar régua de cobrança, renegociação, conciliação e DRE por campanha.
 - [x] Implementar proposta de renegociação auditável de parcela, com simulação antes de aplicar.
 - [x] Implementar playbooks comerciais, aprovação de desconto e ranking de qualidade de vendas.
 - [x] Implementar comunicação unificada, onboarding e radar de relacionamento do associado.
 - [x] Implementar dashboards por exceção, drill-down, data mart operacional e métricas de adoção.
 - [x] Implementar contratos de integração, eventos e extensibilidade segura.
-- [ ] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
+- [x] Validar segurança, desempenho, acessibilidade e fluxos completos antes da IA.
 - [ ] Implementar busca e assistência de IA com permissões, evidências, avaliação e aprovação humana.
 - [x] Implementar motor de estágios da régua de cobrança com prioridade, prazo de ação, criação deduplicada de tarefas e testes unitários.
 - [x] Expor a régua de cobrança na Central Financeira com fila priorizada, estágio, prazo de ação e atalhos de cobrar, renegociar e baixar.
@@ -86,10 +86,16 @@
 - [x] Cobrir de forma integrada os fluxos de direitos e bloqueios, incluindo seu impacto na disponibilidade.
 - [x] Converter oferta confirmada da lista de espera em reserva real com teste integrado do caminho confirmado.
 - [x] Amarrar e testar a chegada e saída completa da reserva com acompanhantes, incluindo o estado após check-in e check-out principal.
-- [ ] Cobrir os novos fluxos operacionais de lista de espera e acompanhantes com testes integrados de roteador e interface.
+- [x] Cobrir os novos fluxos operacionais de lista de espera e acompanhantes com testes integrados de roteador e interface.
 - [x] Adicionar teste integrado da sequência reserva em check-in, presença de acompanhantes e checkout principal com estado final verificado.
 - [x] Configurar Playwright com fixture autenticada efêmera e comprovar a Central de Reservas e a Lista de Espera em navegador real.
 - [x] Implementar central unificada na ficha do associado consolidando interações, próximos contatos, tarefas e contexto operacional em uma única visão.
 - [x] Cobrir em teste integrado o payload de radar/onboarding de `customers.detail` e a experiência autenticada da ficha do associado.
 - [x] Formalizar e versionar o contrato do data mart operacional, com grão, fontes, atualização e consumidores.
 - [x] Cobrir em teste integrado o procedimento `dashboard.operationalPulse` para provar o read model completo de exceções e adoção.
+- [x] Validar performance do frontend com orçamento e evidências objetivas, lazy-load de exportadores e medição do dashboard.
+- [ ] Concluir e provar em navegador os fluxos reais abertos de reversão CSV, download de exportação e lista de espera com acompanhantes.
+- [x] Documentar a fronteira final de segurança residual após `pnpm audit`, com decisão explícita sobre o advisory transitivo restante.
+- [ ] Executar E2E autenticado em homologação isolada para reversão CSV com lote descartável real e verificação do estado final no backend.
+- [ ] Executar E2E autenticado com geração/download real de XLSX/PDF a partir de dados reais do backend, sem interceptar respostas tRPC.
+- [ ] Executar E2E autenticado de lista de espera → oferta → reserva → acompanhantes → check-in/out com fixtures reais isoladas.

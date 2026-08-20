@@ -160,6 +160,9 @@ function DashboardLayoutContent({
 
   return (
     <>
+      <a href="#conteudo-principal" className="sr-only fixed left-4 top-4 z-[100] rounded-lg bg-[#c7a35a] px-4 py-2 text-sm font-bold text-[#1d2b2a] focus:not-sr-only focus:outline-none focus:ring-2 focus:ring-white">
+        Pular para o conteúdo principal
+      </a>
       <div className="relative" ref={sidebarRef}>
         <Sidebar
           collapsible="icon"
@@ -171,7 +174,7 @@ function DashboardLayoutContent({
               <button
                 onClick={toggleSidebar}
                 className="h-8 w-8 flex items-center justify-center rounded-lg transition-colors hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#c7a35a] shrink-0"
-                aria-label="Toggle navigation"
+                aria-label="Alternar navegação"
               >
                 <PanelLeft className="h-4 w-4 text-muted-foreground" />
               </button>
@@ -262,7 +265,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{children}</main>
+        <main id="conteudo-principal" tabIndex={-1} className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{children}</main>
       </SidebarInset>
     </>
   );

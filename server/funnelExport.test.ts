@@ -27,14 +27,15 @@ describe("exportação filtrada de propostas", () => {
       .toBe("tse-propostas-won-2026-08-01-2026-08-31.pdf");
   });
 
-  it("entrega as linhas filtradas ao escritor XLSX e grava com o nome esperado", () => {
+  it("entrega as linhas filtradas ao escritor XLSX seguro e grava com o nome esperado", async () => {
     const rows = buildFunnelExportRows("proposal", [{ opportunity: { title: "Cota teste", expectedAmount: 8000, probability: 55, createdAt: "2026-08-12T12:00:00.000Z" }, customerName: "Bruno Costa", sellerName: null }]);
-    const worksheet: Record<string, unknown> = {};
-    const workbook = { kind: "workbook" };
-    const xlsx = { utils: { json_to_sheet: (received: typeof rows) => { expect(received).toEqual(rows); return worksheet; }, book_new: () => workbook, book_append_sheet: (receivedWorkbook: unknown, receivedWorksheet: unknown, name: string) => { expect(receivedWorkbook).toBe(workbook); expect(receivedWorksheet).toBe(worksheet); expect(name).toBe("Propostas"); } }, writeFile: (receivedWorkbook: unknown, filename: string) => { expect(receivedWorkbook).toBe(workbook); expect(filename).toBe("tse-propostas-proposal-2026-08-01-2026-08-31.xlsx"); } };
+    const worksheet = { columns: [], addRows: (received: typeof rows) => expect(received).toEqual(rows), getRow: () => ({ font: {} }) };
+    const exceljs = { Workbook: class { addWorksheet(name: string) { expect(name).toBe("Propostas"); return worksheet; } xlsx = { writeBuffer: async () => new ArrayBuffer(8) }; } };
+    const downloads: string[] = [];
 
-    writeFunnelExportXlsx(rows, buildFunnelExportFilename("proposal", "2026-08-01", "2026-08-31", "xlsx"), xlsx);
-    expect(worksheet["!cols"]).toHaveLength(7);
+    await writeFunnelExportXlsx(rows, buildFunnelExportFilename("proposal", "2026-08-01", "2026-08-31", "xlsx"), exceljs, (_, filename) => downloads.push(filename));
+    expect(worksheet.columns).toHaveLength(7);
+    expect(downloads).toEqual(["tse-propostas-proposal-2026-08-01-2026-08-31.xlsx"]);
   });
 
   it("escreve o cabeçalho e salva o PDF filtrado com o nome esperado", () => {

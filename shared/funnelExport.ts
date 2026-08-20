@@ -36,13 +36,11 @@ export function buildFunnelExportFilename(stage: FunnelExportStage, startDate: s
   return `tse-propostas-${stage}-${startDate}-${endDate}.${format}`;
 }
 
-type XlsxWriter = {
-  utils: {
-    json_to_sheet: (rows: ReturnType<typeof buildFunnelExportRows>) => any;
-    book_new: () => any;
-    book_append_sheet: (workbook: any, worksheet: any, name: string) => void;
+type ExcelJsWriter = {
+  Workbook: new () => {
+    addWorksheet: (name: string) => any;
+    xlsx: { writeBuffer: () => Promise<ArrayBuffer> };
   };
-  writeFile: (workbook: any, filename: string) => void;
 };
 
 type FunnelPdfDocument = {
@@ -56,12 +54,22 @@ type FunnelPdfDocument = {
   save: (filename: string) => void;
 };
 
-export function writeFunnelExportXlsx(rows: ReturnType<typeof buildFunnelExportRows>, filename: string, xlsx: XlsxWriter) {
-  const worksheet = xlsx.utils.json_to_sheet(rows) as Record<string, unknown>;
-  worksheet["!cols"] = [{ wch: 20 }, { wch: 34 }, { wch: 28 }, { wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
-  const workbook = xlsx.utils.book_new();
-  xlsx.utils.book_append_sheet(workbook, worksheet, "Propostas");
-  xlsx.writeFile(workbook, filename);
+export async function writeFunnelExportXlsx(rows: ReturnType<typeof buildFunnelExportRows>, filename: string, exceljs: ExcelJsWriter, saveFile: (data: ArrayBuffer, fileName: string) => void = browserDownload) {
+  const workbook = new exceljs.Workbook();
+  const worksheet = workbook.addWorksheet("Propostas");
+  worksheet.columns = [
+    { header: "Etapa", key: "Etapa", width: 20 }, { header: "Proposta", key: "Proposta", width: 34 }, { header: "Associado", key: "Associado", width: 28 }, { header: "Vendedor", key: "Vendedor", width: 24 }, { header: "Valor", key: "Valor", width: 16 }, { header: "Probabilidade", key: "Probabilidade", width: 16 }, { header: "Criada em", key: "Criada_em", width: 16 },
+  ];
+  worksheet.addRows(rows);
+  worksheet.getRow(1).font = { bold: true };
+  saveFile(await workbook.xlsx.writeBuffer(), filename);
+}
+
+export function browserDownload(data: ArrayBuffer, filename: string) {
+  const url = URL.createObjectURL(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+  const anchor = document.createElement("a");
+  anchor.href = url; anchor.download = filename; anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export function writeFunnelExportPdf(rows: ReturnType<typeof buildFunnelExportRows>, stage: FunnelExportStage, startDate: string, endDate: string, filename: string, doc: FunnelPdfDocument) {
