@@ -329,6 +329,21 @@ export const contractDocuments = mysqlTable("contract_documents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export const contractCancellationRequests = mysqlTable("contract_cancellation_requests", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  status: mysqlEnum("status", ["requested", "approved", "rejected", "executed", "cancelled"]).default("requested").notNull(),
+  reason: text("reason").notNull(),
+  simulationSnapshot: text("simulationSnapshot").notNull(),
+  requestedByUserId: int("requestedByUserId").notNull().references(() => users.id),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decisionNotes: text("decisionNotes"),
+  decidedAt: timestamp("decidedAt"),
+  executedAt: timestamp("executedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [index("cancellation_requests_contract_status_idx").on(table.contractId, table.status), index("cancellation_requests_status_idx").on(table.status, table.createdAt)]);
+
 export const installments = mysqlTable(
   "installments",
   {
