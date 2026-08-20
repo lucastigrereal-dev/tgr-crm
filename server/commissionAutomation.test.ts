@@ -1,0 +1,3 @@
+import { expect, it } from "vitest";
+import { buildInstallmentCommissions } from "./commissionAutomation";
+it("gera uma linha FTB proporcional por parcela paga", () => { const rows = buildInstallmentCommissions({ installmentId: 8, installmentAmount: 2_000, entryTotal: 8_000, contractTotal: 100_000, paymentMethod: "pix", compensatedAt: new Date("2026-08-10T12:00:00Z"), linerId: 5, closerId: 5 }); expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ sellerId: 5, commissionRole: "ftb", sourceInstallmentId: 8, amount: 786.6, lifecycleStatus: "closing" }); });
