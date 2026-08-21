@@ -179,4 +179,4 @@
 - [x] Validar visualmente a Home/Torre de Comando com filtros transversais além de campanha.
 - [x] Adicionar filtro de status operacional à Home/Torre de Comando, reaproveitando o contrato analítico da sala e o drill-down.
 - [x] Consolidar uma ficha de captação determinística por oportunidade para filtros operacionais do dashboard principal, evitando duplicidade de funil e VGV.
-- [ ] Enriquecer exceções da torre com responsável, prazo operacional e rota de ação por tipo de desvio.
+- [x] Enriquecer exceções da torre com responsável, prazo operacional e rota de ação por tipo de desvio.
