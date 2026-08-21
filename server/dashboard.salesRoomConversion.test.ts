@@ -9,14 +9,15 @@ const caller = (role: string) => appRouter.createCaller({ user: { id: 44, role }
 
 function database() {
   const captureRows = [
-    { capture: { id: 1, createdAt: new Date("2026-08-01T12:00:00Z"), scheduledAt: new Date("2026-08-10T12:00:00Z"), campaignId: 8, promoterId: 10, linerId: 11, closerId: 12, presentationStatus: "closed", checkedInAt: new Date("2026-08-10T12:05:00Z"), presentationStartedAt: new Date("2026-08-10T12:10:00Z") }, opportunityStage: "won" },
+    { capture: { id: 1, createdAt: new Date("2026-08-01T12:00:00Z"), scheduledAt: new Date("2026-08-10T12:00:00Z"), resortId: 3, salesRoom: "Sala A", campaignId: 8, promoterId: 10, linerId: 11, closerId: 12, presentationStatus: "closed", checkedInAt: new Date("2026-08-10T12:05:00Z"), presentationStartedAt: new Date("2026-08-10T12:10:00Z") }, opportunityStage: "won" },
     { capture: { id: 2, createdAt: new Date("2026-08-01T12:00:00Z"), scheduledAt: new Date("2026-08-10T13:00:00Z"), campaignId: 8, promoterId: 10, linerId: null, closerId: null, presentationStatus: "no_tour", checkedInAt: null, presentationStartedAt: null }, opportunityStage: "lost" },
     { capture: { id: 3, createdAt: new Date("2026-08-01T12:00:00Z"), scheduledAt: new Date("2026-07-30T13:00:00Z"), campaignId: 8, promoterId: 10, linerId: 11, closerId: 12, presentationStatus: "closed", checkedInAt: new Date("2026-07-30T13:00:00Z"), presentationStartedAt: new Date("2026-07-30T13:10:00Z") }, opportunityStage: "won" },
   ];
   const select = vi.fn()
     .mockReturnValueOnce({ from: () => ({ leftJoin: async () => captureRows }) })
     .mockReturnValueOnce({ from: async () => [{ id: 8, name: "Campanha Verão" }] })
-    .mockReturnValueOnce({ from: async () => [{ id: 10, name: "Paulo Promotor", email: null }, { id: 11, name: "Lia Liner", email: null }, { id: 12, name: "Fábio Fechador", email: null }] });
+    .mockReturnValueOnce({ from: async () => [{ id: 10, name: "Paulo Promotor", email: null }, { id: 11, name: "Lia Liner", email: null }, { id: 12, name: "Fábio Fechador", email: null }] })
+    .mockReturnValueOnce({ from: () => ({ where: async () => [{ id: 3, name: "Resort Teste" }] }) });
   return { select };
 }
 

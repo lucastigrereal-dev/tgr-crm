@@ -2,6 +2,8 @@ export type ConversionCapture = {
   id: number;
   createdAt: Date;
   scheduledAt: Date | null;
+  resortId?: number | null;
+  salesRoom?: string | null;
   campaignId: number | null;
   promoterId: number | null;
   linerId: number | null;
@@ -70,9 +72,9 @@ export function buildConversionBreakdown(input: { captures: ConversionCapture[];
   return Array.from(buckets.entries()).map(([id, rows]) => ({ id, label: labelOf(id), ...calculateConversionMetrics(rows) })).sort((left, right) => right.captures - left.captures || left.label.localeCompare(right.label, "pt-BR"));
 }
 
-export function filterConversionCaptures(captures: ConversionCapture[], start: Date, end: Date, campaignId?: number) {
+export function filterConversionCaptures(captures: ConversionCapture[], start: Date, end: Date, campaignId?: number, resortId?: number, salesRoom?: string) {
   return captures.filter(capture => {
     const reference = capture.scheduledAt ?? capture.createdAt;
-    return reference >= start && reference < end && (!campaignId || capture.campaignId === campaignId);
+    return reference >= start && reference < end && (!campaignId || capture.campaignId === campaignId) && (!resortId || capture.resortId === resortId) && (!salesRoom || capture.salesRoom === salesRoom);
   });
 }

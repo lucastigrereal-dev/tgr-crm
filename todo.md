@@ -167,3 +167,5 @@
 - [ ] Ampliar o contrato do dashboard com filtros governados de empreendimento, campanha, sala, equipe e status, preservando drill-down e permissões.
 - [x] Adicionar filtro governado de campanha ao funil, drill-down e PDF executivo do dashboard, com contrato único no backend.
 - [x] Adicionar filtro governado de campanha à análise da sala, cobrindo captação, chegada, tour, sem-tour e conversão.
+- [ ] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
+- [x] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.

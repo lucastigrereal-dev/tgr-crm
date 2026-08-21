@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { captureRecords, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, salesCampaigns, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { captureRecords, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, resorts, salesCampaigns, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
@@ -15,7 +15,7 @@ function monthBounds() {
   return { now, start, end };
 }
 
-const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional() }).optional();
+const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(), salesRoom: z.string().min(1).max(180).optional() }).optional();
 const funnelDetailsInput = z.object({ stage: z.enum(funnelStages), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional() });
 function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const fallback = monthBounds();
@@ -58,12 +58,13 @@ export const dashboardRouter = router({
   salesRoomConversion: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return { metrics: calculateConversionMetrics([]), breakdowns: { campaigns: [], promoters: [], liners: [], closers: [] }, range: { start, end } };
-    const [captureRows, campaignRows, userRows] = await Promise.all([
+    const [captureRows, campaignRows, userRows, resortRows] = await Promise.all([
       db.select({ capture: captureRecords, opportunityStage: opportunities.stage }).from(captureRecords).leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id)),
       db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")),
     ]);
-    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end, input?.campaignId);
+    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end, input?.campaignId, input?.resortId, input?.salesRoom);
     const names = { campaigns: new Map(campaignRows.map(item => [item.id, item.name])), users: new Map(userRows.map(item => [item.id, item.name || item.email || `Usuário #${item.id}`])) };
     return {
       metrics: calculateConversionMetrics(captures),
@@ -73,7 +74,7 @@ export const dashboardRouter = router({
         liners: buildConversionBreakdown({ captures, dimension: "liner", names }),
         closers: buildConversionBreakdown({ captures, dimension: "closer", names }),
       },
-      range: { start, end },
+      filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(row => row.capture.salesRoom).filter((value): value is string => Boolean(value)))).sort() }, range: { start, end },
     };
   }),
   operationalPulse: internalProcedure.query(async () => {
