@@ -133,7 +133,7 @@
 - [ ] Adicionar testes integrados da jornada de recepção: fila, chegada, mesa, início, fim e sem-tour.
 - [x] Implementar painel de recepção com atualização automática por polling a cada 5 segundos, mesa, liner, fechador e cronômetro de tour.
 - [x] Cobrir regras e procedimentos da recepção com testes de router usando banco simulado.
-- [ ] Adicionar teste da consulta `receptionQueue` para filtros, ordenação e exclusão de estados encerrados.
+- [x] Adicionar teste da consulta `receptionQueue` para filtros, ordenação e exclusão de estados encerrados.
 - [ ] Executar jornada de recepção contra banco isolado ou E2E real: fila → chegada → mesa/equipe → início → fim/sem-tour.
 - [x] Definir métricas auditáveis de conversão entre captação, chegada, tour, sem-tour, encerramento e oportunidade comercial.
 - [x] Implementar leitura analítica de conversão por campanha, promotor, liner, fechador e período.
@@ -173,10 +173,11 @@
 - [x] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
 - [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
 - [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
-- [ ] Expandir a torre por exceção com captação sem desfecho, proposta sem próximo passo, entrada não recebida, comissão sem conciliação e distrato aguardando decisão.
+- [x] Expandir a torre por exceção com captação sem desfecho, proposta sem próximo passo, entrada não recebida, comissão sem conciliação e distrato aguardando decisão.
 - [ ] Adicionar testes integrados do dashboard principal provando os filtros de empreendimento, sala, equipe e status com drill-down e permissões preservados.
 - [x] Testar o drill-down do dashboard principal com ficha mais recente, empreendimento, sala e status, impedindo duplicidade de oportunidade.
 - [x] Validar visualmente a Home/Torre de Comando com filtros transversais além de campanha.
 - [x] Adicionar filtro de status operacional à Home/Torre de Comando, reaproveitando o contrato analítico da sala e o drill-down.
 - [x] Consolidar uma ficha de captação determinística por oportunidade para filtros operacionais do dashboard principal, evitando duplicidade de funil e VGV.
 - [x] Enriquecer exceções da torre com responsável, prazo operacional e rota de ação por tipo de desvio.
+- [x] Incluir contraprovas de outra sala e outra data no teste da fila de recepção, comprovando os filtros de `receptionQueue` além da ordenação e estados concluídos.

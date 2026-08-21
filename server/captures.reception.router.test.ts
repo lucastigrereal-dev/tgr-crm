@@ -85,4 +85,27 @@ describe("captures reception router", () => {
     expect(recorder.set).toHaveBeenCalledWith(expect.objectContaining({ presentationStatus: "no_tour", noTourReason: "Casal desistiu antes da apresentação.", presentationEndedAt: expect.any(Date) }));
     expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.no_tour", payload: expect.objectContaining({ reason: "Casal desistiu antes da apresentação." }) }));
   });
+
+  it("filtra a fila por sala e deixa encerrados fora da operação ativa", async () => {
+    const activePresented = capture({ id: 92, presentationStatus: "presented", scheduledAt: new Date("2026-08-21T10:00:00-03:00") });
+    const activeScheduled = capture({ id: 91, presentationStatus: "scheduled", scheduledAt: new Date("2026-08-21T11:00:00-03:00") });
+    const completed = capture({ id: 93, presentationStatus: "closed", scheduledAt: new Date("2026-08-21T09:00:00-03:00") });
+    const noTour = capture({ id: 94, presentationStatus: "no_tour", scheduledAt: new Date("2026-08-21T08:00:00-03:00") });
+    const otherRoom = capture({ id: 95, salesRoom: "Sala Prata", presentationStatus: "scheduled", scheduledAt: new Date("2026-08-21T07:00:00-03:00") });
+    const otherDate = capture({ id: 96, presentationStatus: "scheduled", scheduledAt: new Date("2026-08-22T07:00:00-03:00") });
+    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([
+      { capture: activeScheduled, customer: { name: "Bia" }, campaign: null },
+      { capture: completed, customer: { name: "Caio" }, campaign: null },
+      { capture: activePresented, customer: { name: "Ana" }, campaign: null },
+      { capture: noTour, customer: { name: "Dani" }, campaign: null },
+      { capture: otherRoom, customer: { name: "Eva" }, campaign: null },
+      { capture: otherDate, customer: { name: "Fábio" }, campaign: null },
+    ])) } as never);
+
+    const activeQueue = await caller("service").captures.receptionQueue({ date: "2026-08-21", salesRoom: "Sala Ouro" });
+    const fullQueue = await caller("service").captures.receptionQueue({ date: "2026-08-21", salesRoom: "Sala Ouro", includeCompleted: true });
+
+    expect(activeQueue.map(row => row.capture.id)).toEqual([92, 91]);
+    expect(fullQueue.map(row => row.capture.id)).toEqual([94, 93, 92, 91]);
+  });
 });
