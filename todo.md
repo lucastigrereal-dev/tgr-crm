@@ -116,8 +116,8 @@
 - [x] Migrar para domínio do TGR-CRM a comissão proporcional por parcela de entrada, calendário de fechamento e borderô executivo.
 - [ ] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
 - [ ] Implementar painel de recepção em tempo real estrito para chegada, mesa, liner, fechador e cronômetro de tour.
-- [ ] Implementar captação offline-first com fila local, sincronização, deduplicação e resolução de conflito.
-- [ ] Criar fila persistida da ficha de captação no navegador, com hash de deduplicação, estado de sincronização e recuperação explícita de conflito.
+- [x] Implementar captação offline-first com fila local, sincronização, deduplicação e resolução de conflito.
+- [x] Criar fila persistida da ficha de captação no navegador, com hash de deduplicação, estado de sincronização e recuperação explícita de conflito.
 - [x] Implementar estados de recepção da captação: chegada, mesa, liner, fechador, início/fim de apresentação e sem-tour.
 - [x] Criar painel operacional de sala com fila, cronômetro, papéis comerciais e ações protegidas por perfil.
 - [x] Criar análise de conversão por captação, campanha, promotor, liner, fechador e etapa da sala de vendas.
@@ -182,3 +182,5 @@
 - [x] Consolidar uma ficha de captação determinística por oportunidade para filtros operacionais do dashboard principal, evitando duplicidade de funil e VGV.
 - [x] Enriquecer exceções da torre com responsável, prazo operacional e rota de ação por tipo de desvio.
 - [x] Incluir contraprovas de outra sala e outra data no teste da fila de recepção, comprovando os filtros de `receptionQueue` além da ordenação e estados concluídos.
+- [x] Adicionar estados explícitos por item da fila offline: pendente, sincronizando, conflito e sincronizada.
+- [x] Permitir revisão/edição e reenvio individual de ficha offline em conflito, com teste de recuperação ponta a ponta da fila local.

@@ -11,7 +11,7 @@ import { trpc } from "@/lib/trpc";
 import { CalendarCheck, ClipboardList, CloudOff, HeartHandshake, MapPin, Plus, RefreshCw, Sparkles, UsersRound } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { CaptureOfflinePayload, enqueueOfflineCapture, listOfflineCaptures, markOfflineCaptureFailed, removeOfflineCapture } from "@/lib/captureOfflineQueue";
+import { CaptureOfflineItem, CaptureOfflinePayload, enqueueOfflineCapture, listOfflineCaptures, markOfflineCaptureFailed, markOfflineCaptureSyncing, removeOfflineCapture, updateOfflineCapture } from "@/lib/captureOfflineQueue";
 
 const statusLabels = { captured: "Captada", scheduled: "Agendada", checked_in: "Check-in", presented: "Apresentada", no_tour: "No tour", closed: "Encerrada" } as const;
 const statusTone = { captured: "bg-[#f4efe2] text-[#8a6b2d]", scheduled: "bg-[#e6eef5] text-[#315d7e]", checked_in: "bg-[#e5efe4] text-[#285043]", presented: "bg-[#ece8f6] text-[#5c477b]", no_tour: "bg-[#f8e3e0] text-[#9e4037]", closed: "bg-[#ebe8e1] text-[#52615c]" } as const;
@@ -26,8 +26,9 @@ export default function Capture() {
   const selectors = trpc.captures.selectors.useQuery();
   const captures = trpc.captures.list.useQuery();
   const [form, setForm] = useState(blank);
-  const [offlineCount, setOfflineCount] = useState(0);
-  const refreshOfflineCount = async () => setOfflineCount((await listOfflineCaptures()).length);
+  const [offlineItems, setOfflineItems] = useState<CaptureOfflineItem[]>([]);
+  const [reviewingOfflineId, setReviewingOfflineId] = useState<string | null>(null);
+  const refreshOfflineQueue = async () => setOfflineItems(await listOfflineCaptures());
   const create = trpc.captures.create.useMutation({
     onSuccess: result => { toast.success(`Ficha criada. Associado #${result.customerId} e oportunidade ${result.opportunityId ? "aberta" : "não criada"}.`); setForm(blank()); utils.captures.list.invalidate(); },
     onError: error => toast.error(error.message),
@@ -47,17 +48,25 @@ export default function Capture() {
   const syncOffline = async () => {
     if (!navigator.onLine) return;
     for (const item of await listOfflineCaptures()) {
-      try { await create.mutateAsync(item.payload as never); await removeOfflineCapture(item.id); }
+      try { await markOfflineCaptureSyncing(item.id); await create.mutateAsync(item.payload as never); await removeOfflineCapture(item.id); }
       catch (error) { await markOfflineCaptureFailed(item.id, error instanceof Error ? error.message : "Falha ao sincronizar"); }
     }
-    await refreshOfflineCount();
+    await refreshOfflineQueue();
   };
-  useEffect(() => { void refreshOfflineCount(); const online = () => void syncOffline(); window.addEventListener("online", online); return () => window.removeEventListener("online", online); }, []);
+  useEffect(() => { void refreshOfflineQueue(); const online = () => void syncOffline(); window.addEventListener("online", online); return () => window.removeEventListener("online", online); }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const currentPayload = payload();
-    if (!navigator.onLine) { await enqueueOfflineCapture(currentPayload); await refreshOfflineCount(); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
+    if (!navigator.onLine) { if (reviewingOfflineId) await updateOfflineCapture(reviewingOfflineId, currentPayload); else await enqueueOfflineCapture(currentPayload); await refreshOfflineQueue(); setReviewingOfflineId(null); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
+    if (reviewingOfflineId) { try { await create.mutateAsync(currentPayload as never); await removeOfflineCapture(reviewingOfflineId); await refreshOfflineQueue(); setReviewingOfflineId(null); } catch (error) { await markOfflineCaptureFailed(reviewingOfflineId, error instanceof Error ? error.message : "Falha ao reenviar ficha revisada"); await refreshOfflineQueue(); } return; }
     create.mutate(currentPayload as never);
+  };
+  const reviewOffline = (item: CaptureOfflineItem) => {
+    const source = item.payload as Record<string, unknown>;
+    const customer = (source.customer ?? {}) as Record<string, unknown>;
+    setForm({ ...blank(), ...source, fullName: String(customer.fullName ?? ""), phone: String(customer.phone ?? ""), email: String(customer.email ?? ""), city: String(customer.city ?? ""), state: String(customer.state ?? "SP"), occupation: String(customer.occupation ?? ""), resortId: source.resortId ? String(source.resortId) : "", campaignId: source.campaignId ? String(source.campaignId) : "", promoterId: source.promoterId ? String(source.promoterId) : "", linerId: source.linerId ? String(source.linerId) : "", closerId: source.closerId ? String(source.closerId) : "", scheduledAt: source.scheduledAt ? new Date(String(source.scheduledAt)).toISOString().slice(0, 16) : "" } as ReturnType<typeof blank>);
+    setReviewingOfflineId(item.id);
+    toast.info("Ficha pendente carregada para revisão. Corrija e envie novamente.");
   };
 
   const set = (key: keyof ReturnType<typeof blank>, value: string | boolean) => setForm(current => ({ ...current, [key]: value }));
@@ -68,7 +77,7 @@ export default function Capture() {
       <Card className="border-[#e8e1d4] bg-[#c9a557]"><CardContent className="p-5"><CalendarCheck className="h-5 w-5 text-[#1d2b2a]" /><p className="mt-5 text-xs font-bold uppercase tracking-[.14em] text-[#53401c]">Agendadas</p><p className="mt-2 font-serif text-4xl text-[#1d2b2a]">{captures.data?.filter(item => item.capture.presentationStatus === "scheduled").length ?? 0}</p><p className="mt-2 text-sm text-[#53401c]">esperando a sala</p></CardContent></Card>
       <Card className="border-[#e8e1d4] bg-[#f6f3eb]"><CardContent className="p-5"><Sparkles className="h-5 w-5 text-[#285043]" /><p className="mt-5 text-xs font-bold uppercase tracking-[.14em] text-[#52615c]">Qualificadas</p><p className="mt-2 font-serif text-4xl text-[#1d2b2a]">{captures.data?.filter(item => item.capture.qualificationStatus === "qualified").length ?? 0}</p><p className="mt-2 text-sm text-[#52615c]">prontas para venda</p></CardContent></Card>
     </div>
-    {offlineCount > 0 && <div className="flex items-center justify-between gap-3 border border-[#c9a557]/40 bg-[#fff8e4] px-4 py-3 text-sm text-[#53401c]"><span className="flex items-center gap-2"><CloudOff className="h-4 w-4" />{offlineCount} ficha{offlineCount > 1 ? "s" : ""} aguardando sincronização segura neste aparelho.</span><Button type="button" size="sm" variant="outline" onClick={() => void syncOffline()}><RefreshCw className="mr-2 h-3.5 w-3.5" />Sincronizar agora</Button></div>}
+    {offlineItems.length > 0 && <div className="space-y-3 border border-[#c9a557]/40 bg-[#fff8e4] px-4 py-3 text-sm text-[#53401c]"><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><CloudOff className="h-4 w-4" />{offlineItems.length} ficha{offlineItems.length > 1 ? "s" : ""} na fila local deste aparelho.</span><Button type="button" size="sm" variant="outline" onClick={() => void syncOffline()}><RefreshCw className="mr-2 h-3.5 w-3.5" />Sincronizar agora</Button></div>{offlineItems.map(item => <div key={item.id} className="flex items-center justify-between gap-3 border-t border-[#c9a557]/30 pt-3"><p><strong>{String((item.payload.customer as Record<string, unknown> | undefined)?.fullName || "Ficha sem nome")}</strong> · {item.syncStatus === "pending" ? "Pendente de envio" : item.syncStatus === "syncing" ? "Sincronizando" : `Conflito: ${item.lastError || "revise a ficha"}`}{item.syncStatus === "conflict" && ` (${item.attempts} tentativa${item.attempts > 1 ? "s" : ""})`}</p><div className="flex gap-2">{item.syncStatus === "conflict" && <Button type="button" size="sm" variant="outline" onClick={() => reviewOffline(item)}>Revisar ficha</Button>}<Button type="button" size="sm" variant="ghost" onClick={() => void removeOfflineCapture(item.id).then(refreshOfflineQueue)}>Descartar</Button></div></div>)}</div>}
     <div className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
       <Card className="border-[#e8e1d4]"><CardContent className="p-6"><div className="flex items-center gap-3"><UsersRound className="h-5 w-5 text-[#b18f4b]" /><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Ficha digital</p><h2 className="font-serif text-2xl text-[#1d2b2a]">Nova captação</h2></div></div>
         <form onSubmit={submit} className="mt-6 space-y-6">

@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { captureDedupeKey, enqueueOfflineCapture, listOfflineCaptures, removeOfflineCapture } from "../client/src/lib/captureOfflineQueue";
+import { captureDedupeKey, enqueueOfflineCapture, listOfflineCaptures, markOfflineCaptureFailed, markOfflineCaptureSyncing, removeOfflineCapture, updateOfflineCapture } from "../client/src/lib/captureOfflineQueue";
 
 describe("capture offline queue", () => {
   beforeEach(async () => {
@@ -23,5 +23,26 @@ describe("capture offline queue", () => {
     expect(await listOfflineCaptures()).toHaveLength(1);
     await removeOfflineCapture(first.id);
     expect(await listOfflineCaptures()).toEqual([]);
+  });
+
+  it("mantém o conflito explícito até a fila ser revisada", async () => {
+    const item = await enqueueOfflineCapture({ customer: { fullName: "Casal em conflito" }, resortId: 9 });
+    await markOfflineCaptureFailed(item.id, "Telefone já associado a uma ficha revisada");
+    const [pending] = await listOfflineCaptures();
+    expect(pending.attempts).toBe(1);
+    expect(pending.lastError).toContain("Telefone");
+    expect(pending.syncStatus).toBe("conflict");
+  });
+
+  it("revisa conflito, preserva a ficha e devolve-a para envio pendente", async () => {
+    const item = await enqueueOfflineCapture({ customer: { fullName: "Casal antigo" }, resortId: 9 });
+    await markOfflineCaptureSyncing(item.id);
+    expect((await listOfflineCaptures())[0].syncStatus).toBe("syncing");
+    await markOfflineCaptureFailed(item.id, "Documento já usado");
+    await updateOfflineCapture(item.id, { customer: { fullName: "Casal corrigido" }, resortId: 9 });
+    const [revised] = await listOfflineCaptures();
+    expect((revised.payload.customer as { fullName: string }).fullName).toBe("Casal corrigido");
+    expect(revised.syncStatus).toBe("pending");
+    expect(revised.lastError).toBeUndefined();
   });
 });

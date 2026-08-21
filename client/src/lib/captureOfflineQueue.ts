@@ -6,6 +6,7 @@ export type CaptureOfflineItem = {
   payload: CaptureOfflinePayload;
   createdAt: string;
   attempts: number;
+  syncStatus: "pending" | "syncing" | "conflict";
   lastError?: string;
 };
 
@@ -43,7 +44,7 @@ export async function listOfflineCaptures(): Promise<CaptureOfflineItem[]> {
 
 export async function enqueueOfflineCapture(payload: CaptureOfflinePayload): Promise<CaptureOfflineItem> {
   const database = await openDatabase();
-  const item: CaptureOfflineItem = { id: crypto.randomUUID(), dedupeKey: captureDedupeKey(payload), payload, createdAt: new Date().toISOString(), attempts: 0 };
+  const item: CaptureOfflineItem = { id: crypto.randomUUID(), dedupeKey: captureDedupeKey(payload), payload, createdAt: new Date().toISOString(), attempts: 0, syncStatus: "pending" };
   return await new Promise((resolve, reject) => {
     const store = database.transaction(STORE, "readwrite").objectStore(STORE);
     const indexRequest = store.index("dedupeKey").get(item.dedupeKey);
@@ -76,7 +77,39 @@ export async function markOfflineCaptureFailed(id: string, error: string) {
     getRequest.onsuccess = () => {
       const current = getRequest.result as CaptureOfflineItem | undefined;
       if (!current) return resolve();
-      const request = store.put({ ...current, attempts: current.attempts + 1, lastError: error });
+      const request = store.put({ ...current, attempts: current.attempts + 1, syncStatus: "conflict", lastError: error });
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    };
+  });
+}
+
+export async function markOfflineCaptureSyncing(id: string) {
+  const database = await openDatabase();
+  return await new Promise<void>((resolve, reject) => {
+    const store = database.transaction(STORE, "readwrite").objectStore(STORE);
+    const getRequest = store.get(id);
+    getRequest.onerror = () => reject(getRequest.error);
+    getRequest.onsuccess = () => {
+      const current = getRequest.result as CaptureOfflineItem | undefined;
+      if (!current) return resolve();
+      const request = store.put({ ...current, syncStatus: "syncing" });
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    };
+  });
+}
+
+export async function updateOfflineCapture(id: string, payload: CaptureOfflinePayload) {
+  const database = await openDatabase();
+  return await new Promise<void>((resolve, reject) => {
+    const store = database.transaction(STORE, "readwrite").objectStore(STORE);
+    const getRequest = store.get(id);
+    getRequest.onerror = () => reject(getRequest.error);
+    getRequest.onsuccess = () => {
+      const current = getRequest.result as CaptureOfflineItem | undefined;
+      if (!current) return resolve();
+      const request = store.put({ ...current, payload, dedupeKey: captureDedupeKey(payload), syncStatus: "pending", lastError: undefined });
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     };
