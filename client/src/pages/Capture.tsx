@@ -8,9 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, PageHeader } from "@/components/crm/ui";
 import { trpc } from "@/lib/trpc";
-import { CalendarCheck, ClipboardList, HeartHandshake, MapPin, Plus, Sparkles, UsersRound } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { CalendarCheck, ClipboardList, CloudOff, HeartHandshake, MapPin, Plus, RefreshCw, Sparkles, UsersRound } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { CaptureOfflinePayload, enqueueOfflineCapture, listOfflineCaptures, markOfflineCaptureFailed, removeOfflineCapture } from "@/lib/captureOfflineQueue";
 
 const statusLabels = { captured: "Captada", scheduled: "Agendada", checked_in: "Check-in", presented: "Apresentada", no_tour: "No tour", closed: "Encerrada" } as const;
 const statusTone = { captured: "bg-[#f4efe2] text-[#8a6b2d]", scheduled: "bg-[#e6eef5] text-[#315d7e]", checked_in: "bg-[#e5efe4] text-[#285043]", presented: "bg-[#ece8f6] text-[#5c477b]", no_tour: "bg-[#f8e3e0] text-[#9e4037]", closed: "bg-[#ebe8e1] text-[#52615c]" } as const;
@@ -25,6 +26,8 @@ export default function Capture() {
   const selectors = trpc.captures.selectors.useQuery();
   const captures = trpc.captures.list.useQuery();
   const [form, setForm] = useState(blank);
+  const [offlineCount, setOfflineCount] = useState(0);
+  const refreshOfflineCount = async () => setOfflineCount((await listOfflineCaptures()).length);
   const create = trpc.captures.create.useMutation({
     onSuccess: result => { toast.success(`Ficha criada. Associado #${result.customerId} e oportunidade ${result.opportunityId ? "aberta" : "não criada"}.`); setForm(blank()); utils.captures.list.invalidate(); },
     onError: error => toast.error(error.message),
@@ -34,15 +37,27 @@ export default function Capture() {
   const sellers = selectors.data?.sellers ?? [];
   const resorts = selectors.data?.resorts ?? [];
 
-  const submit = (event: FormEvent) => {
+  const payload = (): CaptureOfflinePayload => ({
+    customer: { fullName: form.fullName, phone: form.phone || undefined, email: form.email || undefined, city: form.city || undefined, state: form.state || undefined, occupation: form.occupation || undefined },
+    resortId: nullableNumber(form.resortId), campaignId: nullableNumber(form.campaignId), promoterId: nullableNumber(form.promoterId), linerId: nullableNumber(form.linerId), closerId: nullableNumber(form.closerId), salesRoom: form.salesRoom || undefined, captureLocation: form.captureLocation || undefined, lodgingLocation: form.lodgingLocation || undefined, transportation: form.transportation || undefined, scheduledAt: form.scheduledAt ? new Date(form.scheduledAt).toISOString() : undefined, isPasserby: form.isPasserby, qualificationStatus: form.qualificationStatus, qualificationReason: form.qualificationReason || undefined,
+    partnerName: form.partnerName || undefined, partnerAge: nullableNumber(form.partnerAge), partnerProfession: form.partnerProfession || undefined, relationshipStatus: form.relationshipStatus || undefined, relationshipYears: nullableNumber(form.relationshipYears), childrenCount: Number(form.childrenCount || 0), childrenNames: form.childrenNames || undefined,
+    averageIncome: nullableNumber(form.averageIncome), vehicleBrand: form.vehicleBrand || undefined, vehicleModel: form.vehicleModel || undefined, vehicleYear: nullableNumber(form.vehicleYear), hasCreditCard: bool(form.hasCreditCard), creditCardBrands: form.creditCardBrands || undefined, acceptsCheque: bool(form.acceptsCheque), ownsHome: bool(form.ownsHome), ownsPropertyInCity: bool(form.ownsPropertyInCity),
+    travelWeeksPerYear: nullableNumber(form.travelWeeksPerYear), usualTravelSeason: form.usualTravelSeason || undefined, dreamTrips: form.dreamTrips || undefined, lastTrip: form.lastTrip || undefined, averageHotelSpend: nullableNumber(form.averageHotelSpend), nextFamilyTrip: form.nextFamilyTrip || undefined, socialNetworks: form.socialNetworks || undefined, giftDescription: form.giftDescription || undefined, notes: form.notes || undefined,
+  });
+  const syncOffline = async () => {
+    if (!navigator.onLine) return;
+    for (const item of await listOfflineCaptures()) {
+      try { await create.mutateAsync(item.payload as never); await removeOfflineCapture(item.id); }
+      catch (error) { await markOfflineCaptureFailed(item.id, error instanceof Error ? error.message : "Falha ao sincronizar"); }
+    }
+    await refreshOfflineCount();
+  };
+  useEffect(() => { void refreshOfflineCount(); const online = () => void syncOffline(); window.addEventListener("online", online); return () => window.removeEventListener("online", online); }, []);
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    create.mutate({
-      customer: { fullName: form.fullName, phone: form.phone || undefined, email: form.email || undefined, city: form.city || undefined, state: form.state || undefined, occupation: form.occupation || undefined },
-      resortId: nullableNumber(form.resortId), campaignId: nullableNumber(form.campaignId), promoterId: nullableNumber(form.promoterId), linerId: nullableNumber(form.linerId), closerId: nullableNumber(form.closerId), salesRoom: form.salesRoom || undefined, captureLocation: form.captureLocation || undefined, lodgingLocation: form.lodgingLocation || undefined, transportation: form.transportation || undefined, scheduledAt: form.scheduledAt ? new Date(form.scheduledAt).toISOString() : undefined, isPasserby: form.isPasserby, qualificationStatus: form.qualificationStatus, qualificationReason: form.qualificationReason || undefined,
-      partnerName: form.partnerName || undefined, partnerAge: nullableNumber(form.partnerAge), partnerProfession: form.partnerProfession || undefined, relationshipStatus: form.relationshipStatus || undefined, relationshipYears: nullableNumber(form.relationshipYears), childrenCount: Number(form.childrenCount || 0), childrenNames: form.childrenNames || undefined,
-      averageIncome: nullableNumber(form.averageIncome), vehicleBrand: form.vehicleBrand || undefined, vehicleModel: form.vehicleModel || undefined, vehicleYear: nullableNumber(form.vehicleYear), hasCreditCard: bool(form.hasCreditCard), creditCardBrands: form.creditCardBrands || undefined, acceptsCheque: bool(form.acceptsCheque), ownsHome: bool(form.ownsHome), ownsPropertyInCity: bool(form.ownsPropertyInCity),
-      travelWeeksPerYear: nullableNumber(form.travelWeeksPerYear), usualTravelSeason: form.usualTravelSeason || undefined, dreamTrips: form.dreamTrips || undefined, lastTrip: form.lastTrip || undefined, averageHotelSpend: nullableNumber(form.averageHotelSpend), nextFamilyTrip: form.nextFamilyTrip || undefined, socialNetworks: form.socialNetworks || undefined, giftDescription: form.giftDescription || undefined, notes: form.notes || undefined,
-    });
+    const currentPayload = payload();
+    if (!navigator.onLine) { await enqueueOfflineCapture(currentPayload); await refreshOfflineCount(); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
+    create.mutate(currentPayload as never);
   };
 
   const set = (key: keyof ReturnType<typeof blank>, value: string | boolean) => setForm(current => ({ ...current, [key]: value }));
@@ -53,6 +68,7 @@ export default function Capture() {
       <Card className="border-[#e8e1d4] bg-[#c9a557]"><CardContent className="p-5"><CalendarCheck className="h-5 w-5 text-[#1d2b2a]" /><p className="mt-5 text-xs font-bold uppercase tracking-[.14em] text-[#53401c]">Agendadas</p><p className="mt-2 font-serif text-4xl text-[#1d2b2a]">{captures.data?.filter(item => item.capture.presentationStatus === "scheduled").length ?? 0}</p><p className="mt-2 text-sm text-[#53401c]">esperando a sala</p></CardContent></Card>
       <Card className="border-[#e8e1d4] bg-[#f6f3eb]"><CardContent className="p-5"><Sparkles className="h-5 w-5 text-[#285043]" /><p className="mt-5 text-xs font-bold uppercase tracking-[.14em] text-[#52615c]">Qualificadas</p><p className="mt-2 font-serif text-4xl text-[#1d2b2a]">{captures.data?.filter(item => item.capture.qualificationStatus === "qualified").length ?? 0}</p><p className="mt-2 text-sm text-[#52615c]">prontas para venda</p></CardContent></Card>
     </div>
+    {offlineCount > 0 && <div className="flex items-center justify-between gap-3 border border-[#c9a557]/40 bg-[#fff8e4] px-4 py-3 text-sm text-[#53401c]"><span className="flex items-center gap-2"><CloudOff className="h-4 w-4" />{offlineCount} ficha{offlineCount > 1 ? "s" : ""} aguardando sincronização segura neste aparelho.</span><Button type="button" size="sm" variant="outline" onClick={() => void syncOffline()}><RefreshCw className="mr-2 h-3.5 w-3.5" />Sincronizar agora</Button></div>}
     <div className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
       <Card className="border-[#e8e1d4]"><CardContent className="p-6"><div className="flex items-center gap-3"><UsersRound className="h-5 w-5 text-[#b18f4b]" /><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Ficha digital</p><h2 className="font-serif text-2xl text-[#1d2b2a]">Nova captação</h2></div></div>
         <form onSubmit={submit} className="mt-6 space-y-6">

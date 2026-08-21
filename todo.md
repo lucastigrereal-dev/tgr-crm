@@ -117,6 +117,7 @@
 - [ ] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
 - [ ] Implementar painel de recepção em tempo real estrito para chegada, mesa, liner, fechador e cronômetro de tour.
 - [ ] Implementar captação offline-first com fila local, sincronização, deduplicação e resolução de conflito.
+- [ ] Criar fila persistida da ficha de captação no navegador, com hash de deduplicação, estado de sincronização e recuperação explícita de conflito.
 - [x] Implementar estados de recepção da captação: chegada, mesa, liner, fechador, início/fim de apresentação e sem-tour.
 - [x] Criar painel operacional de sala com fila, cronômetro, papéis comerciais e ações protegidas por perfil.
 - [x] Criar análise de conversão por captação, campanha, promotor, liner, fechador e etapa da sala de vendas.
