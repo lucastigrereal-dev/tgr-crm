@@ -33,16 +33,20 @@ export const commissionsRouter = router({
       const lifecycle = cancellationByContract.has(contract.id) || contract.status === "cancelled" ? "cancelled" : cashConfirmed > 0 ? "matured" : "new";
       const sale = { saleId: contract.id, vgvFormalized: Number(contract.totalAmount), cashConfirmed, lifecycle } as const;
       const promoterAssignments = capture.promoterId ? [{ ...sale, userId: capture.promoterId, role: "promoter" as const }] : [];
-      if (capture.linerId && capture.closerId && capture.linerId === capture.closerId) return [...promoterAssignments, { ...sale, userId: capture.linerId, role: "ftb" as const }];
+      const qualifierAssignments = capture.qualifierId ? [{ ...sale, userId: capture.qualifierId, role: "qualifier" as const }] : [];
+      const roomManagerAssignments = capture.roomManagerId ? [{ ...sale, userId: capture.roomManagerId, role: "room_manager" as const }] : [];
+      if (capture.linerId && capture.closerId && capture.linerId === capture.closerId) return [...promoterAssignments, ...qualifierAssignments, ...roomManagerAssignments, { ...sale, userId: capture.linerId, role: "ftb" as const }];
       return [
         ...promoterAssignments,
+        ...qualifierAssignments,
+        ...roomManagerAssignments,
         ...(capture.linerId ? [{ ...sale, userId: capture.linerId, role: "liner" as const }] : []),
         ...(capture.closerId ? [{ ...sale, userId: capture.closerId, role: "closer" as const }] : []),
       ];
     });
     const names = new Map(userRows.map(row => [row.id, row.name || row.email || `Usuário #${row.id}`]));
     const scorecards = buildProfessionalScorecards(facts, input?.minimumMaturedSales ?? 10).filter(card => ctx.user.role !== "seller" || card.userId === ctx.user.id).map(card => ({ ...card, userName: names.get(card.userId) || `Usuário #${card.userId}` }));
-    return { rolesCovered: ["promoter", "liner", "closer", "ftb"], scorecards };
+    return { rolesCovered: ["promoter", "qualifier", "liner", "closer", "ftb", "room_manager"], scorecards };
   }),
 
   overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional(), closingMonth: z.string().regex(/^\d{4}-\d{2}$/).optional() }).optional()).query(async ({ ctx, input }) => {
