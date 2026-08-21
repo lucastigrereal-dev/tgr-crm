@@ -18,7 +18,7 @@ As respostas tRPC dos E2Es regulares de reversão, download e reserva são contr
 
 ## Distrato: domínio comprovado, evidência visual pendente
 
-Em 21 de agosto de 2026, a suíte passou a ter **125 testes automatizados**. O domínio de distrato cobre execução única de uma solicitação aprovada, bloqueio de pedido não aprovado ou já executado, preservação de parcelas e comissões pagas, cancelamento dos itens reversíveis e propagação de falha intermediária sem registrar auditoria de sucesso. A execução também grava os impactos financeiros previstos abaixo, dentro da transação auditável.
+Em 21 de agosto de 2026, a suíte passou a ter **134 testes automatizados**. O domínio de distrato cobre execução única de uma solicitação aprovada, bloqueio de pedido não aprovado ou já executado, preservação de parcelas e comissões pagas, cancelamento dos itens reversíveis e propagação de falha intermediária sem registrar auditoria de sucesso. A execução também grava os impactos financeiros previstos abaixo, dentro da transação auditável.
 
 | Impacto | Lançamento previsto | Evidência automatizada |
 | --- | --- | --- |
@@ -30,6 +30,8 @@ As rotas autenticadas `/contratos` e `/contratos/1` foram inspecionadas no ambie
 ## Recepção: fronteira da jornada completa
 
 As regras de transição, os procedimentos de roteador e a fila com atualização por polling de cinco segundos estão cobertos. Ainda falta executar, contra banco isolado ou E2E real com dados descartáveis, a jornada integral `fila → chegada/mesa/equipe → início → fim` e o ramo `fila → sem-tour`, verificando a persistência e a saída dos estados encerrados da fila ativa.
+
+O protocolo completo de criação, execução e limpeza do banco descartável está em [`E2E_OPERATIONAL_LAB.md`](./E2E_OPERATIONAL_LAB.md). O bloqueio atual é somente a ausência de `E2E_DATABASE_URL` isolada nesta sessão; o banco operacional não será usado para dados fictícios.
 
 ## Tempo real estrito e gateway de cobrança
 
