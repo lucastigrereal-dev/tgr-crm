@@ -169,3 +169,5 @@
 - [x] Adicionar filtro governado de campanha à análise da sala, cobrindo captação, chegada, tour, sem-tour e conversão.
 - [ ] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
 - [x] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
+- [ ] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
+- [x] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.

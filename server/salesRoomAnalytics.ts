@@ -59,6 +59,7 @@ export function calculateConversionMetrics(captures: ConversionCapture[]): Conve
 }
 
 export type ConversionDimension = "campaign" | "promoter" | "liner" | "closer";
+export type ConversionRole = "promoter" | "liner" | "closer";
 export type ConversionBreakdown = ConversionMetrics & { id: number | null; label: string };
 
 export function buildConversionBreakdown(input: { captures: ConversionCapture[]; dimension: ConversionDimension; names: { campaigns: Map<number, string>; users: Map<number, string> } }) {
@@ -72,9 +73,10 @@ export function buildConversionBreakdown(input: { captures: ConversionCapture[];
   return Array.from(buckets.entries()).map(([id, rows]) => ({ id, label: labelOf(id), ...calculateConversionMetrics(rows) })).sort((left, right) => right.captures - left.captures || left.label.localeCompare(right.label, "pt-BR"));
 }
 
-export function filterConversionCaptures(captures: ConversionCapture[], start: Date, end: Date, campaignId?: number, resortId?: number, salesRoom?: string) {
+export function filterConversionCaptures(captures: ConversionCapture[], start: Date, end: Date, campaignId?: number, resortId?: number, salesRoom?: string, role?: ConversionRole, operatorId?: number) {
   return captures.filter(capture => {
     const reference = capture.scheduledAt ?? capture.createdAt;
-    return reference >= start && reference < end && (!campaignId || capture.campaignId === campaignId) && (!resortId || capture.resortId === resortId) && (!salesRoom || capture.salesRoom === salesRoom);
+    const roleId = role === "promoter" ? capture.promoterId : role === "liner" ? capture.linerId : capture.closerId;
+    return reference >= start && reference < end && (!campaignId || capture.campaignId === campaignId) && (!resortId || capture.resortId === resortId) && (!salesRoom || capture.salesRoom === salesRoom) && (!operatorId || !role || roleId === operatorId);
   });
 }
