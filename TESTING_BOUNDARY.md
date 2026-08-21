@@ -15,3 +15,18 @@ A reversão de um lote CSV altera associados, contratos e parcelas. A execução
 O projeto possui Playwright configurado com uma sessão de proprietário legítima e efêmera, criada pelo próprio SDK e nunca gravada no repositório. **Nove testes autenticados de navegador** confirmam: Central de Reservas, vínculo contratual na fila, central de relacionamento, copiloto de IA, drill-down do dashboard, navegação por teclado, download real de XLSX/PDF filtrado, confirmação visual de reversão CSV e a jornada de oferta para reserva com presença de acompanhante.
 
 As respostas tRPC dos E2Es regulares de reversão, download e reserva são controladas no navegador, para comprovar interface e arquivo sem semear registros artificiais. Além disso, **três E2Es estritos** foram executados contra backend e MySQL descartável isolados: importação/reversão de CSV, download real de XLSX/PDF e jornada waiting → offered → reserva → check-in → acompanhante → check-out. O laboratório foi limpo ao final da validação.
+
+## Distrato: domínio comprovado, evidência visual pendente
+
+Em 21 de agosto de 2026, a suíte passou a ter **125 testes automatizados**. O domínio de distrato cobre execução única de uma solicitação aprovada, bloqueio de pedido não aprovado ou já executado, preservação de parcelas e comissões pagas, cancelamento dos itens reversíveis e propagação de falha intermediária sem registrar auditoria de sucesso. A execução também grava os impactos financeiros previstos abaixo, dentro da transação auditável.
+
+| Impacto | Lançamento previsto | Evidência automatizada |
+| --- | --- | --- |
+| Multa ou retenção | Receita em `Distrato · multa/retenção` | `server/contracts.events.test.ts` |
+| Reembolso | Despesa em `Distrato · reembolso` | `server/contracts.events.test.ts` |
+
+As rotas autenticadas `/contratos` e `/contratos/1` foram inspecionadas no ambiente de desenvolvimento em 21 de agosto de 2026. A lista exibiu **Pasta contratual vazia** e a ficha retornou **Contrato não encontrado**; não há contrato real neste ambiente para acionar os controles visuais de solicitação, aprovação, rejeição e execução. A prova visual do ciclo humano continua pendente para uma homologação isolada com contrato descartável, parcelas abertas e pagas e comissões em estados distintos. Não serão criados dados operacionais artificiais apenas para fabricar captura de tela.
+
+## Recepção: fronteira da jornada completa
+
+As regras de transição, os procedimentos de roteador e a fila com atualização por polling de cinco segundos estão cobertos. Ainda falta executar, contra banco isolado ou E2E real com dados descartáveis, a jornada integral `fila → chegada/mesa/equipe → início → fim` e o ramo `fila → sem-tour`, verificando a persistência e a saída dos estados encerrados da fila ativa.

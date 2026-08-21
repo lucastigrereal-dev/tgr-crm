@@ -10,9 +10,10 @@ import { contractsRouter } from "./routers/contracts";
 function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number } = {}) {
   let selectCall = 0;
   let updateCall = 0;
+  const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
   const rows = (value: unknown[]) => Object.assign(value, { limit: async () => value });
   const tx = {
-    insert: vi.fn((table: unknown) => ({ values: vi.fn(() => ({ $returningId: async () => table ? [{ id: 701 }] : [] })) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); return { $returningId: async () => table ? [{ id: 701 }] : [] }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
       const data = [
         [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ penalty: 120, retained: 120, refund: 80 }) }],
@@ -28,6 +29,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 702 }] })) })),
+    financialEntries,
   };
 }
 
@@ -59,7 +61,9 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {
+    const db = makeDb(); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801, executionNotes: "Conferido pelo financeiro" })).resolves.toMatchObject({ success: true, contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 });
+    expect(db.financialEntries).toEqual(expect.arrayContaining([expect.objectContaining({ type: "income", category: "Distrato · multa/retenção", amount: "120.00" }), expect.objectContaining({ type: "expense", category: "Distrato · reembolso", amount: "80.00" })]));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("parcelas canceladas: 2"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701, payload: expect.objectContaining({ status: "cancelled" }) }));
   });
@@ -68,6 +72,11 @@ describe("eventos e auditoria de contratos", () => {
     dbMocks.getDb.mockResolvedValue(makeDb({ requestStatus: "requested" }));
     await expect(caller().executeCancellation({ requestId: 801 })).rejects.toMatchObject({ message: "Somente distrato aprovado pode ser executado." });
     expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
+  });
+
+  it("bloqueia reexecução de pedido já executado", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ requestStatus: "executed" }));
+    await expect(caller().executeCancellation({ requestId: 801 })).rejects.toMatchObject({ message: "Somente distrato aprovado pode ser executado." });
   });
 
   it("propaga falha intermediária e não registra execução concluída", async () => {

@@ -185,6 +185,6 @@
 - [x] Incluir contraprovas de outra sala e outra data no teste da fila de recepção, comprovando os filtros de `receptionQueue` além da ordenação e estados concluídos.
 - [x] Adicionar estados explícitos por item da fila offline: pendente, sincronizando, conflito e sincronizada.
 - [x] Permitir revisão/edição e reenvio individual de ficha offline em conflito, com teste de recuperação ponta a ponta da fila local.
-- [ ] Adicionar testes ricos do distrato: execução única aprovada, preservação de parcelas/comissões pagas, cancelamento das abertas e rollback em falha intermediária.
-- [ ] Registrar multa/retenção e reembolso previstos pelo distrato em lançamentos financeiros auditáveis.
+- [x] Adicionar testes ricos do distrato: execução única aprovada, preservação de parcelas/comissões pagas, cancelamento das abertas e rollback em falha intermediária.
+- [x] Registrar multa/retenção e reembolso previstos pelo distrato em lançamentos financeiros auditáveis.
 - [ ] Expor aprovação/rejeição humana de solicitação de distrato na ficha do contrato e provar o ciclo completo até execução única.
