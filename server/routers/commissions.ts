@@ -1,17 +1,49 @@
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { opportunities, salesCampaigns, salesCommissions, salesGoals, users } from "../../drizzle/schema";
+import { captureRecords, contractCancellationRequests, contracts, installments, opportunities, proposals, salesCampaigns, salesCommissions, salesGoals, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { calculateCommission } from "../commissionDomain";
 import { calculateCampaignProgress } from "../campaignProgress";
 import { borderoSummary, type CommissionStatus } from "../commissionLifecycle";
 import { router } from "../_core/trpc";
 import { adminProcedure, commissionsProcedure, financeProcedure } from "./access";
+import { buildProfessionalScorecards, type ProfessionalSaleFact } from "../professionalScorecard";
 
 const campaignInput = z.object({ name: z.string().min(3).max(180), code: z.string().min(2).max(64).transform(value => value.trim().toUpperCase().replace(/\s+/g, "-")), description: z.string().max(2000).optional(), startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), commissionRate: z.coerce.number().min(0).max(100), targetAmount: z.coerce.number().min(0).default(0), status: z.enum(["draft", "active", "closed"]).default("draft") });
 
 export const commissionsRouter = router({
+  scorecards: commissionsProcedure.input(z.object({ minimumMaturedSales: z.number().int().min(1).max(100).default(10) }).optional()).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return { rolesCovered: [], scorecards: [] };
+    const [contractRows, proposalRows, opportunityRows, captureRows, installmentRows, cancellationRows] = await Promise.all([
+      db.select().from(contracts), db.select().from(proposals), db.select().from(opportunities), db.select().from(captureRecords), db.select().from(installments), db.select().from(contractCancellationRequests),
+    ]);
+    const proposalById = new Map(proposalRows.map(row => [row.id, row]));
+    const opportunityById = new Map(opportunityRows.map(row => [row.id, row]));
+    const capturesByOpportunity = new Map<number, typeof captureRows>();
+    captureRows.forEach(capture => { if (!capture.opportunityId) return; const rows = capturesByOpportunity.get(capture.opportunityId) ?? []; rows.push(capture); capturesByOpportunity.set(capture.opportunityId, rows); });
+    const cancellationByContract = new Map(cancellationRows.filter(row => row.status === "executed").map(row => [row.contractId, row]));
+    const facts: ProfessionalSaleFact[] = contractRows.flatMap<ProfessionalSaleFact>(contract => {
+      const proposal = contract.proposalId ? proposalById.get(contract.proposalId) : undefined;
+      const opportunity = proposal ? opportunityById.get(proposal.opportunityId) : undefined;
+      const capture = opportunity ? (capturesByOpportunity.get(opportunity.id) ?? []).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0] : undefined;
+      if (!capture) return [];
+      const cashConfirmed = installmentRows.filter(row => row.contractId === contract.id && row.status === "paid").reduce((sum, row) => sum + Number(row.amount), 0);
+      const lifecycle = cancellationByContract.has(contract.id) || contract.status === "cancelled" ? "cancelled" : cashConfirmed > 0 ? "matured" : "new";
+      const sale = { saleId: contract.id, vgvFormalized: Number(contract.totalAmount), cashConfirmed, lifecycle } as const;
+      const promoterAssignments = capture.promoterId ? [{ ...sale, userId: capture.promoterId, role: "promoter" as const }] : [];
+      if (capture.linerId && capture.closerId && capture.linerId === capture.closerId) return [...promoterAssignments, { ...sale, userId: capture.linerId, role: "ftb" as const }];
+      return [
+        ...promoterAssignments,
+        ...(capture.linerId ? [{ ...sale, userId: capture.linerId, role: "liner" as const }] : []),
+        ...(capture.closerId ? [{ ...sale, userId: capture.closerId, role: "closer" as const }] : []),
+      ];
+    });
+    const scorecards = buildProfessionalScorecards(facts, input?.minimumMaturedSales ?? 10).filter(card => ctx.user.role !== "seller" || card.userId === ctx.user.id);
+    return { rolesCovered: ["promoter", "liner", "closer", "ftb"], scorecards };
+  }),
+
   overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional(), closingMonth: z.string().regex(/^\d{4}-\d{2}$/).optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) return { campaigns: [], ranking: [], entries: [] };
     const sellerId = ctx.user.role === "seller" ? ctx.user.id : input?.sellerId;
