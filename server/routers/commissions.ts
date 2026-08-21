@@ -16,8 +16,8 @@ export const commissionsRouter = router({
   scorecards: commissionsProcedure.input(z.object({ minimumMaturedSales: z.number().int().min(1).max(100).default(10) }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { rolesCovered: [], scorecards: [] };
-    const [contractRows, proposalRows, opportunityRows, captureRows, installmentRows, cancellationRows] = await Promise.all([
-      db.select().from(contracts), db.select().from(proposals), db.select().from(opportunities), db.select().from(captureRecords), db.select().from(installments), db.select().from(contractCancellationRequests),
+    const [contractRows, proposalRows, opportunityRows, captureRows, installmentRows, cancellationRows, userRows] = await Promise.all([
+      db.select().from(contracts), db.select().from(proposals), db.select().from(opportunities), db.select().from(captureRecords), db.select().from(installments), db.select().from(contractCancellationRequests), db.select({ id: users.id, name: users.name, email: users.email }).from(users),
     ]);
     const proposalById = new Map(proposalRows.map(row => [row.id, row]));
     const opportunityById = new Map(opportunityRows.map(row => [row.id, row]));
@@ -40,7 +40,8 @@ export const commissionsRouter = router({
         ...(capture.closerId ? [{ ...sale, userId: capture.closerId, role: "closer" as const }] : []),
       ];
     });
-    const scorecards = buildProfessionalScorecards(facts, input?.minimumMaturedSales ?? 10).filter(card => ctx.user.role !== "seller" || card.userId === ctx.user.id);
+    const names = new Map(userRows.map(row => [row.id, row.name || row.email || `Usuário #${row.id}`]));
+    const scorecards = buildProfessionalScorecards(facts, input?.minimumMaturedSales ?? 10).filter(card => ctx.user.role !== "seller" || card.userId === ctx.user.id).map(card => ({ ...card, userName: names.get(card.userId) || `Usuário #${card.userId}` }));
     return { rolesCovered: ["promoter", "liner", "closer", "ftb"], scorecards };
   }),
 

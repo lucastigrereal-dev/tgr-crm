@@ -23,6 +23,7 @@ describe("commissions.scorecards", () => {
       [{ id: 100, opportunityId: 5, promoterId: 2, linerId: 7, closerId: 7, createdAt: new Date("2026-08-21T12:00:00Z") }],
       [{ id: 300, contractId: 20, amount: "2400.00", status: "paid" }],
       [],
+      [{ id: 2, name: "Paula Captação", email: "paula@tgr.local" }, { id: 7, name: "Leo Front Back", email: "leo@tgr.local" }],
     ];
     dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain(responses.shift() ?? [])) });
     const caller = commissionsRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
@@ -31,8 +32,8 @@ describe("commissions.scorecards", () => {
 
     expect(result.rolesCovered).toEqual(["promoter", "liner", "closer", "ftb"]);
     expect(result.scorecards).toEqual(expect.arrayContaining([
-      expect.objectContaining({ userId: 2, role: "promoter", attributedSales: 1, cashConfirmed: 2400, coverage: "mature" }),
-      expect.objectContaining({ userId: 7, role: "ftb", attributedSales: 1, vgvFormalized: 12000, cashConfirmed: 2400 }),
+      expect.objectContaining({ userId: 2, userName: "Paula Captação", role: "promoter", attributedSales: 1, cashConfirmed: 2400, coverage: "mature" }),
+      expect.objectContaining({ userId: 7, userName: "Leo Front Back", role: "ftb", attributedSales: 1, vgvFormalized: 12000, cashConfirmed: 2400 }),
     ]));
     expect(result.scorecards).not.toEqual(expect.arrayContaining([expect.objectContaining({ userId: 7, role: "liner" }), expect.objectContaining({ userId: 7, role: "closer" })]));
   });
