@@ -1,6 +1,6 @@
 export type OperationalExceptionSource = {
   id: number;
-  kind: "installment" | "task" | "maintenance" | "waitlist";
+  kind: "installment" | "task" | "maintenance" | "waitlist" | "capture" | "opportunity" | "cancellation" | "commission";
   label: string;
   dueAt?: Date | null;
   status: string;
@@ -10,7 +10,7 @@ export type OperationalExceptionSource = {
 export type OperationalException = {
   id: string;
   severity: "critical" | "attention";
-  module: "finance" | "sales" | "reservations";
+  module: "finance" | "sales" | "reservations" | "governance";
   title: string;
   description: string;
 };
@@ -24,6 +24,10 @@ export function buildOperationalInsights(input: { exceptions: OperationalExcepti
     if (item.kind === "task" && item.dueAt && item.dueAt < now && ["open", "in_progress"].includes(item.status)) return [{ id: `task-${item.id}`, severity: "attention", module: "sales", title: `Follow-up vencido · ${item.label}`, description: `Prazo estourado em ${item.dueAt.toLocaleDateString("pt-BR")}` }];
     if (item.kind === "maintenance" && ["planned", "active"].includes(item.status)) return [{ id: `maintenance-${item.id}`, severity: item.status === "active" ? "critical" : "attention", module: "reservations", title: `Manutenção ${item.status === "active" ? "ativa" : "programada"} · ${item.label}`, description: item.dueAt ? `Início em ${item.dueAt.toLocaleDateString("pt-BR")}` : "Sem data de início" }];
     if (item.kind === "waitlist" && item.status === "offered" && item.dueAt && item.dueAt < now) return [{ id: `waitlist-${item.id}`, severity: "attention", module: "reservations", title: `Oferta de lista de espera expirou · ${item.label}`, description: `Venceu em ${item.dueAt.toLocaleDateString("pt-BR")}` }];
+    if (item.kind === "capture" && item.status === "captured" && item.dueAt && item.dueAt.getTime() < now.getTime() - 86_400_000) return [{ id: `capture-${item.id}`, severity: "attention", module: "sales", title: `Captação sem desfecho · ${item.label}`, description: `Ficha parada desde ${item.dueAt.toLocaleDateString("pt-BR")}` }];
+    if (item.kind === "opportunity" && ["missing_followup", "overdue_followup"].includes(item.status)) return [{ id: `opportunity-${item.id}`, severity: item.status === "overdue_followup" ? "critical" : "attention", module: "sales", title: `Proposta sem próximo passo · ${item.label}`, description: item.status === "overdue_followup" ? "Follow-up vencido" : "Sem próximo follow-up definido" }];
+    if (item.kind === "cancellation" && item.status === "requested") return [{ id: `cancellation-${item.id}`, severity: "attention", module: "governance", title: `Distrato aguardando decisão · ${item.label}`, description: "Aprovação humana pendente antes de qualquer efeito financeiro" }];
+    if (item.kind === "commission" && item.status !== "paid" && item.status !== "cancelled" && item.dueAt && item.dueAt < now) return [{ id: `commission-${item.id}`, severity: "attention", module: "finance", title: `Comissão sem conciliação · ${item.label}`, description: `Pagamento previsto em ${item.dueAt.toLocaleDateString("pt-BR")}` }];
     return [];
   }).sort((a, b) => (a.severity === "critical" ? -1 : 1) - (b.severity === "critical" ? -1 : 1));
   return { exceptions, adoption: { eventsLast30Days: input.eventsLast30Days.length, activeOperators: new Set(input.eventsLast30Days.map(event => event.actorUserId).filter(Boolean)).size, interactionsLast30Days: input.interactionsLast30Days } };

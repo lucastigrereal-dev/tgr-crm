@@ -173,3 +173,4 @@
 - [x] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
 - [ ] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
 - [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
+- [ ] Expandir a torre por exceção com captação sem desfecho, proposta sem próximo passo, entrada não recebida, comissão sem conciliação e distrato aguardando decisão.

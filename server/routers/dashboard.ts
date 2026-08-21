@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { captureRecords, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, resorts, salesCampaigns, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { captureRecords, contractCancellationRequests, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
@@ -80,19 +80,27 @@ export const dashboardRouter = router({
   operationalPulse: internalProcedure.query(async () => {
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
-    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows] = await Promise.all([
+    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows] = await Promise.all([
       db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)),
       db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt),
       db.select().from(unitMaintenanceBlocks).orderBy(desc(unitMaintenanceBlocks.startsAt)),
       db.select({ item: reservationWaitlist, customerName: customers.fullName }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)),
       db.select({ actorUserId: domainEvents.actorUserId }).from(domainEvents).where(sql`${domainEvents.occurredAt} >= ${cutoff}`),
       db.select({ id: customerInteractions.id }).from(customerInteractions).where(sql`${customerInteractions.occurredAt} >= ${cutoff}`),
+      db.select({ capture: captureRecords, customerName: customers.fullName }).from(captureRecords).innerJoin(customers, eq(captureRecords.customerId, customers.id)).where(eq(captureRecords.presentationStatus, "captured")),
+      db.select({ opportunity: opportunities, customerName: customers.fullName }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).where(inArray(opportunities.stage, ["proposal", "negotiation"])),
+      db.select({ request: contractCancellationRequests, contractNumber: contracts.number }).from(contractCancellationRequests).innerJoin(contracts, eq(contractCancellationRequests.contractId, contracts.id)).where(eq(contractCancellationRequests.status, "requested")),
+      db.select({ commission: salesCommissions, sellerName: users.name }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)),
     ]);
     return buildOperationalInsights({ exceptions: [
       ...installmentRows.map(row => ({ id: row.installment.id, kind: "installment" as const, label: `${row.customerName} · ${row.contractNumber}`, dueAt: row.installment.dueDate, status: row.installment.status, amount: row.installment.amount })),
       ...taskRows.map(row => ({ id: row.task.id, kind: "task" as const, label: row.task.title, dueAt: row.task.dueAt, status: row.task.status })),
       ...maintenanceRows.map(row => ({ id: row.id, kind: "maintenance" as const, label: `Unidade #${row.unitId}`, dueAt: row.startsAt, status: row.status })),
       ...waitlistRows.map(row => ({ id: row.item.id, kind: "waitlist" as const, label: row.customerName, dueAt: row.item.expiresAt, status: row.item.status })),
+      ...captureRows.map(row => ({ id: row.capture.id, kind: "capture" as const, label: row.customerName, dueAt: row.capture.createdAt, status: row.capture.presentationStatus })),
+      ...opportunityRows.map(row => ({ id: row.opportunity.id, kind: "opportunity" as const, label: `${row.customerName} · ${row.opportunity.title}`, dueAt: row.opportunity.nextFollowUpAt, status: row.opportunity.nextFollowUpAt && row.opportunity.nextFollowUpAt < now ? "overdue_followup" : "missing_followup" })),
+      ...cancellationRows.map(row => ({ id: row.request.id, kind: "cancellation" as const, label: row.contractNumber, status: row.request.status })),
+      ...commissionRows.map(row => ({ id: row.commission.id, kind: "commission" as const, label: row.sellerName || `Comissão #${row.commission.id}`, dueAt: row.commission.expectedPaymentAt, status: row.commission.status })),
     ], eventsLast30Days: eventRows, interactionsLast30Days: interactionRows.length }, now);
   }),
 });
