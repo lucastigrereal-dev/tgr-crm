@@ -108,4 +108,48 @@ describe("captures reception router", () => {
     expect(activeQueue.map(row => row.capture.id)).toEqual([92, 91]);
     expect(fullQueue.map(row => row.capture.id)).toEqual([94, 93, 92, 91]);
   });
+
+  it("percorre a jornada integrada da recepção e remove tour encerrado ou sem-tour da fila", async () => {
+    const tour = capture({ id: 201, scheduledAt: new Date("2026-08-21T10:00:00-03:00") }) as Record<string, unknown>;
+    const noTour = capture({ id: 202, scheduledAt: new Date("2026-08-21T11:00:00-03:00") }) as Record<string, unknown>;
+    let selected: Record<string, unknown> | null = null;
+    const responses = [
+      () => [tour],
+      () => [tour],
+      () => [tour],
+      () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
+      () => [tour],
+      () => [noTour],
+      () => [noTour],
+      () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
+    ];
+    const set = vi.fn((patch: Record<string, unknown>) => {
+      Object.assign(selected!, patch);
+      return { where: vi.fn().mockResolvedValue({ affectedRows: 1 }) };
+    });
+    mockedDb.mockResolvedValue({
+      select: vi.fn(() => {
+        const rows = responses.shift()?.() ?? [];
+        if (rows[0] && !("capture" in (rows[0] as object))) selected = rows[0] as Record<string, unknown>;
+        return chain(rows);
+      }),
+      update: vi.fn(() => ({ set })),
+    } as never);
+
+    const room = caller("service").captures;
+    await room.checkIn({ id: 201, receptionNotes: "Chegou para o tour" });
+    await room.assignRoom({ id: 201, salesTable: "M-03", linerId: 31, closerId: 32 });
+    await room.startPresentation({ id: 201 });
+    expect((await room.receptionQueue({ date: "2026-08-21", salesRoom: "Sala Ouro" })).map(row => row.capture.id)).toEqual([201, 202]);
+
+    await room.endPresentation({ id: 201 });
+    await room.checkIn({ id: 202 });
+    await room.markNoTour({ id: 202, reason: "Casal desistiu antes do tour." });
+    expect((await room.receptionQueue({ date: "2026-08-21", salesRoom: "Sala Ouro" })).map(row => row.capture.id)).toEqual([]);
+
+    expect(tour).toMatchObject({ presentationStatus: "closed", salesTable: "M-03", linerId: 31, closerId: 32, presentationStartedAt: expect.any(Date), presentationEndedAt: expect.any(Date) });
+    expect(noTour).toMatchObject({ presentationStatus: "no_tour", noTourReason: "Casal desistiu antes do tour.", checkedInAt: expect.any(Date), presentationEndedAt: expect.any(Date) });
+    expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.presentation.ended", aggregateId: 201 }));
+    expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.no_tour", aggregateId: 202 }));
+  });
 });

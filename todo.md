@@ -131,7 +131,7 @@
 - [x] Adicionar prova integrada de `campaignId` vinculado à ficha e à oportunidade criadas pela captação.
 - [x] Transformar o fim da apresentação em estado operacional concluído e removê-lo da fila ativa da sala.
 - [x] Documentar atualização automática da fila operacional e reduzir o intervalo de consulta para uso de recepção.
-- [ ] Adicionar testes integrados da jornada de recepção: fila, chegada, mesa, início, fim e sem-tour.
+- [x] Adicionar testes integrados da jornada de recepção: fila, chegada, mesa, início, fim e sem-tour.
 - [x] Implementar painel de recepção com atualização automática por polling a cada 5 segundos, mesa, liner, fechador e cronômetro de tour.
 - [x] Cobrir regras e procedimentos da recepção com testes de router usando banco simulado.
 - [x] Adicionar teste da consulta `receptionQueue` para filtros, ordenação e exclusão de estados encerrados.

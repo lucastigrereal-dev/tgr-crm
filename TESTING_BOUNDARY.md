@@ -30,3 +30,9 @@ As rotas autenticadas `/contratos` e `/contratos/1` foram inspecionadas no ambie
 ## Recepção: fronteira da jornada completa
 
 As regras de transição, os procedimentos de roteador e a fila com atualização por polling de cinco segundos estão cobertos. Ainda falta executar, contra banco isolado ou E2E real com dados descartáveis, a jornada integral `fila → chegada/mesa/equipe → início → fim` e o ramo `fila → sem-tour`, verificando a persistência e a saída dos estados encerrados da fila ativa.
+
+## Tempo real estrito e gateway de cobrança
+
+O painel de sala atualmente consulta a fila a cada cinco segundos. Essa solução é deliberadamente segura e suficiente para a operação assistida, porém **não deve ser chamada de tempo real estrito**. SSE ou WebSocket exigem processo persistente em produção; no modo de hospedagem contínua do projeto, isso usa uma instância única de 1 vCPU e 512 MB, com custo de computação de até US$ 37,50/mês em utilização integral, descontado o crédito mensal de US$ 10 e acrescido somente de tráfego/armazenamento efetivamente usado. A mudança só deve ser habilitada com aceite explícito do responsável pela operação e publicação em hospedagem contínua.
+
+A emissão real de boleto e PIX permanece intencionalmente inativa até o cadastro seguro das credenciais do gateway Asaas e a definição de ambiente, chaves, política de webhook, idempotência e reconciliação. As tabelas de clientes e eventos de webhook já existem para suportar a integração, mas o TGR-CRM não cria boleto, QR Code ou cobrança falsa.
