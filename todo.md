@@ -152,6 +152,7 @@
 - [x] Aplicar regra FTB como papel exclusivo de Front Back, impedindo acúmulo indevido de liner e fechador na mesma venda.
 - [ ] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
 - [ ] Criar solicitação de distrato com simulação congelada, aprovação humana auditável e execução transacional posterior.
+- [ ] Executar somente distratos aprovados: cancelar contrato, travar parcelas abertas e reverter comissões não pagas em uma transação auditável.
 - [x] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
 - [x] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success, captação e gestão de carteira.
 - [x] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
@@ -184,3 +185,6 @@
 - [x] Incluir contraprovas de outra sala e outra data no teste da fila de recepção, comprovando os filtros de `receptionQueue` além da ordenação e estados concluídos.
 - [x] Adicionar estados explícitos por item da fila offline: pendente, sincronizando, conflito e sincronizada.
 - [x] Permitir revisão/edição e reenvio individual de ficha offline em conflito, com teste de recuperação ponta a ponta da fila local.
+- [ ] Adicionar testes ricos do distrato: execução única aprovada, preservação de parcelas/comissões pagas, cancelamento das abertas e rollback em falha intermediária.
+- [ ] Registrar multa/retenção e reembolso previstos pelo distrato em lançamentos financeiros auditáveis.
+- [ ] Expor aprovação/rejeição humana de solicitação de distrato na ficha do contrato e provar o ciclo completo até execução única.

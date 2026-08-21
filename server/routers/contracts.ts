@@ -1,13 +1,14 @@
 import { TRPCError } from "@trpc/server";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
-import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, installments, opportunities, proposals, users } from "../../drizzle/schema";
+import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, financialTransactions, financialTransfers, installments, opportunities, ownershipEntitlements, proposals, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { buildInstallmentSchedule } from "../domain";
 import { parseCancellationPolicy } from "../projectPolicy";
 import { simulateCancellation } from "../cancellationDomain";
+import { planCancellationExecution } from "../cancellationExecution";
 import { contractsProcedure, salesProcedure } from "./access";
 
 export const contractsRouter = router({
@@ -68,11 +69,12 @@ export const contractsRouter = router({
     const contract = (await db.select({ contract: contracts, customerName: customers.fullName, customerEmail: customers.email, customerPhone: customers.phone })
       .from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!contract) return null;
-    const [schedule, documents] = await Promise.all([
+    const [schedule, documents, cancellationRequests] = await Promise.all([
       db.select().from(installments).where(eq(installments.contractId, input.id)).orderBy(installments.sequence),
       db.select().from(contractDocuments).where(eq(contractDocuments.contractId, input.id)).orderBy(desc(contractDocuments.createdAt)),
+      db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, input.id)).orderBy(desc(contractCancellationRequests.createdAt)),
     ]);
-    return { ...contract, installments: schedule, documents };
+    return { ...contract, installments: schedule, documents, cancellationRequests };
   }),
 
   simulateCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
@@ -93,6 +95,39 @@ export const contractsRouter = router({
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const request = (await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0]; if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." }); if (request.status !== "requested") throw new TRPCError({ code: "CONFLICT", message: "Esta solicitação já recebeu uma decisão." });
     await db.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(eq(contractCancellationRequests.id, input.requestId)); await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`); return { success: true };
+  }),
+
+  executeCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), executionNotes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const outcome = await db.transaction(async tx => {
+      const request = (await tx.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0];
+      if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." });
+      if (request.status !== "approved") throw new TRPCError({ code: "CONFLICT", message: "Somente distrato aprovado pode ser executado." });
+      const contract = (await tx.select().from(contracts).where(eq(contracts.id, request.contractId)).limit(1))[0];
+      if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+      if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
+      const schedule = await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id));
+      const commissionRows = await tx.select({ id: salesCommissions.id, status: salesCommissions.status }).from(salesCommissions).where(eq(salesCommissions.contractId, contract.id));
+      const impact = planCancellationExecution({ requestStatus: request.status, contractStatus: contract.status, installments: schedule, commissions: commissionRows });
+      const simulation = JSON.parse(request.simulationSnapshot) as { penalty?: number; retained?: number; refund?: number };
+      const settlementDate = new Date();
+      await tx.update(contracts).set({ status: "cancelled", cancelledAt: new Date(), cancellationReason: request.reason }).where(eq(contracts.id, contract.id));
+      const cancelledInstallments = impact.cancelInstallmentIds.length ? await tx.update(installments).set({ status: "cancelled" }).where(inArray(installments.id, impact.cancelInstallmentIds)) : [{ affectedRows: 0 }];
+      const cancelledCommissions = impact.cancelCommissionIds.length ? await tx.update(salesCommissions).set({ status: "cancelled", lifecycleStatus: "cancelled", cancelledAt: new Date(), notes: input.executionNotes?.trim() || "Cancelada por distrato aprovado" }).where(inArray(salesCommissions.id, impact.cancelCommissionIds)) : [{ affectedRows: 0 }];
+      await tx.update(financialTransactions).set({ status: "cancelled" }).where(and(eq(financialTransactions.contractId, contract.id), eq(financialTransactions.status, "open")));
+      await tx.update(financialTransfers).set({ status: "cancelled" }).where(and(eq(financialTransfers.contractId, contract.id), eq(financialTransfers.status, "pending")));
+      await tx.update(ownershipEntitlements).set({ status: "cancelled" }).where(and(eq(ownershipEntitlements.contractId, contract.id), ne(ownershipEntitlements.status, "cancelled")));
+      if (impact.cancelInstallmentIds.length) await tx.update(billingRecords).set({ status: "cancelled" }).where(and(inArray(billingRecords.installmentId, impact.cancelInstallmentIds), inArray(billingRecords.status, ["pending", "generated", "expired"])));
+      const financialImpact = [] as Array<{ contractId: number; type: "income" | "expense"; category: string; description: string; amount: string; dueDate: Date; status: "open"; createdByUserId: number }>;
+      if (Number(simulation.penalty ?? 0) > 0 || Number(simulation.retained ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "income", category: "Distrato · multa/retenção", description: `Impacto previsto do distrato aprovado #${request.id}`, amount: Number(simulation.penalty ?? simulation.retained ?? 0).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
+      if (Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
+      if (financialImpact.length) await tx.insert(financialTransactions).values(financialImpact);
+      await tx.update(contractCancellationRequests).set({ status: "executed", executedAt: new Date(), decisionNotes: [request.decisionNotes, input.executionNotes?.trim()].filter(Boolean).join("\n") || null }).where(eq(contractCancellationRequests.id, request.id));
+      return { contractId: contract.id, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length };
+    });
+    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId}; parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
+    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
+    return { success: true, ...outcome };
   }),
 
   updateStatus: salesProcedure.input(z.object({
