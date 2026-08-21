@@ -33,6 +33,13 @@ describe("dashboard.salesRoomConversion", () => {
     expect(result.breakdowns.liners).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Lia Liner" }), expect.objectContaining({ label: "Não atribuído", noTours: 1 })]));
   });
 
+  it("recorta a conversão pelo papel comercial e responsável selecionados", async () => {
+    mockedDb.mockResolvedValue(database() as never);
+    const result = await caller("finance").dashboard.salesRoomConversion({ startDate: "2026-08-01", endDate: "2026-08-31", commercialRole: "liner", operatorId: 11 });
+    expect(result.metrics).toMatchObject({ captures: 1, presentations: 1, wins: 1, noTours: 0 });
+    expect(result.filters.operators).toEqual(expect.arrayContaining([expect.objectContaining({ id: 11, name: "Lia Liner" })]));
+  });
+
   it("barra perfil externo antes da leitura analítica", async () => {
     await expect(caller("user").dashboard.salesRoomConversion()).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(mockedDb).not.toHaveBeenCalled();
