@@ -1,6 +1,6 @@
 export const funnelStages = ["new", "qualified", "proposal", "negotiation", "won", "lost"] as const;
 
-type OpportunityMetric = { stage: string; expectedAmount: string | number; sellerId: number | null; closedAt: Date | null; createdAt: Date };
+type OpportunityMetric = { stage: string; expectedAmount: string | number; sellerId: number | null; campaignId?: number | null; closedAt: Date | null; createdAt: Date };
 type GoalMetric = { sellerId: number; sellerName: string | null; targetAmount: string | number; targetContracts: number; monthReference: Date | string };
 
 const withinRange = (value: Date | string | null, start: Date, end: Date) => {
@@ -9,12 +9,12 @@ const withinRange = (value: Date | string | null, start: Date, end: Date) => {
   return date >= start && date < end;
 };
 
-export function filterFunnelDetails<T extends OpportunityMetric>(opportunities: T[], stage: string, start: Date, end: Date, sellerId?: number) {
-  return opportunities.filter(item => item.stage === stage && (!sellerId || item.sellerId === sellerId) && withinRange(item.closedAt ?? item.createdAt, start, end));
+export function filterFunnelDetails<T extends OpportunityMetric>(opportunities: T[], stage: string, start: Date, end: Date, sellerId?: number, campaignId?: number) {
+  return opportunities.filter(item => item.stage === stage && (!sellerId || item.sellerId === sellerId) && (!campaignId || item.campaignId === campaignId) && withinRange(item.closedAt ?? item.createdAt, start, end));
 }
 
-export function buildCommercialCharts(opportunities: OpportunityMetric[], goals: GoalMetric[], start: Date, end: Date, sellerId?: number) {
-  const selectedOpportunities = sellerId ? opportunities.filter(item => item.sellerId === sellerId) : opportunities;
+export function buildCommercialCharts(opportunities: OpportunityMetric[], goals: GoalMetric[], start: Date, end: Date, sellerId?: number, campaignId?: number) {
+  const selectedOpportunities = opportunities.filter(item => (!sellerId || item.sellerId === sellerId) && (!campaignId || item.campaignId === campaignId));
   const periodOpportunities = selectedOpportunities.filter(item => withinRange(item.closedAt ?? item.createdAt, start, end));
   const wonInPeriod = selectedOpportunities.filter(item => item.stage === "won" && withinRange(item.closedAt, start, end));
   const selectedGoals = goals.filter(goal => (!sellerId || goal.sellerId === sellerId) && withinRange(goal.monthReference, start, end));

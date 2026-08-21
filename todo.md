@@ -165,3 +165,4 @@
 - [ ] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.
 - [ ] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.
 - [ ] Ampliar o contrato do dashboard com filtros governados de empreendimento, campanha, sala, equipe e status, preservando drill-down e permissões.
+- [x] Adicionar filtro governado de campanha ao funil, drill-down e PDF executivo do dashboard, com contrato único no backend.

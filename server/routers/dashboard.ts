@@ -15,8 +15,8 @@ function monthBounds() {
   return { now, start, end };
 }
 
-const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional() }).optional();
-const funnelDetailsInput = z.object({ stage: z.enum(funnelStages), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional() });
+const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional() }).optional();
+const funnelDetailsInput = z.object({ stage: z.enum(funnelStages), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional() });
 function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const fallback = monthBounds();
   const start = input?.startDate ? new Date(`${input.startDate}T00:00:00Z`) : fallback.start;
@@ -42,17 +42,17 @@ export const dashboardRouter = router({
   }),
   commercialCharts: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
-    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], range: { start, end } };
-    const [opportunityRows, goalRows, sellerRows] = await Promise.all([
-      db.select().from(opportunities), db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)), db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")),
+    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], range: { start, end } };
+    const [opportunityRows, goalRows, sellerRows, campaignRows] = await Promise.all([
+      db.select().from(opportunities), db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)), db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")), db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")),
     ]);
-    return { ...buildCommercialCharts(opportunityRows, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), range: { start, end } };
+    return { ...buildCommercialCharts(opportunityRows, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId, input?.campaignId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), campaigns: campaignRows, range: { start, end } };
   }),
   funnelDetails: internalProcedure.input(funnelDetailsInput).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return [];
     const rows = await db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id));
-    const selectedIds = new Set(filterFunnelDetails(rows.map(({ opportunity }) => opportunity), input.stage, start, end, input.sellerId).map(item => item.id));
+    const selectedIds = new Set(filterFunnelDetails(rows.map(({ opportunity }) => opportunity), input.stage, start, end, input.sellerId, input.campaignId).map(item => item.id));
     return rows.filter(({ opportunity }) => selectedIds.has(opportunity.id)).map(({ opportunity, customerName, sellerName }) => ({ opportunity, customerName, sellerName: sellerName || "Sem vendedor" }));
   }),
   salesRoomConversion: internalProcedure.input(chartFilters).query(async ({ input }) => {
