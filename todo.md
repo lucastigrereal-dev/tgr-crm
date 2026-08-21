@@ -151,6 +151,16 @@
 - [x] Aplicar regra FTB como papel exclusivo de Front Back, impedindo acúmulo indevido de liner e fechador na mesma venda.
 - [ ] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
 - [ ] Criar solicitação de distrato com simulação congelada, aprovação humana auditável e execução transacional posterior.
+- [ ] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
+- [ ] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success, captação e gestão de carteira.
+- [ ] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
+- [ ] Definir a torre de comando TGR com painéis executivos, comerciais, operacionais, financeiros e de exceção filtráveis e auditáveis.
+- [ ] Consolidar análise de especialistas e priorizar de 50 a 100 evoluções de vanguarda por impacto, dependência e risco.
+- [ ] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
+- [ ] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success e gestão de carteira.
+- [ ] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
+- [ ] Definir a torre de comando TGR com painéis executivos, comerciais, operacionais, financeiros e de exceção filtráveis e auditáveis.
+- [ ] Consolidar análise de especialistas e priorizar de 50 a 100 evoluções de vanguarda por impacto, dependência e risco.
 - [ ] Criar configuração comercial por projeto para regras de distrato, campos obrigatórios, papéis de corretor/captador e divisão de comissão.
 - [ ] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.
 - [ ] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.
