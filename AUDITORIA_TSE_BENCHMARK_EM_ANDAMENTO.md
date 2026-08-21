@@ -4,6 +4,8 @@
 
 O acervo enviado contém pacotes binários, DLLs, instalador, arquivos de configuração, logs e materiais que podem conter dados pessoais e financeiros. A análise é **clean-room**: o TGR-CRM aproveitará somente requisitos funcionais, modelos de operação e controles identificados de forma lícita. Não serão executados binários, copiados códigos, importados dados pessoais, segredos, logs ou arquivos de configuração do TSE.
 
+O inventário passivo classificou o arquivo principal em 460 DLLs, 3 executáveis, 881 arquivos `.txt`, 60 CSVs, 46 Markdown, 39 JSON, 19 configurações, 18 imagens JPG, 18 PNG e outros artefatos. A documentação segura foi lida por manifest; binários, executáveis, logs, configurações e possíveis dados operacionais foram deliberadamente isolados. Isso fecha a trilha de auditoria sem contaminar o TGR.
+
 ## Achados iniciais do acervo
 
 O inventário passivo do `TSExplorer.zip` confirma uma referência madura em contratos/parcelas, contatos de cobrança, histórico e solicitações de cancelamento, relatórios financeiros, grids, pivôs, dashboards, impressão, planilhas e integração de cobrança. A presença de telas preservadas de acompanhamento de vendas, contrato financeiro, contatos de cobrança, histórico e solicitações de cancelamento reforça que a apresentação do TGR deve comprovar a jornada ponta a ponta, e não só a venda inicial.
@@ -21,6 +23,8 @@ O TGR já cobre o coração desses fluxos, mas a auditoria abriu quatro lacunas 
 ## Achados iniciais de benchmark público
 
 A WAM comunicou uma jornada digital de compra que inclui seleção, assinatura digital e campanhas de marketing, coexistindo com salas de vendas físicas.[1] A GAV se apresenta publicamente como operação verticalizada, da captação de terreno à venda de cotas, construção e gestão, destacando hotelaria como parte da experiência do proprietário.[2] A Your Vacation descreve a integração entre geração de demanda, gestão de leads, vendas digitais, telesales, mini-vac e time comercial, com foco em CAC e qualidade de venda.[3] Um painel setorial destacou a necessidade de observar vendas de alto impacto, múltiplos canais, sustentabilidade de caixa, cancelamentos e pós-venda.[4]
+
+O aprofundamento confirmou três leituras de produto. A GAV associou escala comercial a múltiplas salas de vendas, estudos de viabilidade, velocidade de vendas e operação verticalizada até a hotelaria; isto torna obrigatório conectar sala, VGV, recebimento, estoque, custo, ocupação e satisfação no mesmo painel.[9] A WAM apresentou venda digital autônoma até assinatura como complemento — não substituto — da operação de salas, tornando necessária uma jornada híbrida auditável.[10] A Your Vacation formula explicitamente a venda como etapa de uma carteira sustentável, ligando base sistêmica, processo comercial, alinhamento de expectativa e pós-venda; este é o motivo de o TGR medir entrada recebida, ativação, uso e distrato por coorte, não apenas contrato assinado.[11]
 
 ## Hipóteses de requisitos para validar no próximo ciclo
 
@@ -53,3 +57,6 @@ As referências de migração e RBAC fortalecem a necessidade de filtros governa
 [6]: https://www.viewpointweb.com/ "Viewpoint Timeshare Management"
 [7]: https://www.geckoboard.com/dashboard-examples/sales/ "Sales dashboards: examples, KPIs, and how to build one"
 [8]: Material documental do pacote TSExplorer enviado pelo usuário: padrões de API, matriz de integrações, contrato de adapter, ADRs e SLOs. Análise passiva em 20 de agosto de 2026.
+[9]: https://turismocompartilhado.com.br/gav-resorts-se-prepara-para-nova-fase-de-expansao/ "GAV Resorts se prepara para nova fase de expansão"
+[10]: https://revistahoteis.com.br/wam-lanca-plataforma-100-online-de-venda-de-multipropriedade-imobiliaria/ "WAM lança plataforma 100% online de venda de multipropriedade imobiliária"
+[11]: https://turismocompartilhado.com.br/your-vacation-%E2%81%A0a-comercializadora-com-visao-de-maratona-nao-como-uma-corrida-de-100-metros/ "Your Vacation: a comercializadora com visão de maratona"
