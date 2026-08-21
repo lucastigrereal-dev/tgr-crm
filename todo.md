@@ -113,7 +113,7 @@
 - [x] Adicionar dashboard visual de progresso de metas em tempo real à Central de Campanhas.
 - [x] Destacar e ampliar o acesso aos modelos CSV de associados, contratos e unidades na Central de Importação.
 - [x] Produzir matriz comparativa entre TGR-CRM e a referência TSE enviada, com cobertura, lacunas, riscos e plano priorizado.
-- [ ] Migrar para domínio do TGR-CRM a comissão proporcional por parcela de entrada, calendário de fechamento e borderô executivo.
+- [x] Migrar para domínio do TGR-CRM a comissão proporcional por parcela de entrada, calendário de fechamento e borderô executivo.
 - [ ] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
 - [ ] Implementar painel de recepção em tempo real estrito para chegada, mesa, liner, fechador e cronômetro de tour.
 - [ ] Implementar captação offline-first com fila local, sincronização, deduplicação e resolução de conflito.
@@ -146,31 +146,34 @@
 - [x] Tornar os três modelos CSV visíveis em cards de acesso rápido, com explicação de cada carga e download direto.
 - [x] Adicionar atualização automática por polling ao painel de metas da Central de Campanhas e validar o comportamento.
 - [x] Modelar comissão proporcional por parcela de entrada, papel comercial e status financeiro como domínio testável.
-- [ ] Implementar calendário de fechamento de comissão e borderô executivo com valores previstos, liberados, travados e cancelados.
-- [ ] Integrar a baixa real de parcela de contrato à geração idempotente de comissão proporcional por papel e ao lifecycle do borderô.
+- [x] Implementar calendário de fechamento de comissão e borderô executivo com valores previstos, liberados, travados e cancelados.
+- [x] Integrar a baixa real de parcela de contrato à geração idempotente de comissão proporcional por papel e ao lifecycle do borderô.
 - [x] Aplicar regra FTB como papel exclusivo de Front Back, impedindo acúmulo indevido de liner e fechador na mesma venda.
 - [ ] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
 - [ ] Criar solicitação de distrato com simulação congelada, aprovação humana auditável e execução transacional posterior.
-- [ ] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
-- [ ] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success, captação e gestão de carteira.
-- [ ] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
-- [ ] Definir a torre de comando TGR com painéis executivos, comerciais, operacionais, financeiros e de exceção filtráveis e auditáveis.
-- [ ] Consolidar análise de especialistas e priorizar de 50 a 100 evoluções de vanguarda por impacto, dependência e risco.
-- [ ] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
-- [ ] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success e gestão de carteira.
-- [ ] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
-- [ ] Definir a torre de comando TGR com painéis executivos, comerciais, operacionais, financeiros e de exceção filtráveis e auditáveis.
-- [ ] Consolidar análise de especialistas e priorizar de 50 a 100 evoluções de vanguarda por impacto, dependência e risco.
-- [ ] Criar configuração comercial por projeto para regras de distrato, campos obrigatórios, papéis de corretor/captador e divisão de comissão.
-- [ ] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.
-- [ ] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.
-- [ ] Ampliar o contrato do dashboard com filtros governados de empreendimento, campanha, sala, equipe e status, preservando drill-down e permissões.
+- [x] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
+- [x] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success, captação e gestão de carteira.
+- [x] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
+- [x] Definir a torre de comando TGR com painéis executivos, comerciais, operacionais, financeiros e de exceção filtráveis e auditáveis.
+- [x] Consolidar análise de especialistas e priorizar de 50 a 100 evoluções de vanguarda por impacto, dependência e risco.
+- [x] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
+- [x] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success e gestão de carteira.
+- [x] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
+- [x] Definir a torre de comando TGR com painéis executivos, comerciais, operacionais, financeiros e de exceção filtráveis e auditáveis.
+- [x] Consolidar análise de especialistas e priorizar de 50 a 100 evoluções de vanguarda por impacto, dependência e risco.
+- [x] Criar configuração comercial por projeto para regras de distrato, campos obrigatórios, papéis de corretor/captador e divisão de comissão.
+- [x] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.
+- [x] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.
+- [ ] Ampliar o contrato do dashboard principal com filtros governados de empreendimento, sala, equipe e status, preservando drill-down e permissões.
 - [x] Adicionar filtro governado de campanha ao funil, drill-down e PDF executivo do dashboard, com contrato único no backend.
 - [x] Adicionar filtro governado de campanha à análise da sala, cobrindo captação, chegada, tour, sem-tour e conversão.
-- [ ] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
 - [x] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
-- [ ] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
+- [x] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
 - [x] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
-- [ ] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
+- [x] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
+- [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
 - [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
 - [ ] Expandir a torre por exceção com captação sem desfecho, proposta sem próximo passo, entrada não recebida, comissão sem conciliação e distrato aguardando decisão.
+- [ ] Adicionar testes integrados do dashboard principal provando os filtros de empreendimento, sala, equipe e status com drill-down e permissões preservados.
+- [ ] Validar visualmente a Home/Torre de Comando com filtros transversais além de campanha.
+- [ ] Enriquecer exceções da torre com responsável, prazo operacional e rota de ação por tipo de desvio.
