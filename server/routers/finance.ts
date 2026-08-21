@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, revenueQualityLedger, salesCampaigns, salesCommissions } from "../../drizzle/schema";
+import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
@@ -15,6 +15,37 @@ import { buildPersistableRevenueProjection } from "../revenueQualityProjection";
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
 export const financeRouter = router({
+  portfolioCandidates: financeProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    return db.select({ id: users.id, name: users.name, email: users.email, role: users.role }).from(users).where(inArray(users.role, ["admin", "finance"])).orderBy(users.name);
+  }),
+
+  portfolioAssignments: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    return db.select({ assignment: financialPortfolioAssignments, contractNumber: contracts.number, ownerName: users.name, ownerEmail: users.email }).from(financialPortfolioAssignments).innerJoin(contracts, eq(financialPortfolioAssignments.contractId, contracts.id)).innerJoin(users, eq(financialPortfolioAssignments.ownerUserId, users.id)).where(and(input?.contractId ? eq(financialPortfolioAssignments.contractId, input.contractId) : undefined, isNull(financialPortfolioAssignments.endsAt))).orderBy(desc(financialPortfolioAssignments.startsAt));
+  }),
+
+  assignPortfolioOwner: financeProcedure.input(z.object({ contractId: z.number().int().positive(), ownerUserId: z.number().int().positive(), notes: z.string().trim().max(2000).optional().nullable() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+    if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    const owner = (await db.select({ id: users.id }).from(users).where(eq(users.id, input.ownerUserId)).limit(1))[0];
+    if (!owner) throw new TRPCError({ code: "NOT_FOUND", message: "Responsável financeiro não encontrado." });
+    const now = new Date();
+    const assignmentId = await db.transaction(async tx => {
+      await tx.update(financialPortfolioAssignments).set({ endsAt: now }).where(and(eq(financialPortfolioAssignments.contractId, input.contractId), isNull(financialPortfolioAssignments.endsAt)));
+      const created = await tx.insert(financialPortfolioAssignments).values({ contractId: input.contractId, ownerUserId: input.ownerUserId, assignedByUserId: ctx.user.id, startsAt: now, notes: input.notes || null }).$returningId();
+      return created[0]?.id;
+    });
+    if (!assignmentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível atribuir a carteira financeira." });
+    await recordAudit(ctx.user.id, "financial_portfolio_assignment", assignmentId, "assigned", `Carteira do contrato ${input.contractId} atribuída ao usuário ${input.ownerUserId}.`);
+    await recordDomainEvent({ eventName: "financial.portfolio.assigned", aggregateType: "financial_portfolio_assignment", aggregateId: assignmentId, actorUserId: ctx.user.id, payload: { contractId: input.contractId, ownerUserId: input.ownerUserId } });
+    return { id: assignmentId, contractId: input.contractId, ownerUserId: input.ownerUserId, startsAt: now };
+  }),
+
   revenueQuality: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];

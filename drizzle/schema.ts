@@ -460,6 +460,20 @@ export const financialTransactions = mysqlTable(
   table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status)],
 );
 
+export const financialPortfolioAssignments = mysqlTable("financial_portfolio_assignments", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  ownerUserId: int("ownerUserId").notNull().references(() => users.id),
+  assignedByUserId: int("assignedByUserId").references(() => users.id),
+  startsAt: timestamp("startsAt").defaultNow().notNull(),
+  endsAt: timestamp("endsAt"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  index("portfolio_contract_active_idx").on(table.contractId, table.endsAt),
+  index("portfolio_owner_active_idx").on(table.ownerUserId, table.endsAt),
+]);
+
 export const financialTransfers = mysqlTable("financial_transfers", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").references(() => contracts.id),

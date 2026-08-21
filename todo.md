@@ -194,6 +194,7 @@
 - [x] Definir laboratório seguro com dados fictícios descartáveis para testar fluxo de casal, venda, comissão, distrato e leitura gerencial antes de uso operacional.
 - [x] Extrair requisitos verificáveis e referências do Wave Research e do PRD de handoff recebidos.
 - [ ] Criar scorecards auditáveis por captador, qualificador, consultor/liner, fechador/FTB, gerente de sala e financeiro.
+- [x] Modelar dono de carteira financeira por contrato, separado do usuário que lançou/baixou o movimento, para scorecard de cobrança e recuperação.
 - [x] Persistir atribuição de qualificador e gerente de sala na ficha, com auditoria e uso futuro em scorecards.
 - [ ] Implementar visão de receita e comissão por qualidade: previsto, confirmado, em risco, inadimplente, distratado e estornado.
 - [ ] Modelar alertas de transparência para venda fantasma, duplicidade, desconto irregular, distorção de mesa, documentação pendente e comissão sem lastro.
