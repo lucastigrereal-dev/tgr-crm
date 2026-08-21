@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, salesCampaigns, salesCommissions } from "../../drizzle/schema";
+import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, revenueQualityLedger, salesCampaigns, salesCommissions } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
@@ -10,6 +10,7 @@ import { buildCampaignDre } from "../financeDre";
 import { buildInstallmentCommissions } from "../commissionAutomation";
 import { parseCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
+import { buildPersistableRevenueProjection } from "../revenueQualityProjection";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
@@ -36,6 +37,31 @@ export const financeRouter = router({
       });
       return { contractId: contract.id, contractNumber: contract.number, policyVersion: "tgr-derived-ledger/v1", summary: summarizeRevenueQualityLedger(facts), facts };
     });
+  }),
+
+  syncRevenueQualityLedger: financeProcedure.input(z.object({ contractId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+    if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    const [installmentRows, commissionRows, cancellationRows] = await Promise.all([
+      db.select().from(installments).where(eq(installments.contractId, contract.id)),
+      db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract.id)),
+      db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, contract.id)),
+    ]);
+    const cancellation = cancellationRows.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
+    const policyVersion = "tgr-derived-ledger/v1";
+    const projection = buildPersistableRevenueProjection({
+      contract: { id: contract.id, totalAmount: contract.totalAmount, status: contract.status },
+      installments: installmentRows.map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, status: row.status })),
+      commissions: commissionRows.map(row => ({ id: row.id, amount: row.amount, status: row.status, lifecycleStatus: row.lifecycleStatus, sourceInstallmentId: row.sourceInstallmentId })),
+      cancellation: cancellation ? { status: cancellation.status } : null,
+      policyVersion,
+    });
+    if (projection.length) await db.insert(revenueQualityLedger).values(projection.map(fact => ({ contractId: fact.contractId, installmentId: fact.installmentId ?? null, commissionId: fact.commissionId ?? null, domainEventId: null, policyVersionId: null, factType: fact.type, amount: fact.amount.toFixed(2), reason: fact.reason ?? null, sourceFingerprint: fact.sourceFingerprint, occurredAt: new Date() }))).onDuplicateKeyUpdate({ set: { sourceFingerprint: sql`sourceFingerprint` } });
+    await recordAudit(ctx.user.id, "revenue_quality_ledger", contract.id, "synced", `${projection.length} fato(s) econômicos projetados pela política ${policyVersion}.`);
+    await recordDomainEvent({ eventName: "revenue_quality_ledger.synced", aggregateType: "contract", aggregateId: contract.id, actorUserId: ctx.user.id, payload: { factCount: projection.length, policyVersion } });
+    return { contractId: contract.id, factCount: projection.length, policyVersion, summary: summarizeRevenueQualityLedger(projection) };
   }),
 
   installments: financeProcedure.query(async () => {

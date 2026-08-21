@@ -8,7 +8,7 @@ const allowedPayloadFields: Record<DomainEventName, readonly string[]> = {
   "ownership.entitlement.created": ["contractId", "unitId", "priorityLevel"], "unit.maintenance.blocked": ["unitId", "startsAt", "endsAt"],
   "opportunity.created": ["customerId", "stage", "campaignId"], "opportunity.updated": ["stage", "campaignId"], "proposal.created": ["opportunityId", "amount"], "sales.playbook.created": ["stage", "title"],
   "capture.created": ["customerId", "campaignId", "qualificationStatus"], "capture.status.updated": ["presentationStatus", "qualificationStatus"], "capture.checked_in": ["salesRoom"], "capture.room.assigned": ["salesRoom", "salesTable", "linerId", "closerId"], "capture.presentation.started": ["salesRoom", "salesTable"], "capture.presentation.ended": ["salesRoom", "salesTable", "durationMinutes"], "capture.no_tour": ["salesRoom", "reason"],
-  "installment.renegotiation.proposed": ["installmentId", "proposalAmount"], "installment.paid": ["installmentId", "paidAmount"], "financial.entry.created": ["type", "amount", "campaignId"], "financial.entry.reconciled": ["reference", "reconciledAt"], "financial.transfer.created": ["amount", "recipient"], "ai.assistance.requested": ["role", "evidenceCount", "model"],
+  "installment.renegotiation.proposed": ["installmentId", "proposalAmount"], "installment.paid": ["installmentId", "paidAmount"], "revenue_quality_ledger.synced": ["factCount", "policyVersion"], "financial.entry.created": ["type", "amount", "campaignId"], "financial.entry.reconciled": ["reference", "reconciledAt"], "financial.transfer.created": ["amount", "recipient"], "ai.assistance.requested": ["role", "evidenceCount", "model"],
 };
 
 function safeObject(value: string | null) {

@@ -111,6 +111,21 @@ export const commercialProjectSettings = mysqlTable("commercial_project_settings
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const commercialPolicyVersions = mysqlTable("commercial_policy_versions", {
+  id: int("id").autoincrement().primaryKey(),
+  resortId: int("resortId").notNull().references(() => resorts.id),
+  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality"]).notNull(),
+  version: varchar("version", { length: 80 }).notNull(),
+  policyJson: text("policyJson").notNull(),
+  effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
+  retiredAt: timestamp("retiredAt"),
+  approvedByUserId: int("approvedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("commercial_policy_version_unique").on(table.resortId, table.policyType, table.version),
+  index("commercial_policy_effective_idx").on(table.resortId, table.policyType, table.effectiveAt),
+]);
+
 export const units = mysqlTable(
   "units",
   {
@@ -576,6 +591,25 @@ export const domainEvents = mysqlTable("domain_events", {
   payload: text("payload"),
   occurredAt: timestamp("occurredAt").defaultNow().notNull(),
 }, table => [index("domain_events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.occurredAt), index("domain_events_name_idx").on(table.eventName, table.occurredAt)]);
+
+export const revenueQualityLedger = mysqlTable("revenue_quality_ledger", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  installmentId: int("installmentId").references(() => installments.id),
+  commissionId: int("commissionId").references(() => salesCommissions.id),
+  domainEventId: int("domainEventId").references(() => domainEvents.id),
+  policyVersionId: int("policyVersionId").references(() => commercialPolicyVersions.id),
+  factType: mysqlEnum("factType", ["vgv_formalized", "cash_confirmed", "cash_exposure", "revenue_reversed", "cancellation_retention", "cancellation_refund", "commission_expected", "commission_at_risk", "commission_paid", "commission_reversed"]).notNull(),
+  amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+  reason: varchar("reason", { length: 80 }),
+  sourceFingerprint: varchar("sourceFingerprint", { length: 160 }).notNull(),
+  occurredAt: timestamp("occurredAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("revenue_ledger_fingerprint_unique").on(table.sourceFingerprint),
+  index("revenue_ledger_contract_fact_idx").on(table.contractId, table.factType, table.occurredAt),
+  index("revenue_ledger_policy_idx").on(table.policyVersionId, table.occurredAt),
+]);
 
 export const csvImportBatches = mysqlTable("csv_import_batches", {
   id: int("id").autoincrement().primaryKey(),
