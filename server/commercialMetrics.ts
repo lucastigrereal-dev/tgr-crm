@@ -2,6 +2,17 @@ export const funnelStages = ["new", "qualified", "proposal", "negotiation", "won
 
 type OpportunityMetric = { stage: string; expectedAmount: string | number; sellerId: number | null; campaignId?: number | null; closedAt: Date | null; createdAt: Date };
 type GoalMetric = { sellerId: number; sellerName: string | null; targetAmount: string | number; targetContracts: number; monthReference: Date | string };
+type CaptureLinkMetric = { opportunityId: number | null; createdAt: Date };
+
+export function latestCaptureByOpportunity<T extends CaptureLinkMetric>(captures: T[]) {
+  const selected = new Map<number, T>();
+  for (const capture of captures) {
+    if (!capture.opportunityId) continue;
+    const current = selected.get(capture.opportunityId);
+    if (!current || capture.createdAt.getTime() > current.createdAt.getTime()) selected.set(capture.opportunityId, capture);
+  }
+  return selected;
+}
 
 const withinRange = (value: Date | string | null, start: Date, end: Date) => {
   if (!value) return false;

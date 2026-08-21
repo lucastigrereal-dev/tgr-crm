@@ -176,4 +176,5 @@
 - [ ] Expandir a torre por exceção com captação sem desfecho, proposta sem próximo passo, entrada não recebida, comissão sem conciliação e distrato aguardando decisão.
 - [ ] Adicionar testes integrados do dashboard principal provando os filtros de empreendimento, sala, equipe e status com drill-down e permissões preservados.
 - [ ] Validar visualmente a Home/Torre de Comando com filtros transversais além de campanha.
+- [x] Consolidar uma ficha de captação determinística por oportunidade para filtros operacionais do dashboard principal, evitando duplicidade de funil e VGV.
 - [ ] Enriquecer exceções da torre com responsável, prazo operacional e rota de ação por tipo de desvio.

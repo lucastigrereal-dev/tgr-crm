@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCommercialCharts, filterFunnelDetails } from "./commercialMetrics";
+import { buildCommercialCharts, filterFunnelDetails, latestCaptureByOpportunity } from "./commercialMetrics";
 
 describe("gráficos comerciais", () => {
   it("agrega funil e progresso por vendedor apenas com vendas ganhas no período", () => {
@@ -29,5 +29,14 @@ describe("gráficos comerciais", () => {
     ];
     expect(filterFunnelDetails(rows, "proposal", new Date("2026-08-01T00:00:00Z"), new Date("2026-09-01T00:00:00Z"), 1).map(item => item.id)).toEqual([1]);
     expect(filterFunnelDetails(rows, "proposal", new Date("2026-08-01T00:00:00Z"), new Date("2026-09-01T00:00:00Z")).map(item => item.id)).toEqual([1, 2]);
+  });
+
+  it("mantém só a ficha mais recente por oportunidade para evitar duplicar o funil", () => {
+    const selected = latestCaptureByOpportunity([
+      { id: 1, opportunityId: 7, createdAt: new Date("2026-08-01T10:00:00Z"), salesRoom: "A" },
+      { id: 2, opportunityId: 7, createdAt: new Date("2026-08-02T10:00:00Z"), salesRoom: "B" },
+      { id: 3, opportunityId: 8, createdAt: new Date("2026-08-03T10:00:00Z"), salesRoom: "A" },
+    ]);
+    expect(Array.from(selected.values()).map(item => item.id)).toEqual([2, 3]);
   });
 });

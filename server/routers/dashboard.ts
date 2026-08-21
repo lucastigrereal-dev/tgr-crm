@@ -4,7 +4,7 @@ import { captureRecords, contractCancellationRequests, contracts, customerIntera
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
-import { buildCommercialCharts, filterFunnelDetails, funnelStages } from "../commercialMetrics";
+import { buildCommercialCharts, filterFunnelDetails, funnelStages, latestCaptureByOpportunity } from "../commercialMetrics";
 import { buildOperationalInsights } from "../operationalAnalytics";
 import { buildConversionBreakdown, calculateConversionMetrics, filterConversionCaptures } from "../salesRoomAnalytics";
 
@@ -42,11 +42,25 @@ export const dashboardRouter = router({
   }),
   commercialCharts: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
-    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], range: { start, end } };
-    const [opportunityRows, goalRows, sellerRows, campaignRows] = await Promise.all([
-      db.select().from(opportunities), db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)), db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")), db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")),
+    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], filters: { resorts: [], salesRooms: [] }, range: { start, end } };
+    const [opportunityRows, captureRows, goalRows, sellerRows, campaignRows, resortRows] = await Promise.all([
+      db.select().from(opportunities),
+      db.select().from(captureRecords),
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")),
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")),
     ]);
-    return { ...buildCommercialCharts(opportunityRows, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId, input?.campaignId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), campaigns: campaignRows, range: { start, end } };
+    const capturesByOpportunity = latestCaptureByOpportunity(captureRows);
+    const needsOperationalContext = Boolean(input?.resortId || input?.salesRoom || input?.commercialRole || input?.operatorId || input?.presentationStatus);
+    const filteredOpportunities = opportunityRows.filter(opportunity => {
+      if (!needsOperationalContext) return true;
+      const capture = capturesByOpportunity.get(opportunity.id);
+      if (!capture) return false;
+      const operatorId = input?.commercialRole === "promoter" ? capture.promoterId : input?.commercialRole === "liner" ? capture.linerId : input?.commercialRole === "closer" ? capture.closerId : null;
+      return (!input?.resortId || capture.resortId === input.resortId) && (!input?.salesRoom || capture.salesRoom === input.salesRoom) && (!input?.presentationStatus || capture.presentationStatus === input.presentationStatus) && (!input?.operatorId || operatorId === input.operatorId);
+    });
+    return { ...buildCommercialCharts(filteredOpportunities, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId, input?.campaignId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), campaigns: campaignRows, filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(item => item.salesRoom).filter((value): value is string => Boolean(value)))).sort() }, range: { start, end } };
   }),
   funnelDetails: internalProcedure.input(funnelDetailsInput).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
