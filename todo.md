@@ -171,3 +171,5 @@
 - [x] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
 - [ ] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
 - [x] Adicionar filtro de papel comercial e responsável à análise de conversão, distinguindo promotor, liner e fechador/FTB.
+- [ ] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
+- [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.

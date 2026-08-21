@@ -15,7 +15,7 @@ function monthBounds() {
   return { now, start, end };
 }
 
-const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(), salesRoom: z.string().min(1).max(180).optional(), commercialRole: z.enum(["promoter", "liner", "closer"]).optional(), operatorId: z.number().int().positive().optional() }).optional();
+const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(), salesRoom: z.string().min(1).max(180).optional(), commercialRole: z.enum(["promoter", "liner", "closer"]).optional(), operatorId: z.number().int().positive().optional(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).optional() }).optional();
 const funnelDetailsInput = z.object({ stage: z.enum(funnelStages), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional() });
 function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const fallback = monthBounds();
@@ -64,7 +64,7 @@ export const dashboardRouter = router({
       db.select({ id: users.id, name: users.name, email: users.email }).from(users),
       db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")),
     ]);
-    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end, input?.campaignId, input?.resortId, input?.salesRoom, input?.commercialRole, input?.operatorId);
+    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end, input?.campaignId, input?.resortId, input?.salesRoom, input?.commercialRole, input?.operatorId, input?.presentationStatus);
     const names = { campaigns: new Map(campaignRows.map(item => [item.id, item.name])), users: new Map(userRows.map(item => [item.id, item.name || item.email || `Usuário #${item.id}`])) };
     return {
       metrics: calculateConversionMetrics(captures),

@@ -40,6 +40,12 @@ describe("dashboard.salesRoomConversion", () => {
     expect(result.filters.operators).toEqual(expect.arrayContaining([expect.objectContaining({ id: 11, name: "Lia Liner" })]));
   });
 
+  it("recorta a análise pelo status operacional sem misturar sem-tour e encerrada", async () => {
+    mockedDb.mockResolvedValue(database() as never);
+    const result = await caller("finance").dashboard.salesRoomConversion({ startDate: "2026-08-01", endDate: "2026-08-31", presentationStatus: "no_tour" });
+    expect(result.metrics).toMatchObject({ captures: 1, noTours: 1, presentations: 0, wins: 0 });
+  });
+
   it("barra perfil externo antes da leitura analítica", async () => {
     await expect(caller("user").dashboard.salesRoomConversion()).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(mockedDb).not.toHaveBeenCalled();
