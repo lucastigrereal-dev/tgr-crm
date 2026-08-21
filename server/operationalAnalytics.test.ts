@@ -18,12 +18,14 @@ describe("insights operacionais", () => {
       { id: 11, kind: "opportunity", label: "Proposta #11", status: "overdue_followup" },
       { id: 12, kind: "commission", label: "Liner · CTR-12", dueAt: new Date("2026-08-19T12:00:00Z"), status: "approved" },
       { id: 13, kind: "cancellation", label: "CTR-13", status: "requested" },
+      { id: 14, kind: "integrity", label: "Comissão sem entrada", status: "critical", responsibleRole: "finance", evidence: "Comissão aprovada sem parcela-fonte paga." },
     ], eventsLast30Days: [], interactionsLast30Days: 0 }, new Date("2026-08-20T12:00:00Z"));
     expect(insights.exceptions).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "capture-10", title: expect.stringContaining("Captação sem desfecho") }),
       expect.objectContaining({ id: "opportunity-11", severity: "critical" }),
       expect.objectContaining({ id: "commission-12", module: "finance" }),
       expect.objectContaining({ id: "cancellation-13", module: "governance" }),
+      expect.objectContaining({ id: "integrity-14", severity: "critical", module: "finance", description: "Comissão aprovada sem parcela-fonte paga." }),
     ]));
   });
 });

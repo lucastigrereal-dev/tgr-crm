@@ -28,6 +28,7 @@ describe("dashboard.operationalPulse", () => {
       [{ item: { id: 4, expiresAt: new Date("2020-01-01T12:00:00Z"), status: "offered" }, customerName: "Bruno" }],
       [{ actorUserId: 9 }, { actorUserId: 11 }],
       [{ id: 99 }, { id: 100 }],
+      [], [], [], [],
     ];
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sourceRows.shift() ?? [])) } as never);
     const pulse = await appRouter.createCaller(context()).dashboard.operationalPulse();

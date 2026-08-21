@@ -4,7 +4,7 @@ import { buildCommercialIntegrityAlerts } from "./commercialIntegrity";
 describe("commercial integrity alerts", () => {
   it("expõe comissão sem lastro, desconto irregular e documento pendente com prova e rota", () => {
     const alerts = buildCommercialIntegrityAlerts({
-      commissions: [{ id: 1, contractId: 71, amount: 800, status: "approved", sourceInstallmentStatus: "open" }],
+      commissions: [{ id: 1, contractId: 71, amount: 800, status: "approved", sourceInstallmentId: 701, sourceInstallmentStatus: "open" }],
       proposals: [{ id: 21, discountPercent: 15, allowedDiscountPercent: 10, approvalStatus: "pending" }],
       contracts: [{ id: 71, requiredDocuments: 3, approvedDocuments: 2 }],
       duplicateCandidates: [],
@@ -19,7 +19,7 @@ describe("commercial integrity alerts", () => {
 
   it("não faz acusação sem regra e trata duplicidade/reabertura como revisão humana", () => {
     const alerts = buildCommercialIntegrityAlerts({
-      commissions: [{ id: 2, contractId: 72, amount: 200, status: "approved", sourceInstallmentStatus: "paid" }],
+      commissions: [{ id: 2, contractId: 72, amount: 200, status: "approved", sourceInstallmentId: 702, sourceInstallmentStatus: "paid" }],
       proposals: [{ id: 22, discountPercent: 10, allowedDiscountPercent: 10, approvalStatus: null }],
       contracts: [{ id: 72, requiredDocuments: 2, approvedDocuments: 2 }],
       duplicateCandidates: [{ customerId: 91, matchingFields: ["telefone", "nome semelhante"], confidence: "probable" }],

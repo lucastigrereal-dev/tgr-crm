@@ -7,6 +7,7 @@ import { internalProcedure } from "./access";
 import { buildCommercialCharts, filterFunnelDetails, funnelStages, latestCaptureByOpportunity } from "../commercialMetrics";
 import { buildOperationalInsights } from "../operationalAnalytics";
 import { buildConversionBreakdown, calculateConversionMetrics, filterConversionCaptures } from "../salesRoomAnalytics";
+import { buildCommercialIntegrityAlerts } from "../commercialIntegrity";
 
 function monthBounds() {
   const now = new Date();
@@ -116,8 +117,9 @@ export const dashboardRouter = router({
       db.select({ capture: captureRecords, customerName: customers.fullName }).from(captureRecords).innerJoin(customers, eq(captureRecords.customerId, customers.id)).where(eq(captureRecords.presentationStatus, "captured")),
       db.select({ opportunity: opportunities, customerName: customers.fullName }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).where(inArray(opportunities.stage, ["proposal", "negotiation"])),
       db.select({ request: contractCancellationRequests, contractNumber: contracts.number }).from(contractCancellationRequests).innerJoin(contracts, eq(contractCancellationRequests.contractId, contracts.id)).where(eq(contractCancellationRequests.status, "requested")),
-      db.select({ commission: salesCommissions, sellerName: users.name }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)),
+      db.select({ commission: salesCommissions, sellerName: users.name, sourceInstallmentStatus: installments.status }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(installments, eq(salesCommissions.sourceInstallmentId, installments.id)),
     ]);
+    const integrityAlerts = buildCommercialIntegrityAlerts({ commissions: commissionRows.map(row => ({ id: row.commission.id, contractId: row.commission.contractId ?? 0, amount: Number(row.commission.amount), status: row.commission.status, sourceInstallmentId: row.commission.sourceInstallmentId, sourceInstallmentStatus: row.sourceInstallmentStatus })), proposals: [], contracts: [], duplicateCandidates: [], opportunities: [] });
     return buildOperationalInsights({ exceptions: [
       ...installmentRows.map(row => ({ id: row.installment.id, kind: "installment" as const, label: `${row.customerName} · ${row.contractNumber}`, dueAt: row.installment.dueDate, status: row.installment.status, amount: row.installment.amount })),
       ...taskRows.map(row => ({ id: row.task.id, kind: "task" as const, label: row.task.title, dueAt: row.task.dueAt, status: row.task.status })),
@@ -127,6 +129,7 @@ export const dashboardRouter = router({
       ...opportunityRows.map(row => ({ id: row.opportunity.id, kind: "opportunity" as const, label: `${row.customerName} · ${row.opportunity.title}`, dueAt: row.opportunity.nextFollowUpAt, status: row.opportunity.nextFollowUpAt && row.opportunity.nextFollowUpAt < now ? "overdue_followup" : "missing_followup" })),
       ...cancellationRows.map(row => ({ id: row.request.id, kind: "cancellation" as const, label: row.contractNumber, status: row.request.status })),
       ...commissionRows.map(row => ({ id: row.commission.id, kind: "commission" as const, label: row.sellerName || `Comissão #${row.commission.id}`, dueAt: row.commission.expectedPaymentAt, status: row.commission.status })),
+      ...integrityAlerts.map(alert => ({ id: alert.entityId, kind: "integrity" as const, label: alert.code.replaceAll("_", " "), status: alert.severity, responsibleRole: alert.ownerRole, evidence: alert.evidence })),
     ], eventsLast30Days: eventRows, interactionsLast30Days: interactionRows.length }, now);
   }),
 });
