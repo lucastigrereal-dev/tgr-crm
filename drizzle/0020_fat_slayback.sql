@@ -1,0 +1,1 @@
+ALTER TABLE `commercial_project_settings` ADD `requiredContractDocuments` text;

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { captureRecords, contractCancellationRequests, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
@@ -8,6 +8,7 @@ import { buildCommercialCharts, filterFunnelDetails, funnelStages, latestCapture
 import { buildOperationalInsights } from "../operationalAnalytics";
 import { buildConversionBreakdown, calculateConversionMetrics, filterConversionCaptures } from "../salesRoomAnalytics";
 import { buildCommercialIntegrityAlerts } from "../commercialIntegrity";
+import { parseRequiredContractDocuments } from "../projectPolicy";
 
 function monthBounds() {
   const now = new Date();
@@ -107,7 +108,7 @@ export const dashboardRouter = router({
   operationalPulse: internalProcedure.query(async () => {
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
-    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows] = await Promise.all([
+    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows] = await Promise.all([
       db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)),
       db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt),
       db.select().from(unitMaintenanceBlocks).orderBy(desc(unitMaintenanceBlocks.startsAt)),
@@ -118,8 +119,24 @@ export const dashboardRouter = router({
       db.select({ opportunity: opportunities, customerName: customers.fullName }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).where(inArray(opportunities.stage, ["proposal", "negotiation"])),
       db.select({ request: contractCancellationRequests, contractNumber: contracts.number }).from(contractCancellationRequests).innerJoin(contracts, eq(contractCancellationRequests.contractId, contracts.id)).where(eq(contractCancellationRequests.status, "requested")),
       db.select({ commission: salesCommissions, sellerName: users.name, sourceInstallmentStatus: installments.status }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(installments, eq(salesCommissions.sourceInstallmentId, installments.id)),
+      db.select({ contract: contracts, customerName: customers.fullName, resortId: captureRecords.resortId, captureCreatedAt: captureRecords.createdAt }).from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)),
+      db.select().from(contractDocuments),
+      db.select().from(commercialProjectSettings),
     ]);
     const integrityAlerts = buildCommercialIntegrityAlerts({ commissions: commissionRows.map(row => ({ id: row.commission.id, contractId: row.commission.contractId ?? 0, amount: Number(row.commission.amount), status: row.commission.status, sourceInstallmentId: row.commission.sourceInstallmentId, sourceInstallmentStatus: row.sourceInstallmentStatus })), proposals: [], contracts: [], duplicateCandidates: [], opportunities: [] });
+    const settingsByResort = new Map(settingsRows.map(row => [row.resortId, parseRequiredContractDocuments(row.requiredContractDocuments)]));
+    const documentsByContract = new Map<number, Set<string>>();
+    for (const document of documentRows) { const categories = documentsByContract.get(document.contractId) || new Set<string>(); categories.add(document.category); documentsByContract.set(document.contractId, categories); }
+    const latestContractContext = new Map<number, typeof contractRows[number]>();
+    for (const row of contractRows) { const current = latestContractContext.get(row.contract.id); if (!current || (row.captureCreatedAt?.getTime() || 0) > (current.captureCreatedAt?.getTime() || 0)) latestContractContext.set(row.contract.id, row); }
+    const documentIntegrityAlerts = Array.from(latestContractContext.values()).flatMap(row => {
+      if (row.contract.status !== "active" || !row.resortId) return [];
+      const required = settingsByResort.get(row.resortId) || [];
+      if (!required.length) return [];
+      const present = documentsByContract.get(row.contract.id) || new Set<string>();
+      const missing = required.filter(category => !present.has(category));
+      return missing.length ? [{ id: row.contract.id, kind: "integrity" as const, label: `Documentos pendentes · ${row.contract.number}`, status: "attention", responsibleRole: "Contratos", evidence: `Associado ${row.customerName}: ausentes pela política do empreendimento — ${missing.join(", ")}.` }] : [];
+    });
     return buildOperationalInsights({ exceptions: [
       ...installmentRows.map(row => ({ id: row.installment.id, kind: "installment" as const, label: `${row.customerName} · ${row.contractNumber}`, dueAt: row.installment.dueDate, status: row.installment.status, amount: row.installment.amount })),
       ...taskRows.map(row => ({ id: row.task.id, kind: "task" as const, label: row.task.title, dueAt: row.task.dueAt, status: row.task.status })),
@@ -130,6 +147,7 @@ export const dashboardRouter = router({
       ...cancellationRows.map(row => ({ id: row.request.id, kind: "cancellation" as const, label: row.contractNumber, status: row.request.status })),
       ...commissionRows.map(row => ({ id: row.commission.id, kind: "commission" as const, label: row.sellerName || `Comissão #${row.commission.id}`, dueAt: row.commission.expectedPaymentAt, status: row.commission.status })),
       ...integrityAlerts.map(alert => ({ id: alert.entityId, kind: "integrity" as const, label: alert.code.replaceAll("_", " "), status: alert.severity, responsibleRole: alert.ownerRole, evidence: alert.evidence })),
+      ...documentIntegrityAlerts,
     ], eventsLast30Days: eventRows, interactionsLast30Days: interactionRows.length }, now);
   }),
 });

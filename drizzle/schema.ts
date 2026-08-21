@@ -104,6 +104,7 @@ export const commercialProjectSettings = mysqlTable("commercial_project_settings
   resortId: int("resortId").notNull().references(() => resorts.id).unique(),
   cancellationPolicy: text("cancellationPolicy"),
   requiredCaptureFields: text("requiredCaptureFields"),
+  requiredContractDocuments: text("requiredContractDocuments"),
   commercialRoles: text("commercialRoles"),
   commissionPolicy: text("commissionPolicy"),
   updatedByUserId: int("updatedByUserId").references(() => users.id),

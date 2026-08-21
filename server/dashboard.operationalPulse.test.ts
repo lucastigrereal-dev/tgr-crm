@@ -29,10 +29,14 @@ describe("dashboard.operationalPulse", () => {
       [{ actorUserId: 9 }, { actorUserId: 11 }],
       [{ id: 99 }, { id: 100 }],
       [], [], [], [],
+      [{ contract: { id: 10, number: "CTR-DOC", status: "active" }, customerName: "Catarina", resortId: 2, captureCreatedAt: new Date("2026-08-01T12:00:00Z") }],
+      [{ contractId: 10, category: "Contrato assinado" }],
+      [{ resortId: 2, requiredContractDocuments: '["Contrato assinado", "RG / CPF"]' }],
     ];
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sourceRows.shift() ?? [])) } as never);
     const pulse = await appRouter.createCaller(context()).dashboard.operationalPulse();
-    expect(pulse.exceptions.map(item => item.id)).toEqual(["installment-1", "maintenance-3", "task-2", "waitlist-4"]);
+    expect(pulse.exceptions.map(item => item.id)).toEqual(["installment-1", "maintenance-3", "task-2", "waitlist-4", "integrity-10"]);
+    expect(pulse.exceptions.find(item => item.id === "integrity-10")).toEqual(expect.objectContaining({ responsible: "Contratos", description: expect.stringContaining("RG / CPF") }));
     expect(pulse.adoption).toEqual({ eventsLast30Days: 2, activeOperators: 2, interactionsLast30Days: 2 });
   });
 });
