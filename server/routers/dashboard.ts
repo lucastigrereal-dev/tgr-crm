@@ -63,7 +63,7 @@ export const dashboardRouter = router({
       db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users),
     ]);
-    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end);
+    const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end, input?.campaignId);
     const names = { campaigns: new Map(campaignRows.map(item => [item.id, item.name])), users: new Map(userRows.map(item => [item.id, item.name || item.email || `Usuário #${item.id}`])) };
     return {
       metrics: calculateConversionMetrics(captures),

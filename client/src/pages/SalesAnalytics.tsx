@@ -22,9 +22,10 @@ const percent = (value: number) => `${value.toLocaleString("pt-BR", { maximumFra
 export default function SalesAnalytics() {
   const [startDate, setStartDate] = useState(() => iso(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [endDate, setEndDate] = useState(() => iso(new Date()));
-  const [dimension, setDimension] = useState<Dimension>("campaigns");
-  const input = useMemo(() => ({ startDate, endDate }), [startDate, endDate]);
+  const [dimension, setDimension] = useState<Dimension>("campaigns"); const [campaign, setCampaign] = useState("all");
+  const input = useMemo(() => ({ startDate, endDate, campaignId: campaign === "all" ? undefined : Number(campaign) }), [startDate, endDate, campaign]);
   const analytics = trpc.dashboard.salesRoomConversion.useQuery(input, { refetchInterval: 30_000, refetchOnWindowFocus: true });
+  const campaignOptions = trpc.dashboard.commercialCharts.useQuery(useMemo(() => ({ startDate, endDate }), [startDate, endDate]));
   const metrics = analytics.data?.metrics;
   const funnel = metrics ? [
     { label: "Captadas", value: metrics.captures, color: "#c7a35a" },
@@ -39,7 +40,7 @@ export default function SalesAnalytics() {
 
   return <div className="space-y-7">
     <PageHeader eyebrow="Inteligência comercial" title="Análise de conversão" description="Enxerga o caminho inteiro: captação, chegada, tour, sem-tour e oportunidade ganha. Onde a conversão morre, o TGR-CRM aponta sem passar pano." />
-    <Card className="border-[#e8e1d4] bg-[#fcfbf7]"><CardContent className="flex flex-col gap-4 p-5 xl:flex-row xl:items-end xl:justify-between"><div className="grid gap-3 sm:grid-cols-2"><div className="grid gap-2"><Label htmlFor="conversion-start">Início</Label><Input id="conversion-start" type="date" value={startDate} max={endDate} onChange={event => setStartDate(event.target.value)} /></div><div className="grid gap-2"><Label htmlFor="conversion-end">Fim</Label><Input id="conversion-end" type="date" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)} /></div></div><div className="flex items-center gap-2 text-xs text-muted-foreground"><CalendarRange className="h-4 w-4 text-[#b18f4b]" />Atualização automática a cada 30 segundos.</div></CardContent></Card>
+    <Card className="border-[#e8e1d4] bg-[#fcfbf7]"><CardContent className="flex flex-col gap-4 p-5 xl:flex-row xl:items-end xl:justify-between"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><div className="grid gap-2"><Label htmlFor="conversion-start">Início</Label><Input id="conversion-start" type="date" value={startDate} max={endDate} onChange={event => setStartDate(event.target.value)} /></div><div className="grid gap-2"><Label htmlFor="conversion-end">Fim</Label><Input id="conversion-end" type="date" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)} /></div><div className="grid gap-2"><Label>Campanha</Label><Select value={campaign} onValueChange={setCampaign}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todas as campanhas</SelectItem>{campaignOptions.data?.campaigns.map(item => <SelectItem key={item.id} value={String(item.id)}>{item.name}</SelectItem>)}</SelectContent></Select></div></div><div className="flex items-center gap-2 text-xs text-muted-foreground"><CalendarRange className="h-4 w-4 text-[#b18f4b]" />Atualização automática a cada 30 segundos.</div></CardContent></Card>
 
     <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5"><MetricCard label="Captações" value={metrics?.captures ?? "—"} detail="Fichas no recorte" icon={ContactRound} tone="dark" /><MetricCard label="Chegada" value={metrics ? percent(metrics.arrivalRate) : "—"} detail="Chegaram ÷ agendadas" icon={UserRoundCheck} tone="sage" /><MetricCard label="Tour" value={metrics ? percent(metrics.tourRate) : "—"} detail="Apresentaram ÷ chegaram" icon={Presentation} tone="cream" /><MetricCard label="Conversão" value={metrics ? percent(metrics.closeRate) : "—"} detail="Ganhos ÷ apresentações" icon={Trophy} tone="gold" /><MetricCard label="Sem-tour" value={metrics ? percent(metrics.noTourRate) : "—"} detail="Sem-tour ÷ agendadas" icon={CircleX} tone="cream" /></section>
 

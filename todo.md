@@ -166,3 +166,4 @@
 - [ ] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.
 - [ ] Ampliar o contrato do dashboard com filtros governados de empreendimento, campanha, sala, equipe e status, preservando drill-down e permissões.
 - [x] Adicionar filtro governado de campanha ao funil, drill-down e PDF executivo do dashboard, com contrato único no backend.
+- [x] Adicionar filtro governado de campanha à análise da sala, cobrindo captação, chegada, tour, sem-tour e conversão.

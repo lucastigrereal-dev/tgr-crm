@@ -70,9 +70,9 @@ export function buildConversionBreakdown(input: { captures: ConversionCapture[];
   return Array.from(buckets.entries()).map(([id, rows]) => ({ id, label: labelOf(id), ...calculateConversionMetrics(rows) })).sort((left, right) => right.captures - left.captures || left.label.localeCompare(right.label, "pt-BR"));
 }
 
-export function filterConversionCaptures(captures: ConversionCapture[], start: Date, end: Date) {
+export function filterConversionCaptures(captures: ConversionCapture[], start: Date, end: Date, campaignId?: number) {
   return captures.filter(capture => {
     const reference = capture.scheduledAt ?? capture.createdAt;
-    return reference >= start && reference < end;
+    return reference >= start && reference < end && (!campaignId || capture.campaignId === campaignId);
   });
 }
