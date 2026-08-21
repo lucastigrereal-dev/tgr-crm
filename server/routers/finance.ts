@@ -11,10 +11,23 @@ import { buildInstallmentCommissions } from "../commissionAutomation";
 import { parseCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 import { buildPersistableRevenueProjection } from "../revenueQualityProjection";
+import { buildFinancialPortfolioScorecards } from "../financialPortfolioScorecard";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
 export const financeRouter = router({
+  portfolioScorecards: financeProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return [];
+    const [assignmentRows, installmentRows, ownerRows] = await Promise.all([
+      db.select().from(financialPortfolioAssignments).where(isNull(financialPortfolioAssignments.endsAt)),
+      db.select().from(installments),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+    ]);
+    const names = new Map(ownerRows.map(owner => [owner.id, owner.name || owner.email || `Usuário #${owner.id}`]));
+    return buildFinancialPortfolioScorecards(assignmentRows.map(assignment => ({ contractId: assignment.contractId, ownerUserId: assignment.ownerUserId, startsAt: assignment.startsAt })), installmentRows.map(installment => ({ contractId: installment.contractId, amount: installment.amount, status: installment.status, paidAt: installment.paidAt }))).map(scorecard => ({ ...scorecard, ownerName: names.get(scorecard.ownerUserId) || `Usuário #${scorecard.ownerUserId}` }));
+  }),
+
   portfolioCandidates: financeProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
