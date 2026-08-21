@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, captureRecords, commercialProjectSettings, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, salesCampaigns, salesCommissions } from "../../drizzle/schema";
+import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, salesCampaigns, salesCommissions } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
@@ -9,10 +9,35 @@ import { getCollectionStage } from "../domain";
 import { buildCampaignDre } from "../financeDre";
 import { buildInstallmentCommissions } from "../commissionAutomation";
 import { parseCommissionPolicy } from "../projectPolicy";
+import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
 export const financeRouter = router({
+  revenueQuality: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const contractRows = await db.select().from(contracts).where(input?.contractId ? eq(contracts.id, input.contractId) : undefined).limit(input?.contractId ? 1 : 300);
+    if (!contractRows.length) return [];
+    const contractIds = contractRows.map(contract => contract.id);
+    const [installmentRows, commissionRows, cancellationRows] = await Promise.all([
+      db.select().from(installments).where(inArray(installments.contractId, contractIds)),
+      db.select().from(salesCommissions).where(inArray(salesCommissions.contractId, contractIds)),
+      db.select().from(contractCancellationRequests).where(inArray(contractCancellationRequests.contractId, contractIds)),
+    ]);
+    return contractRows.map(contract => {
+      const cancellation = cancellationRows.filter(row => row.contractId === contract.id).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
+      const facts = buildRevenueQualityLedger({
+        contract: { id: contract.id, totalAmount: contract.totalAmount, status: contract.status },
+        installments: installmentRows.filter(row => row.contractId === contract.id).map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, status: row.status })),
+        commissions: commissionRows.filter(row => row.contractId === contract.id).map(row => ({ id: row.id, amount: row.amount, status: row.status, lifecycleStatus: row.lifecycleStatus, sourceInstallmentId: row.sourceInstallmentId })),
+        cancellation: cancellation ? { status: cancellation.status } : null,
+        policyVersion: "tgr-derived-ledger/v1",
+      });
+      return { contractId: contract.id, contractNumber: contract.number, policyVersion: "tgr-derived-ledger/v1", summary: summarizeRevenueQualityLedger(facts), facts };
+    });
+  }),
+
   installments: financeProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
