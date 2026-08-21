@@ -59,7 +59,16 @@ describe("dashboard.funnelDetails", () => {
     const caller = appRouter.createCaller(financeContext());
     const recorte = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", resortId: 11, salesRoom: "Sala Azul", presentationStatus: "presented" });
     const etapaAntiga = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", resortId: 11, presentationStatus: "scheduled" });
+    const outraEquipe = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", sellerId: 2, resortId: 11, salesRoom: "Sala Azul", presentationStatus: "presented" });
     expect(recorte.map(item => item.opportunity.id)).toEqual([1]);
     expect(etapaAntiga).toEqual([]);
+    expect(outraEquipe).toEqual([]);
+  });
+
+  it("mantém o dashboard restrito a perfis internos", async () => {
+    const externalContext = financeContext();
+    externalContext.user = { ...externalContext.user!, role: "user" };
+    const caller = appRouter.createCaller(externalContext);
+    await expect(caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

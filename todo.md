@@ -164,7 +164,7 @@
 - [x] Criar configuração comercial por projeto para regras de distrato, campos obrigatórios, papéis de corretor/captador e divisão de comissão.
 - [x] Tornar a ficha de captação e o cálculo de comissão parametrizáveis por configuração de projeto, sem alterar código a cada operação.
 - [x] Vincular a captação ao empreendimento operacional para aplicar regras comerciais por projeto sem depender apenas da campanha.
-- [ ] Ampliar o contrato do dashboard principal com filtros governados de empreendimento, sala, equipe e status, preservando drill-down e permissões.
+- [x] Ampliar o contrato do dashboard principal com filtros governados de empreendimento, sala, equipe e status, preservando drill-down e permissões.
 - [x] Adicionar filtro governado de campanha ao funil, drill-down e PDF executivo do dashboard, com contrato único no backend.
 - [x] Adicionar filtro governado de campanha à análise da sala, cobrindo captação, chegada, tour, sem-tour e conversão.
 - [x] Adicionar filtros de empreendimento e sala à análise de conversão, com opções derivadas da base real e prova de recorte no backend.
@@ -174,7 +174,7 @@
 - [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
 - [x] Adicionar filtro por status operacional à análise de conversão, distinguindo captada, agendada, chegada, apresentação, encerrada e sem-tour.
 - [x] Expandir a torre por exceção com captação sem desfecho, proposta sem próximo passo, entrada não recebida, comissão sem conciliação e distrato aguardando decisão.
-- [ ] Adicionar testes integrados do dashboard principal provando os filtros de empreendimento, sala, equipe e status com drill-down e permissões preservados.
+- [x] Adicionar testes integrados do dashboard principal provando os filtros de empreendimento, sala, equipe e status com drill-down e permissões preservados.
 - [x] Testar o drill-down do dashboard principal com ficha mais recente, empreendimento, sala e status, impedindo duplicidade de oportunidade.
 - [x] Validar visualmente a Home/Torre de Comando com filtros transversais além de campanha.
 - [x] Adicionar filtro de status operacional à Home/Torre de Comando, reaproveitando o contrato analítico da sala e o drill-down.
