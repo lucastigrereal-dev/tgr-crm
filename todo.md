@@ -188,9 +188,9 @@
 - [x] Adicionar testes ricos do distrato: execução única aprovada, preservação de parcelas/comissões pagas, cancelamento das abertas e rollback em falha intermediária.
 - [x] Registrar multa/retenção e reembolso previstos pelo distrato em lançamentos financeiros auditáveis.
 - [ ] Expor aprovação/rejeição humana de solicitação de distrato na ficha do contrato e provar o ciclo completo até execução única.
-- [ ] Executar pesquisa comparativa de vanguarda em multipropriedade, CRM, ERP, vendas consultivas e gestão de performance profissional.
-- [ ] Modelar matriz de eventos, indicadores e cruzamentos por captador, consultor, liner, fechador/FTB, gerente de sala e operação financeira.
-- [ ] Projetar torre de transparência comercial com ranking, previsão de comissão/borderô, risco de cancelamento e gargalos por pessoa, sala, campanha e empreendimento.
+- [x] Executar pesquisa comparativa de vanguarda em multipropriedade, CRM, ERP, vendas consultivas e gestão de performance profissional.
+- [x] Modelar matriz de eventos, indicadores e cruzamentos por captador, consultor, liner, fechador/FTB, gerente de sala e operação financeira.
+- [x] Projetar torre de transparência comercial com ranking, previsão de comissão/borderô, risco de cancelamento e gargalos por pessoa, sala, campanha e empreendimento.
 - [ ] Definir laboratório seguro com dados fictícios descartáveis para testar fluxo de casal, venda, comissão, distrato e leitura gerencial antes de uso operacional.
 - [x] Extrair requisitos verificáveis e referências do Wave Research e do PRD de handoff recebidos.
 - [ ] Criar scorecards auditáveis por captador, qualificador, consultor/liner, fechador/FTB, gerente de sala e financeiro.
