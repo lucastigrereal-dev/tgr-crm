@@ -4,9 +4,10 @@ type OpportunityMetric = { stage: string; expectedAmount: string | number; selle
 type GoalMetric = { sellerId: number; sellerName: string | null; targetAmount: string | number; targetContracts: number; monthReference: Date | string };
 type CaptureLinkMetric = { opportunityId: number | null; createdAt: Date };
 
-export function latestCaptureByOpportunity<T extends CaptureLinkMetric>(captures: T[]) {
+export function latestCaptureByOpportunity<T extends CaptureLinkMetric>(captures?: T[] | null) {
   const selected = new Map<number, T>();
-  for (const capture of captures) {
+  const rows = Array.isArray(captures) ? captures : [];
+  for (const capture of rows) {
     if (!capture.opportunityId) continue;
     const current = selected.get(capture.opportunityId);
     if (!current || capture.createdAt.getTime() > current.createdAt.getTime()) selected.set(capture.opportunityId, capture);
