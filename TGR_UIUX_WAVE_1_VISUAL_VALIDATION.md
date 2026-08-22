@@ -1,6 +1,6 @@
 # TGR-CRM — Validação Visual da Wave 1
 
-**Telas verificadas:** Torre de Comando (`/`) e Central de Comissões (`/comissoes`) em 1440 × 1000, com estado de base vazia.
+**Telas verificadas:** Torre de Comando (`/`) e Central de Comissões (`/comissoes`) em 1440 × 1000, além de Torre e Sala de Vendas (`/sala-de-vendas`) em 390 × 844, com estado de base vazia.
 
 | Critério | Resultado | Evidência observada | Próximo aperto |
 |---|---|---|---|
@@ -11,5 +11,14 @@
 | Estados vazios | Aprovado com ressalva | Cada vazio explica a ausência e sugere a ação que o alimenta; não inventa dados. | Incluir scaffolds discretos de gráfico/tabela para reduzir sensação de tela vazia. |
 | Acento e marca | Aprovado | Verde profundo sustenta autoridade; dourado conduz seleção e ênfase. | Reduzir usos decorativos do dourado em páginas futuras. |
 | Acessibilidade visual | Aprovado no recorte | Navegação ativa não depende apenas de cor e estados textuais continuam legíveis. | Validar teclado, foco, contraste e mobile em uma rodada dedicada. |
+| Sala de Vendas desktop | Aprovado | Fila, espera, chegada e tour se organizam como colunas operacionais com contagem e ação próxima. | Validar coluna preenchida em laboratório isolado. |
+| Sala de Vendas mobile | Aprovado | Métricas e fila se tornam sequência vertical; data e atualização ficam acessíveis sem barra lateral. | Em dados reais, priorizar cards por urgência para reduzir rolagem. |
+| Torre mobile | Aprovado com ressalva | Filtros, recorte salvo, métrica e exceção preservam legibilidade em uma coluna. | Criar modo compacto de filtros com resumo/aplicação para encurtar o primeiro bloco. |
+| Ficha contratual desktop | Aprovado no estado vazio | A rota inexistente oferece retorno claro; a lista mantém CTA e estado vazio coerentes com o shell premium. | Validar pasta preenchida, carteira, parcelas, ledger e distrato em laboratório isolado. |
+| Ficha contratual mobile | Aprovado no estado vazio | CTA de criação e retorno mantêm largura, contraste e alcance adequados, sem dependência da sidebar. | Validar cronograma de parcelas e blocos financeiros preenchidos em base isolada. |
+
+## Limite de evidência desta onda
+
+O redesenho da ficha contratual foi aplicado e passou por TypeScript, Vitest e build. A base conectada não contém contratos e o TGR não deve fabricar casal, venda, parcelas ou distrato para compor prova visual. Portanto, o estado vazio e a rota inexistente foram revisados em desktop e mobile; a validação visual do painel **preenchido** fica deliberadamente condicionada ao laboratório isolado documentado em `E2E_OPERATIONAL_LAB.md`.
 
 > **Conclusão:** a Wave 1 estabeleceu uma casca operacional premium e coerente. A próxima onda não deve trocar estilo; deve aumentar densidade útil, elevar estados preenchidos e criar experiências mobile próprias para fila, alerta e decisão rápida.
