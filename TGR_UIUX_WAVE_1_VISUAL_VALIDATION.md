@@ -32,3 +32,14 @@ O redesenho da ficha contratual foi aplicado e passou por TypeScript, Vitest e b
 | Torre desktop | Aprovado | Campos, recortes salvos, atalhos temporais, comando e PDF se mantêm próximos da investigação sem formar mosaico de controles. | Aplicar toolbar equivalente às listas de Comercial, Financeiro e Comissões. |
 
 > **Validação técnica da Wave 2, corte Torre:** `pnpm check`, 56 arquivos/144 testes Vitest e `pnpm build` passaram. O aviso de chunk grande do build segue sendo oportunidade de code splitting, não falha de compilação.
+
+## Wave 2 — Central de Comissões
+
+| Critério | Resultado | Evidência observada | Próximo aperto |
+|---|---|---|---|
+| Recorte mobile | Aprovado | Ciclo e campanha passam a ser resumidos em bloco compacto, com abertura explícita do filtro para ajustar o borderô. | Validar recorte preenchido de campanha no laboratório isolado. |
+| Métricas de comissão | Aprovado | Valores mantêm tipografia tabular e separação de venda, lançado, recebido e pendente. | Incluir tendência/ritmo apenas quando houver série histórica real. |
+| Scorecards e carteira mobile | Aprovado no estado vazio | As seções mantêm explicação de origem e condição de alimentação sem fabricar ranking ou recuperação. | Validar linhas preenchidas e toque/expansão em base sintética isolada. |
+| Densidade desktop | Aprovado | Filtro, metas, placar e cartões econômicos preservam leitura em blocos de trabalho. | Aplicar a mesma hierarquia à lista comercial e à fila financeira. |
+
+> **Validação técnica da Wave 2, corte Comissões:** `pnpm check`, 56 arquivos/144 testes Vitest e `pnpm build` passaram após a alteração. A revisão visual foi realizada em 1440 × 1000 e 390 × 844.
