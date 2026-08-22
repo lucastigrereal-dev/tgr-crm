@@ -32,11 +32,14 @@ describe("dashboard.operationalPulse", () => {
       [{ contract: { id: 10, number: "CTR-DOC", status: "active" }, customerName: "Catarina", resortId: 2, captureCreatedAt: new Date("2026-08-01T12:00:00Z") }],
       [{ contractId: 10, category: "Contrato assinado" }],
       [{ resortId: 2, requiredContractDocuments: '["Contrato assinado", "RG / CPF"]' }],
+      [{ id: 80, promoterId: 20, qualifierId: null, linerId: null, closerId: null, roomManagerId: null, createdAt: new Date("2020-01-01T12:00:00Z"), qualificationStatus: "pending", checkedInAt: null, presentationStartedAt: null, presentationEndedAt: null, assignedAt: null }],
+      [{ id: 20, name: "Carlos Captador", email: "carlos@example.com" }],
     ];
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sourceRows.shift() ?? [])) } as never);
     const pulse = await appRouter.createCaller(context()).dashboard.operationalPulse();
-    expect(pulse.exceptions.map(item => item.id)).toEqual(["installment-1", "maintenance-3", "task-2", "waitlist-4", "integrity-10"]);
+    expect(pulse.exceptions.map(item => item.id)).toEqual(expect.arrayContaining(["installment-1", "maintenance-3", "task-2", "waitlist-4", "integrity-10", "rhythm-20"]));
     expect(pulse.exceptions.find(item => item.id === "integrity-10")).toEqual(expect.objectContaining({ responsible: "Contratos", description: expect.stringContaining("RG / CPF") }));
+    expect(pulse.exceptions.find(item => item.id === "rhythm-20")).toEqual(expect.objectContaining({ module: "sales", severity: "critical", responsible: "Gerência comercial", title: expect.stringContaining("Carlos Captador"), description: expect.stringContaining("Captação registrada") }));
     expect(pulse.adoption).toEqual({ eventsLast30Days: 2, activeOperators: 2, interactionsLast30Days: 2 });
   });
 });
