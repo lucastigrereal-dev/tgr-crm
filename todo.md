@@ -204,7 +204,7 @@
 - [x] Projetar alertas de ritmo por profissional e por gerente: dias sem avanço, ausência de follow-up, meta em risco e recuperação de performance.
 - [x] Persistir atribuição de qualificador e gerente de sala na ficha, com auditoria e uso futuro em scorecards.
 - [x] Implementar visão de receita e comissão por qualidade: previsto, confirmado, em risco, inadimplente, distratado e estornado.
-- [ ] Modelar alertas de transparência para venda fantasma, duplicidade, desconto irregular, distorção de mesa, documentação pendente e comissão sem lastro.
+- [x] Modelar alertas de transparência para venda fantasma, duplicidade, desconto irregular, distorção de mesa, documentação pendente e comissão sem lastro.
 - [ ] Implementar W1.1: ledger derivado de qualidade da receita por contrato, parcela, comissão e distrato, com versões de política e origem rastreável.
 - [x] Criar migração segura para versões de política comercial e fatos append-only de qualidade de receita.
 - [ ] Persistir projeções idempotentes do ledger a partir de contrato, parcela, comissão e distrato, preservando evento-fonte e versão da regra.
