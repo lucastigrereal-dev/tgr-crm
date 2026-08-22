@@ -22,3 +22,13 @@
 O redesenho da ficha contratual foi aplicado e passou por TypeScript, Vitest e build. A base conectada não contém contratos e o TGR não deve fabricar casal, venda, parcelas ou distrato para compor prova visual. Portanto, o estado vazio e a rota inexistente foram revisados em desktop e mobile; a validação visual do painel **preenchido** fica deliberadamente condicionada ao laboratório isolado documentado em `E2E_OPERATIONAL_LAB.md`.
 
 > **Conclusão:** a Wave 1 estabeleceu uma casca operacional premium e coerente. A próxima onda não deve trocar estilo; deve aumentar densidade útil, elevar estados preenchidos e criar experiências mobile próprias para fila, alerta e decisão rápida.
+
+## Início da Wave 2 — Torre de Comando
+
+| Critério | Resultado | Evidência observada | Próximo aperto |
+|---|---|---|---|
+| Filtros mobile compactos | Aprovado | A tela de 390 px mostra período, resumo do recorte, botão de filtros e atalho do mês sem abrir sete campos no topo. | Validar o sheet de filtro com recortes preenchidos no laboratório isolado. |
+| Command bar contextual | Aprovado no recorte | Desktop expõe o atalho `⌘/Ctrl + K`; mobile abre o mesmo ponto de comando pelo ícone no resumo do recorte. | Expandir por módulos somente quando as ações tiverem rotas e permissão verificáveis. |
+| Torre desktop | Aprovado | Campos, recortes salvos, atalhos temporais, comando e PDF se mantêm próximos da investigação sem formar mosaico de controles. | Aplicar toolbar equivalente às listas de Comercial, Financeiro e Comissões. |
+
+> **Validação técnica da Wave 2, corte Torre:** `pnpm check`, 56 arquivos/144 testes Vitest e `pnpm build` passaram. O aviso de chunk grande do build segue sendo oportunidade de code splitting, não falha de compilação.
