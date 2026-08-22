@@ -212,3 +212,8 @@
 - [x] Exibir o ledger de qualidade na ficha do contrato, com VGV, caixa, exposição, comissão e reversões explicáveis.
 - [x] Declarar documentos contratuais obrigatórios por empreendimento e sinalizar na Torre apenas os contratos ativos que violem essa política.
 - [x] Cobrir W1.1 com testes de VGV bruto, caixa confirmado, comissão em risco e reversão sem apagar fatos históricos.
+- [x] Conduzir pesquisa profunda com 50 benchmarks de UI/UX para CRM, command center, vendas, finanças e hospitalidade premium.
+- [x] Definir design system TGR de alta densidade operacional com hierarquia, navegação, estados, alertas e responsividade.
+- [ ] Redesenhar a primeira onda de telas críticas: Torre de Comando, Central de Comissões, Sala de Vendas e ficha contratual.
+- [ ] Validar visualmente os fluxos críticos em desktop e mobile antes de expandir o novo padrão pelo sistema.
+- [x] Instituir protocolo: cada nova wave de produto deve começar com deep research, fontes verificáveis, síntese de decisão e critérios de validação antes da implementação.

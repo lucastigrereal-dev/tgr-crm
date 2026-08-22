@@ -52,10 +52,10 @@
   --chart-3: oklch(0.49 0.05 175);
   --chart-4: oklch(0.8 0.05 135);
   --chart-5: oklch(0.6 0.07 50);
-  --radius: 0.85rem;
-  --background: oklch(0.975 0.007 90);
+  --radius: 0.625rem;
+  --background: oklch(0.972 0.006 90);
   --foreground: oklch(0.25 0.027 165);
-  --card: oklch(0.995 0.004 95);
+  --card: oklch(0.992 0.004 95);
   --card-foreground: oklch(0.25 0.027 165);
   --popover: oklch(0.995 0.004 95);
   --popover-foreground: oklch(0.25 0.027 165);
@@ -115,6 +115,10 @@
 @layer components {
   .container { width: 100%; margin-left: auto; margin-right: auto; padding-left: 1rem; padding-right: 1rem; }
   .flex { min-height: 0; min-width: 0; }
+  .tgr-page-divider { @apply border-b border-[#ded8cc]; }
+  .tgr-data-label { @apply text-[10px] font-bold uppercase tracking-[0.14em] text-[#69716b]; }
+  .tgr-focus-ring { @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b18f4b] focus-visible:ring-offset-2; }
+  .tgr-table-row { @apply border-b border-[#ebe6dc] transition-colors hover:bg-[#faf8f2]; }
   @media (min-width: 640px) { .container { padding-left: 1.5rem; padding-right: 1.5rem; } }
   @media (min-width: 1024px) { .container { padding-left: 2rem; padding-right: 2rem; max-width: 1280px; } }
 }
