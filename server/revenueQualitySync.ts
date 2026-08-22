@@ -10,7 +10,7 @@ const POLICY_VERSION = "tgr-derived-ledger/v1";
  * Recalcula a projeção derivada de um contrato depois que a fonte transacional
  * foi persistida. O índice único de fingerprint torna novas execuções seguras.
  */
-export async function syncRevenueQualityForContract(input: { contractId: number; actorUserId: number; trigger: string }) {
+export async function syncRevenueQualityForContract(input: { contractId: number; actorUserId: number | null; trigger: string }) {
   const db = await getDb();
   if (!db) throw new Error("Banco indisponível para sincronização do ledger.");
   const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];

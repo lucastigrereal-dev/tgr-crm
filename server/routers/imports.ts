@@ -25,8 +25,9 @@ export const importsRouter = router({
   errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length }; }),
   latestBatch: adminProcedure.query(async () => { const db = await getDb(); if (!db) return null; const batch = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); if (!batch[0]) return null; const itemCount = await db.select().from(csvImportItems).where(eq(csvImportItems.batchId, batch[0].id)); return { ...batch[0], itemCount: itemCount.length, canUndo: batch[0].status === "completed" }; }),
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
-    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const csv = canonicalCsv(input); const parsed = parse(input.kind, csv); const issues: ImportIssue[] = [...parsed.issues];
+    if (issues.length) return { valid: false, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(parsed.records.length, 0, 0, issues) };
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     if (input.kind === "customers") {
       const rows = parseCustomersCsv(csv).records; const documents = rows.map(row => row.documentNumber).filter(Boolean); const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : []; const existingByDocument = new Map(existing.map(item => [item.documentNumber, item]));
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [], summary: importSummary(rows.length, 0, 0, issues) };

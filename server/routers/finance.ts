@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
+import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, paymentGatewayCustomers, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
 import { financeProcedure } from "./access";
@@ -12,6 +12,7 @@ import { parseCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 import { buildFinancialPortfolioScorecards } from "../financialPortfolioScorecard";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
+import { asaasBillingType, billingExternalReference, createAsaasCustomer, createAsaasPayment, findAsaasPaymentsByReference, getAsaasConfig, getAsaasIdentificationField, getAsaasPixQrCode } from "../paymentGateway";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 
@@ -122,6 +123,11 @@ export const financeRouter = router({
       .orderBy(desc(billingRecords.createdAt)).limit(300);
   }),
 
+  gatewayStatus: financeProcedure.query(() => {
+    const config = getAsaasConfig();
+    return { provider: "asaas" as const, configured: Boolean(config), baseUrl: config?.baseUrl || null, webhookConfigured: Boolean(config?.webhookToken) };
+  }),
+
   simulateRenegotiation: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), proposedAmount: z.coerce.number().positive(), proposedDueDate: z.string().date() })).query(async ({ input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const installment = (await db.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1))[0]; if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
@@ -138,11 +144,48 @@ export const financeRouter = router({
     await recordAudit(ctx.user.id, "installment_renegotiation", id, "created", `Acordo proposto para parcela ${installment.sequence}.`); await recordDomainEvent({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: installment.id, proposedAmount: input.proposedAmount } }); return { id };
   }),
 
-  registerBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix", "card", "transfer"]), amount: z.coerce.number().positive(), dueDate: z.string().date(), externalReference: z.string().trim().max(255).optional().nullable(), digitableLine: z.string().trim().max(255).optional().nullable(), pixCopyPaste: z.string().trim().max(4000).optional().nullable() }))
+  issueGatewayBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix"]) }))
     .mutation(async ({ ctx, input }) => {
+      const config = getAsaasConfig();
+      if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Gateway Asaas não configurado. Defina ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN antes de emitir." });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const created = await db.insert(billingRecords).values({ ...input, amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate), externalReference: input.externalReference || `TSE-${input.installmentId}-${Date.now()}`, digitableLine: input.digitableLine || null, pixCopyPaste: input.pixCopyPaste || null, status: "generated", generatedAt: new Date() }).$returningId();
+      const row = (await db.select({ installment: installments, contract: contracts, customer: customers }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(installments.id, input.installmentId)).limit(1))[0];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
+      if (["paid", "cancelled"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga ou cancelada." });
+      const existing = (await db.select({ billing: billingRecords }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.gatewayProvider, "asaas"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).orderBy(desc(billingRecords.createdAt)).limit(1))[0];
+      if (existing?.billing.gatewayPaymentId) return { id: existing.billing.id, gatewayPaymentId: existing.billing.gatewayPaymentId, reused: true };
+
+      const cpfCnpj = (row.customer.documentNumber || "").replace(/\\D/g, "");
+      if (![11, 14].includes(cpfCnpj.length)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Cadastre um CPF ou CNPJ válido no associado antes de emitir a cobrança." });
+      const externalCustomerReference = `TGR-CRM-CUSTOMER-${row.customer.id}`;
+      let gatewayCustomerId = (await db.select({ gatewayCustomerId: paymentGatewayCustomers.gatewayCustomerId }).from(paymentGatewayCustomers).where(and(eq(paymentGatewayCustomers.customerId, row.customer.id), eq(paymentGatewayCustomers.gatewayProvider, "asaas"))).limit(1))[0]?.gatewayCustomerId;
+      if (!gatewayCustomerId) {
+        const remoteCustomer = await createAsaasCustomer(config, { name: row.customer.fullName, email: row.customer.email || null, mobilePhone: row.customer.phone || null, cpfCnpj, externalReference: externalCustomerReference });
+        gatewayCustomerId = remoteCustomer.id;
+        await db.insert(paymentGatewayCustomers).values({ customerId: row.customer.id, gatewayProvider: "asaas", gatewayCustomerId }).onDuplicateKeyUpdate({ set: { gatewayCustomerId, updatedAt: new Date() } });
+      }
+
+      const externalReference = billingExternalReference(input.installmentId);
+      const expectedBillingType = asaasBillingType(input.type);
+      const existingRemote = (await findAsaasPaymentsByReference(config, externalReference)).data?.find(item => item.externalReference === externalReference && item.billingType === expectedBillingType);
+      const payment = existingRemote || await createAsaasPayment(config, { customer: gatewayCustomerId, billingType: expectedBillingType, value: Number(row.installment.amount), dueDate: new Date(row.installment.dueDate).toISOString().slice(0, 10), description: `TGR-CRM · ${row.contract.number} · parcela ${row.installment.sequence}`, externalReference });
+      const identification = input.type === "boleto" ? await getAsaasIdentificationField(config, payment.id) : null;
+      const pix = input.type === "pix" ? await getAsaasPixQrCode(config, payment.id) : null;
+      const created = await db.insert(billingRecords).values({ installmentId: input.installmentId, type: input.type, status: "generated", gatewayProvider: "asaas", gatewayPaymentId: payment.id, gatewayStatus: payment.status || "PENDING", amount: row.installment.amount, dueDate: row.installment.dueDate, externalReference, digitableLine: identification?.identificationField || null, pixCopyPaste: pix?.payload || null, pixQrCodeBase64: pix?.encodedImage || null, invoiceUrl: payment.invoiceUrl || null, bankSlipUrl: payment.bankSlipUrl || null, generatedAt: new Date() }).$returningId();
+      const id = created[0]?.id;
+      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Cobrança criada no gateway, mas não foi persistida no CRM." });
+      await recordAudit(ctx.user.id, "billing_record", id, "gateway_issued", `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.`);
+      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "billing_record", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: payment.id, type: input.type } });
+      return { id, gatewayPaymentId: payment.id, reused: false };
+    }),
+
+  registerBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix", "card", "transfer"]), amount: z.coerce.number().positive(), dueDate: z.string().date(), externalReference: z.string().trim().max(255).optional().nullable(), digitableLine: z.string().trim().max(255).optional().nullable(), pixCopyPaste: z.string().trim().max(4000).optional().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      if (["boleto", "pix"].includes(input.type)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PIX e boleto precisam ser emitidos pelo gateway configurado; o registro manual foi bloqueado para evitar cobrança fictícia." });
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+      const created = await db.insert(billingRecords).values({ ...input, gatewayProvider: "manual", amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate), externalReference: input.externalReference || `TSE-${input.installmentId}-${Date.now()}`, digitableLine: null, pixCopyPaste: null, status: "generated", generatedAt: new Date() }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a cobrança." });
       await recordAudit(ctx.user.id, "billing_record", id, "registered", `Cobrança ${input.type} registrada.`);

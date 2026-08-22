@@ -109,13 +109,13 @@
 - [x] Implementar importação CSV segura de empreendimentos e unidades com validação, prévia, recibo e reversão auditável.
 - [x] Criar módulo dedicado de campanhas, metas e playbooks com visão gerencial e ações administrativas.
 - [x] Aplicar TGR-CRM como nome de trabalho na navegação e identificação visível do sistema.
-- [ ] Preparar emissão de boleto e PIX por gateway nos contratos, sem simular cobrança antes da conexão segura.
+- [x] Preparar emissão de boleto e PIX por gateway nos contratos, sem simular cobrança antes da conexão segura. Adaptador Asaas, emissão protegida, idempotência por referência externa e webhook foram versionados; credenciais de produção continuam externas.
 - [x] Adicionar dashboard visual de progresso de metas em tempo real à Central de Campanhas.
 - [x] Destacar e ampliar o acesso aos modelos CSV de associados, contratos e unidades na Central de Importação.
 - [x] Produzir matriz comparativa entre TGR-CRM e a referência TSE enviada, com cobertura, lacunas, riscos e plano priorizado.
 - [x] Migrar para domínio do TGR-CRM a comissão proporcional por parcela de entrada, calendário de fechamento e borderô executivo.
-- [ ] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
-- [ ] Implementar painel de recepção em tempo real estrito para chegada, mesa, liner, fechador e cronômetro de tour.
+- [x] Implementar distrato com e sem multa e reversão auditável de impactos financeiros e de comissão.
+- [x] Implementar painel de recepção em tempo real estrito para chegada, mesa, liner, fechador e cronômetro de tour. SSE autenticado foi adicionado com fallback de polling de 5 segundos.
 - [x] Implementar captação offline-first com fila local, sincronização, deduplicação e resolução de conflito.
 - [x] Criar fila persistida da ficha de captação no navegador, com hash de deduplicação, estado de sincronização e recuperação explícita de conflito.
 - [x] Implementar estados de recepção da captação: chegada, mesa, liner, fechador, início/fim de apresentação e sem-tour.
@@ -135,7 +135,7 @@
 - [x] Implementar painel de recepção com atualização automática por polling a cada 5 segundos, mesa, liner, fechador e cronômetro de tour.
 - [x] Cobrir regras e procedimentos da recepção com testes de router usando banco simulado.
 - [x] Adicionar teste da consulta `receptionQueue` para filtros, ordenação e exclusão de estados encerrados.
-- [ ] Executar jornada de recepção contra banco isolado ou E2E real: fila → chegada → mesa/equipe → início → fim/sem-tour.
+- [ ] Executar jornada de recepção contra banco isolado ou E2E real: fila → chegada → mesa/equipe → início → fim/sem-tour. O teste estrito e o seed/cleanup estão prontos; falta rodar com `E2E_STRICT=1` e `E2E_DATABASE_URL`.
 - [x] Definir métricas auditáveis de conversão entre captação, chegada, tour, sem-tour, encerramento e oportunidade comercial.
 - [x] Implementar leitura analítica de conversão por campanha, promotor, liner, fechador e período.
 - [x] Criar visão gerencial de conversão da sala com filtros, funil e evidências por etapa.
@@ -150,9 +150,9 @@
 - [x] Implementar calendário de fechamento de comissão e borderô executivo com valores previstos, liberados, travados e cancelados.
 - [x] Integrar a baixa real de parcela de contrato à geração idempotente de comissão proporcional por papel e ao lifecycle do borderô.
 - [x] Aplicar regra FTB como papel exclusivo de Front Back, impedindo acúmulo indevido de liner e fechador na mesma venda.
-- [ ] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
-- [ ] Criar solicitação de distrato com simulação congelada, aprovação humana auditável e execução transacional posterior.
-- [ ] Executar somente distratos aprovados: cancelar contrato, travar parcelas abertas e reverter comissões não pagas em uma transação auditável.
+- [x] Modelar distrato com e sem multa, incluindo impactos em contrato, parcelas pagas/abertas e comissões vinculadas.
+- [x] Criar solicitação de distrato com simulação congelada, aprovação humana auditável e execução transacional posterior.
+- [x] Executar somente distratos aprovados: cancelar contrato, travar parcelas abertas e reverter comissões não pagas em uma transação auditável.
 - [x] Auditar integralmente os arquivos técnicos e documentais enviados do TSE, separando requisitos lícitos, cobertura atual e lacunas funcionais.
 - [x] Pesquisar benchmarks públicos de multipropriedade brasileira, operação comercial, customer success, captação e gestão de carteira.
 - [x] Diagnosticar filtros, cruzamentos de dados, custos, financeiro, administração, relatórios e dashboards necessários para o TGR operar como sistema central.
@@ -187,7 +187,8 @@
 - [x] Permitir revisão/edição e reenvio individual de ficha offline em conflito, com teste de recuperação ponta a ponta da fila local.
 - [x] Adicionar testes ricos do distrato: execução única aprovada, preservação de parcelas/comissões pagas, cancelamento das abertas e rollback em falha intermediária.
 - [x] Registrar multa/retenção e reembolso previstos pelo distrato em lançamentos financeiros auditáveis.
-- [ ] Expor aprovação/rejeição humana de solicitação de distrato na ficha do contrato e provar o ciclo completo até execução única.
+- [x] Expor aprovação/rejeição humana de solicitação de distrato na ficha do contrato.
+- [ ] Provar o ciclo completo de distrato na interface até execução única em E2E autenticado; o backend transacional e os testes de eventos já estão prontos.
 - [x] Executar pesquisa comparativa de vanguarda em multipropriedade, CRM, ERP, vendas consultivas e gestão de performance profissional.
 - [x] Modelar matriz de eventos, indicadores e cruzamentos por captador, consultor, liner, fechador/FTB, gerente de sala e operação financeira.
 - [x] Projetar torre de transparência comercial com ranking, previsão de comissão/borderô, risco de cancelamento e gargalos por pessoa, sala, campanha e empreendimento.
@@ -214,12 +215,14 @@
 - [x] Cobrir W1.1 com testes de VGV bruto, caixa confirmado, comissão em risco e reversão sem apagar fatos históricos.
 - [x] Conduzir pesquisa profunda com 50 benchmarks de UI/UX para CRM, command center, vendas, finanças e hospitalidade premium.
 - [x] Definir design system TGR de alta densidade operacional com hierarquia, navegação, estados, alertas e responsividade.
-- [ ] Redesenhar a primeira onda de telas críticas: Torre de Comando, Central de Comissões, Sala de Vendas e ficha contratual.
-- [ ] Validar visualmente os fluxos críticos em desktop e mobile antes de expandir o novo padrão pelo sistema.
+- [x] Redesenhar a primeira onda de telas críticas: Torre de Comando, Central de Comissões, Sala de Vendas e ficha contratual. Wave 1 foi aplicada e versionada nos commits `2b2ece7` e `f17d271`.
+- [x] Validar visualmente os fluxos críticos em desktop e mobile antes de expandir o novo padrão pelo sistema nos estados disponíveis; estados preenchidos continuam condicionados ao laboratório isolado da Wave 4.
 - [x] Instituir protocolo: cada nova wave de produto deve começar com deep research, fontes verificáveis, síntese de decisão e critérios de validação antes da implementação.
 - [x] Consolidar plano de expansão do TGR-CRM por wave, impacto, dependências, evidências e critério de aceite.
 - [x] Executar Wave 2 de experiência operacional: filtros compactos mobile, command bar e densidade de listas/tabelas críticas.
-- [ ] Executar Wave 3 de transparência econômica: carteira, exceções de receita e rotas de ação por risco.
-- [ ] Executar Wave 4 de laboratório isolado para cenários preenchidos de recepção, contrato, comissão e distrato.
-- [ ] Preparar Wave 5 de inteligência governada e integrações reais, condicionada a dados limpos, credenciais e infraestrutura adequada.
+- [x] Executar Wave 3 de transparência econômica: carteira, exceções de receita e rotas de ação por risco. Scorecards, ledger de qualidade, Torre de exceções e rotas operacionais estão ativos.
+- [x] Preparar Wave 4 de laboratório isolado para cenários preenchidos de recepção, contrato, comissão e distrato: scripts de seed/limpeza, E2E estrito e contrato configurável estão versionados.
+- [ ] Executar Wave 4 em ambiente com `E2E_STRICT=1`, `E2E_DATABASE_URL` e dados preenchidos, incluindo o ciclo de distrato.
+- [x] Preparar Wave 5 de inteligência governada e integrações reais, condicionada a dados limpos, credenciais e infraestrutura adequada. Governança documental, adaptador Asaas, webhook idempotente e contratos de configuração estão versionados.
+- [ ] Ativar e homologar integrações externas com credenciais reais e infraestrutura de produção.
 - [x] Após cada evolução validada, criar checkpoint e sincronizar o repositório privado `lucastigrereal-dev/tgr-crm`, registrando bloqueio de autenticação sem forçar credenciais.

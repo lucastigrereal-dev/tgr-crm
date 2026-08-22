@@ -15,7 +15,7 @@ export function buildCommercialIntegrityAlerts(input: CommercialIntegrityInput):
     if (["pending", "approved"].includes(commission.status) && commission.sourceInstallmentId && commission.sourceInstallmentStatus !== "paid") alerts.push({ code: "commission_without_entry", severity: commission.status === "approved" ? "critical" : "high", entityType: "contract", entityId: commission.contractId, ownerRole: "finance", evidence: `Comissão ${commission.id} de R$ ${commission.amount.toFixed(2)} está ${commission.status} sem parcela-fonte paga.` });
   });
   input.proposals.forEach(proposal => {
-    if (proposal.discountPercent > proposal.allowedDiscountPercent && proposal.approvalStatus !== "approved") alerts.push({ code: "discount_without_approval", severity: "high", entityType: "proposal", entityId: proposal.id, ownerRole: "sales_manager", evidence: `Desconto de ${proposal.discountPercent}% excede alçada de ${proposal.allowedDiscountPercent}% sem aprovação válida.` });
+    if (proposal.discountPercent > 0 && (proposal.discountPercent > proposal.allowedDiscountPercent || proposal.approvalStatus === "pending")) alerts.push({ code: "discount_without_approval", severity: "high", entityType: "proposal", entityId: proposal.id, ownerRole: "sales_manager", evidence: `Desconto de ${proposal.discountPercent}% excede alçada de ${proposal.allowedDiscountPercent}% ou aguarda decisão administrativa.` });
   });
   input.contracts.forEach(contract => {
     if (contract.approvedDocuments < contract.requiredDocuments) alerts.push({ code: "missing_contract_documents", severity: "high", entityType: "contract", entityId: contract.id, ownerRole: "contracts", evidence: `${contract.approvedDocuments}/${contract.requiredDocuments} documentos obrigatórios aprovados.` });

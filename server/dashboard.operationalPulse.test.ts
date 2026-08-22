@@ -13,7 +13,7 @@ function context(): TrpcContext {
 
 function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, unknown>;
-  for (const method of ["from", "innerJoin", "leftJoin", "where", "orderBy"]) promise[method] = () => promise;
+  for (const method of ["from", "innerJoin", "leftJoin", "where", "orderBy", "limit"]) promise[method] = () => promise;
   return promise;
 }
 

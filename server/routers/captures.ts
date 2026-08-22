@@ -8,6 +8,7 @@ import { receptionProcedure, salesProcedure } from "./access";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
 import { getProjectCaptureReadiness } from "../projectPolicy";
 import { activeRoomStatuses, assertReceptionAction, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
+import { publishSalesRoomEvent } from "../realtime";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
 const optionalShort = z.string().trim().max(255).optional().nullable();
@@ -160,6 +161,7 @@ export const capturesRouter = router({
     if (result.taskId) await recordAudit(ctx.user.id, "task", result.taskId, "created", `Acompanhamento de captação criado para ficha ${result.captureId}.`);
     await recordDomainEvent({ eventName: "capture.created", aggregateType: "capture", aggregateId: result.captureId, actorUserId: ctx.user.id, payload: { customerId: result.customerId, campaignId: input.campaignId ?? null, qualificationStatus: input.qualificationStatus } });
     if (result.opportunityId) await recordDomainEvent({ eventName: "opportunity.created", aggregateType: "opportunity", aggregateId: result.opportunityId, actorUserId: ctx.user.id, payload: { customerId: result.customerId, stage: input.qualificationStatus === "qualified" ? "qualified" : "new", campaignId: input.campaignId ?? null } });
+    publishSalesRoomEvent({ type: "capture.created", captureId: result.captureId, salesRoom: input.salesRoom });
     return result;
   }),
 
@@ -169,6 +171,7 @@ export const capturesRouter = router({
     await db.update(captureRecords).set({ presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), noTourReason: nullIfBlank(input.noTourReason), checkedInAt: input.presentationStatus === "checked_in" ? new Date() : undefined }).where(eq(captureRecords.id, input.id));
     await recordAudit(ctx.user.id, "capture", input.id, "status_updated", `Captação atualizada para ${input.presentationStatus}.`);
     await recordDomainEvent({ eventName: "capture.status.updated", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus ?? null } });
+    publishSalesRoomEvent({ type: "capture.status.updated", captureId: input.id });
     return { success: true };
   }),
 
@@ -195,6 +198,7 @@ export const capturesRouter = router({
     await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
     await recordAudit(ctx.user.id, "capture", input.id, "checked_in", "Chegada confirmada pela recepção.");
     await recordDomainEvent({ eventName: "capture.checked_in", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom } });
+    publishSalesRoomEvent({ type: "capture.checked_in", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, checkedInAt };
   }),
 
@@ -205,6 +209,7 @@ export const capturesRouter = router({
     await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
     await recordAudit(ctx.user.id, "capture", input.id, "room_assigned", `Mesa ${input.salesTable} e equipe da sala atribuídas.`);
     await recordDomainEvent({ eventName: "capture.room.assigned", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: input.salesTable, linerId: input.linerId ?? null, closerId: input.closerId ?? null, roomManagerId: input.roomManagerId ?? null } });
+    publishSalesRoomEvent({ type: "capture.room.assigned", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, assignedAt };
   }),
 
@@ -215,6 +220,7 @@ export const capturesRouter = router({
     await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(eq(captureRecords.id, input.id));
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_started", `Apresentação iniciada na mesa ${capture.salesTable}.`);
     await recordDomainEvent({ eventName: "capture.presentation.started", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable } });
+    publishSalesRoomEvent({ type: "capture.presentation.started", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, presentationStartedAt };
   }),
 
@@ -226,6 +232,7 @@ export const capturesRouter = router({
     await db.update(captureRecords).set({ presentationStatus: "closed", presentationEndedAt }).where(eq(captureRecords.id, input.id));
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_ended", `Apresentação concluída e encerrada após ${durationMinutes} minutos.`);
     await recordDomainEvent({ eventName: "capture.presentation.ended", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable, durationMinutes } });
+    publishSalesRoomEvent({ type: "capture.presentation.ended", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, presentationEndedAt, durationMinutes };
   }),
 
@@ -236,6 +243,7 @@ export const capturesRouter = router({
     await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
     await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
     await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: input.reason } });
+    publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, endedAt };
   }),
 });

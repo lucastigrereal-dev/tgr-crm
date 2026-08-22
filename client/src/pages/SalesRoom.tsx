@@ -46,6 +46,14 @@ export default function SalesRoom() {
   const operators = selectors.data?.sellers ?? [];
 
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.EventSource === "undefined") return;
+    const source = new window.EventSource(`/api/realtime/sales-room?date=${encodeURIComponent(date)}`);
+    const refreshFromRealtime = () => { void utils.captures.receptionQueue.invalidate({ date }); };
+    const eventTypes = ["capture.created", "capture.checked_in", "capture.room.assigned", "capture.presentation.started", "capture.presentation.ended", "capture.no_tour", "capture.status.updated"];
+    eventTypes.forEach(type => source.addEventListener(type, refreshFromRealtime));
+    return () => { eventTypes.forEach(type => source.removeEventListener(type, refreshFromRealtime)); source.close(); };
+  }, [date, utils]);
   const refresh = () => { utils.captures.receptionQueue.invalidate(); utils.captures.list.invalidate(); };
   const checkIn = trpc.captures.checkIn.useMutation({ onSuccess: () => { toast.success("Chegada registrada. Agora a recepção manda o casal para a mesa."); refresh(); }, onError: error => toast.error(error.message) });
   const assignRoom = trpc.captures.assignRoom.useMutation({ onSuccess: () => { toast.success("Mesa, time e gerente de sala atribuídos."); refresh(); }, onError: error => toast.error(error.message) });

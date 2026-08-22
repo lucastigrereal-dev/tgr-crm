@@ -34,3 +34,15 @@ O endpoint de webhook aceitará somente o header `asaas-access-token` correspond
 5. [Asaas — Introdução a Webhooks](https://docs.asaas.com/docs/sobre-os-webhooks)
 6. [Asaas — Criar nova cobrança](https://docs.asaas.com/reference/criar-nova-cobranca)
 7. [Asaas — Criar novo cliente](https://docs.asaas.com/reference/criar-novo-cliente)
+
+## Implementação versionada
+
+O adaptador está em `server/paymentGateway.ts`, a emissão protegida está exposta em `finance.issueGatewayBilling` e o webhook está disponível em `POST /api/webhooks/asaas`. O fluxo só emite PIX ou boleto quando `ASAAS_API_KEY` e `ASAAS_WEBHOOK_TOKEN` estão configurados; sem essas variáveis, o CRM retorna pré-condição não atendida e não cria cobrança fictícia.
+
+Variáveis esperadas no ambiente:
+
+- `ASAAS_API_KEY`: chave privada da conta Asaas.
+- `ASAAS_API_URL`: URL da API, com `https://api.asaas.com` como padrão; use a URL de sandbox quando homologar.
+- `ASAAS_WEBHOOK_TOKEN`: segredo comparado ao header `asaas-access-token`.
+
+O webhook registra o ID do evento antes de aplicar efeitos, rejeita token inválido, atualiza cobrança e parcela apenas em `PAYMENT_RECEIVED`/`PAYMENT_CONFIRMED`, e atualiza apenas o estado da cobrança em `PAYMENT_OVERDUE`. A baixa confirmada grava lançamento financeiro, dispara auditoria, sincroniza o ledger e evita duplicidade de comissão por parcela-fonte.

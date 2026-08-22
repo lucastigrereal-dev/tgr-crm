@@ -36,3 +36,9 @@ Validar a cadeia completa de operação e inteligência sem inserir dados artifi
 ## Condição atual
 
 O projeto já tem scripts e E2Es estritos, mas esta sessão não dispõe de `E2E_DATABASE_URL`. Portanto, este protocolo está pronto para execução, porém **nenhum seed será disparado até haver banco descartável isolado**. Isso é uma decisão de segurança, não pendência esquecida.
+
+## Execução após a atualização
+
+A suíte estrita permanece opt-in para impedir que dados de produção sejam usados por acidente. Para homologação, configure um banco descartável em `E2E_DATABASE_URL`, execute o seed, inicie o servidor e rode `E2E_STRICT=1 pnpm exec playwright test e2e/strict-isolated.spec.ts`. O cenário de distrato da interface é habilitado adicionalmente por `E2E_CANCELLATION_CONTRACT_ID`, apontando para um contrato criado exclusivamente no laboratório; ao final, execute o cleanup.
+
+O cenário da Sala de Vendas cobre fila, chegada, mesa/equipe, início, encerramento e sem-tour contra MySQL isolado. O cenário de distrato cobre solicitação, aprovação, execução única e verificação do status no banco. Nenhum cenário deve receber CPF, telefone ou cliente real.

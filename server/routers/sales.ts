@@ -124,6 +124,8 @@ export const salesRouter = router({
   updateOpportunity: salesProcedure.input(z.object({ id: z.number().int().positive(), data: opportunityInput })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const previous = (await db.select({ stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, input.id)).limit(1))[0];
+    if (!previous) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade não encontrada." });
     await db.update(opportunities).set({
       ...input.data,
       expectedAmount: input.data.expectedAmount.toFixed(2),
@@ -133,7 +135,7 @@ export const salesRouter = router({
       closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
     }).where(eq(opportunities.id, input.id));
     await recordAudit(ctx.user.id, "opportunity", input.id, "updated", `Oportunidade atualizada para ${input.data.stage}.`);
-    await recordDomainEvent({ eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: input.id, actorUserId: ctx.user.id, payload: { campaignId: input.data.campaignId ?? null, stage: input.data.stage, expectedAmount: input.data.expectedAmount } });
+    await recordDomainEvent({ eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: input.id, actorUserId: ctx.user.id, payload: { campaignId: input.data.campaignId ?? null, previousStage: previous.stage, stage: input.data.stage, expectedAmount: input.data.expectedAmount } });
     return { success: true };
   }),
 

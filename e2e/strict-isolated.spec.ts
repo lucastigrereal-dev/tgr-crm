@@ -88,3 +88,21 @@ test.describe("homologação isolada estrita", () => {
     expect(noTour).toMatchObject({ presentationStatus: "no_tour", noTourReason: "Casal desistiu da apresentação no teste isolado." });
   });
 });
+
+  test("solicita, aprova e executa distrato uma única vez", async ({ page }) => {
+    const contractId = process.env.E2E_CANCELLATION_CONTRACT_ID;
+    test.skip(!contractId, "Requer E2E_CANCELLATION_CONTRACT_ID apontando para contrato descartável.");
+    await page.goto(`/contratos/${contractId}`);
+    await page.getByRole("button", { name: "Solicitar revisão de distrato" }).click();
+    await page.getByPlaceholder("Motivo documentado do distrato").fill("Distrato solicitado no laboratório isolado.");
+    await page.getByRole("button", { name: "Enviar para aprovação" }).click();
+    await expect(page.getByText(/Solicitação #/)).toBeVisible();
+    await page.getByRole("button", { name: "Aprovar" }).click();
+    await expect(page.getByRole("button", { name: "Executar distrato aprovado" })).toBeVisible();
+    await page.getByRole("button", { name: "Executar distrato aprovado" }).click();
+    await expect(page.getByText("Distrato aprovado executado com trilha auditável.")).toBeVisible();
+    const db = await mysql.createConnection(dbUrl!);
+    const [rows] = await db.execute("SELECT status FROM contracts WHERE id=?", [Number(contractId)]);
+    await db.end();
+    expect((rows as Array<{ status: string }>)[0]?.status).toBe("cancelled");
+  });

@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, savedAnalysisViews, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposalDiscountApprovals, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, savedAnalysisViews, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
@@ -28,6 +28,46 @@ function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const end = input?.endDate ? new Date(`${input.endDate}T00:00:00Z`) : fallback.end;
   if (end <= start) throw new Error("O fim do período precisa ser posterior ao início.");
   return { start, end: input?.endDate ? new Date(end.getTime() + 86_400_000) : end };
+}
+
+function normalized(value: string | null | undefined) { return (value || "").replace(/\\D/g, ""); }
+
+function buildDuplicateCandidates(rows: Array<{ id: number; phone: string | null; documentNumber: string | null }>) {
+  const byKey = new Map<string, Array<number>>();
+  rows.forEach(row => {
+    const document = normalized(row.documentNumber);
+    const phone = normalized(row.phone);
+    if (document.length >= 8) byKey.set(`document:${document}`, [...(byKey.get(`document:${document}`) || []), row.id]);
+    if (phone.length >= 8) byKey.set(`phone:${phone}`, [...(byKey.get(`phone:${phone}`) || []), row.id]);
+  });
+  const byCustomer = new Map<number, { fields: Set<string>; confidence: "high" | "probable" }>();
+  byKey.forEach((ids, key) => {
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length < 2) return;
+    const [field, value] = key.split(":");
+    uniqueIds.forEach(customerId => {
+      const current = byCustomer.get(customerId) || { fields: new Set<string>(), confidence: "probable" as const };
+      current.fields.add(field === "document" ? "documento idêntico" : "telefone idêntico");
+      if (field === "document") current.confidence = "high";
+      byCustomer.set(customerId, current);
+    });
+  });
+  return Array.from(byCustomer, ([customerId, item]) => ({ customerId, matchingFields: Array.from(item.fields), confidence: item.confidence }));
+}
+
+function buildReopenedOpportunities(rows: Array<{ aggregateId: string; payload: string | null }>) {
+  const reopenCount = new Map<number, number>();
+  rows.forEach(row => {
+    const id = Number(row.aggregateId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    try {
+      const payload = JSON.parse(row.payload || "{}") as { previousStage?: string; stage?: string };
+      if (["won", "lost"].includes(payload.previousStage || "") && payload.stage && payload.stage !== payload.previousStage) reopenCount.set(id, (reopenCount.get(id) || 0) + 1);
+    } catch {
+      // Eventos antigos sem payload estruturado não viram acusação.
+    }
+  });
+  return Array.from(reopenCount, ([id, count]) => ({ id, reopenCount: count }));
 }
 
 // Toda leitura executiva usa intervalo explícito para manter filtros, exports e futuros agentes de IA na mesma verdade temporal.
@@ -132,7 +172,7 @@ export const dashboardRouter = router({
   operationalPulse: internalProcedure.query(async () => {
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
-    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows, rhythmCaptureRows, userRows] = await Promise.all([
+    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows, rhythmCaptureRows, userRows, customerRows, opportunityEventRows, discountApprovalRows] = await Promise.all([
       db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)),
       db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt),
       db.select().from(unitMaintenanceBlocks).orderBy(desc(unitMaintenanceBlocks.startsAt)),
@@ -148,8 +188,17 @@ export const dashboardRouter = router({
       db.select().from(commercialProjectSettings),
       db.select().from(captureRecords),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+      db.select({ id: customers.id, phone: customers.phone, documentNumber: customers.documentNumber }).from(customers).limit(2000),
+      db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents).where(eq(domainEvents.eventName, "opportunity.updated")).orderBy(desc(domainEvents.occurredAt)).limit(3000),
+      db.select({ approval: proposalDiscountApprovals, proposal: proposals }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).where(eq(proposalDiscountApprovals.status, "pending")).orderBy(desc(proposalDiscountApprovals.createdAt)).limit(500),
     ]);
-    const integrityAlerts = buildCommercialIntegrityAlerts({ commissions: commissionRows.map(row => ({ id: row.commission.id, contractId: row.commission.contractId ?? 0, amount: Number(row.commission.amount), status: row.commission.status, sourceInstallmentId: row.commission.sourceInstallmentId, sourceInstallmentStatus: row.sourceInstallmentStatus })), proposals: [], contracts: [], duplicateCandidates: [], opportunities: [] });
+    const integrityAlerts = buildCommercialIntegrityAlerts({
+      commissions: commissionRows.map(row => ({ id: row.commission.id, contractId: row.commission.contractId ?? 0, amount: Number(row.commission.amount), status: row.commission.status, sourceInstallmentId: row.commission.sourceInstallmentId, sourceInstallmentStatus: row.sourceInstallmentStatus })),
+      proposals: discountApprovalRows.map(row => ({ id: row.proposal.id, discountPercent: Number(row.approval.discountPercent), allowedDiscountPercent: Number(row.approval.discountPercent), approvalStatus: row.approval.status === "cancelled" ? "pending" : row.approval.status })),
+      contracts: [],
+      duplicateCandidates: buildDuplicateCandidates(customerRows),
+      opportunities: buildReopenedOpportunities(opportunityEventRows),
+    });
     const settingsByResort = new Map(settingsRows.map(row => [row.resortId, parseRequiredContractDocuments(row.requiredContractDocuments)]));
     const documentsByContract = new Map<number, Set<string>>();
     for (const document of documentRows) { const categories = documentsByContract.get(document.contractId) || new Set<string>(); categories.add(document.category); documentsByContract.set(document.contractId, categories); }
