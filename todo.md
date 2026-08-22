@@ -201,6 +201,9 @@
 - [x] Implementar alertas gerenciais de inatividade e ritmo por papel comercial, com período, evidência, responsável e rota de ação.
 - [x] Criar ranking operacional acionável por captador, qualificador, liner, fechador/FTB, gerente e carteira financeira.
 - [x] Adicionar filtros salvos e compartilháveis para análises recorrentes de mesa, equipe, campanha, risco e coorte.
+- [x] Preservar no backend todos os campos históricos da ficha de captação, incluindo casal, filhos, renda, veículo, cartão, moradia, viagens, origem e observações.
+- [x] Expor `captures.profileAnalysis` com filtros combináveis por perfil, busca textual em todos os campos, completude, médias e agrupamentos por carro, cidade, filhos, qualificação e época de viagem.
+- [x] Adicionar índices de localização, carro, campos numéricos de perfil e viagem para sustentar análise histórica de longo prazo.
 - [x] Pesquisar e definir mecânicas de motivação comercial baseadas em VGV líquido, qualidade da venda, progresso de meta e reconhecimento justo.
 - [x] Projetar alertas de ritmo por profissional e por gerente: dias sem avanço, ausência de follow-up, meta em risco e recuperação de performance.
 - [x] Persistir atribuição de qualificador e gerente de sala na ficha, com auditoria e uso futuro em scorecards.

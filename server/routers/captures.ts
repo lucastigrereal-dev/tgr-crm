@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like, lt, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
@@ -137,6 +137,39 @@ export const capturesRouter = router({
     if (input.campaignId) conditions.push(eq(captureRecords.campaignId, input.campaignId));
     if (input.resortId) conditions.push(eq(captureRecords.resortId, input.resortId));
     if (input.presentationStatus) conditions.push(eq(captureRecords.presentationStatus, input.presentationStatus));
+    if (input.city) conditions.push(eq(customers.city, input.city));
+    if (input.state) conditions.push(eq(customers.state, input.state));
+    if (input.salesRoom) conditions.push(eq(captureRecords.salesRoom, input.salesRoom));
+    if (input.captureLocation) conditions.push(like(captureRecords.captureLocation, `%${input.captureLocation}%`));
+    if (input.vehicleBrand) conditions.push(like(captureRecords.vehicleBrand, `%${input.vehicleBrand}%`));
+    if (input.vehicleModel) conditions.push(like(captureRecords.vehicleModel, `%${input.vehicleModel}%`));
+    if (input.relationshipStatus) conditions.push(eq(captureRecords.relationshipStatus, input.relationshipStatus));
+    if (input.travelSeason) conditions.push(like(captureRecords.usualTravelSeason, `%${input.travelSeason}%`));
+    if (input.qualificationStatus) conditions.push(eq(captureRecords.qualificationStatus, input.qualificationStatus));
+    if (input.vehicleYearMin !== undefined) conditions.push(gte(captureRecords.vehicleYear, input.vehicleYearMin));
+    if (input.vehicleYearMax !== undefined) conditions.push(lte(captureRecords.vehicleYear, input.vehicleYearMax));
+    if (input.childrenMin !== undefined) conditions.push(gte(captureRecords.childrenCount, input.childrenMin));
+    if (input.childrenMax !== undefined) conditions.push(lte(captureRecords.childrenCount, input.childrenMax));
+    if (input.incomeMin !== undefined) conditions.push(gte(captureRecords.averageIncome, input.incomeMin.toFixed(2)));
+    if (input.incomeMax !== undefined) conditions.push(lte(captureRecords.averageIncome, input.incomeMax.toFixed(2)));
+    if (input.hotelSpendMin !== undefined) conditions.push(gte(captureRecords.averageHotelSpend, input.hotelSpendMin.toFixed(2)));
+    if (input.hotelSpendMax !== undefined) conditions.push(lte(captureRecords.averageHotelSpend, input.hotelSpendMax.toFixed(2)));
+    if (input.travelWeeksMin !== undefined) conditions.push(gte(captureRecords.travelWeeksPerYear, input.travelWeeksMin.toFixed(1)));
+    if (input.travelWeeksMax !== undefined) conditions.push(lte(captureRecords.travelWeeksPerYear, input.travelWeeksMax.toFixed(1)));
+    if (input.hasCreditCard !== undefined) conditions.push(eq(captureRecords.hasCreditCard, input.hasCreditCard));
+    if (input.acceptsCheque !== undefined) conditions.push(eq(captureRecords.acceptsCheque, input.acceptsCheque));
+    if (input.ownsHome !== undefined) conditions.push(eq(captureRecords.ownsHome, input.ownsHome));
+    if (input.ownsPropertyInCity !== undefined) conditions.push(eq(captureRecords.ownsPropertyInCity, input.ownsPropertyInCity));
+    if (input.isPasserby !== undefined) conditions.push(eq(captureRecords.isPasserby, input.isPasserby));
+    if (input.search) {
+      const searchLike = `%${input.search}%`;
+      conditions.push(or(
+        like(customers.fullName, searchLike), like(customers.documentNumber, searchLike), like(customers.email, searchLike), like(customers.phone, searchLike), like(customers.city, searchLike), like(customers.state, searchLike),
+        like(captureRecords.lodgingLocation, searchLike), like(captureRecords.transportation, searchLike), like(captureRecords.partnerName, searchLike), like(captureRecords.partnerProfession, searchLike), like(captureRecords.relationshipStatus, searchLike), like(captureRecords.childrenNames, searchLike),
+        like(captureRecords.vehicleBrand, searchLike), like(captureRecords.vehicleModel, searchLike), like(captureRecords.creditCardBrands, searchLike), like(captureRecords.usualTravelSeason, searchLike), like(captureRecords.dreamTrips, searchLike), like(captureRecords.lastTrip, searchLike),
+        like(captureRecords.nextFamilyTrip, searchLike), like(captureRecords.socialNetworks, searchLike), like(captureRecords.giftDescription, searchLike), like(captureRecords.qualificationReason, searchLike), like(captureRecords.notes, searchLike), like(captureRecords.salesRoom, searchLike), like(captureRecords.captureLocation, searchLike),
+      ));
+    }
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns, resort: resorts, opportunity: opportunities }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
