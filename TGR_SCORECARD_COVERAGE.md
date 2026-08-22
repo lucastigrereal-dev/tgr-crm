@@ -6,9 +6,9 @@
 | Liner | `capture_records.linerId` | Ativo | Recebe crédito quando não é FTB. |
 | Fechador | `capture_records.closerId` | Ativo | Recebe crédito quando não é FTB. |
 | FTB | `linerId = closerId` | Ativo | Recebe um único crédito FTB; não soma liner + fechador. O captador continua creditado. |
-| Qualificador | Não há identificador próprio persistido | **Não instrumentado** | Não gerar ranking até existir atribuição explícita. |
-| Gerente de sala | Não há identificador próprio persistido | **Não instrumentado** | Não inferir gerente pela sala ou por usuário que apenas alterou estado. |
-| Financeiro | Há criador de lançamento, mas não dono de carteira/contrato | Parcial | Não usar `createdByUserId` como “responsável financeiro” sem regra de operação. |
+| Qualificador | `capture_records.qualifierId` | Ativo | Recebe crédito somente quando a qualificação está concluída e a ficha está vinculada ao resultado. |
+| Gerente de sala | `capture_records.roomManagerId` | Ativo | Recebe crédito por atribuição explícita de mesa; nunca por inferência do usuário que alterou estado. |
+| Financeiro | `financial_portfolio_assignments.ownerUserId` | Ativo | Recuperação só conta após o início da atribuição da carteira; criador de baixa não recebe crédito automático. |
 
 ## Decisão de governança
 
@@ -16,4 +16,4 @@
 
 ## Próxima migração segura
 
-A próxima evolução de scorecard deve acrescentar, à ficha de captação, `qualifierId` e `roomManagerId`, com trilha de auditoria em cada alteração. Para financeiro, o modelo deve declarar um **dono de carteira** no contrato ou parcela; o usuário que lançou uma baixa é operador, não necessariamente responsável pelo relacionamento de cobrança.
+A próxima evolução de scorecard deve ampliar os filtros de contexto (empreendimento, sala, campanha e coorte) e tornar metas por papel configuráveis. A atribuição de `qualifierId`, `roomManagerId` e dono de carteira financeira já está persistida, auditada e usada na leitura atual.
