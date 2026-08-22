@@ -77,7 +77,7 @@ export const customers = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("customers_name_idx").on(table.fullName), index("customers_document_idx").on(table.documentNumber)],
+  table => [index("customers_name_idx").on(table.fullName), index("customers_document_idx").on(table.documentNumber), index("customers_location_idx").on(table.state, table.city)],
 );
 
 export const customerDocuments = mysqlTable("customer_documents", {
@@ -246,6 +246,9 @@ export const captureRecords = mysqlTable(
     index("captures_campaign_status_idx").on(table.campaignId, table.presentationStatus),
     index("captures_room_status_idx").on(table.salesRoom, table.presentationStatus, table.scheduledAt),
     index("captures_opportunity_idx").on(table.opportunityId),
+    index("captures_vehicle_idx").on(table.vehicleBrand, table.vehicleModel, table.createdAt),
+    index("captures_profile_numeric_idx").on(table.childrenCount, table.averageIncome, table.createdAt),
+    index("captures_travel_idx").on(table.usualTravelSeason, table.travelWeeksPerYear, table.createdAt),
   ],
 );
 

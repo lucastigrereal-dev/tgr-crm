@@ -4,8 +4,9 @@ import { z } from "zod";
 import { captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
-import { receptionProcedure, salesProcedure } from "./access";
+import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
+import { buildCaptureProfileAnalytics, getProfileCompleteness, profileSearchText, type CaptureProfile } from "../captureSegmentation";
 import { getProjectCaptureReadiness } from "../projectPolicy";
 import { activeRoomStatuses, assertReceptionAction, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 import { publishSalesRoomEvent } from "../realtime";
@@ -74,6 +75,19 @@ const captureInput = z.object({
 function nullIfBlank(value?: string | null) { return value?.trim() ? value.trim() : null; }
 const clean = <T>(value: T | undefined | null) => value ?? null;
 const presentationStatuses = ["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"] as const;
+const profileAnalysisInput = z.object({
+  startDate: z.string().date().optional(), endDate: z.string().date().optional(), search: z.string().trim().max(180).optional(),
+  city: z.string().trim().max(120).optional(), state: z.string().trim().toUpperCase().max(2).optional(), salesRoom: z.string().trim().max(180).optional(),
+  captureLocation: z.string().trim().max(180).optional(), vehicleBrand: z.string().trim().max(100).optional(), vehicleModel: z.string().trim().max(120).optional(),
+  relationshipStatus: z.string().trim().max(64).optional(), travelSeason: z.string().trim().max(180).optional(), qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).optional(),
+  presentationStatus: z.enum(presentationStatuses).optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(),
+  vehicleYearMin: z.number().int().min(1900).max(2100).optional(), vehicleYearMax: z.number().int().min(1900).max(2100).optional(),
+  childrenMin: z.number().int().min(0).max(20).optional(), childrenMax: z.number().int().min(0).max(20).optional(),
+  incomeMin: z.number().min(0).optional(), incomeMax: z.number().min(0).optional(), hotelSpendMin: z.number().min(0).optional(), hotelSpendMax: z.number().min(0).optional(),
+  travelWeeksMin: z.number().min(0).max(52).optional(), travelWeeksMax: z.number().min(0).max(52).optional(),
+  hasCreditCard: z.boolean().optional(), acceptsCheque: z.boolean().optional(), ownsHome: z.boolean().optional(), ownsPropertyInCity: z.boolean().optional(), isPasserby: z.boolean().optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
 
 async function findCaptureOrThrow(id: number) {
   const db = await getDb();
@@ -112,6 +126,41 @@ export const capturesRouter = router({
       .where(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined)
       .orderBy(desc(captureRecords.createdAt)).limit(120);
     return rows.map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
+  }),
+
+  profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) return { summary: buildCaptureProfileAnalytics([]), rows: [], totalMatches: 0, truncated: false, filters: { cities: [], states: [], salesRooms: [], vehicleBrands: [], vehicleModels: [], travelSeasons: [], relationshipStatuses: [] } };
+    const conditions = [];
+    if (input.startDate) conditions.push(gte(captureRecords.createdAt, new Date(`${input.startDate}T00:00:00Z`)));
+    if (input.endDate) conditions.push(lt(captureRecords.createdAt, new Date(new Date(`${input.endDate}T00:00:00Z`).getTime() + 86_400_000)));
+    if (input.campaignId) conditions.push(eq(captureRecords.campaignId, input.campaignId));
+    if (input.resortId) conditions.push(eq(captureRecords.resortId, input.resortId));
+    if (input.presentationStatus) conditions.push(eq(captureRecords.presentationStatus, input.presentationStatus));
+    const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns, resort: resorts, opportunity: opportunities }).from(captureRecords)
+      .innerJoin(customers, eq(captureRecords.customerId, customers.id))
+      .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
+      .leftJoin(resorts, eq(captureRecords.resortId, resorts.id))
+      .leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id))
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(captureRecords.createdAt));
+    const profiles: CaptureProfile[] = rows.map(row => ({
+      id: row.capture.id, createdAt: row.capture.createdAt, customerName: row.customer.fullName, customerDocumentNumber: row.customer.documentNumber, customerEmail: row.customer.email, customerPhone: row.customer.phone,
+      city: row.customer.city, state: row.customer.state, resortId: row.capture.resortId, resortName: row.resort?.name ?? null, promoterId: row.capture.promoterId, qualifierId: row.capture.qualifierId, linerId: row.capture.linerId, closerId: row.capture.closerId, roomManagerId: row.capture.roomManagerId,
+      campaignId: row.capture.campaignId, campaignName: row.campaign?.name ?? null, salesRoom: row.capture.salesRoom, captureLocation: row.capture.captureLocation, lodgingLocation: row.capture.lodgingLocation, transportation: row.capture.transportation, isPasserby: row.capture.isPasserby,
+      scheduledAt: row.capture.scheduledAt, presentationStatus: row.capture.presentationStatus, qualificationStatus: row.capture.qualificationStatus, partnerName: row.capture.partnerName, partnerAge: row.capture.partnerAge, partnerProfession: row.capture.partnerProfession, relationshipStatus: row.capture.relationshipStatus,
+      relationshipYears: row.capture.relationshipYears, relationshipMonths: row.capture.relationshipMonths, childrenCount: row.capture.childrenCount, childrenNames: row.capture.childrenNames, averageIncome: row.capture.averageIncome === null ? null : Number(row.capture.averageIncome), vehicleBrand: row.capture.vehicleBrand, vehicleModel: row.capture.vehicleModel, vehicleYear: row.capture.vehicleYear,
+      hasCreditCard: row.capture.hasCreditCard, creditCardBrands: row.capture.creditCardBrands, acceptsCheque: row.capture.acceptsCheque, ownsHome: row.capture.ownsHome, ownsPropertyInCity: row.capture.ownsPropertyInCity, travelWeeksPerYear: row.capture.travelWeeksPerYear === null ? null : Number(row.capture.travelWeeksPerYear), usualTravelSeason: row.capture.usualTravelSeason,
+      dreamTrips: row.capture.dreamTrips, lastTrip: row.capture.lastTrip, averageHotelSpend: row.capture.averageHotelSpend === null ? null : Number(row.capture.averageHotelSpend), nextFamilyTrip: row.capture.nextFamilyTrip, socialNetworks: row.capture.socialNetworks, giftDescription: row.capture.giftDescription, qualificationReason: row.capture.qualificationReason, notes: row.capture.notes,
+      opportunityStage: row.opportunity?.stage ?? null, checkedInAt: row.capture.checkedInAt, presentationStartedAt: row.capture.presentationStartedAt,
+    }));
+    const normalizedSearch = input.search?.toLocaleLowerCase("pt-BR");
+    const filtered = profiles.filter(profile => {
+      const income = profile.averageIncome ?? -1; const hotelSpend = profile.averageHotelSpend ?? -1; const travelWeeks = profile.travelWeeksPerYear ?? -1; const vehicleYear = profile.vehicleYear ?? -1;
+      return (!normalizedSearch || profileSearchText(profile).includes(normalizedSearch)) && (!input.city || profile.city?.toLocaleLowerCase("pt-BR") === input.city.toLocaleLowerCase("pt-BR")) && (!input.state || profile.state === input.state) && (!input.salesRoom || profile.salesRoom === input.salesRoom) && (!input.captureLocation || profile.captureLocation?.toLocaleLowerCase("pt-BR").includes(input.captureLocation.toLocaleLowerCase("pt-BR"))) && (!input.vehicleBrand || profile.vehicleBrand?.toLocaleLowerCase("pt-BR").includes(input.vehicleBrand.toLocaleLowerCase("pt-BR"))) && (!input.vehicleModel || profile.vehicleModel?.toLocaleLowerCase("pt-BR").includes(input.vehicleModel.toLocaleLowerCase("pt-BR"))) && (!input.relationshipStatus || profile.relationshipStatus === input.relationshipStatus) && (!input.travelSeason || profile.usualTravelSeason?.toLocaleLowerCase("pt-BR").includes(input.travelSeason.toLocaleLowerCase("pt-BR"))) && (!input.qualificationStatus || profile.qualificationStatus === input.qualificationStatus) && (input.vehicleYearMin === undefined || vehicleYear >= input.vehicleYearMin) && (input.vehicleYearMax === undefined || vehicleYear <= input.vehicleYearMax) && (input.childrenMin === undefined || profile.childrenCount >= input.childrenMin) && (input.childrenMax === undefined || profile.childrenCount <= input.childrenMax) && (input.incomeMin === undefined || income >= input.incomeMin) && (input.incomeMax === undefined || income <= input.incomeMax) && (input.hotelSpendMin === undefined || hotelSpend >= input.hotelSpendMin) && (input.hotelSpendMax === undefined || hotelSpend <= input.hotelSpendMax) && (input.travelWeeksMin === undefined || travelWeeks >= input.travelWeeksMin) && (input.travelWeeksMax === undefined || travelWeeks <= input.travelWeeksMax) && (input.hasCreditCard === undefined || profile.hasCreditCard === input.hasCreditCard) && (input.acceptsCheque === undefined || profile.acceptsCheque === input.acceptsCheque) && (input.ownsHome === undefined || profile.ownsHome === input.ownsHome) && (input.ownsPropertyInCity === undefined || profile.ownsPropertyInCity === input.ownsPropertyInCity) && (input.isPasserby === undefined || profile.isPasserby === input.isPasserby);
+    });
+    const unique = (values: Array<string | null | undefined>) => Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim())))).sort((left, right) => left.localeCompare(right, "pt-BR"));
+    return { summary: buildCaptureProfileAnalytics(filtered), rows: filtered.slice(0, input.limit).map(profile => ({ ...profile, readiness: getProfileCompleteness(profile) })), totalMatches: filtered.length, truncated: filtered.length > input.limit, filters: { cities: unique(profiles.map(profile => profile.city)), states: unique(profiles.map(profile => profile.state)), salesRooms: unique(profiles.map(profile => profile.salesRoom)), vehicleBrands: unique(profiles.map(profile => profile.vehicleBrand)), vehicleModels: unique(profiles.map(profile => profile.vehicleModel)), travelSeasons: unique(profiles.map(profile => profile.usualTravelSeason)), relationshipStatuses: unique(profiles.map(profile => profile.relationshipStatus)) } };
   }),
 
   create: salesProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
