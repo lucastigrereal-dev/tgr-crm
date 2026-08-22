@@ -162,6 +162,13 @@
       "when": 1787355975454,
       "tag": "0022_blue_baron_zemo",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1787358947920,
+      "tag": "0023_thankful_spot",
+      "breakpoints": true
     }
   ]
 }

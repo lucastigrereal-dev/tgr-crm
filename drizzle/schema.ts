@@ -24,6 +24,21 @@ export const users = mysqlTable("users", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export const savedAnalysisViews = mysqlTable(
+  "saved_analysis_views",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    name: varchar("name", { length: 120 }).notNull(),
+    scope: mysqlEnum("scope", ["dashboard"]).default("dashboard").notNull(),
+    visibility: mysqlEnum("visibility", ["personal", "shared"]).default("personal").notNull(),
+    filtersJson: text("filtersJson").notNull(),
+    createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [index("saved_views_creator_idx").on(table.createdByUserId, table.scope), index("saved_views_visibility_idx").on(table.visibility, table.scope)],
+);
+
 export const salesCampaigns = mysqlTable("sales_campaigns", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 180 }).notNull(),

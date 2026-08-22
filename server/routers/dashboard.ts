@@ -1,6 +1,7 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, savedAnalysisViews, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
@@ -19,6 +20,7 @@ function monthBounds() {
 }
 
 const chartFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(), salesRoom: z.string().min(1).max(180).optional(), commercialRole: z.enum(["promoter", "liner", "closer"]).optional(), operatorId: z.number().int().positive().optional(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).optional() }).optional();
+const savedViewFilters = z.object({ startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(), salesRoom: z.string().min(1).max(180).optional(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).optional() });
 const funnelDetailsInput = z.object({ stage: z.enum(funnelStages), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), sellerId: z.number().int().positive().optional(), campaignId: z.number().int().positive().optional(), resortId: z.number().int().positive().optional(), salesRoom: z.string().min(1).max(180).optional(), commercialRole: z.enum(["promoter", "liner", "closer"]).optional(), operatorId: z.number().int().positive().optional(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).optional() });
 function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const fallback = monthBounds();
@@ -31,6 +33,27 @@ function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
 // Toda leitura executiva usa intervalo explícito para manter filtros, exports e futuros agentes de IA na mesma verdade temporal.
 
 export const dashboardRouter = router({
+  savedViews: internalProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const rows = await db.select().from(savedAnalysisViews).where(or(eq(savedAnalysisViews.createdByUserId, ctx.user.id), eq(savedAnalysisViews.visibility, "shared"))).orderBy(desc(savedAnalysisViews.updatedAt));
+    return rows.map(row => ({ ...row, filters: savedViewFilters.parse(JSON.parse(row.filtersJson)) }));
+  }),
+  saveView: internalProcedure.input(z.object({ name: z.string().trim().min(3).max(120), visibility: z.enum(["personal", "shared"]), filters: savedViewFilters })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const result = await db.insert(savedAnalysisViews).values({ name: input.name, visibility: input.visibility, filtersJson: JSON.stringify(input.filters), createdByUserId: ctx.user.id });
+    return { id: Number(result[0].insertId) };
+  }),
+  deleteSavedView: internalProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const row = (await db.select().from(savedAnalysisViews).where(eq(savedAnalysisViews.id, input.id)).limit(1))[0];
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Filtro salvo não encontrado." });
+    if (row.createdByUserId !== ctx.user.id && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só quem criou ou um administrador pode apagar este filtro." });
+    await db.delete(savedAnalysisViews).where(eq(savedAnalysisViews.id, input.id));
+    return { deleted: true };
+  }),
   summary: internalProcedure.query(async () => {
     const db = await getDb();
     if (!db) return { activeContracts: 0, overdueAmount: 0, occupancy: 0, salesThisMonth: 0, pendingTasks: 0, openEntries: 0 };
