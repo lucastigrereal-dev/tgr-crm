@@ -205,9 +205,9 @@
 - [x] Persistir atribuição de qualificador e gerente de sala na ficha, com auditoria e uso futuro em scorecards.
 - [x] Implementar visão de receita e comissão por qualidade: previsto, confirmado, em risco, inadimplente, distratado e estornado.
 - [x] Modelar alertas de transparência para venda fantasma, duplicidade, desconto irregular, distorção de mesa, documentação pendente e comissão sem lastro.
-- [ ] Implementar W1.1: ledger derivado de qualidade da receita por contrato, parcela, comissão e distrato, com versões de política e origem rastreável.
+- [x] Implementar W1.1: ledger derivado de qualidade da receita por contrato, parcela, comissão e distrato, com versões de política e origem rastreável.
 - [x] Criar migração segura para versões de política comercial e fatos append-only de qualidade de receita.
-- [ ] Persistir projeções idempotentes do ledger a partir de contrato, parcela, comissão e distrato, preservando evento-fonte e versão da regra.
+- [x] Persistir projeções idempotentes do ledger a partir de contrato, parcela, comissão e distrato, preservando evento-fonte e versão da regra.
 - [x] Vincular comissão manual ao contrato-fonte quando aplicável e sincronizar alterações de status no ledger auditável.
 - [x] Exibir o ledger de qualidade na ficha do contrato, com VGV, caixa, exposição, comissão e reversões explicáveis.
 - [x] Declarar documentos contratuais obrigatórios por empreendimento e sinalizar na Torre apenas os contratos ativos que violem essa política.
