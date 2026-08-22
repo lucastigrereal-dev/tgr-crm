@@ -2,7 +2,7 @@
 
 ## Comprovado nesta base
 
-O projeto executa checagem de tipos e **71 testes automatizados** de regras de domínio, permissões, CSV, funil, comissão, autenticação, reversão controlada, exportação, inventário, lista de espera, acompanhantes, segurança, integração, analytics e IA permissionada. O backend valida formato de importação, relatórios de erro, filtros comerciais, conversão da fila em reserva e check-in/check-out de acompanhantes sem depender do navegador.
+O projeto executa checagem de tipos e **144 testes automatizados** de regras de domínio, permissões, CSV, funil, comissão, autenticação, reversão controlada, exportação, inventário, lista de espera, acompanhantes, segurança, integração, analytics, IA permissionada, scorecards, ritmo profissional, carteira financeira, filtros salvos e ledger de qualidade de receita. O backend valida formato de importação, relatórios de erro, filtros comerciais, conversão da fila em reserva e check-in/check-out de acompanhantes sem depender do navegador.
 
 A reversão foi exercitada com uma infraestrutura de banco controlada: associados criados são removidos, associados atualizados recuperam o snapshot anterior, contratos importados são removidos junto das parcelas quando não há dependências, e documentos, reservas, tarefas, cobranças, lançamentos financeiros ou contratos dependentes bloqueiam a exclusão. A exportação filtrada possui contrato determinístico para etapa, dados da proposta, data e nome do arquivo, além de testes que comprovam a entrega dessas linhas aos escritores XLSX e PDF.
 
@@ -38,3 +38,7 @@ O protocolo completo de criação, execução e limpeza do banco descartável es
 O painel de sala atualmente consulta a fila a cada cinco segundos. Essa solução é deliberadamente segura e suficiente para a operação assistida, porém **não deve ser chamada de tempo real estrito**. SSE ou WebSocket exigem processo persistente em produção; no modo de hospedagem contínua do projeto, isso usa uma instância única de 1 vCPU e 512 MB, com custo de computação de até US$ 37,50/mês em utilização integral, descontado o crédito mensal de US$ 10 e acrescido somente de tráfego/armazenamento efetivamente usado. A mudança só deve ser habilitada com aceite explícito do responsável pela operação e publicação em hospedagem contínua.
 
 A emissão real de boleto e PIX permanece intencionalmente inativa até o cadastro seguro das credenciais do gateway Asaas e a definição de ambiente, chaves, política de webhook, idempotência e reconciliação. As tabelas de clientes e eventos de webhook já existem para suportar a integração, mas o TGR-CRM não cria boleto, QR Code ou cobrança falsa.
+
+## Ledger de qualidade de receita
+
+O ledger possui tabelas append-only, fingerprint idempotente, versão de política, API de leitura e card na ficha contratual. A projeção já é provada por contrato, parcela, comissão e distrato e pode ser sincronizada explicitamente pelo usuário autorizado na ficha do contrato. O gatilho automático a cada evento-fonte ainda é uma evolução pendente; a ação explícita evita escrita silenciosa ou projeção falsa enquanto essa integração transacional não estiver completa.
