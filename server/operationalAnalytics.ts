@@ -1,6 +1,6 @@
 export type OperationalExceptionSource = {
   id: number;
-  kind: "installment" | "task" | "maintenance" | "waitlist" | "capture" | "opportunity" | "cancellation" | "commission" | "integrity";
+  kind: "installment" | "task" | "maintenance" | "waitlist" | "capture" | "opportunity" | "cancellation" | "commission" | "integrity" | "rhythm";
   label: string;
   dueAt?: Date | null;
   status: string;
@@ -34,6 +34,7 @@ export function buildOperationalInsights(input: { exceptions: OperationalExcepti
     if (item.kind === "cancellation" && item.status === "requested") return [{ id: `cancellation-${item.id}`, severity: "attention", module: "governance", title: `Distrato aguardando decisão · ${item.label}`, description: "Aprovação humana pendente antes de qualquer efeito financeiro", responsible: item.responsibleUserName || item.responsibleRole || "Administração / financeiro", actionDueAt: item.dueAt }];
     if (item.kind === "commission" && item.status !== "paid" && item.status !== "cancelled" && item.dueAt && item.dueAt < now) return [{ id: `commission-${item.id}`, severity: "attention", module: "finance", title: `Comissão sem conciliação · ${item.label}`, description: `Pagamento previsto em ${item.dueAt.toLocaleDateString("pt-BR")}`, responsible: item.responsibleUserName || item.responsibleRole || "Financeiro / comissões", actionDueAt: item.dueAt }];
     if (item.kind === "integrity") return [{ id: `integrity-${item.id}`, severity: item.status === "critical" ? "critical" : "attention", module: item.responsibleRole === "finance" ? "finance" : "governance", title: `Integridade comercial · ${item.label}`, description: item.evidence || "Evidência registrada para revisão humana.", responsible: item.responsibleUserName || item.responsibleRole || "Governança comercial", actionDueAt: item.dueAt }];
+    if (item.kind === "rhythm") return [{ id: `rhythm-${item.id}`, severity: item.status === "critical" ? "critical" : "attention", module: "sales", title: `Ritmo operacional · ${item.label}`, description: item.evidence || "Sem evento recente no papel monitorado.", responsible: item.responsibleRole || "Gerência comercial", actionDueAt: item.dueAt }];
     return [];
   }).sort((a, b) => (a.severity === "critical" ? -1 : 1) - (b.severity === "critical" ? -1 : 1));
   return { exceptions, adoption: { eventsLast30Days: input.eventsLast30Days.length, activeOperators: new Set(input.eventsLast30Days.map(event => event.actorUserId).filter(Boolean)).size, interactionsLast30Days: input.interactionsLast30Days } };

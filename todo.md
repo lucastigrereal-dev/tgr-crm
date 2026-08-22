@@ -196,11 +196,11 @@
 - [ ] Criar scorecards auditáveis por captador, qualificador, consultor/liner, fechador/FTB, gerente de sala e financeiro.
 - [x] Modelar dono de carteira financeira por contrato, separado do usuário que lançou/baixou o movimento, para scorecard de cobrança e recuperação.
 - [ ] Implementar scorecard financeiro por carteira: contratos ativos, saldo em aberto, atraso, recuperado e taxa de regularização.
-- [ ] Registrar separação de produto: TGR-CRM operacional versus TGR Duolingo Vendas Blueprint de treinamento e role play.
-- [ ] Implementar alertas gerenciais de inatividade e ritmo por papel comercial, com período, evidência, responsável e rota de ação.
+- [x] Registrar separação de produto: TGR-CRM operacional versus TGR Duolingo Vendas Blueprint de treinamento e role play.
+- [x] Implementar alertas gerenciais de inatividade e ritmo por papel comercial, com período, evidência, responsável e rota de ação.
 - [ ] Criar ranking operacional acionável por captador, qualificador, liner, fechador/FTB, gerente e carteira financeira.
 - [ ] Adicionar filtros salvos e compartilháveis para análises recorrentes de mesa, equipe, campanha, risco e coorte.
-- [ ] Pesquisar e definir mecânicas de motivação comercial baseadas em VGV líquido, qualidade da venda, progresso de meta e reconhecimento justo.
+- [x] Pesquisar e definir mecânicas de motivação comercial baseadas em VGV líquido, qualidade da venda, progresso de meta e reconhecimento justo.
 - [ ] Projetar alertas de ritmo por profissional e por gerente: dias sem avanço, ausência de follow-up, meta em risco e recuperação de performance.
 - [x] Persistir atribuição de qualificador e gerente de sala na ficha, com auditoria e uso futuro em scorecards.
 - [ ] Implementar visão de receita e comissão por qualidade: previsto, confirmado, em risco, inadimplente, distratado e estornado.

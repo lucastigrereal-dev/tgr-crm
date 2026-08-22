@@ -9,6 +9,7 @@ import { buildOperationalInsights } from "../operationalAnalytics";
 import { buildConversionBreakdown, calculateConversionMetrics, filterConversionCaptures } from "../salesRoomAnalytics";
 import { buildCommercialIntegrityAlerts } from "../commercialIntegrity";
 import { parseRequiredContractDocuments } from "../projectPolicy";
+import { buildProfessionalRhythmAlerts, type ProfessionalRhythmFact } from "../professionalRhythm";
 
 function monthBounds() {
   const now = new Date();
@@ -108,7 +109,7 @@ export const dashboardRouter = router({
   operationalPulse: internalProcedure.query(async () => {
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
-    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows] = await Promise.all([
+    const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows, rhythmCaptureRows, userRows] = await Promise.all([
       db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)),
       db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt),
       db.select().from(unitMaintenanceBlocks).orderBy(desc(unitMaintenanceBlocks.startsAt)),
@@ -122,6 +123,8 @@ export const dashboardRouter = router({
       db.select({ contract: contracts, customerName: customers.fullName, resortId: captureRecords.resortId, captureCreatedAt: captureRecords.createdAt }).from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)),
       db.select().from(contractDocuments),
       db.select().from(commercialProjectSettings),
+      db.select().from(captureRecords),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users),
     ]);
     const integrityAlerts = buildCommercialIntegrityAlerts({ commissions: commissionRows.map(row => ({ id: row.commission.id, contractId: row.commission.contractId ?? 0, amount: Number(row.commission.amount), status: row.commission.status, sourceInstallmentId: row.commission.sourceInstallmentId, sourceInstallmentStatus: row.sourceInstallmentStatus })), proposals: [], contracts: [], duplicateCandidates: [], opportunities: [] });
     const settingsByResort = new Map(settingsRows.map(row => [row.resortId, parseRequiredContractDocuments(row.requiredContractDocuments)]));
@@ -137,6 +140,25 @@ export const dashboardRouter = router({
       const missing = required.filter(category => !present.has(category));
       return missing.length ? [{ id: row.contract.id, kind: "integrity" as const, label: `Documentos pendentes · ${row.contract.number}`, status: "attention", responsibleRole: "Contratos", evidence: `Associado ${row.customerName}: ausentes pela política do empreendimento — ${missing.join(", ")}.` }] : [];
     });
+    const rhythmRosterMap = new Map<string, { userId: number; role: "promoter" | "qualifier" | "liner" | "closer" | "room_manager" }>();
+    for (const capture of rhythmCaptureRows) {
+      if (capture.promoterId) rhythmRosterMap.set(`promoter-${capture.promoterId}`, { userId: capture.promoterId, role: "promoter" });
+      if (capture.qualifierId) rhythmRosterMap.set(`qualifier-${capture.qualifierId}`, { userId: capture.qualifierId, role: "qualifier" });
+      if (capture.linerId) rhythmRosterMap.set(`liner-${capture.linerId}`, { userId: capture.linerId, role: "liner" });
+      if (capture.closerId) rhythmRosterMap.set(`closer-${capture.closerId}`, { userId: capture.closerId, role: "closer" });
+      if (capture.roomManagerId) rhythmRosterMap.set(`room_manager-${capture.roomManagerId}`, { userId: capture.roomManagerId, role: "room_manager" });
+    }
+    const rhythmRoster = Array.from(rhythmRosterMap.values());
+    const rhythmFacts: ProfessionalRhythmFact[] = [];
+    for (const capture of rhythmCaptureRows) {
+      if (capture.promoterId) rhythmFacts.push({ userId: capture.promoterId, role: "promoter", eventAt: capture.createdAt, label: "Captação registrada", entityId: capture.id });
+      if (capture.qualifierId && capture.qualificationStatus === "qualified" && capture.checkedInAt) rhythmFacts.push({ userId: capture.qualifierId, role: "qualifier", eventAt: capture.checkedInAt, label: "Qualificação concluída", entityId: capture.id });
+      if (capture.linerId && capture.presentationStartedAt) rhythmFacts.push({ userId: capture.linerId, role: "liner", eventAt: capture.presentationStartedAt, label: "Apresentação iniciada", entityId: capture.id });
+      if (capture.closerId && capture.presentationEndedAt) rhythmFacts.push({ userId: capture.closerId, role: "closer", eventAt: capture.presentationEndedAt, label: "Apresentação encerrada", entityId: capture.id });
+      if (capture.roomManagerId && capture.assignedAt) rhythmFacts.push({ userId: capture.roomManagerId, role: "room_manager", eventAt: capture.assignedAt, label: "Mesa atribuída", entityId: capture.id });
+    }
+    const userNames = new Map(userRows.map(user => [user.id, user.name || user.email || `Usuário #${user.id}`]));
+    const rhythmAlerts = buildProfessionalRhythmAlerts({ roster: rhythmRoster, facts: rhythmFacts, now });
     return buildOperationalInsights({ exceptions: [
       ...installmentRows.map(row => ({ id: row.installment.id, kind: "installment" as const, label: `${row.customerName} · ${row.contractNumber}`, dueAt: row.installment.dueDate, status: row.installment.status, amount: row.installment.amount })),
       ...taskRows.map(row => ({ id: row.task.id, kind: "task" as const, label: row.task.title, dueAt: row.task.dueAt, status: row.task.status })),
@@ -148,6 +170,7 @@ export const dashboardRouter = router({
       ...commissionRows.map(row => ({ id: row.commission.id, kind: "commission" as const, label: row.sellerName || `Comissão #${row.commission.id}`, dueAt: row.commission.expectedPaymentAt, status: row.commission.status })),
       ...integrityAlerts.map(alert => ({ id: alert.entityId, kind: "integrity" as const, label: alert.code.replaceAll("_", " "), status: alert.severity, responsibleRole: alert.ownerRole, evidence: alert.evidence })),
       ...documentIntegrityAlerts,
+      ...rhythmAlerts.map(alert => ({ id: alert.userId, kind: "rhythm" as const, label: `${userNames.get(alert.userId) || `Usuário #${alert.userId}`} · ${alert.role}`, status: alert.severity, responsibleRole: "Gerência comercial", dueAt: new Date(now.getTime() + (alert.severity === "critical" ? 0 : 86_400_000)), evidence: `${alert.daysWithoutEvent} dia(s) sem evento relevante. ${alert.evidence} ${alert.recommendedAction}` })),
     ], eventsLast30Days: eventRows, interactionsLast30Days: interactionRows.length }, now);
   }),
 });
