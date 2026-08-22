@@ -198,7 +198,7 @@
 - [x] Implementar scorecard financeiro por carteira: contratos ativos, saldo em aberto, atraso, recuperado e taxa de regularização.
 - [x] Registrar separação de produto: TGR-CRM operacional versus TGR Duolingo Vendas Blueprint de treinamento e role play.
 - [x] Implementar alertas gerenciais de inatividade e ritmo por papel comercial, com período, evidência, responsável e rota de ação.
-- [ ] Criar ranking operacional acionável por captador, qualificador, liner, fechador/FTB, gerente e carteira financeira.
+- [x] Criar ranking operacional acionável por captador, qualificador, liner, fechador/FTB, gerente e carteira financeira.
 - [ ] Adicionar filtros salvos e compartilháveis para análises recorrentes de mesa, equipe, campanha, risco e coorte.
 - [x] Pesquisar e definir mecânicas de motivação comercial baseadas em VGV líquido, qualidade da venda, progresso de meta e reconhecimento justo.
 - [x] Projetar alertas de ritmo por profissional e por gerente: dias sem avanço, ausência de follow-up, meta em risco e recuperação de performance.
