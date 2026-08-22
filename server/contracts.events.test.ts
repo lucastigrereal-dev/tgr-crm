@@ -9,9 +9,19 @@ import { contractsRouter } from "./routers/contracts";
 
 function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number } = {}) {
   let selectCall = 0;
+  let ledgerSelectCall = 0;
   let updateCall = 0;
   const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
   const rows = (value: unknown[]) => Object.assign(value, { limit: async () => value });
+  const ledgerRows = (value: unknown[]) => {
+    const chain = {
+      where: vi.fn(() => chain),
+      limit: async () => value,
+      orderBy: async () => value,
+      then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(value).then(resolve, reject),
+    };
+    return chain;
+  };
   const tx = {
     insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); return { $returningId: async () => table ? [{ id: 701 }] : [] }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
@@ -28,7 +38,16 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
   return {
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 702 }] })) })),
+    select: vi.fn(() => ({ from: vi.fn(() => {
+      const data = [
+        [{ id: 701, totalAmount: "12000.00", status: "cancelled" }],
+        [{ id: 71, sequence: 1, amount: "1000.00", status: "paid" }],
+        [{ id: 91, amount: "120.00", status: "cancelled", lifecycleStatus: "cancelled", sourceInstallmentId: 71 }],
+        [{ id: 801, status: "executed", createdAt: new Date() }],
+      ][ledgerSelectCall++] ?? [];
+      return ledgerRows(data);
+    }) })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 702 }], onDuplicateKeyUpdate: async () => undefined })) })),
     financialEntries,
   };
 }

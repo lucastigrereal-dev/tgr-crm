@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { unitMaintenanceBlocks } from "../drizzle/schema";
+import { contractCancellationRequests, contracts, installments, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -10,19 +10,32 @@ import { salesRouter } from "./routers/sales";
 
 function makeDb() {
   const installment = { id: 91, contractId: 61, sequence: 2, totalAmount: "1000.00", amount: "1000.00", status: "open", dueDate: new Date("2026-09-10T12:00:00Z") };
+  const queryRows = (value: unknown[]) => {
+    const chain = {
+      where: () => chain,
+      limit: async () => value,
+      orderBy: async () => value,
+      then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(value).then(resolve, reject),
+    };
+    return chain;
+  };
   const tx = {
     insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
   let id = 300;
   return {
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: id++ }] })) })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: id++ }], onDuplicateKeyUpdate: async () => undefined })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     select: vi.fn(() => ({
       from: (table: unknown) => {
-        if (table === unitMaintenanceBlocks) return { where: async () => [] };
-        return { where: () => ({ limit: async () => [installment] }) };
+        if (table === unitMaintenanceBlocks) return queryRows([]);
+        if (table === contracts) return queryRows([{ id: 61, totalAmount: "1000.00", status: "active" }]);
+        if (table === installments) return queryRows([installment]);
+        if (table === salesCommissions || table === contractCancellationRequests) return queryRows([]);
+        if (table === revenueQualityLedger) return queryRows([]);
+        return queryRows([installment]);
       },
     })),
   };

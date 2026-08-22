@@ -9,6 +9,7 @@ import { buildInstallmentSchedule } from "../domain";
 import { parseCancellationPolicy } from "../projectPolicy";
 import { simulateCancellation } from "../cancellationDomain";
 import { planCancellationExecution } from "../cancellationExecution";
+import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { contractsProcedure, salesProcedure } from "./access";
 
 export const contractsRouter = router({
@@ -60,6 +61,7 @@ export const contractsRouter = router({
     });
     await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
     await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
+    await syncRevenueQualityForContract({ contractId: result, actorUserId: ctx.user.id, trigger: "criação de contrato" });
     return { id: result };
   }),
 
@@ -127,6 +129,7 @@ export const contractsRouter = router({
     });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId}; parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
+    await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
     return { success: true, ...outcome };
   }),
 
@@ -145,6 +148,7 @@ export const contractsRouter = router({
     }).where(eq(contracts.id, input.id));
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: input.status === "cancelled" ? input.cancellationReason ?? null : null } });
+    await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
     return { success: true };
   }),
 
