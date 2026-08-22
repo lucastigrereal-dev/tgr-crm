@@ -201,7 +201,7 @@
 - [ ] Criar ranking operacional acionável por captador, qualificador, liner, fechador/FTB, gerente e carteira financeira.
 - [ ] Adicionar filtros salvos e compartilháveis para análises recorrentes de mesa, equipe, campanha, risco e coorte.
 - [x] Pesquisar e definir mecânicas de motivação comercial baseadas em VGV líquido, qualidade da venda, progresso de meta e reconhecimento justo.
-- [ ] Projetar alertas de ritmo por profissional e por gerente: dias sem avanço, ausência de follow-up, meta em risco e recuperação de performance.
+- [x] Projetar alertas de ritmo por profissional e por gerente: dias sem avanço, ausência de follow-up, meta em risco e recuperação de performance.
 - [x] Persistir atribuição de qualificador e gerente de sala na ficha, com auditoria e uso futuro em scorecards.
 - [ ] Implementar visão de receita e comissão por qualidade: previsto, confirmado, em risco, inadimplente, distratado e estornado.
 - [ ] Modelar alertas de transparência para venda fantasma, duplicidade, desconto irregular, distorção de mesa, documentação pendente e comissão sem lastro.
