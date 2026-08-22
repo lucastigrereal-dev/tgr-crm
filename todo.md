@@ -218,7 +218,7 @@
 - [ ] Validar visualmente os fluxos críticos em desktop e mobile antes de expandir o novo padrão pelo sistema.
 - [x] Instituir protocolo: cada nova wave de produto deve começar com deep research, fontes verificáveis, síntese de decisão e critérios de validação antes da implementação.
 - [x] Consolidar plano de expansão do TGR-CRM por wave, impacto, dependências, evidências e critério de aceite.
-- [ ] Executar Wave 2 de experiência operacional: filtros compactos mobile, command bar e densidade de listas/tabelas críticas.
+- [x] Executar Wave 2 de experiência operacional: filtros compactos mobile, command bar e densidade de listas/tabelas críticas.
 - [ ] Executar Wave 3 de transparência econômica: carteira, exceções de receita e rotas de ação por risco.
 - [ ] Executar Wave 4 de laboratório isolado para cenários preenchidos de recepção, contrato, comissão e distrato.
 - [ ] Preparar Wave 5 de inteligência governada e integrações reais, condicionada a dados limpos, credenciais e infraestrutura adequada.

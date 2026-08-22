@@ -43,3 +43,13 @@ O redesenho da ficha contratual foi aplicado e passou por TypeScript, Vitest e b
 | Densidade desktop | Aprovado | Filtro, metas, placar e cartões econômicos preservam leitura em blocos de trabalho. | Aplicar a mesma hierarquia à lista comercial e à fila financeira. |
 
 > **Validação técnica da Wave 2, corte Comissões:** `pnpm check`, 56 arquivos/144 testes Vitest e `pnpm build` passaram após a alteração. A revisão visual foi realizada em 1440 × 1000 e 390 × 844.
+
+## Wave 2 — Central Financeira
+
+| Critério | Resultado | Evidência observada | Próximo aperto |
+|---|---|---|---|
+| Régua de inadimplência | Aprovado no estado vazio | O bloco comunica quantidade crítica/em ação e a ausência real de parcelas sem inventar cobrança. Linhas preenchidas agora priorizam associado, estágio, prazo, valor e ações. | Provar fila com atraso real no laboratório isolado. |
+| DRE por campanha | Aprovado | A DRE preserva separação entre receita, despesa e resultado, com números tabulares e leitura compacta para mobile. | Validar campanhas com resultado positivo e negativo em cenário sintético isolado. |
+| Responsividade financeira | Aprovado | Ações de lançamento, cobrança e repasse preservam alvo de toque; métricas e blocos vazios empilham sem colunas comprimidas. | Aplicar a mesma prioridade à lista comercial na próxima pesquisa/wave. |
+
+> **Validação técnica da Wave 2, corte Financeiro:** `pnpm check`, 56 arquivos/144 testes Vitest e `pnpm build` passaram após a alteração. A revisão visual foi realizada em 1440 × 1000 e 390 × 844, na rota correta `/financeiro`.
