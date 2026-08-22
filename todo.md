@@ -193,9 +193,9 @@
 - [x] Projetar torre de transparência comercial com ranking, previsão de comissão/borderô, risco de cancelamento e gargalos por pessoa, sala, campanha e empreendimento.
 - [x] Definir laboratório seguro com dados fictícios descartáveis para testar fluxo de casal, venda, comissão, distrato e leitura gerencial antes de uso operacional.
 - [x] Extrair requisitos verificáveis e referências do Wave Research e do PRD de handoff recebidos.
-- [ ] Criar scorecards auditáveis por captador, qualificador, consultor/liner, fechador/FTB, gerente de sala e financeiro.
+- [x] Criar scorecards auditáveis por captador, qualificador, consultor/liner, fechador/FTB, gerente de sala e financeiro.
 - [x] Modelar dono de carteira financeira por contrato, separado do usuário que lançou/baixou o movimento, para scorecard de cobrança e recuperação.
-- [ ] Implementar scorecard financeiro por carteira: contratos ativos, saldo em aberto, atraso, recuperado e taxa de regularização.
+- [x] Implementar scorecard financeiro por carteira: contratos ativos, saldo em aberto, atraso, recuperado e taxa de regularização.
 - [x] Registrar separação de produto: TGR-CRM operacional versus TGR Duolingo Vendas Blueprint de treinamento e role play.
 - [x] Implementar alertas gerenciais de inatividade e ritmo por papel comercial, com período, evidência, responsável e rota de ação.
 - [ ] Criar ranking operacional acionável por captador, qualificador, liner, fechador/FTB, gerente e carteira financeira.
