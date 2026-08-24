@@ -1,36 +1,65 @@
-# Arquitetura do TSE CRM Exclusivo
+# Arquitetura do TGR-CRM
 
 ## Princípio de produto
 
-O TSE CRM Exclusivo é um **monólito modular de empresa única**. A aplicação preserva a jornada operacional de timeshare — relacionamento, venda, contrato, cobrança, utilização e atendimento — sem carregar a complexidade de `tenant_id`, administração de múltiplas empresas ou isolamento entre operações.
+O TGR-CRM é o **sistema operacional comercial e de relacionamento de uma empresa de multipropriedade**, estruturado como monólito modular para preservar velocidade de desenvolvimento, transações simples e uma única fonte de verdade. A mesma empresa pode operar múltiplos empreendimentos/projetos com regras próprias de produto, comissão, documentação e operação.
+
+A arquitetura não tenta transformar o produto em uma plataforma genérica de CRM. O domínio central é a jornada de multipropriedade: captação, qualificação, venda, formalização, recebimento, comissão, carteira, utilização, reserva, cobrança, pós-venda e governança.
+
+## Regra-mãe de negócio
+
+**Venda comercial, contrato, caixa e qualidade são fatos diferentes.** O sistema deve distinguir explicitamente:
+
+1. oportunidade em negociação;
+2. proposta enviada/aceita;
+3. contrato emitido/assinado;
+4. venda em validação;
+5. venda validada;
+6. pagamento/entrada confirmados;
+7. contrato ativo;
+8. contrato em risco, inadimplente, cancelado ou encerrado;
+9. venda madura por coorte.
+
+Nenhum KPI financeiro deve inferir caixa recebido apenas a partir do estágio comercial.
 
 ## Domínios
 
 | Domínio | Responsabilidade | Entidades principais |
 |---|---|---|
-| Pessoas | Cadastro completo, documentos, contatos e histórico de atendimento. | clientes, documentos, interações |
-| Comercial | Funil, propostas, metas e acompanhamento de vendedores. | oportunidades, propostas, metas de vendas |
-| Contratos | Formalização do direito contratado e documentação de apoio. | contratos, documentos contratuais, parcelas |
-| Inventário e reservas | Unidades, disponibilidade, reservas e estadias. | empreendimentos, unidades, reservas |
-| Financeiro | Parcelas, cobranças, recebimentos, repasses e despesas. | parcelas, cobranças, lançamentos, repasses |
-| Operação | Agenda, pendências e lembretes de trabalho. | tarefas |
-| Governança | Perfis internos e registro de ações críticas. | usuários, trilha de auditoria |
+| Pessoas e household | Cadastro, casal/família, documentos, contatos e histórico. | clientes, interações, documentos, fichas |
+| Captação | Origem, campanha, qualificação, agendamento e comparecimento. | fichas de captação, campanhas, responsáveis |
+| Comercial | Oportunidades, propostas, desconto, metas e playbooks. | oportunidades, propostas, aprovações, metas |
+| Contratos | Formalização, versão documental, direitos e ciclo contratual. | contratos, documentos, parcelas, direitos |
+| Receita e financeiro | Entrada, parcelas, cobrança, recebimentos, repasses, comissões e qualidade de receita. | parcelas, cobranças, transações, comissões, ledger |
+| Inventário e reservas | Empreendimentos, unidades, disponibilidade, direitos, reservas e estadias. | resorts, unidades, entitlements, reservas |
+| Relacionamento e pós-venda | Interações, onboarding, tarefas, retenção e acompanhamento de carteira. | interações, tarefas, casos e eventos |
+| Dados e inteligência | Eventos, read models, scorecards, cohorts, KPIs e IA permissionada. | domain events, audit logs, ledgers e read models |
+| Governança | Identidade, permissões, políticas por empreendimento e auditoria. | usuários, papéis, políticas, trilha de auditoria |
 
-## Perfis de acesso
+## Projetos e regras
 
-| Perfil | Escopo principal |
-|---|---|
-| Administração | Visão e administração integral da operação. |
-| Vendas | Clientes, oportunidades, propostas, contratos próprios e metas. |
-| Financeiro | Contratos, parcelas, cobranças, repasses, receitas e despesas. |
-| Atendimento | Clientes, contratos consultáveis, reservas, interações e tarefas. |
+Cada empreendimento possui parâmetros próprios. Regras comerciais e financeiras não devem ficar escondidas em constantes do código. Comissão, cancelamento, documentação obrigatória, papéis e campos de ficha devem ser configuráveis, validados e auditáveis.
 
-## Regras estruturais
+Valores ainda não aprovados ficam explicitamente em estado **PENDENTE**. A ausência de uma política financeira válida deve bloquear a automação relacionada em vez de recorrer silenciosamente a valores históricos.
 
-Cada contrato pertence a um cliente principal e pode nascer de uma proposta aprovada. As parcelas são ligadas ao contrato, enquanto uma cobrança pode ser vinculada a uma parcela quando houver boleto, Pix ou outro meio registrado. Reservas vinculam cliente, contrato e unidade, impedindo sobreposição de estadias confirmadas para a mesma unidade. Tarefas conectam pessoas e contratos às rotinas de atendimento, comercial e financeiro.
+## Segurança e acesso
 
-Os dados sensíveis devem ser tratados com acesso por perfil, dados de documento mascarados nas listagens e anexos mantidos por referência em armazenamento de arquivos. A geração bancária real, assinatura digital e integrações de reservas serão conectores posteriores, pois exigem credenciais, homologação e regras de cada fornecedor.
+A autorização ocorre no servidor. Esconder botão no frontend não é controle de acesso. Documentos e arquivos sensíveis exigem autenticação, escopo de recurso e trilha de acesso. Perfis devem evoluir de papéis genéricos para capacidades coerentes com a operação: administração, captação, recepção, consultor/liner, fechador, gerente, financeiro, contratos/pós-venda e atendimento.
+
+## Integrações
+
+O core mantém contratos estáveis de integração. Gateway de pagamento, assinatura eletrônica, ERP/PMS, WhatsApp e outros fornecedores entram por adaptadores. Escritas financeiras e contratuais devem ser idempotentes, reconciliáveis e auditáveis.
+
+## Dados e IA
+
+Eventos de domínio preservam o que ocorreu e quando. Tabelas operacionais mantêm o estado atual. Ledgers e read models derivam verdade econômica e scorecards sem transformar o banco transacional em BI improvisado.
+
+IA é uma camada de assistência: busca, resumo, explicação, recomendação e análise. A IA não aprova desconto, distrato, pagamento ou comissão de forma autônoma.
 
 ## Critério de implementação
 
-A primeira versão prioriza fluxos completos, navegáveis e rastreáveis: cadastrar cliente, abrir oportunidade, registrar proposta, criar contrato, lançar parcelas, reservar unidade e acompanhar tarefas. Não vamos tentar recriar as centenas de telas do legado, porque isso seria construir uma rodoviária inteira para vender uma passagem.
+Prioridade permanente:
+
+**fluxo real → dado mínimo correto → rastreabilidade → dashboard → inteligência.**
+
+Não reconstruir o sistema para imitar centenas de telas legadas. A paridade funcional será medida por capacidade e resultado operacional, não por quantidade de formulários.
