@@ -42,7 +42,10 @@ export const importsRouter = router({
     }
     if (input.kind === "units") {
       const rows = parseUnitsCsv(csv).records;
-      const [resortRows, unitRows] = await Promise.all([db.select().from(resorts), db.select().from(units)]);
+      const resortNames = Array.from(new Set(rows.map(row => row.resortName).filter(Boolean)));
+      const resortRows = resortNames.length ? await db.select().from(resorts).where(inArray(resorts.name, resortNames)) : [];
+      const resortIds = resortRows.map(item => item.id);
+      const unitRows = resortIds.length ? await db.select().from(units).where(inArray(units.resortId, resortIds)) : [];
       const resortsByName = new Map(resortRows.map(item => [normalizedKey(item.name), item]));
       const unitsByKey = new Map(unitRows.map(item => [`${item.resortId}::${normalizedKey(item.code)}`, item]));
       let created = 0; let updated = 0; let batchId = 0;
@@ -65,7 +68,18 @@ export const importsRouter = router({
       await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: inventário — ${created} unidades criadas e ${updated} atualizadas.`);
       return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
     }
-    const rows = parseContractsCsv(csv).records; const [customerRows, userRows, contractRows] = await Promise.all([db.select().from(customers), db.select().from(users), db.select({ number: contracts.number }).from(contracts)]); const customerByDocument = new Map(customerRows.map(item => [item.documentNumber, item])); const userByEmail = new Map(userRows.filter(item => item.email).map(item => [item.email!.toLowerCase(), item])); const existingNumbers = new Set(contractRows.map(item => item.number));
+    const rows = parseContractsCsv(csv).records;
+    const customerDocuments = Array.from(new Set(rows.map(row => row.customerDocument).filter(Boolean)));
+    const sellerEmails = Array.from(new Set(rows.map(row => row.sellerEmail).filter((email): email is string => Boolean(email))));
+    const contractNumbers = Array.from(new Set(rows.map(row => row.number).filter(Boolean)));
+    const [customerRows, userRows, contractRows] = await Promise.all([
+      customerDocuments.length ? db.select().from(customers).where(inArray(customers.documentNumber, customerDocuments)) : [],
+      sellerEmails.length ? db.select().from(users).where(inArray(users.email, sellerEmails)) : [],
+      contractNumbers.length ? db.select({ number: contracts.number }).from(contracts).where(inArray(contracts.number, contractNumbers)) : [],
+    ]);
+    const customerByDocument = new Map(customerRows.map(item => [item.documentNumber, item]));
+    const userByEmail = new Map(userRows.filter(item => item.email).map(item => [item.email!.toLowerCase(), item]));
+    const existingNumbers = new Set(contractRows.map(item => item.number));
     rows.forEach((row, index) => { const line = index + 2; if (!customerByDocument.has(row.customerDocument)) issues.push({ line, field: "documento_associado", message: "Associado não encontrado; importe os associados antes dos contratos." }); if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." }); if (row.sellerEmail && !userByEmail.has(row.sellerEmail)) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail." }); });
     if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
     let created = 0; let batchId = 0;
