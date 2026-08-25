@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, or, SQL } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, SQL } from "drizzle-orm";
 import { z } from "zod";
 import { contracts, customers, installments, ownershipEntitlements, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -169,16 +169,15 @@ export const operationsRouter = router({
       if (!db) return [];
       const checkIn = dateValue(input.checkIn); const checkOut = dateValue(input.checkOut);
       if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída precisa ser posterior ao check-in." });
-      const available = await db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
-        .where(and(eq(units.status, "active"), input.resortId ? eq(units.resortId, input.resortId) : undefined)).limit(5000);
-      const busy = await db.select({ unitId: reservations.unitId }).from(reservations).where(and(
-        lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),
-      )).limit(10000);
-      const maintenance = await db.select({ unitId: unitMaintenanceBlocks.unitId }).from(unitMaintenanceBlocks).where(and(
-        lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]),
-      )).limit(10000);
-      const busyIds = new Set([...busy.map(item => item.unitId), ...maintenance.map(item => item.unitId)]);
-      return available.filter(item => !busyIds.has(item.unit.id));
+      const reservationConflict = db.select({ id: reservations.id }).from(reservations).where(and(
+        eq(reservations.unitId, units.id), lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),
+      ));
+      const maintenanceConflict = db.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(
+        eq(unitMaintenanceBlocks.unitId, units.id), lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]),
+      ));
+      return db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
+        .where(and(eq(units.status, "active"), input.resortId ? eq(units.resortId, input.resortId) : undefined, notExists(reservationConflict), notExists(maintenanceConflict)))
+        .orderBy(resorts.name, units.code).limit(5000);
     }),
 
   createReservation: serviceProcedure.input(z.object({
