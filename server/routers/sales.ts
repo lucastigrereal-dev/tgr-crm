@@ -116,27 +116,30 @@ export const salesRouter = router({
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da oportunidade não encontrada." });
     }
     const followUpAt = resolveFollowUpAt(input.nextFollowUpAt);
-    const result = await db.insert(opportunities).values({
-      ...input,
-      sellerId,
-      expectedAmount: input.expectedAmount.toFixed(2),
-      source: input.source?.trim() || null,
-      nextFollowUpAt: followUpAt,
-      lossReason: input.lossReason?.trim() || null,
-      closedAt: input.stage === "won" || input.stage === "lost" ? new Date() : null,
-    }).$returningId();
-    const id = result[0]?.id;
-    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a oportunidade." });
-    await db.insert(tasks).values({
-      title: `Follow-up comercial: ${input.title}`,
-      description: `Follow-up automático criado com a oportunidade comercial #${id}.`,
-      type: "follow_up",
-      priority: "normal",
-      customerId: input.customerId,
-      assignedToUserId: sellerId,
-      dueAt: followUpAt,
-      reminderAt: followUpAt,
-      createdByUserId: ctx.user.id,
+    const id = await db.transaction(async tx => {
+      const result = await tx.insert(opportunities).values({
+        ...input,
+        sellerId,
+        expectedAmount: input.expectedAmount.toFixed(2),
+        source: input.source?.trim() || null,
+        nextFollowUpAt: followUpAt,
+        lossReason: input.lossReason?.trim() || null,
+        closedAt: input.stage === "won" || input.stage === "lost" ? new Date() : null,
+      }).$returningId();
+      const opportunityId = result[0]?.id;
+      if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a oportunidade." });
+      await tx.insert(tasks).values({
+        title: `Follow-up comercial: ${input.title}`,
+        description: `Follow-up automático criado com a oportunidade comercial #${opportunityId}.`,
+        type: "follow_up",
+        priority: "normal",
+        customerId: input.customerId,
+        assignedToUserId: sellerId,
+        dueAt: followUpAt,
+        reminderAt: followUpAt,
+        createdByUserId: ctx.user.id,
+      });
+      return opportunityId;
     });
     await recordAudit(ctx.user.id, "opportunity", id, "created", `Oportunidade ${input.title} criada.`);
     await recordDomainEvent({ eventName: "opportunity.created", aggregateType: "opportunity", aggregateId: id, actorUserId: ctx.user.id, payload: { campaignId: input.campaignId ?? null, sellerId: input.sellerId ?? ctx.user.id, stage: input.stage, expectedAmount: input.expectedAmount } });
