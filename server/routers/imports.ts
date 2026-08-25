@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { desc, eq, inArray } from "drizzle-orm";
+import { count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
@@ -23,7 +23,7 @@ export const importsRouter = router({
   suggestMapping: adminProcedure.input(z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000) })).mutation(({ input }) => suggestCsvMapping(input.csv, input.kind)),
   preview: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) }; }),
   errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length }; }),
-  latestBatch: adminProcedure.query(async () => { const db = await getDb(); if (!db) return null; const batch = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); if (!batch[0]) return null; const itemCount = await db.select().from(csvImportItems).where(eq(csvImportItems.batchId, batch[0].id)); return { ...batch[0], itemCount: itemCount.length, canUndo: batch[0].status === "completed" }; }),
+  latestBatch: adminProcedure.query(async () => { const db = await getDb(); if (!db) return null; const batch = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); if (!batch[0]) return null; const itemCount = await db.select({ total: count() }).from(csvImportItems).where(eq(csvImportItems.batchId, batch[0].id)); return { ...batch[0], itemCount: Number(itemCount[0]?.total ?? 0), canUndo: batch[0].status === "completed" }; }),
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
     const csv = canonicalCsv(input); const parsed = parse(input.kind, csv); const issues: ImportIssue[] = [...parsed.issues];
     if (issues.length) return { valid: false, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(parsed.records.length, 0, 0, issues) };
