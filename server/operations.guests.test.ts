@@ -8,18 +8,22 @@ import { operationsRouter } from "./routers/operations";
 function makeDb(selectResponses: unknown[][] = [], updateAffectedRows?: number) {
   const updates: unknown[] = [];
   const inserts: unknown[] = [];
+  const select = vi.fn(() => {
+    const result = Promise.resolve(selectResponses.shift() ?? []);
+    const limitChain = { for: vi.fn(async () => result), then: result.then.bind(result) };
+    const chain: Record<string, (...args: unknown[]) => unknown> = {};
+    chain.from = () => chain;
+    chain.innerJoin = () => chain;
+    chain.where = () => chain;
+    chain.limit = () => limitChain;
+    return chain;
+  });
+  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 722 }] }; }) }));
   const db = {
-    select: vi.fn(() => {
-      const result = Promise.resolve(selectResponses.shift() ?? []);
-      const chain: Record<string, () => unknown> = {};
-      chain.from = () => chain;
-      chain.innerJoin = () => chain;
-      chain.where = () => chain;
-      chain.limit = () => result;
-      return chain;
-    }),
+    select,
+    transaction: vi.fn(async (callback: (transaction: { select: typeof select; insert: typeof insert }) => Promise<unknown>) => callback({ select, insert })),
     update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); return updateAffectedRows === undefined ? undefined : { affectedRows: updateAffectedRows }; }) })) })),
-    insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 722 }] }; }) })),
+    insert,
   };
   return { db, updates, inserts };
 }

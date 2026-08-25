@@ -244,12 +244,16 @@ export const operationsRouter = router({
 
   addReservationGuest: serviceProcedure.input(z.object({ reservationId: z.number().int().positive(), fullName: z.string().trim().min(3).max(255), documentNumber: z.string().trim().max(32).nullable().optional(), relationship: z.string().trim().max(80).nullable().optional(), birthDate: z.string().date().nullable().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const reservation = (await db.select({ id: reservations.id, capacity: units.capacity }).from(reservations).innerJoin(units, eq(reservations.unitId, units.id)).where(eq(reservations.id, input.reservationId)).limit(1))[0];
-    if (!reservation) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
-    const guests = await db.select({ id: reservationGuests.id }).from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).limit(31);
-    if (guests.length >= reservation.capacity) throw new TRPCError({ code: "CONFLICT", message: "A capacidade da unidade já foi atingida." });
-    const created = await db.insert(reservationGuests).values({ reservationId: input.reservationId, fullName: input.fullName, documentNumber: input.documentNumber || null, relationship: input.relationship || null, birthDate: input.birthDate ? dateValue(input.birthDate) : null }).$returningId();
-    const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o acompanhante." });
+    const id = await db.transaction(async tx => {
+      const reservation = (await tx.select({ id: reservations.id, capacity: units.capacity }).from(reservations).innerJoin(units, eq(reservations.unitId, units.id)).where(eq(reservations.id, input.reservationId)).limit(1).for("update"))[0];
+      if (!reservation) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
+      const guests = await tx.select({ id: reservationGuests.id }).from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).limit(31);
+      if (guests.length >= reservation.capacity) throw new TRPCError({ code: "CONFLICT", message: "A capacidade da unidade já foi atingida." });
+      const created = await tx.insert(reservationGuests).values({ reservationId: input.reservationId, fullName: input.fullName, documentNumber: input.documentNumber || null, relationship: input.relationship || null, birthDate: input.birthDate ? dateValue(input.birthDate) : null }).$returningId();
+      const createdId = created[0]?.id;
+      if (!createdId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o acompanhante." });
+      return createdId;
+    });
     await recordAudit(ctx.user.id, "reservation_guest", id, "created", `Acompanhante ${input.fullName} incluído na reserva ${input.reservationId}.`);
     return { id };
   }),
