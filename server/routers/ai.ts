@@ -23,7 +23,12 @@ export const aiRouter = router({
     ]);
     const role = ctx.user.role as AssistantRole;
     const context = buildPermissionedCustomerContext(role, { customer, interactions, contracts: customerContracts, opportunities: customerOpportunities, reservations: customerReservations, installments: customerInstallments, tasks: customerTasks });
-    const result = await analyzeCustomerWithEvidence(input.question, context);
+    let result;
+    try {
+      result = await analyzeCustomerWithEvidence(input.question, context);
+    } catch {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível concluir a análise de IA agora." });
+    }
     await recordAudit(ctx.user.id, "customer", input.customerId, "ai_assistance_requested", `Assistência IA consultada com ${context.evidence.length} evidência(s).`);
     await recordDomainEvent({ eventName: "ai.assistance.requested", aggregateType: "customer", aggregateId: input.customerId, actorUserId: ctx.user.id, payload: { role, evidenceCount: context.evidence.length, model: result.model } });
     return result;
