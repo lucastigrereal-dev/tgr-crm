@@ -13,14 +13,16 @@ function makeDb() {
   const queryRows = (value: unknown[]) => {
     const chain = {
       where: () => chain,
-      limit: async () => value,
-      orderBy: async () => value,
+      limit: () => chain,
+      orderBy: () => chain,
+      for: async () => value,
       then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(value).then(resolve, reject),
     };
     return chain;
   };
   const tx = {
-    insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+    select: vi.fn(() => ({ from: (table: unknown) => table === unitMaintenanceBlocks ? queryRows([]) : queryRows([{ id: 51 }]) })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 901 }] })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
   let id = 300;
