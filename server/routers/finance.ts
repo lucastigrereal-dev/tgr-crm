@@ -10,7 +10,6 @@ import { buildCampaignDre } from "../financeDre";
 import { buildInstallmentCommissions } from "../commissionAutomation";
 import { parseCompleteCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
-import { buildFinancialPortfolioScorecards } from "../financialPortfolioScorecard";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { asaasBillingType, billingExternalReference, createAsaasCustomer, createAsaasPayment, findAsaasPaymentsByReference, getAsaasConfig, getAsaasIdentificationField, getAsaasPixQrCode } from "../paymentGateway";
 
@@ -20,13 +19,34 @@ export const financeRouter = router({
   portfolioScorecards: financeProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    const [assignmentRows, installmentRows, ownerRows] = await Promise.all([
-      db.select().from(financialPortfolioAssignments).where(isNull(financialPortfolioAssignments.endsAt)),
-      db.select().from(installments),
-      db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+    const [scorecardRows, ownerRows] = await Promise.all([
+      db.select({
+        ownerUserId: financialPortfolioAssignments.ownerUserId,
+        assignedContracts: sql<number>`count(distinct ${financialPortfolioAssignments.contractId})`,
+        openAmount: sql<number>`coalesce(sum(case when ${installments.status} not in ('paid', 'cancelled') then ${installments.amount} else 0 end), 0)`,
+        overdueAmount: sql<number>`coalesce(sum(case when ${installments.status} = 'overdue' then ${installments.amount} else 0 end), 0)`,
+        recoveredAfterAssignment: sql<number>`coalesce(sum(case when ${installments.status} = 'paid' and ${installments.paidAt} >= ${financialPortfolioAssignments.startsAt} then ${installments.amount} else 0 end), 0)`,
+        assignedSince: sql<Date>`min(${financialPortfolioAssignments.startsAt})`,
+      }).from(financialPortfolioAssignments).leftJoin(installments, eq(financialPortfolioAssignments.contractId, installments.contractId)).where(isNull(financialPortfolioAssignments.endsAt)).groupBy(financialPortfolioAssignments.ownerUserId),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
     ]);
     const names = new Map(ownerRows.map(owner => [owner.id, owner.name || owner.email || `Usuário #${owner.id}`]));
-    return buildFinancialPortfolioScorecards(assignmentRows.map(assignment => ({ contractId: assignment.contractId, ownerUserId: assignment.ownerUserId, startsAt: assignment.startsAt })), installmentRows.map(installment => ({ contractId: installment.contractId, amount: installment.amount, status: installment.status, paidAt: installment.paidAt }))).map(scorecard => ({ ...scorecard, ownerName: names.get(scorecard.ownerUserId) || `Usuário #${scorecard.ownerUserId}` }));
+    return scorecardRows.map(scorecard => {
+      const openAmount = Number(scorecard.openAmount ?? 0);
+      const overdueAmount = Number(scorecard.overdueAmount ?? 0);
+      const recoveredAfterAssignment = Number(scorecard.recoveredAfterAssignment ?? 0);
+      const regularizationBase = recoveredAfterAssignment + openAmount;
+      return {
+        ownerUserId: scorecard.ownerUserId,
+        ownerName: names.get(scorecard.ownerUserId) || `Usuário #${scorecard.ownerUserId}`,
+        assignedContracts: Number(scorecard.assignedContracts ?? 0),
+        openAmount: Number(openAmount.toFixed(2)),
+        overdueAmount: Number(overdueAmount.toFixed(2)),
+        recoveredAfterAssignment: Number(recoveredAfterAssignment.toFixed(2)),
+        regularizationRate: regularizationBase ? Number((recoveredAfterAssignment / regularizationBase * 100).toFixed(2)) : null,
+        assignedSince: scorecard.assignedSince ? new Date(scorecard.assignedSince) : null,
+      };
+    });
   }),
 
   portfolioCandidates: financeProcedure.query(async () => {
@@ -231,12 +251,20 @@ export const financeRouter = router({
 
   dreByCampaign: financeProcedure.input(z.object({ from: z.string().date().optional(), to: z.string().date().optional() }).optional()).query(async ({ input }) => {
     const db = await getDb(); if (!db) return [];
-    const [transactions, campaigns] = await Promise.all([
-      db.select({ entry: financialTransactions, inheritedCampaignId: opportunities.campaignId }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).where(and(eq(financialTransactions.status, "paid"), isNotNull(financialTransactions.paidAt), input?.from ? gte(financialTransactions.paidAt, dateValue(input.from)) : undefined, input?.to ? lte(financialTransactions.paidAt, new Date(`${input.to}T23:59:59Z`)) : undefined)),
-      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns),
-    ]);
-    const campaignNames = new Map(campaigns.map(campaign => [campaign.id, campaign.name]));
-    return buildCampaignDre(transactions.map(({ entry, inheritedCampaignId }) => { const campaignId = entry.campaignId ?? inheritedCampaignId ?? null; return { campaignId, campaignName: campaignId ? campaignNames.get(campaignId) ?? null : null, type: entry.type, amount: entry.amount }; }));
+    const transactions = await db.select({
+      campaignId: sql<number | null>`coalesce(${financialTransactions.campaignId}, ${opportunities.campaignId})`,
+      campaignName: salesCampaigns.name,
+      type: financialTransactions.type,
+      amount: sql<string>`coalesce(sum(${financialTransactions.amount}), 0)`,
+    }).from(financialTransactions)
+      .leftJoin(contracts, eq(financialTransactions.contractId, contracts.id))
+      .leftJoin(proposals, eq(contracts.proposalId, proposals.id))
+      .leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id))
+      .leftJoin(salesCampaigns, sql`${salesCampaigns.id} = coalesce(${financialTransactions.campaignId}, ${opportunities.campaignId})`)
+      .where(and(eq(financialTransactions.status, "paid"), isNotNull(financialTransactions.paidAt), input?.from ? gte(financialTransactions.paidAt, dateValue(input.from)) : undefined, input?.to ? lte(financialTransactions.paidAt, new Date(`${input.to}T23:59:59Z`)) : undefined))
+      .groupBy(sql`coalesce(${financialTransactions.campaignId}, ${opportunities.campaignId})`, salesCampaigns.name, financialTransactions.type)
+      .limit(1000);
+    return buildCampaignDre(transactions.map(row => ({ campaignId: row.campaignId, campaignName: row.campaignName, type: row.type, amount: row.amount })));
   }),
 
   createEntry: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), campaignId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))

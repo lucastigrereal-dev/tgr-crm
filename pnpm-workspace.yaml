@@ -2,7 +2,18 @@ packages:
   - '.'
 
 overrides:
-  tailwindcss>nanoid: 3.3.7
+  tailwindcss>nanoid: 3.3.18
+  vite-plugin-manus-runtime>nanoid: 5.1.16
+  tar: 7.5.21
+  rollup: 4.59.0
+  picomatch: 4.0.4
+  '@esbuild-kit/core-utils>esbuild': 0.25.10
+  'exceljs>uuid': 11.1.1
+  '@vitejs/plugin-react>@babel/core': 7.29.6
+
+onlyBuiltDependencies:
+  - '@tailwindcss/oxide'
+  - esbuild
 
 patchedDependencies:
   wouter@3.7.1: patches/wouter@3.7.1.patch

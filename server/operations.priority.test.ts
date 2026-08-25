@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ownershipEntitlements, reservations, unitMaintenanceBlocks } from "../drizzle/schema";
+import { ownershipEntitlements, reservations, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -9,18 +9,19 @@ import { operationsRouter } from "./routers/operations";
 function makeDb(options: { entitlementPriority?: number; maintenance?: boolean } = {}) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
-  const db = {
-    select: vi.fn(() => ({
-      from: (table: unknown) => {
-        if (table === ownershipEntitlements) return { where: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] };
-        if (table === reservations) return { where: () => ({ limit: async () => [] }) };
-        if (table === unitMaintenanceBlocks) return { where: () => ({ limit: async () => options.maintenance ? [{ id: 700 }] : [] }) };
-        throw new Error("Tabela não prevista neste teste");
-      },
-    })),
-    insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 501 }] }; }) })),
-    update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })),
-  };
+  const select = vi.fn(() => ({
+    from: (table: unknown) => {
+      if (table === ownershipEntitlements) return { where: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] };
+      if (table === units) return { where: () => ({ limit: async () => [{ id: 18, status: "active" }] }) };
+      if (table === reservations) return { where: () => ({ limit: async () => [] }) };
+      if (table === unitMaintenanceBlocks) return { where: () => ({ limit: async () => options.maintenance ? [{ id: 700 }] : [] }) };
+      throw new Error("Tabela não prevista neste teste");
+    },
+  }));
+  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 501 }] }; }) }));
+  const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) }));
+  const transaction = vi.fn(async (callback: (tx: { select: typeof select; insert: typeof insert; update: typeof update }) => Promise<unknown>) => callback({ select, insert, update }));
+  const db = { select, insert, update, transaction };
   return { db, inserted, updates };
 }
 

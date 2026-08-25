@@ -153,19 +153,24 @@ export const operationsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const checkIn = dateValue(input.checkIn); const checkOut = dateValue(input.checkOut);
     if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída precisa ser posterior ao check-in." });
-    const conflict = await db.select({ id: reservations.id }).from(reservations).where(and(
-      eq(reservations.unitId, input.unitId), lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),
-    )).limit(1);
-    if (conflict.length) throw new TRPCError({ code: "CONFLICT", message: "Esta unidade já possui uma reserva nesse período." });
-    const maintenanceConflict = await db.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
-    if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "Esta unidade está bloqueada para manutenção no período informado." });
-    if (input.contractId) {
-      const contract = (await db.select().from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
-      if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao cliente." });
-    }
-    const created = await db.insert(reservations).values({ ...input, checkIn, checkOut, contractId: input.contractId ?? null, notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId();
-    const id = created[0]?.id;
-    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a reserva." });
+    const id = await db.transaction(async tx => {
+      const unit = (await tx.select({ id: units.id, status: units.status }).from(units).where(eq(units.id, input.unitId)).limit(1))[0];
+      if (!unit || unit.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para criar a reserva." });
+      const conflict = await tx.select({ id: reservations.id }).from(reservations).where(and(
+        eq(reservations.unitId, input.unitId), lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),
+      )).limit(1);
+      if (conflict.length) throw new TRPCError({ code: "CONFLICT", message: "Esta unidade já possui uma reserva nesse período." });
+      const maintenanceConflict = await tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
+      if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "Esta unidade está bloqueada para manutenção no período informado." });
+      if (input.contractId) {
+        const contract = (await tx.select({ id: contracts.id }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
+        if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao cliente." });
+      }
+      const created = await tx.insert(reservations).values({ ...input, checkIn, checkOut, contractId: input.contractId ?? null, notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId();
+      const reservationId = created[0]?.id;
+      if (!reservationId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a reserva." });
+      return reservationId;
+    });
     await recordAudit(ctx.user.id, "reservation", id, "created", `Reserva de ${input.checkIn} a ${input.checkOut} criada.`);
     return { id };
   }),

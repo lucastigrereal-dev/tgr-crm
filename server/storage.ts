@@ -3,6 +3,9 @@
 // Downloads return /manus-storage/{key} paths served via 307 redirect.
 
 import { ENV } from "./_core/env";
+import { fetchWithTimeout } from "./integrationReliability";
+
+const MAX_STORAGE_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
@@ -18,7 +21,12 @@ function getForgeConfig() {
 }
 
 function normalizeKey(relKey: string): string {
-  return relKey.replace(/^\/+/, "");
+  const key = relKey.replace(/^\/+/, "").replace(/\\/g, "/");
+  const segments = key.split("/");
+  if (!key || key.includes("\0") || segments.some(segment => segment === ".." || segment === ".")) {
+    throw new Error("Storage key inválida.");
+  }
+  return key;
 }
 
 function appendHashSuffix(relKey: string): string {
@@ -34,13 +42,17 @@ export async function storagePut(
   contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
   const { forgeUrl, forgeKey } = getForgeConfig();
+  const inputBytes = typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
+  if (inputBytes > MAX_STORAGE_UPLOAD_BYTES) {
+    throw new Error(`Arquivo excede o limite de ${MAX_STORAGE_UPLOAD_BYTES} bytes.`);
+  }
   const key = appendHashSuffix(normalizeKey(relKey));
 
   // 1. Get presigned PUT URL from Forge
   const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
   presignUrl.searchParams.set("path", key);
 
-  const presignResp = await fetch(presignUrl, {
+  const presignResp = await fetchWithTimeout(presignUrl, {
     headers: { Authorization: `Bearer ${forgeKey}` },
   });
 
@@ -58,7 +70,7 @@ export async function storagePut(
       ? new Blob([data], { type: contentType })
       : new Blob([data as any], { type: contentType });
 
-  const uploadResp = await fetch(s3Url, {
+  const uploadResp = await fetchWithTimeout(s3Url, {
     method: "PUT",
     headers: { "Content-Type": contentType },
     body: blob,
@@ -83,7 +95,7 @@ export async function storageGetSignedUrl(relKey: string): Promise<string> {
   const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
   getUrl.searchParams.set("path", key);
 
-  const resp = await fetch(getUrl, {
+  const resp = await fetchWithTimeout(getUrl, {
     headers: { Authorization: `Bearer ${forgeKey}` },
   });
 

@@ -1,31 +1,36 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { lazy, Suspense } from "react";
 import { Route, Switch } from "wouter";
 import DashboardLayout from "./components/DashboardLayout";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Contracts from "./pages/Contracts";
-import ContractDetail from "./pages/ContractDetail";
-import Agenda from "./pages/Agenda";
-import CustomerDetail from "./pages/CustomerDetail";
-import Customers from "./pages/Customers";
-import Finance from "./pages/Finance";
-import Home from "./pages/Home";
-import NotFound from "./pages/NotFound";
-import Sales from "./pages/Sales";
-import Team from "./pages/Team";
-import Reservations from "./pages/Reservations";
-import ImportCsv from "./pages/ImportCsv";
-import Commissions from "./pages/Commissions";
-import Campaigns from "./pages/Campaigns";
-import Capture from "./pages/Capture";
-import SalesRoom from "./pages/SalesRoom";
-import SalesAnalytics from "./pages/SalesAnalytics";
-import ProjectSettings from "./pages/ProjectSettings";
-import Intelligence from "./pages/Intelligence";
+const Contracts = lazy(() => import("./pages/Contracts"));
+const ContractDetail = lazy(() => import("./pages/ContractDetail"));
+const Agenda = lazy(() => import("./pages/Agenda"));
+const CustomerDetail = lazy(() => import("./pages/CustomerDetail"));
+const Customers = lazy(() => import("./pages/Customers"));
+const Finance = lazy(() => import("./pages/Finance"));
+const Home = lazy(() => import("./pages/Home"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const Sales = lazy(() => import("./pages/Sales"));
+const Team = lazy(() => import("./pages/Team"));
+const Reservations = lazy(() => import("./pages/Reservations"));
+const ImportCsv = lazy(() => import("./pages/ImportCsv"));
+const Commissions = lazy(() => import("./pages/Commissions"));
+const Campaigns = lazy(() => import("./pages/Campaigns"));
+const Capture = lazy(() => import("./pages/Capture"));
+const SalesRoom = lazy(() => import("./pages/SalesRoom"));
+const SalesAnalytics = lazy(() => import("./pages/SalesAnalytics"));
+const ProjectSettings = lazy(() => import("./pages/ProjectSettings"));
+const Intelligence = lazy(() => import("./pages/Intelligence"));
+
+function PageFallback() {
+  return <div className="flex min-h-[40vh] items-center justify-center p-8 text-sm text-muted-foreground">Carregando área do TGR CRM…</div>;
+}
 
 function Router() {
-  return <DashboardLayout><Switch>
+  return <DashboardLayout><Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={Home} />
     <Route path="/clientes" component={Customers} />
     <Route path="/clientes/:id" component={CustomerDetail} />
@@ -46,7 +51,7 @@ function Router() {
     <Route path="/inteligencia" component={Intelligence} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
-  </Switch></DashboardLayout>;
+  </Switch></Suspense></DashboardLayout>;
 }
 
 function App() {

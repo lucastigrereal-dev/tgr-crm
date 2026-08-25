@@ -16,12 +16,21 @@ function financeContext(): TrpcContext {
   };
 }
 
+function chain<T>(value: T) {
+  const promise = Promise.resolve(value) as Promise<T> & Record<string, () => unknown>;
+  promise.where = () => promise;
+  promise.limit = () => promise;
+  return promise;
+}
+
 function fakeDatabase(rows: unknown[], captures: unknown[] = []) {
   let selectCount = 0;
   return {
     select: () => {
       selectCount += 1;
-      return { from: () => selectCount % 2 === 0 ? Promise.resolve(captures) : ({ innerJoin: () => ({ leftJoin: async () => rows }) }) };
+      return selectCount % 2 === 0
+        ? { from: () => ({ where: () => chain(captures) }) }
+        : { from: () => ({ innerJoin: () => ({ leftJoin: () => ({ where: () => chain(rows) }) }) }) };
     },
   };
 }

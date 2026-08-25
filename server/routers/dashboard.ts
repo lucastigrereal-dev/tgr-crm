@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposalDiscountApprovals, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, savedAnalysisViews, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
@@ -70,6 +70,9 @@ function buildReopenedOpportunities(rows: Array<{ aggregateId: string; payload: 
   return Array.from(reopenCount, ([id, count]) => ({ id, reopenCount: count }));
 }
 
+const MAX_ANALYTICS_ROWS = 5000;
+const MAX_OPERATIONAL_ROWS = 5000;
+
 // Toda leitura executiva usa intervalo explícito para manter filtros, exports e futuros agentes de IA na mesma verdade temporal.
 
 export const dashboardRouter = router({
@@ -98,24 +101,30 @@ export const dashboardRouter = router({
     const db = await getDb();
     if (!db) return { activeContracts: 0, overdueAmount: 0, occupancy: 0, salesThisMonth: 0, pendingTasks: 0, openEntries: 0 };
     const { now, start, end } = monthBounds();
-    const [contractRows, installmentRows, reservationRows, unitRows, taskRows, salesRows, entryRows] = await Promise.all([
-      db.select({ total: sql<number>`count(*)` }).from(contracts).where(eq(contracts.status, "active")), db.select().from(installments), db.select().from(reservations).where(and(sql`${reservations.checkIn} < ${end}`, sql`${reservations.checkOut} > ${start}`, inArray(reservations.status, ["confirmed", "checked_in", "completed"]))), db.select({ total: sql<number>`count(*)` }).from(units).where(eq(units.status, "active")), db.select({ total: sql<number>`count(*)` }).from(tasks).where(inArray(tasks.status, ["open", "in_progress"])), db.select().from(opportunities).where(and(eq(opportunities.stage, "won"), sql`${opportunities.closedAt} >= ${start}`, sql`${opportunities.closedAt} < ${end}`)), db.select({ total: sql<number>`count(*)` }).from(financialTransactions).where(eq(financialTransactions.status, "open")),
+    const [contractRows, overdueRows, reservationDayRows, unitRows, taskRows, salesRows, entryRows] = await Promise.all([
+      db.select({ total: sql<number>`count(*)` }).from(contracts).where(eq(contracts.status, "active")),
+      db.select({ total: sql<number>`coalesce(sum(case when ${installments.status} = 'overdue' or (${installments.status} = 'open' and ${installments.dueDate} < ${now}) then ${installments.amount} else 0 end), 0)` }).from(installments),
+      db.select({ total: sql<number>`coalesce(sum(timestampdiff(day, ${reservations.checkIn}, ${reservations.checkOut})), 0)` }).from(reservations).where(and(sql`${reservations.checkIn} < ${end}`, sql`${reservations.checkOut} > ${start}`, inArray(reservations.status, ["confirmed", "checked_in", "completed"]))),
+      db.select({ total: sql<number>`count(*)` }).from(units).where(eq(units.status, "active")),
+      db.select({ total: sql<number>`count(*)` }).from(tasks).where(inArray(tasks.status, ["open", "in_progress"])),
+      db.select({ total: sql<number>`coalesce(sum(${opportunities.expectedAmount}), 0)` }).from(opportunities).where(and(eq(opportunities.stage, "won"), sql`${opportunities.closedAt} >= ${start}`, sql`${opportunities.closedAt} < ${end}`)),
+      db.select({ total: sql<number>`count(*)` }).from(financialTransactions).where(eq(financialTransactions.status, "open")),
     ]);
-    const overdueAmount = installmentRows.filter(item => item.status === "overdue" || (item.status === "open" && new Date(item.dueDate) < now)).reduce((sum, item) => sum + Number(item.amount), 0);
-    const totalReservationDays = reservationRows.reduce((sum, item) => Math.max(0, sum + Math.ceil((new Date(item.checkOut).getTime() - new Date(item.checkIn).getTime()) / 86_400_000)), 0);
+    const overdueAmount = Number(overdueRows[0]?.total ?? 0);
+    const totalReservationDays = Math.max(0, Number(reservationDayRows[0]?.total ?? 0));
     const totalDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86_400_000) * Number(unitRows[0]?.total ?? 0));
-    return { activeContracts: Number(contractRows[0]?.total ?? 0), overdueAmount, occupancy: Math.min(100, Math.round((totalReservationDays / totalDays) * 100)), salesThisMonth: salesRows.reduce((sum, item) => sum + Number(item.expectedAmount), 0), pendingTasks: Number(taskRows[0]?.total ?? 0), openEntries: Number(entryRows[0]?.total ?? 0) };
+    return { activeContracts: Number(contractRows[0]?.total ?? 0), overdueAmount, occupancy: Math.min(100, Math.round((totalReservationDays / totalDays) * 100)), salesThisMonth: Number(salesRows[0]?.total ?? 0), pendingTasks: Number(taskRows[0]?.total ?? 0), openEntries: Number(entryRows[0]?.total ?? 0) };
   }),
   commercialCharts: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], filters: { resorts: [], salesRooms: [] }, range: { start, end } };
     const [opportunityRows, captureRows, goalRows, sellerRows, campaignRows, resortRows] = await Promise.all([
-      db.select().from(opportunities),
-      db.select().from(captureRecords),
-      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)),
-      db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")),
-      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")),
-      db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")),
+      db.select().from(opportunities).where(or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end)))).limit(MAX_ANALYTICS_ROWS),
+      db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).limit(1000),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")).limit(1000),
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")).limit(1000),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")).limit(1000),
     ]);
     const capturesByOpportunity = latestCaptureByOpportunity(captureRows);
     const needsOperationalContext = Boolean(input?.resortId || input?.salesRoom || input?.commercialRole || input?.operatorId || input?.presentationStatus);
@@ -132,8 +141,8 @@ export const dashboardRouter = router({
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return [];
     const [rows, captureRows] = await Promise.all([
-      db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id)),
-      db.select().from(captureRecords),
+      db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id)).where(or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end)))).limit(MAX_ANALYTICS_ROWS),
+      db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
     ]);
     const selectedIds = new Set(filterFunnelDetails(rows.map(({ opportunity }) => opportunity), input.stage, start, end, input.sellerId, input.campaignId).map(item => item.id));
     const capturesByOpportunity = latestCaptureByOpportunity(captureRows);
@@ -151,10 +160,10 @@ export const dashboardRouter = router({
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return { metrics: calculateConversionMetrics([]), breakdowns: { campaigns: [], promoters: [], liners: [], closers: [] }, range: { start, end } };
     const [captureRows, campaignRows, userRows, resortRows] = await Promise.all([
-      db.select({ capture: captureRecords, opportunityStage: opportunities.stage }).from(captureRecords).leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id)),
-      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns),
-      db.select({ id: users.id, name: users.name, email: users.email }).from(users),
-      db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")),
+      db.select({ capture: captureRecords, opportunityStage: opportunities.stage }).from(captureRecords).leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id)).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).limit(1000),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")).limit(1000),
     ]);
     const captures = filterConversionCaptures(captureRows.map(row => ({ ...row.capture, opportunityStage: row.opportunityStage ?? null })), start, end, input?.campaignId, input?.resortId, input?.salesRoom, input?.commercialRole, input?.operatorId, input?.presentationStatus);
     const names = { campaigns: new Map(campaignRows.map(item => [item.id, item.name])), users: new Map(userRows.map(item => [item.id, item.name || item.email || `Usuário #${item.id}`])) };
@@ -173,21 +182,21 @@ export const dashboardRouter = router({
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
     const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows, rhythmCaptureRows, userRows, customerRows, opportunityEventRows, discountApprovalRows] = await Promise.all([
-      db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)),
-      db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt),
-      db.select().from(unitMaintenanceBlocks).orderBy(desc(unitMaintenanceBlocks.startsAt)),
-      db.select({ item: reservationWaitlist, customerName: customers.fullName }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)),
-      db.select({ actorUserId: domainEvents.actorUserId }).from(domainEvents).where(sql`${domainEvents.occurredAt} >= ${cutoff}`),
-      db.select({ id: customerInteractions.id }).from(customerInteractions).where(sql`${customerInteractions.occurredAt} >= ${cutoff}`),
-      db.select({ capture: captureRecords, customerName: customers.fullName }).from(captureRecords).innerJoin(customers, eq(captureRecords.customerId, customers.id)).where(eq(captureRecords.presentationStatus, "captured")),
-      db.select({ opportunity: opportunities, customerName: customers.fullName }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).where(inArray(opportunities.stage, ["proposal", "negotiation"])),
-      db.select({ request: contractCancellationRequests, contractNumber: contracts.number }).from(contractCancellationRequests).innerJoin(contracts, eq(contractCancellationRequests.contractId, contracts.id)).where(eq(contractCancellationRequests.status, "requested")),
-      db.select({ commission: salesCommissions, sellerName: users.name, sourceInstallmentStatus: installments.status }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(installments, eq(salesCommissions.sourceInstallmentId, installments.id)),
-      db.select({ contract: contracts, customerName: customers.fullName, resortId: captureRecords.resortId, captureCreatedAt: captureRecords.createdAt }).from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)),
-      db.select().from(contractDocuments),
-      db.select().from(commercialProjectSettings),
-      db.select().from(captureRecords),
-      db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+      db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).orderBy(desc(installments.dueDate)).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt).limit(MAX_OPERATIONAL_ROWS),
+      db.select().from(unitMaintenanceBlocks).orderBy(desc(unitMaintenanceBlocks.startsAt)).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ item: reservationWaitlist, customerName: customers.fullName }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).orderBy(reservationWaitlist.desiredCheckIn).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ actorUserId: domainEvents.actorUserId }).from(domainEvents).where(sql`${domainEvents.occurredAt} >= ${cutoff}`).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ id: customerInteractions.id }).from(customerInteractions).where(sql`${customerInteractions.occurredAt} >= ${cutoff}`).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ capture: captureRecords, customerName: customers.fullName }).from(captureRecords).innerJoin(customers, eq(captureRecords.customerId, customers.id)).where(eq(captureRecords.presentationStatus, "captured")).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ opportunity: opportunities, customerName: customers.fullName }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).where(inArray(opportunities.stage, ["proposal", "negotiation"])).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ request: contractCancellationRequests, contractNumber: contracts.number }).from(contractCancellationRequests).innerJoin(contracts, eq(contractCancellationRequests.contractId, contracts.id)).where(eq(contractCancellationRequests.status, "requested")).limit(1000),
+      db.select({ commission: salesCommissions, sellerName: users.name, sourceInstallmentStatus: installments.status }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(installments, eq(salesCommissions.sourceInstallmentId, installments.id)).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ contract: contracts, customerName: customers.fullName, resortId: captureRecords.resortId, captureCreatedAt: captureRecords.createdAt }).from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).limit(MAX_OPERATIONAL_ROWS),
+      db.select().from(contractDocuments).limit(MAX_OPERATIONAL_ROWS),
+      db.select().from(commercialProjectSettings).limit(1000),
+      db.select().from(captureRecords).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
       db.select({ id: customers.id, phone: customers.phone, documentNumber: customers.documentNumber }).from(customers).limit(2000),
       db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents).where(eq(domainEvents.eventName, "opportunity.updated")).orderBy(desc(domainEvents.occurredAt)).limit(3000),
       db.select({ approval: proposalDiscountApprovals, proposal: proposals }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).where(eq(proposalDiscountApprovals.status, "pending")).orderBy(desc(proposalDiscountApprovals.createdAt)).limit(500),

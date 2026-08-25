@@ -175,7 +175,7 @@ export const opportunities = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("opportunities_stage_idx").on(table.stage), index("opportunities_seller_idx").on(table.sellerId)],
+  table => [index("opportunities_stage_idx").on(table.stage), index("opportunities_seller_idx").on(table.sellerId), index("opportunities_period_idx").on(table.stage, table.closedAt, table.createdAt), index("opportunities_campaign_period_idx").on(table.campaignId, table.stage, table.closedAt)],
 );
 
 export const captureRecords = mysqlTable(
@@ -246,6 +246,7 @@ export const captureRecords = mysqlTable(
     index("captures_campaign_status_idx").on(table.campaignId, table.presentationStatus),
     index("captures_room_status_idx").on(table.salesRoom, table.presentationStatus, table.scheduledAt),
     index("captures_opportunity_idx").on(table.opportunityId),
+    index("captures_created_idx").on(table.createdAt),
     index("captures_vehicle_idx").on(table.vehicleBrand, table.vehicleModel, table.createdAt),
     index("captures_profile_numeric_idx").on(table.childrenCount, table.averageIncome, table.createdAt),
     index("captures_travel_idx").on(table.usualTravelSeason, table.travelWeeksPerYear, table.createdAt),
@@ -331,7 +332,7 @@ export const salesCommissions = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId)],
+  table => [index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
 );
 
 export const contracts = mysqlTable(
@@ -353,7 +354,7 @@ export const contracts = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("contracts_status_idx").on(table.status), index("contracts_customer_idx").on(table.customerId)],
+  table => [index("contracts_status_idx").on(table.status), index("contracts_customer_idx").on(table.customerId), index("contracts_proposal_status_idx").on(table.proposalId, table.status)],
 );
 
 export const contractDocuments = mysqlTable("contract_documents", {
@@ -475,7 +476,7 @@ export const financialTransactions = mysqlTable(
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status)],
+  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status), index("financial_transactions_paid_idx").on(table.status, table.paidAt, table.type)],
 );
 
 export const financialPortfolioAssignments = mysqlTable("financial_portfolio_assignments", {
@@ -523,7 +524,7 @@ export const reservations = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("reservations_unit_dates_idx").on(table.unitId, table.checkIn, table.checkOut), index("reservations_customer_idx").on(table.customerId)],
+  table => [index("reservations_unit_dates_idx").on(table.unitId, table.checkIn, table.checkOut), index("reservations_unit_status_dates_idx").on(table.unitId, table.status, table.checkIn, table.checkOut), index("reservations_customer_idx").on(table.customerId)],
 );
 
 export const reservationGuests = mysqlTable(
