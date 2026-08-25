@@ -11,7 +11,9 @@ function query(rows: unknown[]) {
 
 function makeDb(duplicate = false) {
   return {
-    select: vi.fn(() => query(duplicate ? [{ id: 700 }] : [])),
+    select: vi.fn()
+      .mockReturnValueOnce(query([{ id: 91, status: "open" }]))
+      .mockReturnValueOnce(query(duplicate ? [{ id: 700 }] : [])),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 701 }] })) })),
   };
 }

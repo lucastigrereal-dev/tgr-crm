@@ -206,6 +206,9 @@ export const financeRouter = router({
       if (["boleto", "pix"].includes(input.type)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PIX e boleto precisam ser emitidos pelo gateway configurado; o registro manual foi bloqueado para evitar cobrança fictícia." });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+      const installment = (await db.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.id, input.installmentId)).limit(1))[0];
+      if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela da cobrança não encontrada." });
+      if (["paid", "cancelled"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga ou cancelada." });
       const externalReference = input.externalReference?.trim() || `TGR-${input.installmentId}-${Date.now()}`;
       const duplicate = (await db.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
       if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
@@ -324,6 +327,10 @@ export const financeRouter = router({
       assertCapability(ctx.user.role, "finance.transfer.create");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+      if (input.contractId) {
+        const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+        if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do repasse não encontrado." });
+      }
       const created = await db.insert(financialTransfers).values({ ...input, contractId: input.contractId ?? null, description: input.description || null, amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate) }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o repasse." });
