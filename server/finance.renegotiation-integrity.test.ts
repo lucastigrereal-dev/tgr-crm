@@ -6,8 +6,23 @@ vi.mock("./db", () => dbMocks);
 import { financeRouter } from "./routers/finance";
 
 function makeDb(status: "open" | "paid" | "cancelled") {
+  const rows = [{ id: 91, contractId: 61, sequence: 2, amount: "1000.00", status }];
+  const query = () => {
+    const chain = {
+      from: vi.fn(),
+      where: vi.fn(),
+      limit: vi.fn(),
+      for: vi.fn(async () => rows),
+      then: (resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(rows).then(resolve, reject),
+    };
+    chain.from.mockReturnValue(chain);
+    chain.where.mockReturnValue(chain);
+    chain.limit.mockReturnValue(chain);
+    return chain;
+  };
+  const tx = { select: vi.fn(() => query()), insert: vi.fn() };
   return {
-    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => [{ id: 91, contractId: 61, sequence: 2, amount: "1000.00", status }]) })) })) })),
+    transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     insert: vi.fn(),
   };
 }

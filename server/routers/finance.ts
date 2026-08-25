@@ -159,10 +159,21 @@ export const financeRouter = router({
 
   createRenegotiation: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), proposedAmount: z.coerce.number().positive(), proposedDueDate: z.string().date(), notes: z.string().trim().max(2000).nullable().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const installment = (await db.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1))[0]; if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
-    const originalAmount = Number(installment.amount); if (["paid", "cancelled"].includes(installment.status) || input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "Acordo inválido para esta parcela." });
-    const created = await db.insert(installmentRenegotiations).values({ contractId: installment.contractId, originalInstallmentId: installment.id, originalAmount: originalAmount.toFixed(2), proposedAmount: input.proposedAmount.toFixed(2), proposedDueDate: dateValue(input.proposedDueDate), discountAmount: (originalAmount - input.proposedAmount).toFixed(2), notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId(); const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o acordo." });
-    await recordAudit(ctx.user.id, "installment_renegotiation", id, "created", `Acordo proposto para parcela ${installment.sequence}.`); await recordDomainEvent({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: installment.id, proposedAmount: input.proposedAmount } }); return { id };
+    const renegotiation = await db.transaction(async tx => {
+      const installment = (await tx.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
+      if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
+      const originalAmount = Number(installment.amount);
+      if (["paid", "cancelled"].includes(installment.status) || input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "Acordo inválido para esta parcela." });
+      const active = (await tx.select({ id: installmentRenegotiations.id }).from(installmentRenegotiations).where(and(eq(installmentRenegotiations.originalInstallmentId, input.installmentId), inArray(installmentRenegotiations.status, ["draft", "approved"]))).limit(1))[0];
+      if (active) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma renegociação ativa para esta parcela." });
+      const created = await tx.insert(installmentRenegotiations).values({ contractId: installment.contractId, originalInstallmentId: installment.id, originalAmount: originalAmount.toFixed(2), proposedAmount: input.proposedAmount.toFixed(2), proposedDueDate: dateValue(input.proposedDueDate), discountAmount: (originalAmount - input.proposedAmount).toFixed(2), notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId();
+      const id = created[0]?.id;
+      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o acordo." });
+      return { id, sequence: installment.sequence, installmentId: installment.id, proposedAmount: input.proposedAmount };
+    });
+    await recordAudit(ctx.user.id, "installment_renegotiation", renegotiation.id, "created", `Acordo proposto para parcela ${renegotiation.sequence}.`);
+    await recordDomainEvent({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: renegotiation.id, actorUserId: ctx.user.id, payload: { installmentId: renegotiation.installmentId, proposedAmount: renegotiation.proposedAmount } });
+    return { id: renegotiation.id };
   }),
 
   issueGatewayBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix"]) }))
