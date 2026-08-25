@@ -22,5 +22,23 @@ function normalizeJsonText(value: string | null | undefined) {
 }
 export const projectSettingsRouter = router({
   list: adminProcedure.query(async () => { const db = await getDb(); if (!db) return []; return db.select({ resort: resorts, settings: commercialProjectSettings }).from(resorts).leftJoin(commercialProjectSettings, eq(commercialProjectSettings.resortId, resorts.id)).limit(1000); }),
-  upsert: adminProcedure.input(settingsInput).mutation(async ({ ctx, input }) => { const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." }); const current = (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0]; const values = { ...input, cancellationPolicy: normalizeJsonText(input.cancellationPolicy), requiredCaptureFields: normalizeJsonText(input.requiredCaptureFields), requiredContractDocuments: normalizeJsonText(input.requiredContractDocuments), commercialRoles: normalizeJsonText(input.commercialRoles), commissionPolicy: normalizeJsonText(input.commissionPolicy), updatedByUserId: ctx.user.id }; if (current) await db.update(commercialProjectSettings).set(values).where(eq(commercialProjectSettings.id, current.id)); else await db.insert(commercialProjectSettings).values(values); await recordAudit(ctx.user.id, "commercial_project_settings", input.resortId, current ? "updated" : "created", "Configuração comercial por empreendimento atualizada."); return { success: true }; }),
+  upsert: adminProcedure.input(settingsInput).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const operation = await db.transaction(async tx => {
+      const resort = (await tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1).for("update"))[0];
+      if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento não encontrado." });
+      const current = (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0];
+      const values = { ...input, cancellationPolicy: normalizeJsonText(input.cancellationPolicy), requiredCaptureFields: normalizeJsonText(input.requiredCaptureFields), requiredContractDocuments: normalizeJsonText(input.requiredContractDocuments), commercialRoles: normalizeJsonText(input.commercialRoles), commissionPolicy: normalizeJsonText(input.commissionPolicy), updatedByUserId: ctx.user.id };
+      if (current) {
+        const updateResult = await tx.update(commercialProjectSettings).set(values).where(eq(commercialProjectSettings.id, current.id));
+        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A configuração foi alterada por outra operação. Recarregue e tente novamente." });
+      } else {
+        await tx.insert(commercialProjectSettings).values(values);
+      }
+      return current ? "updated" as const : "created" as const;
+    });
+    await recordAudit(ctx.user.id, "commercial_project_settings", input.resortId, operation, "Configuração comercial por empreendimento atualizada.");
+    return { success: true };
+  }),
 });
