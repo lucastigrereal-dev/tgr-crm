@@ -109,7 +109,7 @@ async function startServer() {
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    logger.warn("Preferred port unavailable; using fallback port", { preferredPort, port });
   }
 
   const shutdown = (signal: string) => {
@@ -129,4 +129,4 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(error => logger.error("Server startup failed", { error: error instanceof Error ? error.message : "unknown_error" }));
