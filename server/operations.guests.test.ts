@@ -45,8 +45,16 @@ describe("operação de fila e acompanhantes", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(9, "reservation_guest", 722, "created", expect.stringContaining("Maria Tigre"));
   });
 
+  it("bloqueia presença fora de uma hospedagem ativa", async () => {
+    const fixture = makeDb([[{ checkedInAt: null, checkedOutAt: null, reservationStatus: "confirmed" }]]); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
+
+    await expect(caller.updateGuestPresence({ id: 722, action: "check_in" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fixture.updates).toEqual([]);
+  });
+
   it("marca presença individual do acompanhante na chegada", async () => {
-    const fixture = makeDb([[{ checkedInAt: null, checkedOutAt: null }]]); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const fixture = makeDb([[{ checkedInAt: null, checkedOutAt: null, reservationStatus: "checked_in" }]]); dbMocks.getDb.mockResolvedValue(fixture.db);
     const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
 
     await expect(caller.updateGuestPresence({ id: 722, action: "check_in" })).resolves.toEqual({ success: true, alreadyCheckedIn: false });

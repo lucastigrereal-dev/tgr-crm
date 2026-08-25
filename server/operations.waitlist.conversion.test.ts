@@ -60,7 +60,7 @@ describe("conversão de lista de espera e saída integrada", () => {
 
   it("mantém a jornada completa de chegada e saída coerente para reserva e acompanhante", async () => {
     const updates: unknown[] = [];
-    const db = { select: querySequence([[{ status: "confirmed" }], [{ checkedInAt: null, checkedOutAt: null }], [{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const db = { select: querySequence([[{ status: "confirmed" }], [{ checkedInAt: null, checkedOutAt: null, reservationStatus: "checked_in" }], [{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 

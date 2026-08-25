@@ -247,8 +247,9 @@ export const operationsRouter = router({
 
   updateGuestPresence: serviceProcedure.input(z.object({ id: z.number().int().positive(), action: z.enum(["check_in", "check_out"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const guest = (await db.select({ checkedInAt: reservationGuests.checkedInAt, checkedOutAt: reservationGuests.checkedOutAt }).from(reservationGuests).where(eq(reservationGuests.id, input.id)).limit(1))[0];
+    const guest = (await db.select({ checkedInAt: reservationGuests.checkedInAt, checkedOutAt: reservationGuests.checkedOutAt, reservationStatus: reservations.status }).from(reservationGuests).innerJoin(reservations, eq(reservationGuests.reservationId, reservations.id)).where(eq(reservationGuests.id, input.id)).limit(1))[0];
     if (!guest) throw new TRPCError({ code: "NOT_FOUND", message: "Acompanhante não encontrado." });
+    if (guest.reservationStatus !== "checked_in") throw new TRPCError({ code: "BAD_REQUEST", message: "A presença só pode ser registrada durante a hospedagem." });
     if (input.action === "check_in" && guest.checkedInAt) return { success: true, alreadyCheckedIn: true };
     if (input.action === "check_out" && !guest.checkedInAt) throw new TRPCError({ code: "BAD_REQUEST", message: "O acompanhante precisa fazer check-in antes do check-out." });
     if (input.action === "check_out" && guest.checkedOutAt) return { success: true, alreadyCheckedOut: true };
