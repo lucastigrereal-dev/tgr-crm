@@ -602,12 +602,13 @@ export const tasks = mysqlTable(
     assignedToUserId: int("assignedToUserId").references(() => users.id),
     dueAt: timestamp("dueAt"),
     reminderAt: timestamp("reminderAt"),
+    automationKey: varchar("automationKey", { length: 255 }),
     completedAt: timestamp("completedAt"),
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("tasks_status_due_idx").on(table.status, table.dueAt), index("tasks_assigned_idx").on(table.assignedToUserId)],
+  table => [index("tasks_status_due_idx").on(table.status, table.dueAt), index("tasks_assigned_idx").on(table.assignedToUserId), uniqueIndex("tasks_automation_key_unique").on(table.automationKey)],
 );
 
 export const auditLogs = mysqlTable("audit_logs", {

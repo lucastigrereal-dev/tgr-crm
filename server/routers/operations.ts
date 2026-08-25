@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, SQL } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql, SQL } from "drizzle-orm";
 import { z } from "zod";
 import { contracts, customers, installments, ownershipEntitlements, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -299,7 +299,8 @@ export const operationsRouter = router({
         dueAt: installment.dueDate,
         reminderAt: installment.dueDate,
         createdByUserId: ctx.user.id,
-      });
+        automationKey: key,
+      }).onDuplicateKeyUpdate({ set: { automationKey: sql`${tasks.automationKey}` } });
       existingPaymentTaskKeys.add(key);
     }
     const taskFilters: SQL[] = [];
