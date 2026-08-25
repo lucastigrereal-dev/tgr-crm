@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, like, or } from "drizzle-orm";
 import { z } from "zod";
-import { customers, opportunities, proposalDiscountApprovals, proposals, salesGoals, salesPlaybooks, tasks, users } from "../../drizzle/schema";
+import { customers, opportunities, proposalDiscountApprovals, proposals, salesCampaigns, salesGoals, salesPlaybooks, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, salesProcedure } from "./access";
@@ -97,10 +97,19 @@ export const salesRouter = router({
   createOpportunity: salesProcedure.input(opportunityInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente da oportunidade não encontrado." });
+    const sellerId = input.sellerId ?? ctx.user.id;
+    const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, sellerId)).limit(1))[0];
+    if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor da oportunidade não encontrado." });
+    if (input.campaignId) {
+      const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1))[0];
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da oportunidade não encontrada." });
+    }
     const followUpAt = resolveFollowUpAt(input.nextFollowUpAt);
     const result = await db.insert(opportunities).values({
       ...input,
-      sellerId: input.sellerId ?? ctx.user.id,
+      sellerId,
       expectedAmount: input.expectedAmount.toFixed(2),
       source: input.source?.trim() || null,
       nextFollowUpAt: followUpAt,
@@ -115,7 +124,7 @@ export const salesRouter = router({
       type: "follow_up",
       priority: "normal",
       customerId: input.customerId,
-      assignedToUserId: input.sellerId ?? ctx.user.id,
+      assignedToUserId: sellerId,
       dueAt: followUpAt,
       reminderAt: followUpAt,
       createdByUserId: ctx.user.id,
