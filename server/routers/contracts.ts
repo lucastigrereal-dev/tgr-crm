@@ -45,8 +45,11 @@ export const contractsRouter = router({
     const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, sellerId)).limit(1))[0];
     if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor do contrato não encontrado." });
     if (input.proposalId) {
-      const proposal = (await db.select({ id: proposals.id }).from(proposals).where(eq(proposals.id, input.proposalId)).limit(1))[0];
+      const proposal = (await db.select({ id: proposals.id, opportunityId: proposals.opportunityId }).from(proposals).where(eq(proposals.id, input.proposalId)).limit(1))[0];
       if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposta do contrato não encontrada." });
+      const opportunity = (await db.select({ customerId: opportunities.customerId }).from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0];
+      if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
+      if (opportunity.customerId !== input.customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "A proposta informada não pertence ao cliente do contrato." });
     }
     const schedule = buildInstallmentSchedule(input.totalAmount, input.installmentCount, input.firstDueDate);
     const result = await db.transaction(async tx => {
