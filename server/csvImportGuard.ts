@@ -8,3 +8,15 @@ export function assertCsvImportRowBudget(csv: string) {
     throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: `O arquivo excede o limite de ${MAX_CSV_IMPORT_ROWS.toLocaleString("pt-BR")} linhas.` });
   }
 }
+
+export function duplicateValueIndexes(values: readonly (string | null | undefined)[]) {
+  const seen = new Set<string>();
+  const duplicates: number[] = [];
+  values.forEach((value, index) => {
+    const normalized = value?.trim().toLocaleLowerCase("pt-BR");
+    if (!normalized) return;
+    if (seen.has(normalized)) duplicates.push(index);
+    else seen.add(normalized);
+  });
+  return duplicates;
+}

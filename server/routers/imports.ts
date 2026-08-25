@@ -5,7 +5,7 @@ import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImpo
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
-import { assertCsvImportRowBudget } from "../csvImportGuard";
+import { assertCsvImportRowBudget, duplicateValueIndexes } from "../csvImportGuard";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
 
@@ -31,7 +31,8 @@ export const importsRouter = router({
     if (issues.length) return { valid: false, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(parsed.records.length, 0, 0, issues) };
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     if (input.kind === "customers") {
-      const rows = parseCustomersCsv(csv).records; const documents = rows.map(row => row.documentNumber).filter(Boolean); const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : []; const existingByDocument = new Map(existing.map(item => [item.documentNumber, item]));
+      const rows = parseCustomersCsv(csv).records; const documents = rows.map(row => row.documentNumber).filter(Boolean); const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : []; const existingByDocument = new Map(existing.map(item => [item.documentNumber, item])); const duplicateCustomerRows = new Set(duplicateValueIndexes(rows.map(row => row.documentNumber)));
+      rows.forEach((row, index) => { if (duplicateCustomerRows.has(index)) issues.push({ line: index + 2, field: "documentNumber", message: "Documento repetido dentro do próprio arquivo." }); });
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [], summary: importSummary(rows.length, 0, 0, issues) };
       let created = 0; let updated = 0; let batchId = 0;
       await db.transaction(async tx => {
@@ -45,12 +46,14 @@ export const importsRouter = router({
     if (input.kind === "units") {
       const rows = parseUnitsCsv(csv).records;
       const resortNames = Array.from(new Set(rows.map(row => row.resortName).filter(Boolean)));
+      const duplicateUnitRows = new Set(duplicateValueIndexes(rows.map(row => `${normalizedKey(row.resortName)}::${normalizedKey(row.code)}`)));
       const resortRows = resortNames.length ? await db.select().from(resorts).where(inArray(resorts.name, resortNames)) : [];
       const resortIds = resortRows.map(item => item.id);
       const unitRows = resortIds.length ? await db.select().from(units).where(inArray(units.resortId, resortIds)) : [];
       const resortsByName = new Map(resortRows.map(item => [normalizedKey(item.name), item]));
       const unitsByKey = new Map(unitRows.map(item => [`${item.resortId}::${normalizedKey(item.code)}`, item]));
       let created = 0; let updated = 0; let batchId = 0;
+      rows.forEach((row, index) => { if (duplicateUnitRows.has(index)) issues.push({ line: index + 2, field: "codigo_unidade", message: "Código de unidade repetido no mesmo empreendimento dentro do arquivo." }); });
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
       await db.transaction(async tx => {
         const createdBatch = await tx.insert(csvImportBatches).values({ kind: "units", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0;
@@ -82,7 +85,8 @@ export const importsRouter = router({
     const customerByDocument = new Map(customerRows.map(item => [item.documentNumber, item]));
     const userByEmail = new Map(userRows.filter(item => item.email).map(item => [item.email!.toLowerCase(), item]));
     const existingNumbers = new Set(contractRows.map(item => item.number));
-    rows.forEach((row, index) => { const line = index + 2; if (!customerByDocument.has(row.customerDocument)) issues.push({ line, field: "documento_associado", message: "Associado não encontrado; importe os associados antes dos contratos." }); if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." }); if (row.sellerEmail && !userByEmail.has(row.sellerEmail)) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail." }); });
+    const duplicateContractRows = new Set(duplicateValueIndexes(rows.map(row => row.number)));
+    rows.forEach((row, index) => { const line = index + 2; if (duplicateContractRows.has(index)) issues.push({ line, field: "numero_contrato", message: "Número de contrato repetido dentro do próprio arquivo." }); if (!customerByDocument.has(row.customerDocument)) issues.push({ line, field: "documento_associado", message: "Associado não encontrado; importe os associados antes dos contratos." }); if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." }); if (row.sellerEmail && !userByEmail.has(row.sellerEmail)) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail." }); });
     if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
     let created = 0; let batchId = 0;
     await db.transaction(async tx => { const createdBatch = await tx.insert(csvImportBatches).values({ kind: "contracts", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." }); for (const row of rows) { const customer = customerByDocument.get(row.customerDocument)!; const seller = row.sellerEmail ? userByEmail.get(row.sellerEmail) : undefined; const createdContract = await tx.insert(contracts).values({ number: row.number, customerId: customer.id, sellerId: seller?.id ?? ctx.user.id, usageModel: row.usageModel, status: row.status, totalAmount: row.totalAmount.toFixed(2), activatedAt: row.status === "active" ? new Date() : null, notes: row.notes }).$returningId(); const contractId = createdContract[0]?.id; if (!contractId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o contrato importado." }); const schedule = buildInstallmentSchedule(row.totalAmount, row.installmentCount, row.firstDueDate); await tx.insert(installments).values(schedule.map(item => ({ contractId, sequence: item.sequence, dueDate: item.dueDate, amount: item.amount, status: "open" as const }))); await tx.insert(csvImportItems).values({ batchId, entityType: "contract", entityId: contractId, action: "created" }); created += 1; } await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: 0, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId)); });
