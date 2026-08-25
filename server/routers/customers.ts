@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, like, or } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   contracts,
@@ -70,9 +70,14 @@ export const customersRouter = router({
   create: internalProcedure.input(customerInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const documentNumber = nullableText(input.documentNumber);
+    if (documentNumber) {
+      const duplicate = (await db.select({ id: customers.id }).from(customers).where(eq(customers.documentNumber, documentNumber)).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe um cliente com este documento." });
+    }
     const inserted = await db.insert(customers).values({
       ...input,
-      documentNumber: nullableText(input.documentNumber),
+      documentNumber,
       email: nullableText(input.email),
       phone: nullableText(input.phone),
       birthDate: input.birthDate ? new Date(`${input.birthDate}T12:00:00Z`) : null,
@@ -98,9 +103,16 @@ export const customersRouter = router({
   update: internalProcedure.input(z.object({ id: z.number().int().positive(), data: customerInput })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const current = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.id)).limit(1))[0];
+    if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
+    const documentNumber = nullableText(input.data.documentNumber);
+    if (documentNumber) {
+      const duplicate = (await db.select({ id: customers.id }).from(customers).where(and(eq(customers.documentNumber, documentNumber), ne(customers.id, input.id))).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outro cliente com este documento." });
+    }
     await db.update(customers).set({
       ...input.data,
-      documentNumber: nullableText(input.data.documentNumber),
+      documentNumber,
       email: nullableText(input.data.email),
       phone: nullableText(input.data.phone),
       birthDate: input.data.birthDate ? new Date(`${input.data.birthDate}T12:00:00Z`) : null,

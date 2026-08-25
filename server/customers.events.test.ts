@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { customers } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -7,8 +8,19 @@ vi.mock("./storage", () => storageMocks);
 
 import { customersRouter } from "./routers/customers";
 
-function makeDb() {
+function makeDb(options: { existingId?: number | null; duplicateDocumentId?: number } = {}) {
+  let customerSelectCall = 0;
   return {
+    select: vi.fn(() => ({
+      from: (table: unknown) => {
+        if (table !== customers) throw new Error("Tabela não prevista neste teste");
+        return { where: () => ({ limit: async () => {
+          if (options.existingId === null) return [];
+          if (customerSelectCall++ === 0) return [{ id: options.existingId ?? 121 }];
+          return options.duplicateDocumentId ? [{ id: options.duplicateDocumentId }] : [];
+        } }) };
+      },
+    })),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 121 }] })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
@@ -33,6 +45,23 @@ describe("eventos e auditoria de associados", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "customer.created", aggregateType: "customer", aggregateId: 121, actorUserId: 44, payload: expect.objectContaining({ status: "active", acquisitionSource: "tour" }) }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(44, "customer", 121, "updated", expect.stringContaining("Ana da Silva"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "customer.updated", aggregateType: "customer", aggregateId: 121, actorUserId: 44, payload: expect.objectContaining({ status: "inactive", city: "Olímpia", state: "SP" }) }));
+  });
+
+  it("bloqueia documento duplicado e cliente inexistente antes da escrita", async () => {
+    const duplicate = makeDb();
+    dbMocks.getDb.mockResolvedValue(duplicate);
+    await expect(caller().create({ fullName: "Cliente Duplicado", documentNumber: "CPF-123", status: "prospect" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(duplicate.insert).not.toHaveBeenCalled();
+
+    const missing = makeDb({ existingId: null });
+    dbMocks.getDb.mockResolvedValue(missing);
+    await expect(caller().update({ id: 999, data: { fullName: "Cliente Ausente", status: "prospect" } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(missing.update).not.toHaveBeenCalled();
+
+    const updateDuplicate = makeDb({ duplicateDocumentId: 122 });
+    dbMocks.getDb.mockResolvedValue(updateDuplicate);
+    await expect(caller().update({ id: 121, data: { fullName: "Ana da Silva", documentNumber: "CPF-999", status: "active" } })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(updateDuplicate.update).not.toHaveBeenCalled();
   });
 
   it("registra evento de interação e de documento com o associado e ator corretos", async () => {
