@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, auditLogs, domainEvents, users } from "../drizzle/schema";
 import type { DomainEventName } from "../shared/domainEvents";
 import { ENV } from "./_core/env";
+import { logger } from "./logger";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -11,7 +12,7 @@ export async function getDb() {
     try {
       _db = drizzle(process.env.DATABASE_URL);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      logger.warn("Database initialization failed", { error: error instanceof Error ? error.message : "unknown_error" });
       _db = null;
     }
   }
