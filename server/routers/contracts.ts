@@ -187,6 +187,8 @@ export const contractsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+    if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do documento não encontrado." });
     const payload = input.base64.includes(",") ? input.base64.split(",").at(-1)! : input.base64;
     const buffer = Buffer.from(payload, "base64");
     if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new TRPCError({ code: "BAD_REQUEST", message: "O anexo deve ter até 5 MB." });
@@ -200,7 +202,8 @@ export const contractsRouter = router({
       signed: input.signed,
       uploadedByUserId: ctx.user.id,
     }).$returningId();
-    const id = created[0]?.id ?? 0;
+    const id = created[0]?.id;
+    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento." });
     await recordAudit(ctx.user.id, "contract_document", id, "uploaded", `Documento ${input.filename} anexado.`);
     await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed: input.signed, filename: input.filename } });
     return { id, url: upload.url };

@@ -97,6 +97,13 @@ describe("eventos e auditoria de contratos", () => {
 
   });
 
+  it("rejeita upload de documento quando o contrato não existe antes do storage", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+    await expect(caller().uploadDocument({ contractId: 999, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {
     const db = makeDb(); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801, executionNotes: "Conferido pelo financeiro" })).resolves.toMatchObject({ success: true, contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 });
