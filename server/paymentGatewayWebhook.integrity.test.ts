@@ -90,3 +90,24 @@ describe("deduplicação concorrente de eventos", () => {
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });
+
+
+describe("isolamento de erros de integridade do webhook", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("não transforma violação referencial em resposta de evento duplicado", async () => {
+    const integrityError = { code: "ER_NO_REFERENCED_ROW_2", sqlState: "23000" };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(query([]))
+        .mockReturnValueOnce(query([])),
+      transaction: vi.fn(async (callback: (transaction: { insert: ReturnType<typeof vi.fn> }) => Promise<unknown>) => callback({
+        insert: vi.fn(() => ({ values: vi.fn(async () => { throw integrityError; }) })),
+      })),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+
+    await expect(processAsaasWebhook("secret", { id: "evt-integrity-94", event: "PAYMENT_CONFIRMED", payment: { id: "pay-unlinked", status: "CONFIRMED" } })).rejects.toThrow();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+});

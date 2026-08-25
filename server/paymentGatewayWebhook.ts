@@ -27,8 +27,8 @@ export type ProcessAsaasWebhookResult = {
 
 function isDuplicateKeyError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown; sqlState?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062 || candidate.sqlState === "23000";
+  const candidate = error as { code?: unknown; errno?: unknown };
+  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
 }
 
 export async function processAsaasWebhook(token: string | undefined, payload: AsaasWebhookPayload): Promise<ProcessAsaasWebhookResult> {
