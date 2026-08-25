@@ -192,6 +192,8 @@ export const financeRouter = router({
         const cpfCnpj = (row.customer.documentNumber || "").replace(/\\D/g, "");
         if (![11, 14].includes(cpfCnpj.length)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Cadastre um CPF ou CNPJ válido no associado antes de emitir a cobrança." });
         const externalCustomerReference = `TGR-CRM-CUSTOMER-${row.customer.id}`;
+        const customerLock = (await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, row.customer.id)).limit(1).for("update"))[0];
+        if (!customerLock) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente da cobrança não encontrado." });
         let gatewayCustomerId = (await tx.select({ gatewayCustomerId: paymentGatewayCustomers.gatewayCustomerId }).from(paymentGatewayCustomers).where(and(eq(paymentGatewayCustomers.customerId, row.customer.id), eq(paymentGatewayCustomers.gatewayProvider, "asaas"))).limit(1))[0]?.gatewayCustomerId;
         if (!gatewayCustomerId) {
           const remoteCustomer = await createAsaasCustomer(config, { name: row.customer.fullName, email: row.customer.email || null, mobilePhone: row.customer.phone || null, cpfCnpj, externalReference: externalCustomerReference });

@@ -14,7 +14,7 @@ const gatewayMocks = vi.hoisted(() => ({
 vi.mock("./db", () => dbMocks);
 vi.mock("./paymentGateway", () => gatewayMocks);
 
-import { billingRecords, installments, paymentGatewayCustomers } from "../drizzle/schema";
+import { billingRecords, customers, installments, paymentGatewayCustomers } from "../drizzle/schema";
 import { financeRouter } from "./routers/finance";
 
 function query(rows: unknown[]) {
@@ -45,6 +45,7 @@ function makeDb() {
       if (table === installments) return query([{ installment, contract: { number: "CTR-61" }, customer: { id: 7, fullName: "Ana Tigre", documentNumber: "12345678901", email: null, phone: null } }]);
       if (table === billingRecords) return query(billingState);
       if (table === paymentGatewayCustomers) return query(gatewayCustomerState);
+      if (table === customers) return query([{ id: 7 }]);
       return query([]);
     } })),
     insert: vi.fn(() => ({ values: vi.fn((value: unknown) => {
