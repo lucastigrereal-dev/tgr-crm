@@ -7,6 +7,7 @@ import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
 import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod, shouldCreatePaymentReminder } from "../domain";
 import { canTransitionReservationStatus, canTransitionWaitlistStatus } from "../../shared/reservationLifecycle";
+import { canTransitionTaskStatus } from "../../shared/taskLifecycle";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const dateTimeValue = (value: string | null | undefined) => value ? new Date(value) : null;
@@ -345,7 +346,11 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      await db.update(tasks).set({ status: input.status, completedAt: input.status === "done" ? new Date() : null }).where(eq(tasks.id, input.id));
+      const current = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, input.id)).limit(1))[0];
+      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Tarefa não encontrada." });
+      if (!canTransitionTaskStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de tarefa inválida: ${current.status} → ${input.status}.` });
+      const updateResult = await db.update(tasks).set({ status: input.status, completedAt: input.status === "done" ? new Date() : null }).where(and(eq(tasks.id, input.id), eq(tasks.status, current.status)));
+      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A tarefa foi alterada por outra operação. Recarregue e tente novamente." });
       await recordAudit(ctx.user.id, "task", input.id, "status_updated", `Tarefa atualizada para ${input.status}.`);
       return { success: true };
     }),
