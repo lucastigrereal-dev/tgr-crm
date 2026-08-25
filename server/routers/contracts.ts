@@ -210,7 +210,12 @@ export const contractsRouter = router({
     const buffer = Buffer.from(payload, "base64");
     if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new TRPCError({ code: "BAD_REQUEST", message: "O anexo deve ter até 5 MB." });
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const upload = await storagePut(`contracts/${input.contractId}/${Date.now()}-${safeName}`, buffer, input.contentType);
+    let upload: { key: string; url: string };
+    try {
+      upload = await storagePut(`contracts/${input.contractId}/${Date.now()}-${safeName}`, buffer, input.contentType);
+    } catch {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do contrato." });
+    }
     const created = await db.insert(contractDocuments).values({
       contractId: input.contractId,
       category: input.category,

@@ -74,6 +74,14 @@ describe("eventos e auditoria de associados", () => {
     expect(storageMocks.storagePut).not.toHaveBeenCalled();
   });
 
+  it("normaliza falha detalhada do storage sem auditar upload falso", async () => {
+    storageMocks.storagePut.mockRejectedValueOnce(new Error("payload remoto secreto"));
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ customerId: 88, category: "Identidade", filename: "rg.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do cliente." });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("registra evento de interação e de documento com o associado e ator corretos", async () => {
     await caller().addInteraction({ customerId: 88, type: "whatsapp", direction: "outgoing", content: "Contato feito." });
     await caller().uploadDocument({ customerId: 88, category: "Identidade", filename: "rg.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" });

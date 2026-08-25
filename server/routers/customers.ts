@@ -184,7 +184,12 @@ export const customersRouter = router({
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
     const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const upload = await storagePut(`customers/${input.customerId}/${Date.now()}-${safeName}`, buffer, input.contentType);
+    let upload: { key: string; url: string };
+    try {
+      upload = await storagePut(`customers/${input.customerId}/${Date.now()}-${safeName}`, buffer, input.contentType);
+    } catch {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do cliente." });
+    }
     const result = await db.insert(customerDocuments).values({
       customerId: input.customerId,
       type: input.category,
@@ -193,8 +198,9 @@ export const customersRouter = router({
       uploadedByUserId: ctx.user.id,
     }).$returningId();
     const id = result[0]?.id;
-    await recordAudit(ctx.user.id, "customer_document", id ?? 0, "uploaded", `Anexo ${input.filename} incluído.`);
-    await recordDomainEvent({ eventName: "customer.document.uploaded", aggregateType: "customer_document", aggregateId: id ?? 0, actorUserId: ctx.user.id, payload: { customerId: input.customerId, category: input.category, filename: input.filename } });
+    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento do cliente." });
+    await recordAudit(ctx.user.id, "customer_document", id, "uploaded", `Anexo ${input.filename} incluído.`);
+    await recordDomainEvent({ eventName: "customer.document.uploaded", aggregateType: "customer_document", aggregateId: id, actorUserId: ctx.user.id, payload: { customerId: input.customerId, category: input.category, filename: input.filename } });
     return { id, url: upload.url };
   }),
 

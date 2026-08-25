@@ -97,6 +97,14 @@ describe("eventos e auditoria de contratos", () => {
 
   });
 
+  it("normaliza falha detalhada do storage sem auditar documento falso", async () => {
+    storageMocks.storagePut.mockRejectedValueOnce(new Error("payload remoto secreto"));
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ contractId: 701, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do contrato." });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("rejeita upload de documento quando o contrato não existe antes do storage", async () => {
     dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
     await expect(caller().uploadDocument({ contractId: 999, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "NOT_FOUND" });
