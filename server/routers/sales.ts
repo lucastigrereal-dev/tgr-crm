@@ -49,16 +49,21 @@ export const salesRouter = router({
   createDiscountRequest: salesProcedure.input(z.object({ proposalId: z.number().int().positive(), requestedAmount: z.coerce.number().positive(), rationale: z.string().trim().min(10).max(3000) })).mutation(async ({ ctx, input }) => { assertCapability(ctx.user.role, "sales.discount.request");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const row = await db.select().from(proposals).where(eq(proposals.id, input.proposalId)).limit(1);
-    const proposal = row[0];
-    if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposta não encontrada." });
-    const original = Number(proposal.totalAmount);
-    if (input.requestedAmount >= original) throw new TRPCError({ code: "BAD_REQUEST", message: "O valor negociado precisa ser menor que o valor original." });
-    const discountPercent = ((original - input.requestedAmount) / original) * 100;
-    const created = await db.insert(proposalDiscountApprovals).values({ proposalId: input.proposalId, requestedByUserId: ctx.user.id, requestedAmount: input.requestedAmount.toFixed(2), discountPercent: discountPercent.toFixed(2), rationale: input.rationale }).$returningId();
-    const id = created[0]?.id;
-    await recordAudit(ctx.user.id, "proposal_discount", id ?? 0, "requested", `Desconto de ${discountPercent.toFixed(2)}% solicitado para proposta #${input.proposalId}.`);
-    return { id, discountPercent };
+    const requested = await db.transaction(async tx => {
+      const proposal = (await tx.select().from(proposals).where(eq(proposals.id, input.proposalId)).limit(1).for("update"))[0];
+      if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposta não encontrada." });
+      const original = Number(proposal.totalAmount);
+      if (input.requestedAmount >= original) throw new TRPCError({ code: "BAD_REQUEST", message: "O valor negociado precisa ser menor que o valor original." });
+      const pending = (await tx.select({ id: proposalDiscountApprovals.id }).from(proposalDiscountApprovals).where(and(eq(proposalDiscountApprovals.proposalId, input.proposalId), eq(proposalDiscountApprovals.status, "pending"))).limit(1))[0];
+      if (pending) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma solicitação de desconto pendente para esta proposta." });
+      const discountPercent = ((original - input.requestedAmount) / original) * 100;
+      const created = await tx.insert(proposalDiscountApprovals).values({ proposalId: input.proposalId, requestedByUserId: ctx.user.id, requestedAmount: input.requestedAmount.toFixed(2), discountPercent: discountPercent.toFixed(2), rationale: input.rationale }).$returningId();
+      const id = created[0]?.id;
+      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível solicitar o desconto." });
+      return { id, discountPercent };
+    });
+    await recordAudit(ctx.user.id, "proposal_discount", requested.id, "requested", `Desconto de ${requested.discountPercent.toFixed(2)}% solicitado para proposta #${input.proposalId}.`);
+    return requested;
   }),
 
   discountApprovals: adminProcedure.query(async () => {
