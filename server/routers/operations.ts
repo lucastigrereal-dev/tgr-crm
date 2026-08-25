@@ -301,7 +301,20 @@ export const operationsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const created = await db.insert(tasks).values({ ...input, description: input.description || null, customerId: input.customerId ?? null, contractId: input.contractId ?? null, assignedToUserId: input.assignedToUserId ?? ctx.user.id, dueAt: dateTimeValue(input.dueAt), reminderAt: dateTimeValue(input.reminderAt), createdByUserId: ctx.user.id }).$returningId();
+    const customerId = input.customerId ?? null;
+    const contractId = input.contractId ?? null;
+    const assignedToUserId = input.assignedToUserId ?? ctx.user.id;
+    const [customerRows, contractRows, assigneeRows] = await Promise.all([
+      customerId ? db.select({ id: customers.id }).from(customers).where(eq(customers.id, customerId)).limit(1) : Promise.resolve([]),
+      contractId ? db.select({ id: contracts.id, customerId: contracts.customerId }).from(contracts).where(eq(contracts.id, contractId)).limit(1) : Promise.resolve([]),
+      db.select({ id: users.id }).from(users).where(eq(users.id, assignedToUserId)).limit(1),
+    ]);
+    if (customerId && !customerRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
+    const contract = contractRows[0];
+    if (contractId && !contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    if (contract && customerId && contract.customerId !== customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato não pertence ao cliente informado." });
+    if (!assigneeRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Responsável não encontrado." });
+    const created = await db.insert(tasks).values({ ...input, description: input.description || null, customerId, contractId, assignedToUserId, dueAt: dateTimeValue(input.dueAt), reminderAt: dateTimeValue(input.reminderAt), createdByUserId: ctx.user.id }).$returningId();
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a tarefa." });
     await recordAudit(ctx.user.id, "task", id, "created", `Tarefa ${input.title} criada.`);
