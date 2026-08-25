@@ -6,14 +6,14 @@ vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; resortMissing?: boolean } = {}, updateAffectedRows?: number) {
+function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean } = {}, updateAffectedRows?: number) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
   let unitSelectCall = 0;
   const select = vi.fn(() => ({
     from: (table: unknown) => {
       if (table === customers) return { where: () => ({ limit: async () => options.customerMissing ? [] : [{ id: 3 }] }) };
-      if (table === contracts) return { where: () => ({ limit: async () => options.contractMissing ? [] : [{ id: 8, customerId: 3 }] }) };
+      if (table === contracts) return { where: () => ({ limit: async () => options.contractMissing ? [] : [{ id: 8, customerId: 3, status: options.contractStatus ?? "active" }] }) };
       if (table === resorts) return { where: () => ({ limit: async () => options.resortMissing ? [] : [{ id: 5 }] }) };
       if (table === ownershipEntitlements) return { where: () => ({ limit: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] }) };
       if (table === units) return { where: () => ({ limit: () => { const rows = unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active" }] : []; return { for: async () => rows, then: (resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(rows).then(resolve, reject) }; } }) };
@@ -67,6 +67,17 @@ describe("prioridade de direitos e bloqueio operacional", () => {
 
     await expect(caller.createReservation({ customerId: 999, unitId: 18, checkIn: "2026-11-10", checkOut: "2026-11-14", status: "confirmed" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(fixture.inserted).toEqual([]);
+  });
+
+  it("bloqueia reserva vinculada a contrato cancelado ou encerrado", async () => {
+    for (const contractStatus of ["cancelled", "closed"] as const) {
+      const fixture = makeDb({ contractStatus });
+      dbMocks.getDb.mockResolvedValue(fixture.db);
+      const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+      await expect(caller.createReservation({ customerId: 3, contractId: 8, unitId: 18, checkIn: "2026-11-10", checkOut: "2026-11-14", status: "confirmed" })).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(fixture.inserted).toEqual([]);
+    }
   });
 
   it("impede reserva direta em unidade bloqueada para manutenção", async () => {

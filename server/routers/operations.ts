@@ -213,8 +213,9 @@ export const operationsRouter = router({
       const maintenanceConflict = await tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
       if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "Esta unidade está bloqueada para manutenção no período informado." });
       if (input.contractId) {
-        const contract = (await tx.select({ id: contracts.id }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
+        const contract = (await tx.select({ id: contracts.id, status: contracts.status }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
         if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao cliente." });
+        if (contract.status === "cancelled" || contract.status === "closed") throw new TRPCError({ code: "CONFLICT", message: "Contrato cancelado ou encerrado não pode receber nova reserva." });
       }
       const created = await tx.insert(reservations).values({ ...input, checkIn, checkOut, contractId: input.contractId ?? null, notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId();
       const reservationId = created[0]?.id;
