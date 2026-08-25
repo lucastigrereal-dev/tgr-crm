@@ -206,7 +206,10 @@ export const financeRouter = router({
       if (["boleto", "pix"].includes(input.type)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PIX e boleto precisam ser emitidos pelo gateway configurado; o registro manual foi bloqueado para evitar cobrança fictícia." });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const created = await db.insert(billingRecords).values({ ...input, gatewayProvider: "manual", amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate), externalReference: input.externalReference || `TGR-${input.installmentId}-${Date.now()}`, digitableLine: null, pixCopyPaste: null, status: "generated", generatedAt: new Date() }).$returningId();
+      const externalReference = input.externalReference?.trim() || `TGR-${input.installmentId}-${Date.now()}`;
+      const duplicate = (await db.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
+      const created = await db.insert(billingRecords).values({ ...input, gatewayProvider: "manual", amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate), externalReference, digitableLine: null, pixCopyPaste: null, status: "generated", generatedAt: new Date() }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a cobrança." });
       await recordAudit(ctx.user.id, "billing_record", id, "registered", `Cobrança ${input.type} registrada.`);

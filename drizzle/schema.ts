@@ -419,7 +419,7 @@ export const billingRecords = mysqlTable("billing_records", {
   generatedAt: timestamp("generatedAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status)]);
+}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status), uniqueIndex("billing_gateway_reference_unique").on(table.gatewayProvider, table.externalReference)]);
 
 export const paymentGatewayCustomers = mysqlTable("payment_gateway_customers", {
   id: int("id").autoincrement().primaryKey(),
