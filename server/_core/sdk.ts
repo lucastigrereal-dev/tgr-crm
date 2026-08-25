@@ -29,6 +29,9 @@ const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
 const GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
 const GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfoWithJwt`;
 
+type ProviderUserInfo = GetUserInfoResponse & { platforms?: unknown };
+type ProviderUserInfoWithJwt = GetUserInfoWithJwtResponse & { platforms?: unknown };
+
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
     logger.info("OAuth SDK initialized", { baseUrlConfigured: Boolean(ENV.oAuthServerUrl) });
@@ -132,15 +135,16 @@ class SDKServer {
     const data = await this.oauthService.getUserInfoByToken({
       accessToken,
     } as ExchangeTokenResponse);
+    const providerData = data as ProviderUserInfo;
     const loginMethod = this.deriveLoginMethod(
-      (data as any)?.platforms,
-      (data as any)?.platform ?? data.platform ?? null
+      providerData.platforms,
+      providerData.platform ?? null
     );
     return {
-      ...(data as any),
+      ...providerData,
       platform: loginMethod,
       loginMethod,
-    } as GetUserInfoResponse;
+    };
   }
 
   private parseCookies(cookieHeader: string | undefined) {
@@ -243,15 +247,16 @@ class SDKServer {
       payload
     );
 
+    const providerData = data as ProviderUserInfoWithJwt;
     const loginMethod = this.deriveLoginMethod(
-      (data as any)?.platforms,
-      (data as any)?.platform ?? data.platform ?? null
+      providerData.platforms,
+      providerData.platform ?? null
     );
     return {
-      ...(data as any),
+      ...providerData,
       platform: loginMethod,
       loginMethod,
-    } as GetUserInfoWithJwtResponse;
+    };
   }
 
   async authenticateRequest(req: Request): Promise<AuthenticatedUser> {
