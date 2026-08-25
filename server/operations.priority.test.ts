@@ -9,10 +9,11 @@ import { operationsRouter } from "./routers/operations";
 function makeDb(options: { entitlementPriority?: number; maintenance?: boolean } = {}) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
+  let unitSelectCall = 0;
   const select = vi.fn(() => ({
     from: (table: unknown) => {
       if (table === ownershipEntitlements) return { where: () => ({ limit: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] }) };
-      if (table === units) return { where: () => ({ limit: async () => [{ id: 18, status: "active" }] }) };
+      if (table === units) return { where: () => ({ limit: async () => unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active" }] : [] }) };
       if (table === reservations) return { where: () => ({ limit: async () => [] }) };
       if (table === unitMaintenanceBlocks) return { where: () => ({ limit: async () => options.maintenance ? [{ id: 700 }] : [] }) };
       throw new Error("Tabela não prevista neste teste");

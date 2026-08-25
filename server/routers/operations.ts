@@ -29,6 +29,8 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+      const duplicate = (await db.select({ id: resorts.id }).from(resorts).where(eq(resorts.name, input.name)).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe um empreendimento com este nome." });
       const created = await db.insert(resorts).values({ name: input.name, city: input.city || null, state: input.state || null }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível cadastrar o empreendimento." });
@@ -55,8 +57,10 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const existing = (await db.select({ id: units.id }).from(units).where(eq(units.id, input.id)).limit(1))[0];
+      const existing = (await db.select({ id: units.id, resortId: units.resortId }).from(units).where(eq(units.id, input.id)).limit(1))[0];
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade não encontrada." });
+      const duplicate = (await db.select({ id: units.id }).from(units).where(and(eq(units.resortId, existing.resortId), eq(units.code, input.code), ne(units.id, input.id))).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outra unidade com este código no empreendimento." });
       await db.update(units).set({ code: input.code, category: input.category || null, capacity: input.capacity, beds: input.beds, status: input.status }).where(eq(units.id, input.id));
       await recordAudit(ctx.user.id, "unit", input.id, "updated", `Unidade ${input.code} atualizada para ${input.status}.`);
       return { success: true };
