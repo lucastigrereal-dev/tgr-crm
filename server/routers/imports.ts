@@ -5,6 +5,7 @@ import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImpo
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
+import { assertCsvImportRowBudget } from "../csvImportGuard";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
 
@@ -20,11 +21,12 @@ const restoreResortValues = (snapshot: Record<string, unknown>) => ({ name: Stri
 const restoreUnitValues = (snapshot: Record<string, unknown>) => ({ code: String(snapshot.code ?? ""), category: snapshot.category ? String(snapshot.category) : null, capacity: Number(snapshot.capacity ?? 2), beds: Number(snapshot.beds ?? 1), status: (snapshot.status ?? "active") as "active" | "maintenance" | "inactive" });
 
 export const importsRouter = router({
-  suggestMapping: adminProcedure.input(z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000) })).mutation(({ input }) => suggestCsvMapping(input.csv, input.kind)),
-  preview: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) }; }),
-  errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => { const parsed = parse(input.kind, canonicalCsv(input)); return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length }; }),
+  suggestMapping: adminProcedure.input(z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000) })).mutation(({ input }) => { assertCsvImportRowBudget(input.csv); return suggestCsvMapping(input.csv, input.kind); }),
+  preview: adminProcedure.input(inputSchema).mutation(({ input }) => { assertCsvImportRowBudget(input.csv); const parsed = parse(input.kind, canonicalCsv(input)); return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) }; }),
+  errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => { assertCsvImportRowBudget(input.csv); const parsed = parse(input.kind, canonicalCsv(input)); return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length }; }),
   latestBatch: adminProcedure.query(async () => { const db = await getDb(); if (!db) return null; const batch = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); if (!batch[0]) return null; const itemCount = await db.select({ total: count() }).from(csvImportItems).where(eq(csvImportItems.batchId, batch[0].id)); return { ...batch[0], itemCount: Number(itemCount[0]?.total ?? 0), canUndo: batch[0].status === "completed" }; }),
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
+    assertCsvImportRowBudget(input.csv);
     const csv = canonicalCsv(input); const parsed = parse(input.kind, csv); const issues: ImportIssue[] = [...parsed.issues];
     if (issues.length) return { valid: false, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(parsed.records.length, 0, 0, issues) };
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
