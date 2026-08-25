@@ -2,7 +2,7 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "dri
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customerInteractions, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposalDiscountApprovals, proposals, reservationWaitlist, reservations, resorts, salesCampaigns, salesCommissions, salesGoals, savedAnalysisViews, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
 import { buildCommercialCharts, filterFunnelDetails, funnelStages, latestCaptureByOpportunity } from "../commercialMetrics";
@@ -86,7 +86,9 @@ export const dashboardRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.insert(savedAnalysisViews).values({ name: input.name, visibility: input.visibility, filtersJson: JSON.stringify(input.filters), createdByUserId: ctx.user.id });
-    return { id: Number(result[0].insertId) };
+    const id = Number(result[0].insertId);
+    await recordAudit(ctx.user.id, "saved_analysis_view", id, "created", `View salva ${input.name} criada.`);
+    return { id };
   }),
   deleteSavedView: internalProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -94,7 +96,10 @@ export const dashboardRouter = router({
     const row = (await db.select().from(savedAnalysisViews).where(eq(savedAnalysisViews.id, input.id)).limit(1))[0];
     if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Filtro salvo não encontrado." });
     if (row.createdByUserId !== ctx.user.id && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só quem criou ou um administrador pode apagar este filtro." });
-    await db.delete(savedAnalysisViews).where(eq(savedAnalysisViews.id, input.id));
+    const deleteCondition = ctx.user.role === "admin" ? eq(savedAnalysisViews.id, input.id) : and(eq(savedAnalysisViews.id, input.id), eq(savedAnalysisViews.createdByUserId, ctx.user.id));
+    const deleteResult = await db.delete(savedAnalysisViews).where(deleteCondition);
+    if (deleteResult && typeof deleteResult === "object" && "affectedRows" in deleteResult && Number(deleteResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A view salva foi alterada por outra operação. Recarregue e tente novamente." });
+    await recordAudit(ctx.user.id, "saved_analysis_view", input.id, "deleted", "View salva excluída.");
     return { deleted: true };
   }),
   summary: internalProcedure.query(async () => {
