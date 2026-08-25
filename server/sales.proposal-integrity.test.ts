@@ -5,11 +5,15 @@ vi.mock("./db", () => dbMocks);
 
 import { salesRouter } from "./routers/sales";
 
-function makeDb(opportunityExists: boolean) {
+function makeDb(opportunityExists: boolean, duplicateReference = false) {
+  let selectCall = 0;
   const select = vi.fn(() => ({
     from: vi.fn(() => ({
       where: vi.fn(() => ({
-        limit: vi.fn(async () => opportunityExists ? [{ id: 11 }] : []),
+        limit: vi.fn(async () => {
+          const rows = selectCall++ === 0 ? (opportunityExists ? [{ id: 11 }] : []) : (duplicateReference ? [{ id: 702 }] : []);
+          return rows;
+        }),
       })),
     })),
   }));
@@ -40,6 +44,26 @@ describe("integridade de propostas", () => {
       status: "draft",
       expiresAt: null,
     })).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita referência de proposta duplicada antes do insert", async () => {
+    const db = makeDb(true, true);
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
+
+    await expect(caller.createProposal({
+      opportunityId: 11,
+      reference: "PROP-11",
+      productDescription: "Proposta duplicada",
+      totalAmount: 1000,
+      downPaymentAmount: 100,
+      installmentCount: 10,
+      status: "draft",
+      expiresAt: null,
+    })).rejects.toMatchObject({ code: "CONFLICT" });
 
     expect(db.insert).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();

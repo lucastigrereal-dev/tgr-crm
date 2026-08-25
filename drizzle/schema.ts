@@ -265,7 +265,7 @@ export const proposals = mysqlTable("proposals", {
   expiresAt: date("expiresAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, table => [uniqueIndex("proposals_reference_unique").on(table.reference)]);
 
 export const salesPlaybooks = mysqlTable("sales_playbooks", {
   id: int("id").autoincrement().primaryKey(),

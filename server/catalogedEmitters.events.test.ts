@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { contractCancellationRequests, contracts, installments, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
+import { contractCancellationRequests, contracts, installments, opportunities, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -32,6 +32,8 @@ function makeDb() {
       from: (table: unknown) => {
         if (table === unitMaintenanceBlocks) return queryRows([]);
         if (table === contracts) return queryRows([{ id: 61, totalAmount: "1000.00", status: "active" }]);
+        if (table === opportunities) return queryRows([{ id: 301, stage: "qualified" }]);
+        if (table === proposals) return queryRows([]);
         if (table === installments) return queryRows([installment]);
         if (table === salesCommissions || table === contractCancellationRequests) return queryRows([]);
         if (table === revenueQualityLedger) return queryRows([]);

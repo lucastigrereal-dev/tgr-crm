@@ -182,6 +182,8 @@ export const salesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const opportunity = (await db.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1))[0];
     if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
+    const duplicate = (await db.select({ id: proposals.id }).from(proposals).where(eq(proposals.reference, input.reference)).limit(1))[0];
+    if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma proposta com esta referência." });
     const result = await db.insert(proposals).values({
       ...input,
       totalAmount: input.totalAmount.toFixed(2),
