@@ -9,8 +9,11 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { applySecurityHeaders } from "../securityHeaders";
+import { attachRequestId } from "../requestId";
 import { subscribeSalesRoom } from "../realtime";
 import { processAsaasWebhook } from "../paymentGatewayWebhook";
+import { registerHealthRoutes } from "../health";
+import { logger } from "../logger";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -35,9 +38,11 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
+  app.use(attachRequestId);
   app.use(applySecurityHeaders);
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
+  registerHealthRoutes(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
@@ -89,6 +94,17 @@ async function startServer() {
     serveStatic(app);
   }
 
+  app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    logger.error("Unhandled request error", {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      error: error instanceof Error ? error.message : "unknown_error",
+    });
+    if (res.headersSent) return;
+    res.status(500).json({ error: "Erro interno do servidor.", requestId: req.requestId ?? null });
+  });
+
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
 
@@ -96,8 +112,20 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
+  const shutdown = (signal: string) => {
+    logger.info("Graceful shutdown requested", { signal });
+    server.close(error => {
+      if (error) {
+        logger.error("Graceful shutdown failed", { signal, error: error.message });
+        process.exitCode = 1;
+      }
+    });
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
+
   server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+    logger.info("Server running", { port });
   });
 }
 

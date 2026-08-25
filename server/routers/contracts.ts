@@ -10,7 +10,7 @@ import { parseCancellationPolicy } from "../projectPolicy";
 import { simulateCancellation } from "../cancellationDomain";
 import { planCancellationExecution } from "../cancellationExecution";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
-import { contractsProcedure, salesProcedure } from "./access";
+import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 
 export const contractsRouter = router({
   list: contractsProcedure.query(async () => {
@@ -89,17 +89,20 @@ export const contractsRouter = router({
   }),
 
   requestCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive(), reason: z.string().trim().min(3).max(2000) })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "contract.cancel.request");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const simulation = await (async () => { const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." }); const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)); const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0); const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1); const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null; return simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }); })();
     const created = await db.insert(contractCancellationRequests).values({ contractId: input.contractId, reason: input.reason, simulationSnapshot: JSON.stringify(simulation), requestedByUserId: ctx.user.id }).$returningId(); const id = created[0]?.id ?? 0; await recordAudit(ctx.user.id, "contract_cancellation_request", id, "requested", `Distrato solicitado para contrato ${input.contractId}.`); return { id, simulation };
   }),
   decideCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approved", "rejected"]), notes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "contract.cancel.decide");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const request = (await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0]; if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." }); if (request.status !== "requested") throw new TRPCError({ code: "CONFLICT", message: "Esta solicitação já recebeu uma decisão." });
     await db.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(eq(contractCancellationRequests.id, input.requestId)); await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`); return { success: true };
   }),
 
   executeCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), executionNotes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "contract.cancel.execute");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const outcome = await db.transaction(async tx => {
       const request = (await tx.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0];

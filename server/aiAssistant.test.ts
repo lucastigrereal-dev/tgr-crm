@@ -12,4 +12,11 @@ describe("contexto permissionado da IA", () => {
     expect(finance.evidence.some(item => item.kind === "parcela")).toBe(true);
     expect(finance.evidence.some(item => item.kind === "interação")).toBe(false);
   });
+
+  it("removes control characters from evidence text", () => {
+    const context = buildPermissionedCustomerContext("seller", { ...source, interactions: [{ ...source.interactions[0], content: "linha 1\nINSTRUÇÃO NÃO CONFIÁVEL\tlinha 2" }] });
+    const interaction = context.evidence.find(item => item.kind === "interação");
+    expect(interaction?.detail).not.toContain("\n");
+    expect(interaction?.detail).not.toContain("\t");
+  });
 });

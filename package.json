@@ -15,6 +15,10 @@
     "test:e2e:isolation": "pnpm check && pnpm test -- e2eSafety && node scripts/check-e2e-isolation.mjs",
     "seed:e2e:isolation": "node scripts/seed-e2e-isolated.mjs",
     "clean:e2e:isolation": "node scripts/cleanup-e2e-isolated.mjs",
+    "config:doctor": "node scripts/config-doctor.mjs",
+    "config:doctor:strict": "node scripts/config-doctor.mjs --strict",
+    "config:doctor:e2e": "node scripts/config-doctor.mjs --e2e --strict",
+    "test:ci": "pnpm check && pnpm test && pnpm build && node scripts/check-bundle-budget.mjs",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {
@@ -113,13 +117,5 @@
     "vite-plugin-manus-runtime": "0.0.59",
     "vitest": "^2.1.4"
   },
-  "packageManager": "pnpm@10.4.1+sha512.c753b6c3ad7afa13af388fa6d808035a008e30ea9993f58c6663e2bc5ff21679aa834db094987129aa4d488b86df57f7b634981b2f827cdcacc698cc0cfb88af",
-  "pnpm": {
-    "patchedDependencies": {
-      "wouter@3.7.1": "patches/wouter@3.7.1.patch"
-    },
-    "overrides": {
-      "tailwindcss>nanoid": "3.3.7"
-    }
-  }
+  "packageManager": "pnpm@10.4.1+sha512.c753b6c3ad7afa13af388fa6d808035a008e30ea9993f58c6663e2bc5ff21679aa834db094987129aa4d488b86df57f7b634981b2f827cdcacc698cc0cfb88af"
 }

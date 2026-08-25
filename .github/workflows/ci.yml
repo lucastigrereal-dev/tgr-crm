@@ -1,0 +1,111 @@
+name: TGR CRM CI
+
+on:
+  push:
+    branches: [main, demo-ready-2026-08-26]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tgr-crm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Typecheck, tests, build e bundle budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate configuration shape
+        run: pnpm config:doctor
+        env:
+          JWT_SECRET: ci-only-secret-with-at-least-32-characters
+
+      - name: Typecheck
+        run: pnpm check
+
+      - name: Unit and integration tests
+        run: pnpm test -- --reporter=dot --pool=forks --poolOptions.forks.singleFork=true
+
+      - name: Production build
+        run: pnpm build
+
+      - name: Bundle budget
+        run: node scripts/check-bundle-budget.mjs
+
+  e2e:
+    name: E2E autenticado (quando ambiente estiver habilitado)
+    if: ${{ vars.TGR_E2E_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Validate E2E configuration
+        run: pnpm config:doctor:e2e
+        env:
+          DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
+          E2E_DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.TGR_E2E_JWT_SECRET }}
+          VITE_APP_ID: ${{ secrets.TGR_E2E_APP_ID }}
+          OAUTH_SERVER_URL: ${{ secrets.TGR_E2E_OAUTH_SERVER_URL }}
+          OWNER_OPEN_ID: ${{ secrets.TGR_E2E_OWNER_OPEN_ID }}
+
+      - name: Run browser tests
+        run: pnpm test:browser
+        env:
+          DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
+          E2E_DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.TGR_E2E_JWT_SECRET }}
+          VITE_APP_ID: ${{ secrets.TGR_E2E_APP_ID }}
+          OAUTH_SERVER_URL: ${{ secrets.TGR_E2E_OAUTH_SERVER_URL }}
+          OWNER_OPEN_ID: ${{ secrets.TGR_E2E_OWNER_OPEN_ID }}
+          E2E_STRICT: "1"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore

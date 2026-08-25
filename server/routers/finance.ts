@@ -4,7 +4,7 @@ import { z } from "zod";
 import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, paymentGatewayCustomers, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { protectedProcedure, router } from "../_core/trpc";
-import { financeProcedure } from "./access";
+import { assertCapability, financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
 import { buildCampaignDre } from "../financeDre";
 import { buildInstallmentCommissions } from "../commissionAutomation";
@@ -194,10 +194,12 @@ export const financeRouter = router({
 
   markInstallmentPaid: financeProcedure.input(z.object({ id: z.number().int().positive(), paymentMethod: z.string().trim().max(64).optional().nullable() }))
     .mutation(async ({ ctx, input }) => {
+      assertCapability(ctx.user.role, "finance.installment.settle", "Somente financeiro pode baixar parcelas.");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
       const item = (await db.select().from(installments).where(eq(installments.id, input.id)).limit(1))[0];
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
+      if (item.status === "paid") return { success: true, alreadyPaid: true, commissionBlocked: false };
       const contextQuery = db.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts); const commissionContext = typeof (contextQuery as any).leftJoin === "function" ? (await (contextQuery as any).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, item.contractId)).limit(1))[0] : null;
       const policyRow = commissionContext?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, commissionContext.capture.resortId)).limit(1))[0] : null; const commissionPolicy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy); const commissionNeedsPolicy = Boolean(commissionContext?.proposal && commissionContext.capture && Number(commissionContext.proposal.downPaymentAmount) > 0); const commissionBlocked = commissionNeedsPolicy && !commissionPolicy;
       await db.transaction(async tx => {
@@ -213,7 +215,7 @@ export const financeRouter = router({
       }
       await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, sequence: item.sequence, amount: item.amount, commissionBlocked } });
       await syncRevenueQualityForContract({ contractId: item.contractId, actorUserId: ctx.user.id, trigger: "baixa de parcela" });
-      return { success: true, commissionBlocked };
+      return { success: true, alreadyPaid: false, commissionBlocked };
     }),
 
   entries: financeProcedure.query(async () => {
@@ -239,6 +241,7 @@ export const financeRouter = router({
 
   createEntry: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), campaignId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))
     .mutation(async ({ ctx, input }) => {
+      assertCapability(ctx.user.role, "finance.entry.create");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
       const created = await db.insert(financialTransactions).values({ ...input, contractId: input.contractId ?? null, campaignId: input.campaignId ?? null, amount: input.amount.toFixed(2), dueDate: input.dueDate ? dateValue(input.dueDate) : null, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
@@ -250,6 +253,7 @@ export const financeRouter = router({
     }),
 
   reconcileEntry: financeProcedure.input(z.object({ id: z.number().int().positive(), reconciliationReference: z.string().trim().min(3).max(255) })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "finance.payment.reconcile");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const entry = (await db.select().from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
     if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento não encontrado." });
@@ -268,6 +272,7 @@ export const financeRouter = router({
 
   createTransfer: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), beneficiaryName: z.string().trim().min(2).max(255), description: z.string().trim().max(2000).optional().nullable(), amount: z.coerce.number().positive(), dueDate: z.string().date() }))
     .mutation(async ({ ctx, input }) => {
+      assertCapability(ctx.user.role, "finance.transfer.create");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
       const created = await db.insert(financialTransfers).values({ ...input, contractId: input.contractId ?? null, description: input.description || null, amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate) }).$returningId();
@@ -279,6 +284,7 @@ export const financeRouter = router({
     }),
 
   markTransferPaid: financeProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "finance.transfer.pay");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     await db.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(eq(financialTransfers.id, input.id));

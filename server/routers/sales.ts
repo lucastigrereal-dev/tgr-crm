@@ -4,7 +4,7 @@ import { z } from "zod";
 import { customers, opportunities, proposalDiscountApprovals, proposals, salesGoals, salesPlaybooks, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
-import { adminProcedure, salesProcedure } from "./access";
+import { adminProcedure, assertCapability, salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
 import { buildSellerQualityRanking } from "../salesQuality";
 import { saleStageFromFacts } from "../saleLifecycle";
@@ -45,7 +45,7 @@ export const salesRouter = router({
     return { id };
   }),
 
-  createDiscountRequest: salesProcedure.input(z.object({ proposalId: z.number().int().positive(), requestedAmount: z.coerce.number().positive(), rationale: z.string().trim().min(10).max(3000) })).mutation(async ({ ctx, input }) => {
+  createDiscountRequest: salesProcedure.input(z.object({ proposalId: z.number().int().positive(), requestedAmount: z.coerce.number().positive(), rationale: z.string().trim().min(10).max(3000) })).mutation(async ({ ctx, input }) => { assertCapability(ctx.user.role, "sales.discount.request");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const row = await db.select().from(proposals).where(eq(proposals.id, input.proposalId)).limit(1);
@@ -150,6 +150,7 @@ export const salesRouter = router({
     status: z.enum(["draft", "sent", "approved", "rejected", "expired"]).default("draft"),
     expiresAt: z.string().date().optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "sales.proposal.create");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.insert(proposals).values({
