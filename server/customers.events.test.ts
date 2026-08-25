@@ -16,8 +16,9 @@ function makeDb(options: { existingId?: number | null; duplicateDocumentId?: num
         if (table !== customers) throw new Error("Tabela não prevista neste teste");
         return { where: () => ({ limit: async () => {
           if (options.existingId === null) return [];
-          if (customerSelectCall++ === 0) return [{ id: options.existingId ?? 121 }];
-          return options.duplicateDocumentId ? [{ id: options.duplicateDocumentId }] : [];
+          if (options.duplicateDocumentId && customerSelectCall++ > 0) return [{ id: options.duplicateDocumentId }];
+          customerSelectCall += 1;
+          return [{ id: options.existingId ?? 121 }];
         } }) };
       },
     })),
@@ -62,6 +63,15 @@ describe("eventos e auditoria de associados", () => {
     dbMocks.getDb.mockResolvedValue(updateDuplicate);
     await expect(caller().update({ id: 121, data: { fullName: "Ana da Silva", documentNumber: "CPF-999", status: "active" } })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(updateDuplicate.update).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia interação e upload quando o cliente não existe", async () => {
+    const missing = makeDb({ existingId: null });
+    dbMocks.getDb.mockResolvedValue(missing);
+    await expect(caller().addInteraction({ customerId: 999, type: "note", content: "Não deve gravar." })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller().uploadDocument({ customerId: 999, category: "Identidade", filename: "rg.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(missing.insert).not.toHaveBeenCalled();
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
   });
 
   it("registra evento de interação e de documento com o associado e ator corretos", async () => {

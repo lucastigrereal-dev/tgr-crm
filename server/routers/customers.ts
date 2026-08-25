@@ -161,6 +161,8 @@ export const customersRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
     const result = await db.insert(customerInteractions).values({ ...input, subject: nullableText(input.subject), createdByUserId: ctx.user.id }).$returningId();
     const id = result[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível salvar a interação." });
@@ -178,6 +180,8 @@ export const customersRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
     const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const upload = await storagePut(`customers/${input.customerId}/${Date.now()}-${safeName}`, buffer, input.contentType);
