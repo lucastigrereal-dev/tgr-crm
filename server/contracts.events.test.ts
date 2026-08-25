@@ -8,7 +8,7 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean } = {}) {
+function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; statusUpdateAffectedRows?: number } = {}) {
   let selectCall = 0;
   let contractSelectCall = 0;
   let ledgerSelectCall = 0;
@@ -39,7 +39,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
   };
   return {
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
-    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => options.statusUpdateAffectedRows === undefined ? undefined : { affectedRows: options.statusUpdateAffectedRows }) })) })),
     select: vi.fn(() => ({ from: vi.fn((table: unknown) => {
       if (table === contracts) {
         const exists = contractSelectCall++ === 0 ? options.contractExists !== false : true;
@@ -87,6 +87,14 @@ describe("eventos e auditoria de contratos", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "cancelled", cancellationReason: "Solicitação documentada" } }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_document", 702, "uploaded", expect.stringContaining("contrato.pdf"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: true, filename: "contrato.pdf" } }));
+  });
+
+  it("rejeita atualização de status que perdeu a corrida", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ statusUpdateAffectedRows: 0 }));
+    await expect(caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract", 701, "status_updated", expect.any(String));
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701 }));
+
   });
 
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {
