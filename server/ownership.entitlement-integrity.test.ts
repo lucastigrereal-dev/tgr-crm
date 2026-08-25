@@ -10,13 +10,13 @@ function query(rows: unknown[]) {
   return { from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => rows) })) })) };
 }
 
-function makeDb(options: { contracts?: unknown[]; resorts?: unknown[]; units?: unknown[] } = {}) {
+function makeDb(options: { contracts?: unknown[]; resorts?: unknown[]; units?: unknown[]; returningId?: number } = {}) {
   const inserted: unknown[] = [];
   const db = {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => table === contracts ? query(options.contracts ?? [{ id: 61 }]).from() : table === resorts ? query(options.resorts ?? [{ id: 2 }]).from() : table === units ? query(options.units ?? [{ id: 51, resortId: 2 }]).from() : query([]).from()),
     })),
-    insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 901 }] }; }) })),
+    insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => options.returningId === undefined ? [{ id: 901 }] : (options.returningId ? [{ id: options.returningId }] : []) }; }) })),
   };
   return { db, inserted };
 }
@@ -49,6 +49,16 @@ describe("integridade de direitos de uso", () => {
 
     await expect(caller.createEntitlement({ contractId: 61, entitlementType: "points", annualPoints: 100, priorityLevel: 2, validFrom: "2027-01-01", validUntil: "2026-01-01" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(fixture.inserted).toEqual([]);
+  });
+
+  it("rejeita insert sem ID e não audita direito fantasma", async () => {
+    const fixture = makeDb({ returningId: 0 });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = ownershipRouter.createCaller({ user: { id: 72, role: "service" } } as never);
+
+    await expect(caller.createEntitlement({ contractId: 61, entitlementType: "points", annualPoints: 100, priorityLevel: 2 })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("cria e audita direito válido", async () => {
