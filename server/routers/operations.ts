@@ -158,7 +158,8 @@ export const operationsRouter = router({
       }
       const created = await tx.insert(reservations).values({ customerId: item.customerId, contractId: item.contractId, unitId: input.unitId, checkIn: item.desiredCheckIn, checkOut: item.desiredCheckOut, adults: item.partySize, children: 0, notes: input.notes || item.preferenceNotes || null, status: "confirmed", createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar a reserva da fila." });
-      await tx.update(reservationWaitlist).set({ status: "confirmed" }).where(and(eq(reservationWaitlist.id, item.id), eq(reservationWaitlist.status, "offered")));
+      const waitlistUpdate = await tx.update(reservationWaitlist).set({ status: "confirmed" }).where(and(eq(reservationWaitlist.id, item.id), eq(reservationWaitlist.status, "offered")));
+      if (waitlistUpdate && typeof waitlistUpdate === "object" && "affectedRows" in waitlistUpdate && Number(waitlistUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oferta da fila foi confirmada por outra operação." });
       return { id, waitlistId: item.id };
     });
     await recordAudit(ctx.user.id, "reservation", reservationId.id, "created_from_waitlist", `Reserva criada da fila ${reservationId.waitlistId}.`);
