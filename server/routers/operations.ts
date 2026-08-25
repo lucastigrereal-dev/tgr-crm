@@ -245,7 +245,13 @@ export const operationsRouter = router({
     return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: false } : { alreadyCheckedOut: false }) };
   }),
 
-  tasks: internalProcedure.input(z.object({ includeDone: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
+  tasks: internalProcedure.input(z.object({
+    includeDone: z.boolean().optional(),
+    status: z.enum(["open", "in_progress", "done", "cancelled"]).optional(),
+    priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+    search: z.string().trim().max(120).optional(),
+    limit: z.number().int().min(1).max(500).default(200),
+  }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
     const now = new Date();
@@ -274,10 +280,16 @@ export const operationsRouter = router({
       });
       existingPaymentTaskKeys.add(key);
     }
+    const taskFilters: SQL[] = [];
+    if (input?.status) taskFilters.push(eq(tasks.status, input.status));
+    else if (!input?.includeDone) taskFilters.push(inArray(tasks.status, ["open", "in_progress"]));
+    if (input?.priority) taskFilters.push(eq(tasks.priority, input.priority));
+    const search = input?.search?.trim();
+    if (search) taskFilters.push(or(like(tasks.title, `%${search}%`), like(customers.fullName, `%${search}%`), like(contracts.number, `%${search}%`))!);
     return db.select({ task: tasks, customerName: customers.fullName, contractNumber: contracts.number, assigneeName: users.name })
       .from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).leftJoin(contracts, eq(tasks.contractId, contracts.id)).leftJoin(users, eq(tasks.assignedToUserId, users.id))
-      .where(input?.includeDone ? undefined : inArray(tasks.status, ["open", "in_progress"]))
-      .orderBy(tasks.dueAt).limit(200);
+      .where(taskFilters.length ? and(...taskFilters) : undefined)
+      .orderBy(tasks.dueAt).limit(input?.limit ?? 200);
   }),
 
   createTask: internalProcedure.input(z.object({
