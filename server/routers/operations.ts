@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, or, SQL } from "drizzle-orm";
 import { z } from "zod";
 import { contracts, customers, installments, ownershipEntitlements, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -66,16 +66,29 @@ export const operationsRouter = router({
       return { success: true };
     }),
 
-  reservations: serviceProcedure.query(async () => {
+  reservations: serviceProcedure.input(z.object({
+    status: z.enum(["pending", "confirmed", "checked_in", "completed", "cancelled"]).optional(),
+    search: z.string().trim().max(120).optional(),
+    from: z.string().date().optional(),
+    to: z.string().date().optional(),
+    limit: z.number().int().min(1).max(500).default(200),
+  }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
+    const filters: SQL[] = [];
+    if (input?.status) filters.push(eq(reservations.status, input.status));
+    if (input?.from) filters.push(gte(reservations.checkIn, dateValue(input.from)));
+    if (input?.to) filters.push(lte(reservations.checkIn, dateValue(input.to)));
+    const search = input?.search?.trim();
+    if (search) filters.push(or(like(customers.fullName, `%${search}%`), like(units.code, `%${search}%`), like(contracts.number, `%${search}%`))!);
     return db.select({ reservation: reservations, customerName: customers.fullName, contractNumber: contracts.number, unitCode: units.code, resortName: resorts.name })
       .from(reservations)
       .innerJoin(customers, eq(reservations.customerId, customers.id))
       .leftJoin(contracts, eq(reservations.contractId, contracts.id))
       .innerJoin(units, eq(reservations.unitId, units.id))
       .innerJoin(resorts, eq(units.resortId, resorts.id))
-      .orderBy(desc(reservations.checkIn)).limit(200);
+      .where(filters.length ? and(...filters) : undefined)
+      .orderBy(desc(reservations.checkIn)).limit(input?.limit ?? 200);
   }),
 
   waitlist: serviceProcedure.query(async () => {
