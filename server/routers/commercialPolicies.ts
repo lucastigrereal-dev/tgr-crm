@@ -1,4 +1,5 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { commercialPolicyVersions } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -16,18 +17,19 @@ export const commercialPoliciesRouter = router({
 
   create: adminProcedure.input(z.object({ resortId: z.number().int().positive(), policyType, version: z.string().trim().min(2).max(80), policy: z.record(z.string(), z.unknown()), effectiveAt: z.coerce.date().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
-    if (!db) throw new Error("Banco indisponível.");
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const created = await db.insert(commercialPolicyVersions).values({ resortId: input.resortId, policyType: input.policyType, version: input.version, policyJson: JSON.stringify(input.policy), effectiveAt: input.effectiveAt ?? new Date(), approvedByUserId: ctx.user.id }).$returningId();
     const id = created[0]?.id;
-    if (!id) throw new Error("Não foi possível versionar a política comercial.");
+    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível versionar a política comercial." });
     await recordAudit(ctx.user.id, "commercial_policy_version", id, "created", `Política ${input.policyType} ${input.version} criada para empreendimento ${input.resortId}.`);
     return { id };
   }),
 
   retire: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
-    if (!db) throw new Error("Banco indisponível.");
-    await db.update(commercialPolicyVersions).set({ retiredAt: new Date() }).where(eq(commercialPolicyVersions.id, input.id));
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const result = await db.update(commercialPolicyVersions).set({ retiredAt: new Date() }).where(and(eq(commercialPolicyVersions.id, input.id), isNull(commercialPolicyVersions.retiredAt)));
+    if (result && typeof result === "object" && "affectedRows" in result && Number(result.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A política já foi aposentada ou não existe." });
     await recordAudit(ctx.user.id, "commercial_policy_version", input.id, "retired", "Política comercial aposentada; histórico preservado.");
     return { success: true };
   }),
