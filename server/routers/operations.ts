@@ -267,7 +267,8 @@ export const operationsRouter = router({
     if (input.action === "check_in" && guest.checkedInAt) return { success: true, alreadyCheckedIn: true };
     if (input.action === "check_out" && !guest.checkedInAt) throw new TRPCError({ code: "BAD_REQUEST", message: "O acompanhante precisa fazer check-in antes do check-out." });
     if (input.action === "check_out" && guest.checkedOutAt) return { success: true, alreadyCheckedOut: true };
-    await db.update(reservationGuests).set(input.action === "check_in" ? { checkedInAt: new Date() } : { checkedOutAt: new Date() }).where(eq(reservationGuests.id, input.id));
+    const presenceUpdate = await db.update(reservationGuests).set(input.action === "check_in" ? { checkedInAt: new Date() } : { checkedOutAt: new Date() }).where(input.action === "check_in" ? and(eq(reservationGuests.id, input.id), isNull(reservationGuests.checkedInAt)) : and(eq(reservationGuests.id, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
+    if (presenceUpdate && typeof presenceUpdate === "object" && "affectedRows" in presenceUpdate && Number(presenceUpdate.affectedRows) === 0) return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: true } : { alreadyCheckedOut: true }) };
     await recordAudit(ctx.user.id, "reservation_guest", input.id, input.action, `Presença de acompanhante registrada: ${input.action}.`);
     return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: false } : { alreadyCheckedOut: false }) };
   }),
