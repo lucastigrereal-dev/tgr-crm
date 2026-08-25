@@ -1,4 +1,4 @@
-import { and, count, desc, inArray, sql } from "drizzle-orm";
+import { and, count, desc, inArray, max, sql } from "drizzle-orm";
 import { z } from "zod";
 import { contractCancellationRequests, contractDocuments, contracts, customerInteractions, installments, opportunities, proposals, tasks } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -29,11 +29,11 @@ export const intelligenceRouter = router({
         paid: sql<number>`sum(case when ${installments.status} = 'paid' then 1 else 0 end)`,
         overdue: sql<number>`sum(case when ${installments.status} = 'overdue' then 1 else 0 end)`,
       }).from(installments).where(inArray(installments.contractId, contractIds)).groupBy(installments.contractId),
-      db.select({ id: contractDocuments.id, contractId: contractDocuments.contractId }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)),
-      db.select({ id: tasks.id, contractId: tasks.contractId, status: tasks.status, type: tasks.type }).from(tasks).where(inArray(tasks.contractId, contractIds)),
-      db.select({ id: contractCancellationRequests.id, contractId: contractCancellationRequests.contractId, status: contractCancellationRequests.status }).from(contractCancellationRequests).where(and(inArray(contractCancellationRequests.contractId, contractIds), inArray(contractCancellationRequests.status, ["requested", "approved"]))),
-      customerIds.length ? db.select({ customerId: customerInteractions.customerId, occurredAt: customerInteractions.occurredAt }).from(customerInteractions).where(inArray(customerInteractions.customerId, customerIds)).orderBy(desc(customerInteractions.occurredAt)) : Promise.resolve([]),
-      proposalIds.length ? db.select().from(proposals).where(inArray(proposals.id, proposalIds)) : Promise.resolve([]),
+      db.select({ contractId: contractDocuments.contractId, total: count() }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)).groupBy(contractDocuments.contractId),
+      db.select({ contractId: tasks.contractId, total: count() }).from(tasks).where(and(inArray(tasks.contractId, contractIds), inArray(tasks.status, ["open", "in_progress"]))).groupBy(tasks.contractId),
+      db.select({ contractId: contractCancellationRequests.contractId }).from(contractCancellationRequests).where(and(inArray(contractCancellationRequests.contractId, contractIds), inArray(contractCancellationRequests.status, ["requested", "approved"]))).groupBy(contractCancellationRequests.contractId),
+      customerIds.length ? db.select({ customerId: customerInteractions.customerId, occurredAt: max(customerInteractions.occurredAt) }).from(customerInteractions).where(inArray(customerInteractions.customerId, customerIds)).groupBy(customerInteractions.customerId) : Promise.resolve([]),
+      proposalIds.length ? db.select({ id: proposals.id, opportunityId: proposals.opportunityId }).from(proposals).where(inArray(proposals.id, proposalIds)) : Promise.resolve([]),
     ]);
 
     const opportunityIds = proposalRows.map(proposal => proposal.opportunityId);
@@ -47,10 +47,10 @@ export const intelligenceRouter = router({
     const latestInteractionByCustomer = new Map<number, Date>();
 
     for (const row of installmentRows) installmentsByContract.set(row.contractId, { total: Number(row.total ?? 0), paid: Number(row.paid ?? 0), overdue: Number(row.overdue ?? 0) });
-    for (const row of documentRows) documentsByContract.set(row.contractId, (documentsByContract.get(row.contractId) ?? 0) + 1);
-    for (const row of taskRows) if (row.status === "open" || row.status === "in_progress") tasksByContract.set(row.contractId ?? 0, (tasksByContract.get(row.contractId ?? 0) ?? 0) + 1);
+    for (const row of documentRows) documentsByContract.set(row.contractId, Number(row.total ?? 0));
+    for (const row of taskRows) if (row.contractId) tasksByContract.set(row.contractId, Number(row.total ?? 0));
     for (const row of cancellationRows) cancellationsByContract.add(row.contractId);
-    for (const row of interactionRows) if (!latestInteractionByCustomer.has(row.customerId)) latestInteractionByCustomer.set(row.customerId, row.occurredAt);
+    for (const row of interactionRows) if (row.occurredAt) latestInteractionByCustomer.set(row.customerId, row.occurredAt);
 
     const now = Date.now();
     const rows = selectedContracts.map(contract => {
