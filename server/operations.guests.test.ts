@@ -5,7 +5,7 @@ vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(selectResponses: unknown[][] = []) {
+function makeDb(selectResponses: unknown[][] = [], updateAffectedRows?: number) {
   const updates: unknown[] = [];
   const inserts: unknown[] = [];
   const db = {
@@ -18,7 +18,7 @@ function makeDb(selectResponses: unknown[][] = []) {
       chain.limit = () => result;
       return chain;
     }),
-    update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })),
+    update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); return updateAffectedRows === undefined ? undefined : { affectedRows: updateAffectedRows }; }) })) })),
     insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 722 }] }; }) })),
   };
   return { db, updates, inserts };
@@ -34,6 +34,15 @@ describe("operação de fila e acompanhantes", () => {
     await expect(caller.updateWaitlistStatus({ id: 55, status: "offered" })).resolves.toEqual({ success: true });
     expect(fixture.updates[0]).toMatchObject({ status: "offered", offeredAt: expect.any(Date), expiresAt: expect.any(Date) });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(9, "reservation_waitlist", 55, "status_updated", expect.stringContaining("offered"));
+  });
+
+  it("não audita uma mudança de fila que perdeu a corrida", async () => {
+    const fixture = makeDb([[{ status: "waiting" }]], 0); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
+
+    await expect(caller.updateWaitlistStatus({ id: 55, status: "offered" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.updates).toHaveLength(1);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("registra acompanhante com dados estruturados e trilha de auditoria", async () => {
