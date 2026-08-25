@@ -1,5 +1,6 @@
 import { ENV } from "./env";
 import { fetchWithTimeout } from "../integrationReliability";
+import { logger } from "../logger";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -321,16 +322,12 @@ const fetchWithBackoff = async (
       } catch {
         // Body already settled; nothing to clean up.
       }
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after status ${response.status}`
-      );
+      logger.warn("LLM request retry after provider status", { attempt: attempt + 1, maxRetries: RETRY_MAX_RETRIES, status: response.status });
       await sleep(computeBackoffDelay(attempt, retryAfterMs));
     } catch (error) {
       lastError = error;
       if (attempt === RETRY_MAX_RETRIES) throw error;
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after network error`
-      );
+      logger.warn("LLM request retry after network error", { attempt: attempt + 1, maxRetries: RETRY_MAX_RETRIES, error: error instanceof Error ? error.message : "unknown_error" });
       await sleep(computeBackoffDelay(attempt));
     }
   }

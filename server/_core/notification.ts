@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { ENV } from "./env";
 import { fetchWithTimeout } from "../integrationReliability";
+import { logger } from "../logger";
 
 export type NotificationPayload = {
   title: string;
@@ -99,17 +100,13 @@ export async function notifyOwner(
 
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      console.warn(
-        `[Notification] Failed to notify owner (${response.status} ${response.statusText})${
-          detail ? `: ${detail}` : ""
-        }`
-      );
+      logger.warn("Notification provider rejected request", { status: response.status, statusText: response.statusText, detail: detail.slice(0, 300) });
       return false;
     }
 
     return true;
   } catch (error) {
-    console.warn("[Notification] Error calling notification service:", error);
+    logger.warn("Notification provider request failed", { error: error instanceof Error ? error.message : "unknown_error" });
     return false;
   }
 }
