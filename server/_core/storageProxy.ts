@@ -1,8 +1,10 @@
 import type { Express } from "express";
 import { authorizeStorageRead } from "../storageAccess";
 import { recordAudit } from "../db";
+import { logger } from "../logger";
 import { createContext } from "./context";
 import { ENV } from "./env";
+import { fetchWithTimeout } from "../integrationReliability";
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*splat", async (req, res) => {
@@ -52,13 +54,13 @@ export function registerStorageProxy(app: Express) {
       );
       forgeUrl.searchParams.set("path", key);
 
-      const forgeResp = await fetch(forgeUrl, {
+      const forgeResp = await fetchWithTimeout(forgeUrl, {
         headers: { Authorization: `Bearer ${ENV.forgeApiKey}` },
       });
 
       if (!forgeResp.ok) {
         const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
+        logger.error("Storage provider returned an error", { status: forgeResp.status, body });
         res.status(502).send("Storage backend error");
         return;
       }
@@ -72,7 +74,7 @@ export function registerStorageProxy(app: Express) {
       res.set("Cache-Control", "no-store");
       res.redirect(307, url);
     } catch (err) {
-      console.error("[StorageProxy] failed:", err);
+      logger.error("Storage proxy failed", { error: err instanceof Error ? err.message : String(err) });
       res.status(502).send("Storage proxy error");
     }
   });

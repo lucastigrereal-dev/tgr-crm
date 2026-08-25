@@ -11,7 +11,7 @@ function makeDb(options: { entitlementPriority?: number; maintenance?: boolean }
   const updates: unknown[] = [];
   const select = vi.fn(() => ({
     from: (table: unknown) => {
-      if (table === ownershipEntitlements) return { where: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] };
+      if (table === ownershipEntitlements) return { where: () => ({ limit: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] }) };
       if (table === units) return { where: () => ({ limit: async () => [{ id: 18, status: "active" }] }) };
       if (table === reservations) return { where: () => ({ limit: async () => [] }) };
       if (table === unitMaintenanceBlocks) return { where: () => ({ limit: async () => options.maintenance ? [{ id: 700 }] : [] }) };

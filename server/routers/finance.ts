@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, paymentGatewayCustomers, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
@@ -52,13 +52,13 @@ export const financeRouter = router({
   portfolioCandidates: financeProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    return db.select({ id: users.id, name: users.name, email: users.email, role: users.role }).from(users).where(inArray(users.role, ["admin", "finance"])).orderBy(users.name);
+    return db.select({ id: users.id, name: users.name, email: users.email, role: users.role }).from(users).where(inArray(users.role, ["admin", "finance"])).orderBy(users.name).limit(500);
   }),
 
   portfolioAssignments: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select({ assignment: financialPortfolioAssignments, contractNumber: contracts.number, ownerName: users.name, ownerEmail: users.email }).from(financialPortfolioAssignments).innerJoin(contracts, eq(financialPortfolioAssignments.contractId, contracts.id)).innerJoin(users, eq(financialPortfolioAssignments.ownerUserId, users.id)).where(and(input?.contractId ? eq(financialPortfolioAssignments.contractId, input.contractId) : undefined, isNull(financialPortfolioAssignments.endsAt))).orderBy(desc(financialPortfolioAssignments.startsAt));
+    return db.select({ assignment: financialPortfolioAssignments, contractNumber: contracts.number, ownerName: users.name, ownerEmail: users.email }).from(financialPortfolioAssignments).innerJoin(contracts, eq(financialPortfolioAssignments.contractId, contracts.id)).innerJoin(users, eq(financialPortfolioAssignments.ownerUserId, users.id)).where(and(input?.contractId ? eq(financialPortfolioAssignments.contractId, input.contractId) : undefined, isNull(financialPortfolioAssignments.endsAt))).orderBy(desc(financialPortfolioAssignments.startsAt)).limit(1000);
   }),
 
   assignPortfolioOwner: financeProcedure.input(z.object({ contractId: z.number().int().positive(), ownerUserId: z.number().int().positive(), notes: z.string().trim().max(2000).optional().nullable() })).mutation(async ({ ctx, input }) => {
@@ -112,12 +112,13 @@ export const financeRouter = router({
     }
   }),
 
-  installments: financeProcedure.query(async () => {
+  installments: financeProcedure.input(z.object({ status: z.enum(["open", "overdue", "paid", "cancelled"]).optional(), limit: z.number().int().min(1).max(1000).default(300) }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
     return db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
       .from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
-      .orderBy(desc(installments.dueDate)).limit(300);
+      .where(input?.status ? eq(installments.status, input.status) : undefined)
+      .orderBy(desc(installments.dueDate)).limit(input?.limit ?? 300);
   }),
 
   collectionQueue: financeProcedure.query(async () => {
@@ -238,10 +239,10 @@ export const financeRouter = router({
       return { success: true, alreadyPaid: false, commissionBlocked };
     }),
 
-  entries: financeProcedure.query(async () => {
+  entries: financeProcedure.input(z.object({ type: z.enum(["income", "expense"]).optional(), status: z.enum(["open", "paid", "cancelled"]).optional(), limit: z.number().int().min(1).max(1000).default(300) }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select({ entry: financialTransactions, contractNumber: contracts.number, campaignName: salesCampaigns.name }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(salesCampaigns, eq(financialTransactions.campaignId, salesCampaigns.id)).orderBy(desc(financialTransactions.createdAt)).limit(300);
+    return db.select({ entry: financialTransactions, contractNumber: contracts.number, campaignName: salesCampaigns.name }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(salesCampaigns, eq(financialTransactions.campaignId, salesCampaigns.id)).where(and(input?.type ? eq(financialTransactions.type, input.type) : undefined, input?.status ? eq(financialTransactions.status, input.status) : undefined)).orderBy(desc(financialTransactions.createdAt)).limit(input?.limit ?? 300);
   }),
 
   campaigns: financeProcedure.query(async () => {
@@ -272,6 +273,14 @@ export const financeRouter = router({
       assertCapability(ctx.user.role, "finance.entry.create");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+      if (input.contractId) {
+        const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+        if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do lançamento não encontrado." });
+      }
+      if (input.campaignId) {
+        const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1))[0];
+        if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha do lançamento não encontrada." });
+      }
       const created = await db.insert(financialTransactions).values({ ...input, contractId: input.contractId ?? null, campaignId: input.campaignId ?? null, amount: input.amount.toFixed(2), dueDate: input.dueDate ? dateValue(input.dueDate) : null, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o lançamento." });
@@ -286,7 +295,8 @@ export const financeRouter = router({
     const entry = (await db.select().from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
     if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento não encontrado." });
     if (entry.status !== "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Apenas lançamentos pagos podem ser conciliados." });
-    await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt: new Date(), reconciledByUserId: ctx.user.id }).where(eq(financialTransactions.id, input.id));
+    if (entry.reconciledAt) return { success: true, alreadyReconciled: true };
+    await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt: new Date(), reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
     await recordAudit(ctx.user.id, "financial_transaction", input.id, "reconciled", `Lançamento conciliado pela referência ${input.reconciliationReference}.`);
     await recordDomainEvent({ eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reconciliationReference: input.reconciliationReference } });
     return { success: true };
@@ -315,8 +325,12 @@ export const financeRouter = router({
     assertCapability(ctx.user.role, "finance.transfer.pay");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    await db.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(eq(financialTransfers.id, input.id));
+    const transfer = (await db.select({ status: financialTransfers.status }).from(financialTransfers).where(eq(financialTransfers.id, input.id)).limit(1))[0];
+    if (!transfer) throw new TRPCError({ code: "NOT_FOUND", message: "Repasse não encontrado." });
+    if (transfer.status === "paid") return { success: true, alreadyPaid: true };
+    if (transfer.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Repasse cancelado não pode ser pago." });
+    await db.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(and(eq(financialTransfers.id, input.id), ne(financialTransfers.status, "paid")));
     await recordAudit(ctx.user.id, "financial_transfer", input.id, "paid", "Repasse baixado como pago.");
-    return { success: true };
+    return { success: true, alreadyPaid: false };
   }),
 });

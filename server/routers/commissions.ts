@@ -18,7 +18,7 @@ export const commissionsRouter = router({
     const db = await getDb();
     if (!db) return { rolesCovered: [], scorecards: [] };
     const [contractRows, proposalRows, opportunityRows, captureRows, installmentRows, cancellationRows, userRows] = await Promise.all([
-      db.select().from(contracts), db.select().from(proposals), db.select().from(opportunities), db.select().from(captureRecords), db.select().from(installments), db.select().from(contractCancellationRequests), db.select({ id: users.id, name: users.name, email: users.email }).from(users),
+      db.select().from(contracts).limit(5000), db.select().from(proposals).limit(5000), db.select().from(opportunities).limit(5000), db.select().from(captureRecords).limit(10_000), db.select().from(installments).limit(20_000), db.select().from(contractCancellationRequests).limit(2000), db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
     ]);
     const proposalById = new Map(proposalRows.map(row => [row.id, row]));
     const opportunityById = new Map(opportunityRows.map(row => [row.id, row]));
@@ -54,11 +54,11 @@ export const commissionsRouter = router({
     const db = await getDb(); if (!db) return { campaigns: [], ranking: [], entries: [] };
     const sellerId = ctx.user.role === "seller" ? ctx.user.id : input?.sellerId;
     const [campaigns, opportunityRows, commissionRows, sellerRows, goalRows] = await Promise.all([
-      db.select().from(salesCampaigns),
-      db.select({ opportunity: opportunities, sellerName: users.name, sellerEmail: users.email, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).leftJoin(salesCampaigns, eq(opportunities.campaignId, salesCampaigns.id)),
-      db.select({ commission: salesCommissions, sellerName: users.name, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(salesCampaigns, eq(salesCommissions.campaignId, salesCampaigns.id)),
-      db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")),
-      db.select().from(salesGoals),
+      db.select().from(salesCampaigns).limit(1000),
+      db.select({ opportunity: opportunities, sellerName: users.name, sellerEmail: users.email, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).leftJoin(salesCampaigns, eq(opportunities.campaignId, salesCampaigns.id)).limit(5000),
+      db.select({ commission: salesCommissions, sellerName: users.name, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(salesCampaigns, eq(salesCommissions.campaignId, salesCampaigns.id)).limit(5000),
+      db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")).limit(1000),
+      db.select().from(salesGoals).limit(1000),
     ]);
     const selectedOpportunities = opportunityRows.filter(row => row.opportunity.stage === "won" && (!input?.campaignId || row.opportunity.campaignId === input.campaignId) && (!sellerId || row.opportunity.sellerId === sellerId));
     const selectedCommissions = commissionRows.filter(row => (!input?.campaignId || row.commission.campaignId === input.campaignId) && (!sellerId || row.commission.sellerId === sellerId) && (!input?.closingMonth || (row.commission.closingAt ?? row.commission.createdAt).toISOString().slice(0, 7) === input.closingMonth));

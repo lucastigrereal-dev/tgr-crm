@@ -9,6 +9,7 @@ function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, () => unknown>;
   promise.from = () => promise;
   promise.where = () => promise;
+  promise.limit = () => promise;
   return promise;
 }
 

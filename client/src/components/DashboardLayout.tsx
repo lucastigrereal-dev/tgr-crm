@@ -37,6 +37,10 @@ const menuGroups = [
 ];
 const menuItems = menuGroups.flatMap(group => group.items);
 
+function matchesMenuPath(location: string, path: string) {
+  return path === "/" ? location === "/" : location === path || location.startsWith(`${path}/`);
+}
+
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
 const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 200;
@@ -116,7 +120,7 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find(item => item.path === location);
+  const activeMenuItem = menuItems.find(item => matchesMenuPath(location, item.path));
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -189,10 +193,10 @@ function DashboardLayoutContent({
                 {!isCollapsed ? <p className="px-2 pb-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-white/35">{group.label}</p> : null}
                 <SidebarMenu className="gap-0">
                   {group.items.filter(item => !["/importar", "/configuracoes-projeto"].includes(item.path) || user?.role === "admin").map(item => {
-                    const isActive = location === item.path;
+                    const isActive = matchesMenuPath(location, item.path);
                     return (
                       <SidebarMenuItem key={item.path}>
-                        <SidebarMenuButton isActive={isActive} onClick={() => setLocation(item.path)} tooltip={item.label} className="h-9 rounded-lg text-white/70 transition-all hover:bg-white/10 hover:text-white data-[active=true]:bg-[#c7a35a] data-[active=true]:font-semibold data-[active=true]:text-[#1d2b2a]">
+                        <SidebarMenuButton isActive={isActive} onClick={() => setLocation(item.path)} aria-current={isActive ? "page" : undefined} tooltip={item.label} className="h-9 rounded-lg text-white/70 transition-all hover:bg-white/10 hover:text-white data-[active=true]:bg-[#c7a35a] data-[active=true]:font-semibold data-[active=true]:text-[#1d2b2a]">
                           <item.icon className={`h-4 w-4 ${isActive ? "text-[#1d2b2a]" : ""}`} />
                           <span>{item.label}</span>
                         </SidebarMenuButton>
@@ -241,6 +245,7 @@ function DashboardLayoutContent({
             if (isCollapsed) return;
             setIsResizing(true);
           }}
+          aria-hidden="true"
           style={{ zIndex: 50 }}
         />
       </div>

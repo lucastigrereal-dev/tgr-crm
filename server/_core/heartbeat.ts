@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { ENV } from "./env";
+import { fetchWithTimeout } from "../integrationReliability";
 
 export type HeartbeatJob = {
   name: string;
@@ -80,7 +81,7 @@ const callForge = async <T>(
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    response = await fetchWithTimeout(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),

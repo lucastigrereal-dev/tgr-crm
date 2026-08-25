@@ -5,7 +5,7 @@ vi.mock("./db", () => dbMocks);
 
 import { financeRouter } from "./routers/finance";
 
-function databaseFor(entry: { id: number; status: "open" | "paid" | "cancelled" }) {
+function databaseFor(entry: { id: number; status: "open" | "paid" | "cancelled"; reconciledAt?: Date | null }) {
   const updates: unknown[] = [];
   return {
     updates,
@@ -35,5 +35,14 @@ describe("conciliação financeira", () => {
 
     await expect(caller.reconcileEntry({ id: 82, reconciliationReference: "OFX-2026-00082" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(fixture.updates).toHaveLength(0);
+  });
+
+  it("não escreve novamente um lançamento já conciliado", async () => {
+    const fixture = databaseFor({ id: 83, status: "paid", reconciledAt: new Date("2026-08-25T12:00:00Z") }); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = financeRouter.createCaller({ user: { id: 5, role: "finance" } } as never);
+
+    await expect(caller.reconcileEntry({ id: 83, reconciliationReference: "OFX-REPETIDO" })).resolves.toEqual({ success: true, alreadyReconciled: true });
+    expect(fixture.updates).toHaveLength(0);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });

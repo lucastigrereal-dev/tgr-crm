@@ -19,12 +19,18 @@ const statusTone = { captured: "bg-[#f4efe2] text-[#8a6b2d]", scheduled: "bg-[#e
 const blank = () => ({ fullName: "", phone: "", email: "", city: "", state: "SP", occupation: "", resortId: "", campaignId: "", promoterId: "", linerId: "", closerId: "", salesRoom: "", captureLocation: "", lodgingLocation: "", transportation: "", scheduledAt: "", isPasserby: false, qualificationStatus: "pending" as "pending" | "qualified" | "disqualified", qualificationReason: "", partnerName: "", partnerAge: "", partnerProfession: "", relationshipStatus: "", relationshipYears: "", childrenCount: "0", childrenNames: "", averageIncome: "", vehicleBrand: "", vehicleModel: "", vehicleYear: "", hasCreditCard: "unknown", creditCardBrands: "", acceptsCheque: "unknown", ownsHome: "unknown", ownsPropertyInCity: "unknown", travelWeeksPerYear: "", usualTravelSeason: "", dreamTrips: "", lastTrip: "", averageHotelSpend: "", nextFamilyTrip: "", socialNetworks: "", giftDescription: "", notes: "" });
 
 function bool(value: string) { return value === "unknown" ? null : value === "yes"; }
-function nullableNumber(value: string) { return value.trim() ? Number(value) : null; }
+function nullableNumber(value: string) {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export default function Capture() {
   const utils = trpc.useUtils();
   const selectors = trpc.captures.selectors.useQuery();
-  const captures = trpc.captures.list.useQuery();
+  const [statusFilter, setStatusFilter] = useState<keyof typeof statusLabels | "all">("all");
+  const captures = trpc.captures.list.useQuery(statusFilter === "all" ? undefined : { status: statusFilter });
   const [form, setForm] = useState(blank);
   const [offlineItems, setOfflineItems] = useState<CaptureOfflineItem[]>([]);
   const [reviewingOfflineId, setReviewingOfflineId] = useState<string | null>(null);
@@ -41,7 +47,7 @@ export default function Capture() {
   const payload = (): CaptureOfflinePayload => ({
     customer: { fullName: form.fullName, phone: form.phone || undefined, email: form.email || undefined, city: form.city || undefined, state: form.state || undefined, occupation: form.occupation || undefined },
     resortId: nullableNumber(form.resortId), campaignId: nullableNumber(form.campaignId), promoterId: nullableNumber(form.promoterId), linerId: nullableNumber(form.linerId), closerId: nullableNumber(form.closerId), salesRoom: form.salesRoom || undefined, captureLocation: form.captureLocation || undefined, lodgingLocation: form.lodgingLocation || undefined, transportation: form.transportation || undefined, scheduledAt: form.scheduledAt ? new Date(form.scheduledAt).toISOString() : undefined, isPasserby: form.isPasserby, qualificationStatus: form.qualificationStatus, qualificationReason: form.qualificationReason || undefined,
-    partnerName: form.partnerName || undefined, partnerAge: nullableNumber(form.partnerAge), partnerProfession: form.partnerProfession || undefined, relationshipStatus: form.relationshipStatus || undefined, relationshipYears: nullableNumber(form.relationshipYears), childrenCount: Number(form.childrenCount || 0), childrenNames: form.childrenNames || undefined,
+    partnerName: form.partnerName || undefined, partnerAge: nullableNumber(form.partnerAge), partnerProfession: form.partnerProfession || undefined, relationshipStatus: form.relationshipStatus || undefined, relationshipYears: nullableNumber(form.relationshipYears), childrenCount: nullableNumber(form.childrenCount) ?? 0, childrenNames: form.childrenNames || undefined,
     averageIncome: nullableNumber(form.averageIncome), vehicleBrand: form.vehicleBrand || undefined, vehicleModel: form.vehicleModel || undefined, vehicleYear: nullableNumber(form.vehicleYear), hasCreditCard: bool(form.hasCreditCard), creditCardBrands: form.creditCardBrands || undefined, acceptsCheque: bool(form.acceptsCheque), ownsHome: bool(form.ownsHome), ownsPropertyInCity: bool(form.ownsPropertyInCity),
     travelWeeksPerYear: nullableNumber(form.travelWeeksPerYear), usualTravelSeason: form.usualTravelSeason || undefined, dreamTrips: form.dreamTrips || undefined, lastTrip: form.lastTrip || undefined, averageHotelSpend: nullableNumber(form.averageHotelSpend), nextFamilyTrip: form.nextFamilyTrip || undefined, socialNetworks: form.socialNetworks || undefined, giftDescription: form.giftDescription || undefined, notes: form.notes || undefined,
   });
@@ -78,6 +84,10 @@ export default function Capture() {
       <Card className="border-[#e8e1d4] bg-[#f6f3eb]"><CardContent className="p-5"><Sparkles className="h-5 w-5 text-[#285043]" /><p className="mt-5 text-xs font-bold uppercase tracking-[.14em] text-[#52615c]">Qualificadas</p><p className="mt-2 font-serif text-4xl text-[#1d2b2a]">{captures.data?.filter(item => item.capture.qualificationStatus === "qualified").length ?? 0}</p><p className="mt-2 text-sm text-[#52615c]">prontas para venda</p></CardContent></Card>
     </div>
     {offlineItems.length > 0 && <div className="space-y-3 border border-[#c9a557]/40 bg-[#fff8e4] px-4 py-3 text-sm text-[#53401c]"><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><CloudOff className="h-4 w-4" />{offlineItems.length} ficha{offlineItems.length > 1 ? "s" : ""} na fila local deste aparelho.</span><Button type="button" size="sm" variant="outline" onClick={() => void syncOffline()}><RefreshCw className="mr-2 h-3.5 w-3.5" />Sincronizar agora</Button></div>{offlineItems.map(item => <div key={item.id} className="flex items-center justify-between gap-3 border-t border-[#c9a557]/30 pt-3"><p><strong>{String((item.payload.customer as Record<string, unknown> | undefined)?.fullName || "Ficha sem nome")}</strong> · {item.syncStatus === "pending" ? "Pendente de envio" : item.syncStatus === "syncing" ? "Sincronizando" : `Conflito: ${item.lastError || "revise a ficha"}`}{item.syncStatus === "conflict" && ` (${item.attempts} tentativa${item.attempts > 1 ? "s" : ""})`}</p><div className="flex gap-2">{item.syncStatus === "conflict" && <Button type="button" size="sm" variant="outline" onClick={() => reviewOffline(item)}>Revisar ficha</Button>}<Button type="button" size="sm" variant="ghost" onClick={() => void removeOfflineCapture(item.id).then(refreshOfflineQueue)}>Descartar</Button></div></div>)}</div>}
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e8e1d4] bg-[#fcfbf7] px-4 py-3">
+      <div><p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Fila operacional</p><p className="text-sm text-muted-foreground">Filtre as fichas por etapa sem perder o contexto da captação.</p></div>
+      <div className="flex items-center gap-2"><Label htmlFor="capture-status-filter" className="text-xs text-muted-foreground">Status</Label><Select value={statusFilter} onValueChange={value => setStatusFilter(value as typeof statusFilter)}><SelectTrigger id="capture-status-filter" className="w-[170px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todas as etapas</SelectItem>{Object.entries(statusLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div>
+    </div>
     <div className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
       <Card className="border-[#e8e1d4]"><CardContent className="p-6"><div className="flex items-center gap-3"><UsersRound className="h-5 w-5 text-[#b18f4b]" /><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Ficha digital</p><h2 className="font-serif text-2xl text-[#1d2b2a]">Nova captação</h2></div></div>
         <form onSubmit={submit} className="mt-6 space-y-6">

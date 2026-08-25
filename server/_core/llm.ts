@@ -1,4 +1,5 @@
 import { ENV } from "./env";
+import { fetchWithTimeout } from "../integrationReliability";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -307,7 +308,7 @@ const fetchWithBackoff = async (
 
   for (let attempt = 0; attempt <= RETRY_MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(url, init);
+      const response = await fetchWithTimeout(url, init, 60_000);
       if (response.ok || attempt === RETRY_MAX_RETRIES) {
         return response;
       }

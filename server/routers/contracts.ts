@@ -10,15 +10,17 @@ import { parseCancellationPolicy } from "../projectPolicy";
 import { simulateCancellation } from "../cancellationDomain";
 import { planCancellationExecution } from "../cancellationExecution";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
+import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 
 export const contractsRouter = router({
-  list: contractsProcedure.query(async () => {
+  list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
     return db.select({ contract: contracts, customerName: customers.fullName, sellerName: users.name })
       .from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).leftJoin(users, eq(contracts.sellerId, users.id))
-      .orderBy(desc(contracts.updatedAt)).limit(100);
+      .where(input?.status ? eq(contracts.status, input.status) : undefined)
+      .orderBy(desc(contracts.updatedAt)).limit(input?.limit ?? 100);
   }),
 
   create: salesProcedure.input(z.object({
@@ -72,9 +74,9 @@ export const contractsRouter = router({
       .from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!contract) return null;
     const [schedule, documents, cancellationRequests] = await Promise.all([
-      db.select().from(installments).where(eq(installments.contractId, input.id)).orderBy(installments.sequence),
-      db.select().from(contractDocuments).where(eq(contractDocuments.contractId, input.id)).orderBy(desc(contractDocuments.createdAt)),
-      db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, input.id)).orderBy(desc(contractCancellationRequests.createdAt)),
+      db.select().from(installments).where(eq(installments.contractId, input.id)).orderBy(installments.sequence).limit(360),
+      db.select().from(contractDocuments).where(eq(contractDocuments.contractId, input.id)).orderBy(desc(contractDocuments.createdAt)).limit(100),
+      db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, input.id)).orderBy(desc(contractCancellationRequests.createdAt)).limit(50),
     ]);
     return { ...contract, installments: schedule, documents, cancellationRequests };
   }),
@@ -82,7 +84,7 @@ export const contractsRouter = router({
   simulateCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-    const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)); const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0);
+    const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360); const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0);
     const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
     const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
     return { contractId: contract.id, resortId: resortId ?? null, policy: parseCancellationPolicy(settings?.cancellationPolicy), ...simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }) };
@@ -91,7 +93,9 @@ export const contractsRouter = router({
   requestCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive(), reason: z.string().trim().min(3).max(2000) })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.request");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const simulation = await (async () => { const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." }); const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)); const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0); const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1); const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null; return simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }); })();
+    const existingRequest = (await db.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, input.contractId), eq(contractCancellationRequests.status, "requested"))).limit(1))[0];
+    if (existingRequest) throw new TRPCError({ code: "CONFLICT", message: "Já existe um distrato aguardando decisão para este contrato." });
+    const simulation = await (async () => { const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." }); const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360); const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0); const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1); const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null; return simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }); })();
     const created = await db.insert(contractCancellationRequests).values({ contractId: input.contractId, reason: input.reason, simulationSnapshot: JSON.stringify(simulation), requestedByUserId: ctx.user.id }).$returningId(); const id = created[0]?.id ?? 0; await recordAudit(ctx.user.id, "contract_cancellation_request", id, "requested", `Distrato solicitado para contrato ${input.contractId}.`); return { id, simulation };
   }),
   decideCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approved", "rejected"]), notes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
@@ -143,12 +147,16 @@ export const contractsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
+    if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
+    if (input.status === "cancelled" && !input.cancellationReason?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Informe o motivo do cancelamento do contrato." });
     await db.update(contracts).set({
       status: input.status,
       activatedAt: input.status === "active" ? new Date() : undefined,
       cancelledAt: input.status === "cancelled" ? new Date() : undefined,
-      cancellationReason: input.status === "cancelled" ? input.cancellationReason?.trim() || "Cancelamento registrado" : null,
-    }).where(eq(contracts.id, input.id));
+      cancellationReason: input.status === "cancelled" ? input.cancellationReason!.trim() : null,
+    }).where(and(eq(contracts.id, input.id), eq(contracts.status, current.status)));
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: input.status === "cancelled" ? input.cancellationReason ?? null : null } });
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });

@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, like, or } from "drizzle-orm";
 import { z } from "zod";
 import { customers, opportunities, proposalDiscountApprovals, proposals, salesGoals, salesPlaybooks, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
@@ -8,6 +8,7 @@ import { adminProcedure, assertCapability, salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
 import { buildSellerQualityRanking } from "../salesQuality";
 import { saleStageFromFacts } from "../saleLifecycle";
+import { canTransitionOpportunityStage } from "../../shared/opportunityLifecycle";
 
 const opportunityInput = z.object({
   customerId: z.number().int().positive(),
@@ -26,7 +27,7 @@ export const salesRouter = router({
   playbooks: salesProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(salesPlaybooks).where(eq(salesPlaybooks.active, true)).orderBy(salesPlaybooks.stage, desc(salesPlaybooks.updatedAt));
+    return db.select().from(salesPlaybooks).where(eq(salesPlaybooks.active, true)).orderBy(salesPlaybooks.stage, desc(salesPlaybooks.updatedAt)).limit(200);
   }),
 
   createPlaybook: adminProcedure.input(z.object({
@@ -63,7 +64,7 @@ export const salesRouter = router({
   discountApprovals: adminProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    return db.select({ approval: proposalDiscountApprovals, proposalReference: proposals.reference, requesterName: users.name }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).innerJoin(users, eq(proposalDiscountApprovals.requestedByUserId, users.id)).orderBy(desc(proposalDiscountApprovals.createdAt));
+    return db.select({ approval: proposalDiscountApprovals, proposalReference: proposals.reference, requesterName: users.name }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).innerJoin(users, eq(proposalDiscountApprovals.requestedByUserId, users.id)).orderBy(desc(proposalDiscountApprovals.createdAt)).limit(500);
   }),
 
   decideDiscount: adminProcedure.input(z.object({ id: z.number().int().positive(), approve: z.boolean(), decisionNotes: z.string().trim().max(3000).optional() })).mutation(async ({ ctx, input }) => {
@@ -74,14 +75,16 @@ export const salesRouter = router({
     return { success: true };
   }),
 
-  pipeline: salesProcedure.query(async () => {
+  pipeline: salesProcedure.input(z.object({ stage: z.enum(["new", "qualified", "proposal", "negotiation", "won", "lost"]).optional(), sellerId: z.number().int().positive().optional(), search: z.string().trim().max(120).optional(), limit: z.number().int().min(1).max(500).default(120) }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
+    const term = input?.search ? `%${input.search}%` : null;
     return db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name })
       .from(opportunities)
       .innerJoin(customers, eq(opportunities.customerId, customers.id))
       .leftJoin(users, eq(opportunities.sellerId, users.id))
-      .orderBy(desc(opportunities.updatedAt)).limit(120);
+      .where(and(input?.stage ? eq(opportunities.stage, input.stage) : undefined, input?.sellerId ? eq(opportunities.sellerId, input.sellerId) : undefined, term ? or(like(opportunities.title, term), like(customers.fullName, term), like(opportunities.source, term)) : undefined))
+      .orderBy(desc(opportunities.updatedAt)).limit(input?.limit ?? 120);
   }),
 
   qualityRanking: salesProcedure.query(async () => {
@@ -127,6 +130,7 @@ export const salesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const previous = (await db.select({ stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, input.id)).limit(1))[0];
     if (!previous) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade não encontrada." });
+    if (!canTransitionOpportunityStage(previous.stage, input.data.stage)) throw new TRPCError({ code: "CONFLICT", message: `Transição de oportunidade inválida: ${previous.stage} → ${input.data.stage}.` });
     await db.update(opportunities).set({
       ...input.data,
       expectedAmount: input.data.expectedAmount.toFixed(2),
@@ -181,8 +185,8 @@ export const salesRouter = router({
     const db = await getDb();
     if (!db) return [];
     const [goalRows, wonOpportunities] = await Promise.all([
-      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).orderBy(desc(salesGoals.monthReference)),
-      db.select().from(opportunities).where(eq(opportunities.stage, "won")),
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).orderBy(desc(salesGoals.monthReference)).limit(1000),
+      db.select().from(opportunities).where(eq(opportunities.stage, "won")).limit(5000),
     ]);
     return goalRows.map(row => {
       const reference = new Date(row.goal.monthReference);

@@ -6,6 +6,7 @@ import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
 import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod, shouldCreatePaymentReminder } from "../domain";
+import { canTransitionReservationStatus, canTransitionWaitlistStatus } from "../../shared/reservationLifecycle";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const dateTimeValue = (value: string | null | undefined) => value ? new Date(value) : null;
@@ -14,14 +15,14 @@ export const operationsRouter = router({
   resorts: internalProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(resorts).orderBy(resorts.name);
+    return db.select().from(resorts).orderBy(resorts.name).limit(1000);
   }),
 
   units: internalProcedure.input(z.object({ resortId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
     return db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
-      .where(input?.resortId ? eq(units.resortId, input.resortId) : undefined).orderBy(resorts.name, units.code);
+      .where(input?.resortId ? eq(units.resortId, input.resortId) : undefined).orderBy(resorts.name, units.code).limit(5000);
   }),
 
   createResort: adminProcedure.input(z.object({ name: z.string().trim().min(3).max(180), city: z.string().trim().max(120).optional(), state: z.string().trim().toUpperCase().max(2).optional() }))
@@ -77,7 +78,7 @@ export const operationsRouter = router({
     const checkIn = dateValue(input.desiredCheckIn), checkOut = dateValue(input.desiredCheckOut); if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída desejada precisa ser posterior à entrada." });
     let entitlementScore = 0;
     if (input.contractId) {
-      const entitlements = await db.select().from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active")));
+      const entitlements = await db.select().from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"))).limit(1000);
       const highestPriority = entitlements.reduce<number | null>((current, entitlement) => current === null || entitlement.priorityLevel < current ? entitlement.priorityLevel : current, null);
       entitlementScore = highestPriority === null ? 0 : entitlementPriorityScore(highestPriority);
     }
@@ -88,8 +89,11 @@ export const operationsRouter = router({
 
   updateWaitlistStatus: serviceProcedure.input(z.object({ id: z.number().int().positive(), status: z.enum(["waiting", "offered", "confirmed", "expired", "cancelled"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const current = (await db.select({ status: reservationWaitlist.status }).from(reservationWaitlist).where(eq(reservationWaitlist.id, input.id)).limit(1))[0];
+    if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Item da fila não encontrado." });
+    if (!canTransitionWaitlistStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de fila inválida: ${current.status} → ${input.status}.` });
     const now = new Date();
-    await db.update(reservationWaitlist).set({ status: input.status, offeredAt: input.status === "offered" ? now : undefined, expiresAt: input.status === "offered" ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : undefined }).where(eq(reservationWaitlist.id, input.id));
+    await db.update(reservationWaitlist).set({ status: input.status, offeredAt: input.status === "offered" ? now : undefined, expiresAt: input.status === "offered" ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : undefined }).where(and(eq(reservationWaitlist.id, input.id), eq(reservationWaitlist.status, current.status)));
     await recordAudit(ctx.user.id, "reservation_waitlist", input.id, "status_updated", `Fila de espera atualizada para ${input.status}.`);
     return { success: true };
   }),
@@ -127,13 +131,13 @@ export const operationsRouter = router({
       const checkIn = dateValue(input.checkIn); const checkOut = dateValue(input.checkOut);
       if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída precisa ser posterior ao check-in." });
       const available = await db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
-        .where(and(eq(units.status, "active"), input.resortId ? eq(units.resortId, input.resortId) : undefined));
+        .where(and(eq(units.status, "active"), input.resortId ? eq(units.resortId, input.resortId) : undefined)).limit(5000);
       const busy = await db.select({ unitId: reservations.unitId }).from(reservations).where(and(
         lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),
-      ));
+      )).limit(10000);
       const maintenance = await db.select({ unitId: unitMaintenanceBlocks.unitId }).from(unitMaintenanceBlocks).where(and(
         lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]),
-      ));
+      )).limit(10000);
       const busyIds = new Set([...busy.map(item => item.unitId), ...maintenance.map(item => item.unitId)]);
       return available.filter(item => !busyIds.has(item.unit.id));
     }),
@@ -179,8 +183,11 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+      const current = (await db.select({ status: reservations.status }).from(reservations).where(eq(reservations.id, input.id)).limit(1))[0];
+      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
+      if (!canTransitionReservationStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de reserva inválida: ${current.status} → ${input.status}.` });
       const now = new Date();
-      await db.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(eq(reservations.id, input.id));
+      await db.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(and(eq(reservations.id, input.id), eq(reservations.status, current.status)));
       if (input.status === "completed") await db.update(reservationGuests).set({ checkedOutAt: now }).where(and(eq(reservationGuests.reservationId, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
       await recordAudit(ctx.user.id, "reservation", input.id, "status_updated", `Reserva atualizada para ${input.status}.`);
       return { success: true };
@@ -188,11 +195,15 @@ export const operationsRouter = router({
 
   reservationGuests: serviceProcedure.input(z.object({ reservationId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb(); if (!db) return [];
-    return db.select().from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).orderBy(reservationGuests.createdAt);
+    return db.select().from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).orderBy(reservationGuests.createdAt).limit(100);
   }),
 
   addReservationGuest: serviceProcedure.input(z.object({ reservationId: z.number().int().positive(), fullName: z.string().trim().min(3).max(255), documentNumber: z.string().trim().max(32).nullable().optional(), relationship: z.string().trim().max(80).nullable().optional(), birthDate: z.string().date().nullable().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const reservation = (await db.select({ id: reservations.id, capacity: units.capacity }).from(reservations).innerJoin(units, eq(reservations.unitId, units.id)).where(eq(reservations.id, input.reservationId)).limit(1))[0];
+    if (!reservation) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
+    const guests = await db.select({ id: reservationGuests.id }).from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).limit(31);
+    if (guests.length >= reservation.capacity) throw new TRPCError({ code: "CONFLICT", message: "A capacidade da unidade já foi atingida." });
     const created = await db.insert(reservationGuests).values({ reservationId: input.reservationId, fullName: input.fullName, documentNumber: input.documentNumber || null, relationship: input.relationship || null, birthDate: input.birthDate ? dateValue(input.birthDate) : null }).$returningId();
     const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o acompanhante." });
     await recordAudit(ctx.user.id, "reservation_guest", id, "created", `Acompanhante ${input.fullName} incluído na reserva ${input.reservationId}.`);
@@ -201,9 +212,14 @@ export const operationsRouter = router({
 
   updateGuestPresence: serviceProcedure.input(z.object({ id: z.number().int().positive(), action: z.enum(["check_in", "check_out"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const guest = (await db.select({ checkedInAt: reservationGuests.checkedInAt, checkedOutAt: reservationGuests.checkedOutAt }).from(reservationGuests).where(eq(reservationGuests.id, input.id)).limit(1))[0];
+    if (!guest) throw new TRPCError({ code: "NOT_FOUND", message: "Acompanhante não encontrado." });
+    if (input.action === "check_in" && guest.checkedInAt) return { success: true, alreadyCheckedIn: true };
+    if (input.action === "check_out" && !guest.checkedInAt) throw new TRPCError({ code: "BAD_REQUEST", message: "O acompanhante precisa fazer check-in antes do check-out." });
+    if (input.action === "check_out" && guest.checkedOutAt) return { success: true, alreadyCheckedOut: true };
     await db.update(reservationGuests).set(input.action === "check_in" ? { checkedInAt: new Date() } : { checkedOutAt: new Date() }).where(eq(reservationGuests.id, input.id));
     await recordAudit(ctx.user.id, "reservation_guest", input.id, input.action, `Presença de acompanhante registrada: ${input.action}.`);
-    return { success: true };
+    return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: false } : { alreadyCheckedOut: false }) };
   }),
 
   tasks: internalProcedure.input(z.object({ includeDone: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
@@ -211,8 +227,8 @@ export const operationsRouter = router({
     if (!db) return [];
     const now = new Date();
     const [dueInstallments, openPaymentTasks] = await Promise.all([
-      db.select({ installment: installments, customerId: contracts.customerId }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(inArray(installments.status, ["open", "overdue"])),
-      db.select().from(tasks).where(and(eq(tasks.type, "payment"), inArray(tasks.status, ["open", "in_progress"]))),
+      db.select({ installment: installments, customerId: contracts.customerId }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(inArray(installments.status, ["open", "overdue"])).orderBy(installments.dueDate).limit(5000),
+      db.select().from(tasks).where(and(eq(tasks.type, "payment"), inArray(tasks.status, ["open", "in_progress"]))).limit(5000),
     ]);
     const existingPaymentTaskKeys = new Set(openPaymentTasks.map(task => `${task.contractId}:${task.title}`));
     const reminders = dueInstallments.filter(({ installment }) => shouldCreatePaymentReminder(new Date(installment.dueDate), now));

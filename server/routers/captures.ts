@@ -110,9 +110,9 @@ export const capturesRouter = router({
     const db = await getDb();
     if (!db) return { campaigns: [], sellers: [], resorts: [] };
     const [campaigns, sellers, resortRows] = await Promise.all([
-      db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)),
-      db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name),
-      db.select({ id: resorts.id, name: resorts.name }).from(resorts),
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)).limit(1000),
+      db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name).limit(1000),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).orderBy(resorts.name).limit(1000),
     ]);
     return { campaigns, sellers, resorts: resortRows };
   }),
@@ -176,7 +176,7 @@ export const capturesRouter = router({
       .leftJoin(resorts, eq(captureRecords.resortId, resorts.id))
       .leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id))
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(captureRecords.createdAt));
+      .orderBy(desc(captureRecords.createdAt)).limit(20_000);
     const profiles: CaptureProfile[] = rows.map(row => ({
       id: row.capture.id, createdAt: row.capture.createdAt, customerName: row.customer.fullName, customerDocumentNumber: row.customer.documentNumber, customerEmail: row.customer.email, customerPhone: row.customer.phone,
       city: row.customer.city, state: row.customer.state, resortId: row.capture.resortId, resortName: row.resort?.name ?? null, promoterId: row.capture.promoterId, qualifierId: row.capture.qualifierId, linerId: row.capture.linerId, closerId: row.capture.closerId, roomManagerId: row.capture.roomManagerId,

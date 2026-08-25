@@ -1,10 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { reservationWaitlist, reservations, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { reservationWaitlist, reservations, reservationGuests, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
+
+function querySequence(responses: unknown[][]) {
+  return vi.fn(() => {
+    const result = Promise.resolve(responses.shift() ?? []);
+    const chain: Record<string, () => unknown> = {};
+    chain.from = () => chain;
+    chain.innerJoin = () => chain;
+    chain.leftJoin = () => chain;
+    chain.where = () => chain;
+    chain.limit = () => result;
+    return chain;
+  });
+}
 
 describe("conversão de lista de espera e saída integrada", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -34,7 +47,7 @@ describe("conversão de lista de espera e saída integrada", () => {
 
   it("encerra automaticamente os acompanhantes presentes quando a reserva faz checkout", async () => {
     const updates: unknown[] = [];
-    const db = { update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const db = { select: querySequence([[{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 
@@ -47,7 +60,7 @@ describe("conversão de lista de espera e saída integrada", () => {
 
   it("mantém a jornada completa de chegada e saída coerente para reserva e acompanhante", async () => {
     const updates: unknown[] = [];
-    const db = { update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const db = { select: querySequence([[{ status: "confirmed" }], [{ checkedInAt: null, checkedOutAt: null }], [{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 

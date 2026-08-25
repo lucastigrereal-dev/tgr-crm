@@ -53,17 +53,18 @@ function decodeUpload(base64: string) {
 
 export const customersRouter = router({
   list: internalProcedure
-    .input(z.object({ search: z.string().trim().max(120).optional() }).optional())
+    .input(z.object({ search: z.string().trim().max(120).optional(), status: z.enum(["active", "inactive", "prospect"]).optional(), city: z.string().trim().max(120).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional())
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) return [];
       const term = input?.search ? `%${input.search}%` : null;
+      const cityTerm = input?.city ? `%${input.city}%` : null;
       return db
         .select()
         .from(customers)
-        .where(term ? or(like(customers.fullName, term), like(customers.documentNumber, term), like(customers.email, term)) : undefined)
+        .where(and(term ? or(like(customers.fullName, term), like(customers.documentNumber, term), like(customers.email, term)) : undefined, input?.status ? eq(customers.status, input.status) : undefined, cityTerm ? like(customers.city, cityTerm) : undefined))
         .orderBy(desc(customers.updatedAt))
-        .limit(100);
+        .limit(input?.limit ?? 100);
     }),
 
   create: internalProcedure.input(customerInput).mutation(async ({ ctx, input }) => {
@@ -127,11 +128,11 @@ export const customersRouter = router({
     if (!customer) return null;
     const [interactions, documents, customerContracts, customerOpportunities, customerReservations, customerInstallments, relationshipTasks, captures] = await Promise.all([
       db.select().from(customerInteractions).where(eq(customerInteractions.customerId, input.id)).orderBy(desc(customerInteractions.occurredAt)).limit(50),
-      db.select().from(customerDocuments).where(eq(customerDocuments.customerId, input.id)).orderBy(desc(customerDocuments.createdAt)),
-      db.select().from(contracts).where(eq(contracts.customerId, input.id)).orderBy(desc(contracts.createdAt)),
-      db.select().from(opportunities).where(eq(opportunities.customerId, input.id)).orderBy(desc(opportunities.updatedAt)),
-      db.select().from(reservations).where(eq(reservations.customerId, input.id)).orderBy(desc(reservations.checkIn)),
-      db.select({ status: installments.status }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(eq(contracts.customerId, input.id)),
+      db.select().from(customerDocuments).where(eq(customerDocuments.customerId, input.id)).orderBy(desc(customerDocuments.createdAt)).limit(100),
+      db.select().from(contracts).where(eq(contracts.customerId, input.id)).orderBy(desc(contracts.createdAt)).limit(100),
+      db.select().from(opportunities).where(eq(opportunities.customerId, input.id)).orderBy(desc(opportunities.updatedAt)).limit(200),
+      db.select().from(reservations).where(eq(reservations.customerId, input.id)).orderBy(desc(reservations.checkIn)).limit(200),
+      db.select({ status: installments.status }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(eq(contracts.customerId, input.id)).limit(500),
       db.select().from(tasks).where(and(eq(tasks.customerId, input.id), inArray(tasks.status, ["open", "in_progress"]))).orderBy(tasks.dueAt).limit(20),
       db.select().from(captureRecords).where(eq(captureRecords.customerId, input.id)).orderBy(desc(captureRecords.createdAt)).limit(20),
     ]);
@@ -186,6 +187,6 @@ export const customersRouter = router({
     if (!db) return [];
     return db.select({ installment: installments, contractNumber: contracts.number }).from(installments)
       .innerJoin(contracts, eq(installments.contractId, contracts.id))
-      .where(eq(contracts.customerId, input.customerId)).orderBy(desc(installments.dueDate));
+      .where(eq(contracts.customerId, input.customerId)).orderBy(desc(installments.dueDate)).limit(500);
   }),
 });
