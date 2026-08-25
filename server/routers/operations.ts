@@ -91,9 +91,12 @@ export const operationsRouter = router({
       .orderBy(desc(reservations.checkIn)).limit(input?.limit ?? 200);
   }),
 
-  waitlist: serviceProcedure.query(async () => {
+  waitlist: serviceProcedure.input(z.object({ search: z.string().trim().max(120).optional(), status: z.enum(["waiting", "offered"]).optional(), limit: z.number().int().min(1).max(500).default(200) }).optional()).query(async ({ input }) => {
     const db = await getDb(); if (!db) return [];
-    return db.select({ item: reservationWaitlist, customerName: customers.fullName, resortName: resorts.name }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).leftJoin(resorts, eq(reservationWaitlist.resortId, resorts.id)).where(inArray(reservationWaitlist.status, ["waiting", "offered"])).orderBy(desc(reservationWaitlist.priorityScore), reservationWaitlist.desiredCheckIn).limit(200);
+    const filters: SQL[] = [inArray(reservationWaitlist.status, ["waiting", "offered"] as const)];
+    if (input?.status) filters.push(eq(reservationWaitlist.status, input.status));
+    if (input?.search) filters.push(or(like(customers.fullName, `%${input.search}%`), like(resorts.name, `%${input.search}%`))!);
+    return db.select({ item: reservationWaitlist, customerName: customers.fullName, resortName: resorts.name }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).leftJoin(resorts, eq(reservationWaitlist.resortId, resorts.id)).where(and(...filters)).orderBy(desc(reservationWaitlist.priorityScore), reservationWaitlist.desiredCheckIn).limit(input?.limit ?? 200);
   }),
 
   joinWaitlist: serviceProcedure.input(z.object({ customerId: z.number().int().positive(), contractId: z.number().int().positive().nullable().optional(), resortId: z.number().int().positive().nullable().optional(), desiredCheckIn: z.string().date(), desiredCheckOut: z.string().date(), partySize: z.number().int().min(1).max(30).default(1), priorityScore: z.number().int().min(0).max(999).default(0), preferenceNotes: z.string().trim().max(2000).nullable().optional() })).mutation(async ({ ctx, input }) => {
