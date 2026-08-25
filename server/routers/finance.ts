@@ -182,7 +182,9 @@ export const financeRouter = router({
       if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Gateway Asaas não configurado. Defina ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN antes de emitir." });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const issued = await db.transaction(async tx => {
+      let issued;
+      try {
+        issued = await db.transaction(async tx => {
         const row = (await tx.select({ installment: installments, contract: contracts, customer: customers }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
         if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
         if (["paid", "cancelled"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga ou cancelada." });
@@ -210,8 +212,12 @@ export const financeRouter = router({
         const created = await tx.insert(billingRecords).values({ installmentId: input.installmentId, type: input.type, status: "generated", gatewayProvider: "asaas", gatewayPaymentId: payment.id, gatewayStatus: payment.status || "PENDING", amount: row.installment.amount, dueDate: row.installment.dueDate, externalReference, digitableLine: identification?.identificationField || null, pixCopyPaste: pix?.payload || null, pixQrCodeBase64: pix?.encodedImage || null, invoiceUrl: payment.invoiceUrl || null, bankSlipUrl: payment.bankSlipUrl || null, generatedAt: new Date() }).$returningId();
         const id = created[0]?.id;
         if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Cobrança criada no gateway, mas não foi persistida no CRM." });
-        return { id, gatewayPaymentId: payment.id, reused: false };
-      });
+          return { id, gatewayPaymentId: payment.id, reused: false };
+        });
+      } catch (error) {
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: "BAD_GATEWAY", message: "O gateway de cobrança não respondeu corretamente. Tente novamente." });
+      }
       if (issued.reused) return issued;
       await recordAudit(ctx.user.id, "billing_record", issued.id, "gateway_issued", `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.`);
       await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "billing_record", aggregateId: issued.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: issued.gatewayPaymentId, type: input.type } });

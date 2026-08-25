@@ -79,3 +79,18 @@ describe("idempotência de emissão Asaas", () => {
   });
 });
 
+
+
+describe("isolamento de erro do gateway", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("não vaza payload remoto nem audita falha de emissão", async () => {
+    const fixture = makeDb();
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    gatewayMocks.createAsaasPayment.mockRejectedValueOnce(new Error("Asaas: documento inválido com dados internos"));
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.issueGatewayBilling({ installmentId: 91, type: "pix" })).rejects.toMatchObject({ code: "BAD_GATEWAY", message: "O gateway de cobrança não respondeu corretamente. Tente novamente." });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+});
