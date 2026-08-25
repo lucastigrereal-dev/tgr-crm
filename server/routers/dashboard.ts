@@ -26,7 +26,7 @@ function resolveRange(input?: z.infer<NonNullable<typeof chartFilters>>) {
   const fallback = monthBounds();
   const start = input?.startDate ? new Date(`${input.startDate}T00:00:00Z`) : fallback.start;
   const end = input?.endDate ? new Date(`${input.endDate}T00:00:00Z`) : fallback.end;
-  if (end <= start) throw new Error("O fim do período precisa ser posterior ao início.");
+  if (end <= start) throw new TRPCError({ code: "BAD_REQUEST", message: "O fim do período precisa ser posterior ao início." });
   return { start, end: input?.endDate ? new Date(end.getTime() + 86_400_000) : end };
 }
 
