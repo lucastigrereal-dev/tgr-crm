@@ -5,10 +5,10 @@ vi.mock("./db", () => dbMocks);
 
 import { salesRouter } from "./routers/sales";
 
-function makeDb(opportunityExists: boolean, duplicateReference = false, affectedRows?: number) {
+function makeDb(opportunityExists: boolean, duplicateReference = false, affectedRows?: number, opportunityStage: "new" | "qualified" | "proposal" | "negotiation" | "won" | "lost" = "new") {
   let selectCall = 0;
   const select = vi.fn(() => {
-    const result = Promise.resolve(selectCall++ === 0 ? (opportunityExists ? [{ id: 11 }] : []) : (duplicateReference ? [{ id: 702 }] : []));
+    const result = Promise.resolve(selectCall++ === 0 ? (opportunityExists ? [{ id: 11, stage: opportunityStage }] : []) : (duplicateReference ? [{ id: 702 }] : []));
     const limitChain = { for: vi.fn(async () => result), then: result.then.bind(result) };
     const chain = {
       from: vi.fn(() => chain),
@@ -66,6 +66,25 @@ describe("integridade de propostas", () => {
       expiresAt: null,
     })).rejects.toMatchObject({ code: "CONFLICT" });
 
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita proposta para oportunidade terminal antes do insert", async () => {
+    const db = makeDb(true, false, 1, "won");
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
+
+    await expect(caller.createProposal({
+      opportunityId: 11,
+      reference: "PROP-WON",
+      productDescription: "Proposta indevida",
+      totalAmount: 1000,
+      downPaymentAmount: 100,
+      installmentCount: 10,
+      status: "draft",
+      expiresAt: null,
+    })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(db.insert).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });

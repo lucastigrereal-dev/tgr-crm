@@ -190,8 +190,9 @@ export const salesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const id = await db.transaction(async tx => {
-      const opportunity = (await tx.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1).for("update"))[0];
+      const opportunity = (await tx.select({ id: opportunities.id, stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1).for("update"))[0];
       if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
+      if (!canTransitionOpportunityStage(opportunity.stage, "proposal")) throw new TRPCError({ code: "CONFLICT", message: `Não é possível criar proposta para oportunidade em estágio ${opportunity.stage}.` });
       const duplicate = (await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.reference, input.reference)).limit(1))[0];
       if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma proposta com esta referência." });
       const result = await tx.insert(proposals).values({
@@ -202,7 +203,7 @@ export const salesRouter = router({
       }).$returningId();
       const proposalId = result[0]?.id;
       if (!proposalId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
-      const stageUpdate = await tx.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(eq(opportunities.id, input.opportunityId));
+      const stageUpdate = await tx.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.stage, opportunity.stage)));
       if (stageUpdate && typeof stageUpdate === "object" && "affectedRows" in stageUpdate && Number(stageUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
       return proposalId;
     });
