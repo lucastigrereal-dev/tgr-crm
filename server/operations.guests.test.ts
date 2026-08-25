@@ -74,4 +74,12 @@ describe("operação de fila e acompanhantes", () => {
     expect(fixture.updates[0]).toMatchObject({ checkedInAt: expect.any(Date) });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(9, "reservation_guest", 722, "check_in", expect.stringContaining("check_in"));
   });
+
+  it("não audita check-in que perdeu a corrida", async () => {
+    const fixture = makeDb([[{ checkedInAt: null, checkedOutAt: null, reservationStatus: "checked_in" }]], 0); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
+
+    await expect(caller.updateGuestPresence({ id: 722, action: "check_in" })).resolves.toEqual({ success: true, alreadyCheckedIn: true });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
 });
