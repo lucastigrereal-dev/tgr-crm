@@ -11,7 +11,8 @@ import { adminProcedure, assertCapability, commissionsProcedure, financeProcedur
 import { buildProfessionalScorecards, type ProfessionalSaleFact } from "../professionalScorecard";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 
-const campaignInput = z.object({ name: z.string().min(3).max(180), code: z.string().min(2).max(64).transform(value => value.trim().toUpperCase().replace(/\s+/g, "-")), description: z.string().max(2000).optional(), startsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endsAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), commissionRate: z.coerce.number().min(0).max(100), targetAmount: z.coerce.number().min(0).default(0), status: z.enum(["draft", "active", "closed"]).default("draft") });
+const campaignDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => { const parsed = new Date(`${value}T00:00:00Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value; }, "Data de campanha inválida.");
+const campaignInput = z.object({ name: z.string().min(3).max(180), code: z.string().min(2).max(64).transform(value => value.trim().toUpperCase().replace(/\s+/g, "-")), description: z.string().max(2000).optional(), startsAt: campaignDate.optional(), endsAt: campaignDate.optional(), commissionRate: z.coerce.number().min(0).max(100), targetAmount: z.coerce.number().min(0).default(0), status: z.enum(["draft", "active", "closed"]).default("draft") }).superRefine((value, refinement) => { if (value.startsAt && value.endsAt && value.endsAt < value.startsAt) refinement.addIssue({ code: "custom", path: ["endsAt"], message: "A data final da campanha precisa ser posterior ou igual à inicial." }); });
 
 export const commissionsRouter = router({
   scorecards: commissionsProcedure.input(z.object({ minimumMaturedSales: z.number().int().min(1).max(100).default(10) }).optional()).query(async ({ ctx, input }) => {
