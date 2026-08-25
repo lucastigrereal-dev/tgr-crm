@@ -215,14 +215,21 @@ export const salesRouter = router({
       db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).orderBy(desc(salesGoals.monthReference)).limit(1000),
       db.select().from(opportunities).where(eq(opportunities.stage, "won")).limit(5000),
     ]);
+    const progressBySellerMonth = new Map<string, { currentAmount: number; currentContracts: number }>();
+    for (const opportunity of wonOpportunities) {
+      if (opportunity.sellerId === null || !opportunity.closedAt) continue;
+      const closeDate = new Date(opportunity.closedAt);
+      const key = `${opportunity.sellerId}:${closeDate.getUTCFullYear()}-${closeDate.getUTCMonth()}`;
+      const progress = progressBySellerMonth.get(key) ?? { currentAmount: 0, currentContracts: 0 };
+      progress.currentAmount += Number(opportunity.expectedAmount);
+      progress.currentContracts += 1;
+      progressBySellerMonth.set(key, progress);
+    }
     return goalRows.map(row => {
       const reference = new Date(row.goal.monthReference);
-      const closed = wonOpportunities.filter(opportunity => {
-        if (opportunity.sellerId !== row.goal.sellerId || !opportunity.closedAt) return false;
-        const closeDate = new Date(opportunity.closedAt);
-        return closeDate.getUTCFullYear() === reference.getUTCFullYear() && closeDate.getUTCMonth() === reference.getUTCMonth();
-      });
-      return { ...row, currentAmount: closed.reduce((sum, opportunity) => sum + Number(opportunity.expectedAmount), 0), currentContracts: closed.length };
+      const key = `${row.goal.sellerId}:${reference.getUTCFullYear()}-${reference.getUTCMonth()}`;
+      const progress = progressBySellerMonth.get(key) ?? { currentAmount: 0, currentContracts: 0 };
+      return { ...row, ...progress };
     });
   }),
 
