@@ -14,7 +14,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
   let ledgerSelectCall = 0;
   let updateCall = 0;
   const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
-  const rows = (value: unknown[]) => Object.assign(value, { limit: async () => value });
+  const rows = (value: unknown[]) => Object.assign(value, { limit: () => Object.assign(Promise.resolve(value), { for: async () => value }) });
   const ledgerRows = (value: unknown[]) => {
     const chain = {
       where: vi.fn(() => chain),

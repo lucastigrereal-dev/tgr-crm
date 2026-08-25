@@ -139,10 +139,10 @@ export const contractsRouter = router({
     assertCapability(ctx.user.role, "contract.cancel.execute");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const outcome = await db.transaction(async tx => {
-      const request = (await tx.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0];
+      const request = (await tx.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1).for("update"))[0];
       if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." });
       if (request.status !== "approved") throw new TRPCError({ code: "CONFLICT", message: "Somente distrato aprovado pode ser executado." });
-      const contract = (await tx.select().from(contracts).where(eq(contracts.id, request.contractId)).limit(1))[0];
+      const contract = (await tx.select().from(contracts).where(eq(contracts.id, request.contractId)).limit(1).for("update"))[0];
       if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
       if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
       const schedule = await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id));
