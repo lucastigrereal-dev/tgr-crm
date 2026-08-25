@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { contractCancellationRequests, contracts, customers, installments, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks, users } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -7,8 +8,9 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number } = {}) {
+function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean } = {}) {
   let selectCall = 0;
+  let contractSelectCall = 0;
   let ledgerSelectCall = 0;
   let updateCall = 0;
   const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
@@ -38,7 +40,14 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
   return {
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
-    select: vi.fn(() => ({ from: vi.fn(() => {
+    select: vi.fn(() => ({ from: vi.fn((table: unknown) => {
+      if (table === contracts) {
+        const exists = contractSelectCall++ === 0 ? options.contractExists !== false : true;
+        return ledgerRows(exists ? [{ id: 701, totalAmount: "12000.00", status: "active" }] : []);
+      }
+      if (table === customers) return ledgerRows([{ id: 11 }]);
+      if (table === users) return ledgerRows([{ id: 55 }]);
+      if (table === proposals) return ledgerRows([]);
       const data = [
         [{ id: 701, totalAmount: "12000.00", status: "cancelled" }],
         [{ id: 71, sequence: 1, amount: "1000.00", status: "paid" }],
@@ -64,6 +73,7 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("registra criação contratual com valor, parcelas e ator", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
     await expect(caller().create({ number: "TS-2026-701", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "active", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 })).resolves.toEqual({ id: 701 });
 
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract", 701, "created", expect.stringContaining("TS-2026-701"));

@@ -37,13 +37,24 @@ export const contractsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const duplicate = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.number, input.number)).limit(1))[0];
+    if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe um contrato com este número." });
+    const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente do contrato não encontrado." });
+    const sellerId = input.sellerId ?? ctx.user.id;
+    const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, sellerId)).limit(1))[0];
+    if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor do contrato não encontrado." });
+    if (input.proposalId) {
+      const proposal = (await db.select({ id: proposals.id }).from(proposals).where(eq(proposals.id, input.proposalId)).limit(1))[0];
+      if (!proposal) throw new TRPCError({ code: "NOT_FOUND", message: "Proposta do contrato não encontrada." });
+    }
     const schedule = buildInstallmentSchedule(input.totalAmount, input.installmentCount, input.firstDueDate);
     const result = await db.transaction(async tx => {
       const created = await tx.insert(contracts).values({
         number: input.number,
         customerId: input.customerId,
         proposalId: input.proposalId ?? null,
-        sellerId: input.sellerId ?? ctx.user.id,
+        sellerId,
         usageModel: input.usageModel,
         status: input.status,
         totalAmount: input.totalAmount.toFixed(2),
