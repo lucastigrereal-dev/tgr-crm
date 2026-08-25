@@ -302,7 +302,7 @@ export const salesGoals = mysqlTable("sales_goals", {
   targetAmount: decimal("targetAmount", { precision: 14, scale: 2 }).notNull(),
   targetContracts: int("targetContracts").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("sales_goals_seller_month_unique").on(table.sellerId, table.monthReference)]);
 
 export const salesCommissions = mysqlTable(
   "sales_commissions",

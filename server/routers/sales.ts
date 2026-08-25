@@ -235,9 +235,14 @@ export const salesRouter = router({
     if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas a administração pode definir metas." });
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, input.sellerId)).limit(1))[0];
+    if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor da meta não encontrado." });
+    const monthReference = new Date(`${input.monthReference}T12:00:00Z`);
+    const duplicate = (await db.select({ id: salesGoals.id }).from(salesGoals).where(and(eq(salesGoals.sellerId, input.sellerId), eq(salesGoals.monthReference, monthReference))).limit(1))[0];
+    if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma meta para este vendedor nesse mês." });
     const created = await db.insert(salesGoals).values({
       sellerId: input.sellerId,
-      monthReference: new Date(`${input.monthReference}T12:00:00Z`),
+      monthReference,
       targetAmount: input.targetAmount.toFixed(2),
       targetContracts: input.targetContracts,
     }).$returningId();
