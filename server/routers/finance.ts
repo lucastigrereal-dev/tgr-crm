@@ -366,13 +366,16 @@ export const financeRouter = router({
     assertCapability(ctx.user.role, "finance.transfer.pay");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const transfer = (await db.select({ status: financialTransfers.status }).from(financialTransfers).where(eq(financialTransfers.id, input.id)).limit(1))[0];
-    if (!transfer) throw new TRPCError({ code: "NOT_FOUND", message: "Repasse não encontrado." });
-    if (transfer.status === "paid") return { success: true, alreadyPaid: true };
-    if (transfer.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Repasse cancelado não pode ser pago." });
-    const updateResult = await db.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(and(eq(financialTransfers.id, input.id), ne(financialTransfers.status, "paid")));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadyPaid: true };
-    await recordAudit(ctx.user.id, "financial_transfer", input.id, "paid", "Repasse baixado como pago.");
-    return { success: true, alreadyPaid: false };
+    const outcome = await db.transaction(async tx => {
+      const transfer = (await tx.select({ status: financialTransfers.status }).from(financialTransfers).where(eq(financialTransfers.id, input.id)).limit(1).for("update"))[0];
+      if (!transfer) throw new TRPCError({ code: "NOT_FOUND", message: "Repasse não encontrado." });
+      if (transfer.status === "paid") return { success: true, alreadyPaid: true };
+      if (transfer.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Repasse cancelado não pode ser pago." });
+      const updateResult = await tx.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(and(eq(financialTransfers.id, input.id), eq(financialTransfers.status, "pending")));
+      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadyPaid: true };
+      return { success: true, alreadyPaid: false };
+    });
+    if (!outcome.alreadyPaid) await recordAudit(ctx.user.id, "financial_transfer", input.id, "paid", "Repasse baixado como pago.");
+    return outcome;
   }),
 });
