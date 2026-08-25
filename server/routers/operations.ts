@@ -139,28 +139,28 @@ export const operationsRouter = router({
 
   convertWaitlistToReservation: serviceProcedure.input(z.object({ waitlistId: z.number().int().positive(), unitId: z.number().int().positive(), notes: z.string().trim().max(3000).optional().nullable() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const item = (await db.select().from(reservationWaitlist).where(eq(reservationWaitlist.id, input.waitlistId)).limit(1))[0];
-    if (!item || item.status !== "offered") throw new TRPCError({ code: "BAD_REQUEST", message: "A fila precisa estar com oferta ativa para virar reserva." });
-    const unit = (await db.select().from(units).where(and(eq(units.id, input.unitId), eq(units.status, "active"))).limit(1))[0];
-    if (!unit) throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para confirmar a reserva." });
-    if (item.resortId && unit.resortId !== item.resortId) throw new TRPCError({ code: "BAD_REQUEST", message: "A unidade escolhida não pertence ao empreendimento solicitado." });
-    const conflict = await db.select({ id: reservations.id }).from(reservations).where(and(eq(reservations.unitId, input.unitId), lt(reservations.checkIn, item.desiredCheckOut), gt(reservations.checkOut, item.desiredCheckIn), ne(reservations.status, "cancelled"))).limit(1);
-    if (conflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade escolhida ficou indisponível neste período." });
-    const maintenanceConflict = await db.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, item.desiredCheckOut), gt(unitMaintenanceBlocks.endsAt, item.desiredCheckIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
-    if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade está bloqueada para manutenção neste período." });
-    if (item.contractId) {
-      const contract = (await db.select().from(contracts).where(and(eq(contracts.id, item.contractId), eq(contracts.customerId, item.customerId))).limit(1))[0];
-      if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato da fila não pertence ao associado." });
-    }
     const reservationId = await db.transaction(async tx => {
+      const item = (await tx.select().from(reservationWaitlist).where(eq(reservationWaitlist.id, input.waitlistId)).limit(1).for("update"))[0];
+      if (!item || item.status !== "offered") throw new TRPCError({ code: "BAD_REQUEST", message: "A fila precisa estar com oferta ativa para virar reserva." });
+      const unit = (await tx.select().from(units).where(and(eq(units.id, input.unitId), eq(units.status, "active"))).limit(1).for("update"))[0];
+      if (!unit) throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para confirmar a reserva." });
+      if (item.resortId && unit.resortId !== item.resortId) throw new TRPCError({ code: "BAD_REQUEST", message: "A unidade escolhida não pertence ao empreendimento solicitado." });
+      const conflict = await tx.select({ id: reservations.id }).from(reservations).where(and(eq(reservations.unitId, input.unitId), lt(reservations.checkIn, item.desiredCheckOut), gt(reservations.checkOut, item.desiredCheckIn), ne(reservations.status, "cancelled"))).limit(1);
+      if (conflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade escolhida ficou indisponível neste período." });
+      const maintenanceConflict = await tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, item.desiredCheckOut), gt(unitMaintenanceBlocks.endsAt, item.desiredCheckIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
+      if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade está bloqueada para manutenção neste período." });
+      if (item.contractId) {
+        const contract = (await tx.select().from(contracts).where(and(eq(contracts.id, item.contractId), eq(contracts.customerId, item.customerId))).limit(1))[0];
+        if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato da fila não pertence ao associado." });
+      }
       const created = await tx.insert(reservations).values({ customerId: item.customerId, contractId: item.contractId, unitId: input.unitId, checkIn: item.desiredCheckIn, checkOut: item.desiredCheckOut, adults: item.partySize, children: 0, notes: input.notes || item.preferenceNotes || null, status: "confirmed", createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar a reserva da fila." });
-      await tx.update(reservationWaitlist).set({ status: "confirmed" }).where(eq(reservationWaitlist.id, item.id));
-      return id;
+      await tx.update(reservationWaitlist).set({ status: "confirmed" }).where(and(eq(reservationWaitlist.id, item.id), eq(reservationWaitlist.status, "offered")));
+      return { id, waitlistId: item.id };
     });
-    await recordAudit(ctx.user.id, "reservation", reservationId, "created_from_waitlist", `Reserva criada da fila ${item.id}.`);
-    await recordAudit(ctx.user.id, "reservation_waitlist", item.id, "converted_to_reservation", `Fila convertida na reserva ${reservationId}.`);
-    return { reservationId };
+    await recordAudit(ctx.user.id, "reservation", reservationId.id, "created_from_waitlist", `Reserva criada da fila ${reservationId.waitlistId}.`);
+    await recordAudit(ctx.user.id, "reservation_waitlist", reservationId.waitlistId, "converted_to_reservation", `Fila convertida na reserva ${reservationId.id}.`);
+    return { reservationId: reservationId.id };
   }),
 
   availableUnits: serviceProcedure.input(z.object({ checkIn: z.string().date(), checkOut: z.string().date(), resortId: z.number().int().positive().optional() }))
@@ -196,7 +196,7 @@ export const operationsRouter = router({
     const checkIn = dateValue(input.checkIn); const checkOut = dateValue(input.checkOut);
     if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída precisa ser posterior ao check-in." });
     const id = await db.transaction(async tx => {
-      const unit = (await tx.select({ id: units.id, status: units.status }).from(units).where(eq(units.id, input.unitId)).limit(1))[0];
+      const unit = (await tx.select({ id: units.id, status: units.status }).from(units).where(eq(units.id, input.unitId)).limit(1).for("update"))[0];
       if (!unit || unit.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para criar a reserva." });
       const conflict = await tx.select({ id: reservations.id }).from(reservations).where(and(
         eq(reservations.unitId, input.unitId), lt(reservations.checkIn, checkOut), gt(reservations.checkOut, checkIn), ne(reservations.status, "cancelled"),

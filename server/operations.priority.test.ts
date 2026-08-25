@@ -16,7 +16,7 @@ function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; 
       if (table === contracts) return { where: () => ({ limit: async () => options.contractMissing ? [] : [{ id: 8, customerId: 3 }] }) };
       if (table === resorts) return { where: () => ({ limit: async () => options.resortMissing ? [] : [{ id: 5 }] }) };
       if (table === ownershipEntitlements) return { where: () => ({ limit: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] }) };
-      if (table === units) return { where: () => ({ limit: async () => unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active" }] : [] }) };
+      if (table === units) return { where: () => ({ limit: () => { const rows = unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active" }] : []; return { for: async () => rows, then: (resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(rows).then(resolve, reject) }; } }) };
       if (table === reservations) return { where: () => ({ limit: async () => [] }) };
       if (table === unitMaintenanceBlocks) return { where: () => ({ limit: async () => options.maintenance ? [{ id: 700 }] : [] }) };
       throw new Error("Tabela não prevista neste teste");
