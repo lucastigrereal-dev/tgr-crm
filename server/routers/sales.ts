@@ -144,6 +144,16 @@ export const salesRouter = router({
     const previous = (await db.select({ stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, input.id)).limit(1))[0];
     if (!previous) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade não encontrada." });
     if (!canTransitionOpportunityStage(previous.stage, input.data.stage)) throw new TRPCError({ code: "CONFLICT", message: `Transição de oportunidade inválida: ${previous.stage} → ${input.data.stage}.` });
+    const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.data.customerId)).limit(1))[0];
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente da oportunidade não encontrado." });
+    if (input.data.sellerId !== null && input.data.sellerId !== undefined) {
+      const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, input.data.sellerId)).limit(1))[0];
+      if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor da oportunidade não encontrado." });
+    }
+    if (input.data.campaignId !== null && input.data.campaignId !== undefined) {
+      const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.data.campaignId)).limit(1))[0];
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da oportunidade não encontrada." });
+    }
     await db.update(opportunities).set({
       ...input.data,
       expectedAmount: input.data.expectedAmount.toFixed(2),
