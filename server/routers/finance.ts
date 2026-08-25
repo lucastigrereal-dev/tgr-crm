@@ -182,34 +182,38 @@ export const financeRouter = router({
       if (!config) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Gateway Asaas não configurado. Defina ASAAS_API_KEY e ASAAS_WEBHOOK_TOKEN antes de emitir." });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const row = (await db.select({ installment: installments, contract: contracts, customer: customers }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(installments.id, input.installmentId)).limit(1))[0];
-      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
-      if (["paid", "cancelled"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga ou cancelada." });
-      const existing = (await db.select({ billing: billingRecords }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.gatewayProvider, "asaas"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).orderBy(desc(billingRecords.createdAt)).limit(1))[0];
-      if (existing?.billing.gatewayPaymentId) return { id: existing.billing.id, gatewayPaymentId: existing.billing.gatewayPaymentId, reused: true };
+      const issued = await db.transaction(async tx => {
+        const row = (await tx.select({ installment: installments, contract: contracts, customer: customers }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
+        if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
+        if (["paid", "cancelled"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga ou cancelada." });
+        const existing = (await tx.select({ billing: billingRecords }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.gatewayProvider, "asaas"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).orderBy(desc(billingRecords.createdAt)).limit(1))[0];
+        if (existing?.billing.gatewayPaymentId) return { id: existing.billing.id, gatewayPaymentId: existing.billing.gatewayPaymentId, reused: true };
 
-      const cpfCnpj = (row.customer.documentNumber || "").replace(/\\D/g, "");
-      if (![11, 14].includes(cpfCnpj.length)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Cadastre um CPF ou CNPJ válido no associado antes de emitir a cobrança." });
-      const externalCustomerReference = `TGR-CRM-CUSTOMER-${row.customer.id}`;
-      let gatewayCustomerId = (await db.select({ gatewayCustomerId: paymentGatewayCustomers.gatewayCustomerId }).from(paymentGatewayCustomers).where(and(eq(paymentGatewayCustomers.customerId, row.customer.id), eq(paymentGatewayCustomers.gatewayProvider, "asaas"))).limit(1))[0]?.gatewayCustomerId;
-      if (!gatewayCustomerId) {
-        const remoteCustomer = await createAsaasCustomer(config, { name: row.customer.fullName, email: row.customer.email || null, mobilePhone: row.customer.phone || null, cpfCnpj, externalReference: externalCustomerReference });
-        gatewayCustomerId = remoteCustomer.id;
-        await db.insert(paymentGatewayCustomers).values({ customerId: row.customer.id, gatewayProvider: "asaas", gatewayCustomerId }).onDuplicateKeyUpdate({ set: { gatewayCustomerId, updatedAt: new Date() } });
-      }
+        const cpfCnpj = (row.customer.documentNumber || "").replace(/\\D/g, "");
+        if (![11, 14].includes(cpfCnpj.length)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Cadastre um CPF ou CNPJ válido no associado antes de emitir a cobrança." });
+        const externalCustomerReference = `TGR-CRM-CUSTOMER-${row.customer.id}`;
+        let gatewayCustomerId = (await tx.select({ gatewayCustomerId: paymentGatewayCustomers.gatewayCustomerId }).from(paymentGatewayCustomers).where(and(eq(paymentGatewayCustomers.customerId, row.customer.id), eq(paymentGatewayCustomers.gatewayProvider, "asaas"))).limit(1))[0]?.gatewayCustomerId;
+        if (!gatewayCustomerId) {
+          const remoteCustomer = await createAsaasCustomer(config, { name: row.customer.fullName, email: row.customer.email || null, mobilePhone: row.customer.phone || null, cpfCnpj, externalReference: externalCustomerReference });
+          gatewayCustomerId = remoteCustomer.id;
+          await tx.insert(paymentGatewayCustomers).values({ customerId: row.customer.id, gatewayProvider: "asaas", gatewayCustomerId }).onDuplicateKeyUpdate({ set: { gatewayCustomerId, updatedAt: new Date() } });
+        }
 
-      const externalReference = billingExternalReference(input.installmentId);
-      const expectedBillingType = asaasBillingType(input.type);
-      const existingRemote = (await findAsaasPaymentsByReference(config, externalReference)).data?.find(item => item.externalReference === externalReference && item.billingType === expectedBillingType);
-      const payment = existingRemote || await createAsaasPayment(config, { customer: gatewayCustomerId, billingType: expectedBillingType, value: Number(row.installment.amount), dueDate: new Date(row.installment.dueDate).toISOString().slice(0, 10), description: `TGR-CRM · ${row.contract.number} · parcela ${row.installment.sequence}`, externalReference });
-      const identification = input.type === "boleto" ? await getAsaasIdentificationField(config, payment.id) : null;
-      const pix = input.type === "pix" ? await getAsaasPixQrCode(config, payment.id) : null;
-      const created = await db.insert(billingRecords).values({ installmentId: input.installmentId, type: input.type, status: "generated", gatewayProvider: "asaas", gatewayPaymentId: payment.id, gatewayStatus: payment.status || "PENDING", amount: row.installment.amount, dueDate: row.installment.dueDate, externalReference, digitableLine: identification?.identificationField || null, pixCopyPaste: pix?.payload || null, pixQrCodeBase64: pix?.encodedImage || null, invoiceUrl: payment.invoiceUrl || null, bankSlipUrl: payment.bankSlipUrl || null, generatedAt: new Date() }).$returningId();
-      const id = created[0]?.id;
-      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Cobrança criada no gateway, mas não foi persistida no CRM." });
-      await recordAudit(ctx.user.id, "billing_record", id, "gateway_issued", `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.`);
-      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "billing_record", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: payment.id, type: input.type } });
-      return { id, gatewayPaymentId: payment.id, reused: false };
+        const externalReference = billingExternalReference(input.installmentId);
+        const expectedBillingType = asaasBillingType(input.type);
+        const existingRemote = (await findAsaasPaymentsByReference(config, externalReference)).data?.find(item => item.externalReference === externalReference && item.billingType === expectedBillingType);
+        const payment = existingRemote || await createAsaasPayment(config, { customer: gatewayCustomerId, billingType: expectedBillingType, value: Number(row.installment.amount), dueDate: new Date(row.installment.dueDate).toISOString().slice(0, 10), description: `TGR-CRM · ${row.contract.number} · parcela ${row.installment.sequence}`, externalReference });
+        const identification = input.type === "boleto" ? await getAsaasIdentificationField(config, payment.id) : null;
+        const pix = input.type === "pix" ? await getAsaasPixQrCode(config, payment.id) : null;
+        const created = await tx.insert(billingRecords).values({ installmentId: input.installmentId, type: input.type, status: "generated", gatewayProvider: "asaas", gatewayPaymentId: payment.id, gatewayStatus: payment.status || "PENDING", amount: row.installment.amount, dueDate: row.installment.dueDate, externalReference, digitableLine: identification?.identificationField || null, pixCopyPaste: pix?.payload || null, pixQrCodeBase64: pix?.encodedImage || null, invoiceUrl: payment.invoiceUrl || null, bankSlipUrl: payment.bankSlipUrl || null, generatedAt: new Date() }).$returningId();
+        const id = created[0]?.id;
+        if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Cobrança criada no gateway, mas não foi persistida no CRM." });
+        return { id, gatewayPaymentId: payment.id, reused: false };
+      });
+      if (issued.reused) return issued;
+      await recordAudit(ctx.user.id, "billing_record", issued.id, "gateway_issued", `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.`);
+      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "billing_record", aggregateId: issued.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: issued.gatewayPaymentId, type: input.type } });
+      return issued;
     }),
 
   registerBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix", "card", "transfer"]), amount: z.coerce.number().positive(), dueDate: z.string().date(), externalReference: z.string().trim().max(255).optional().nullable(), digitableLine: z.string().trim().max(255).optional().nullable(), pixCopyPaste: z.string().trim().max(4000).optional().nullable() }))
