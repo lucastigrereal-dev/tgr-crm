@@ -221,7 +221,11 @@ export const financeRouter = router({
       const item = (await db.select().from(installments).where(eq(installments.id, input.id)).limit(1))[0];
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
       if (item.status === "paid") return { success: true, alreadyPaid: true, commissionBlocked: false };
-      const contextQuery = db.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts); const commissionContext = typeof (contextQuery as any).leftJoin === "function" ? (await (contextQuery as any).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, item.contractId)).limit(1))[0] : null;
+      const contract = (await db.select().from(contracts).where(eq(contracts.id, item.contractId)).limit(1))[0] ?? null;
+      const proposal = contract?.proposalId ? ((await db.select().from(proposals).where(eq(proposals.id, contract.proposalId)).limit(1))[0] ?? null) : null;
+      const opportunity = proposal?.opportunityId ? ((await db.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
+      const capture = opportunity?.id ? ((await db.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).limit(1))[0] ?? null) : null;
+      const commissionContext = contract ? { contract, proposal, opportunity, capture } : null;
       const policyRow = commissionContext?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, commissionContext.capture.resortId)).limit(1))[0] : null; const commissionPolicy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy); const commissionNeedsPolicy = Boolean(commissionContext?.proposal && commissionContext.capture && Number(commissionContext.proposal.downPaymentAmount) > 0); const commissionBlocked = commissionNeedsPolicy && !commissionPolicy;
       await db.transaction(async tx => {
         await tx.update(installments).set({ status: "paid", paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(eq(installments.id, input.id));
