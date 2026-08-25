@@ -87,7 +87,8 @@ export const dashboardRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.insert(savedAnalysisViews).values({ name: input.name, visibility: input.visibility, filtersJson: JSON.stringify(input.filters), createdByUserId: ctx.user.id });
-    const id = Number(result[0].insertId);
+    const id = Number(result[0]?.insertId);
+    if (!Number.isInteger(id) || id <= 0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o filtro salvo." });
     await recordAudit(ctx.user.id, "saved_analysis_view", id, "created", `View salva ${input.name} criada.`);
     return { id };
   }),

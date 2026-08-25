@@ -3,25 +3,34 @@ import type { TrpcContext } from "./_core/context";
 
 vi.mock("./db", () => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 
-import { getDb } from "./db";
+import { getDb, recordAudit } from "./db";
 import { appRouter } from "./routers";
 
 const mockedGetDb = vi.mocked(getDb);
+const mockedRecordAudit = vi.mocked(recordAudit);
 
 function context(userId = 99, role: "admin" | "finance" = "finance"): TrpcContext {
   return { user: { id: userId, openId: `user-${userId}`, email: `user${userId}@test.com`, name: `Usuário ${userId}`, loginMethod: "test", role, createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() }, req: { protocol: "https", headers: {} } as TrpcContext["req"], res: { clearCookie: () => undefined } as TrpcContext["res"] };
 }
 
-function fakeDb(rows: Array<{ id: number; createdByUserId: number; visibility: "personal" | "shared"; filtersJson: string }>) {
+function fakeDb(rows: Array<{ id: number; createdByUserId: number; visibility: "personal" | "shared"; filtersJson: string }>, insertId: unknown = 71) {
   return {
     select: () => ({ from: () => ({ where: () => ({ orderBy: async () => rows, limit: async () => rows.slice(-1) }) }) }),
-    insert: () => ({ values: async () => [{ insertId: 71 }] }),
+    insert: () => ({ values: async () => [{ insertId }] }),
     delete: () => ({ where: async () => undefined }),
   };
 }
 
 describe("dashboard.savedViews", () => {
   beforeEach(() => vi.resetAllMocks());
+
+  it("rejeita criação sem identificador persistido e não audita sucesso falso", async () => {
+    mockedGetDb.mockResolvedValue(fakeDb([], null) as never);
+    const caller = appRouter.createCaller(context());
+
+    await expect(caller.dashboard.saveView({ name: "View sem ID", visibility: "personal", filters: {} })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(mockedRecordAudit).not.toHaveBeenCalled();
+  });
 
   it("lista recortes pessoais e compartilhados, cria recorte validado e bloqueia exclusão alheia", async () => {
     const rows = [
