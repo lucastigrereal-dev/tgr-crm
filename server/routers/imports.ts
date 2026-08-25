@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
@@ -94,23 +94,69 @@ export const importsRouter = router({
     return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, 0, []) };
   }),
   undoLast: adminProcedure.input(z.object({ confirm: z.literal(true) })).mutation(async ({ ctx }) => {
-    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." }); const batches = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); const batch = batches[0]; if (!batch) throw new TRPCError({ code: "NOT_FOUND", message: "Ainda não há lote de importação para desfazer." }); if (batch.status !== "completed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O último lote já foi revertido e não pode ser desfeito novamente." }); const items = await db.select().from(csvImportItems).where(eq(csvImportItems.batchId, batch.id));
-    if (batch.kind === "units") {
-      await db.transaction(async tx => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const outcome = await db.transaction(async tx => {
+      const batches = await tx.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1).for("update");
+      const batch = batches[0];
+      if (!batch) throw new TRPCError({ code: "NOT_FOUND", message: "Ainda não há lote de importação para desfazer." });
+      if (batch.status !== "completed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O último lote já foi revertido e não pode ser desfeito novamente." });
+      const items = await tx.select().from(csvImportItems).where(eq(csvImportItems.batchId, batch.id));
+
+      if (batch.kind === "units") {
         const createdUnitIds = items.filter(item => item.entityType === "unit" && item.action === "created").map(item => item.entityId);
-        if (createdUnitIds.length) { const [bookingRows, entitlementRows, blockRows] = await Promise.all([tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.unitId, createdUnitIds)), tx.select({ id: ownershipEntitlements.id }).from(ownershipEntitlements).where(inArray(ownershipEntitlements.unitId, createdUnitIds)), tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(inArray(unitMaintenanceBlocks.unitId, createdUnitIds))]); if (bookingRows.length || entitlementRows.length || blockRows.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: uma unidade importada já possui reserva, direito de uso ou bloqueio de manutenção vinculado." }); await tx.delete(units).where(inArray(units.id, createdUnitIds)); }
+        if (createdUnitIds.length) {
+          const [bookingRows, entitlementRows, blockRows] = await Promise.all([
+            tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.unitId, createdUnitIds)),
+            tx.select({ id: ownershipEntitlements.id }).from(ownershipEntitlements).where(inArray(ownershipEntitlements.unitId, createdUnitIds)),
+            tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(inArray(unitMaintenanceBlocks.unitId, createdUnitIds)),
+          ]);
+          if (bookingRows.length || entitlementRows.length || blockRows.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: uma unidade importada já possui reserva, direito de uso ou bloqueio de manutenção vinculado." });
+          await tx.delete(units).where(inArray(units.id, createdUnitIds));
+        }
         for (const item of items.filter(item => item.entityType === "unit" && item.action === "updated" && item.beforeSnapshot)) await tx.update(units).set(restoreUnitValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(units.id, item.entityId));
         const createdResortIds = items.filter(item => item.entityType === "resort" && item.action === "created").map(item => item.entityId);
-        if (createdResortIds.length) { const [unitRows, waitlistRows, entitlementRows] = await Promise.all([tx.select({ id: units.id }).from(units).where(inArray(units.resortId, createdResortIds)), tx.select({ id: reservationWaitlist.id }).from(reservationWaitlist).where(inArray(reservationWaitlist.resortId, createdResortIds)), tx.select({ id: ownershipEntitlements.id }).from(ownershipEntitlements).where(inArray(ownershipEntitlements.resortId, createdResortIds))]); if (unitRows.length || waitlistRows.length || entitlementRows.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o empreendimento importado já possui unidade, fila ou direito de uso vinculado." }); await tx.delete(resorts).where(inArray(resorts.id, createdResortIds)); }
+        if (createdResortIds.length) {
+          const [unitRows, waitlistRows, entitlementRows] = await Promise.all([
+            tx.select({ id: units.id }).from(units).where(inArray(units.resortId, createdResortIds)),
+            tx.select({ id: reservationWaitlist.id }).from(reservationWaitlist).where(inArray(reservationWaitlist.resortId, createdResortIds)),
+            tx.select({ id: ownershipEntitlements.id }).from(ownershipEntitlements).where(inArray(ownershipEntitlements.resortId, createdResortIds)),
+          ]);
+          if (unitRows.length || waitlistRows.length || entitlementRows.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o empreendimento importado já possui unidade, fila ou direito de uso vinculado." });
+          await tx.delete(resorts).where(inArray(resorts.id, createdResortIds));
+        }
         for (const item of items.filter(item => item.entityType === "resort" && item.action === "updated" && item.beforeSnapshot)) await tx.update(resorts).set(restoreResortValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(resorts.id, item.entityId));
-        await tx.update(csvImportBatches).set({ status: "reverted", revertedAt: new Date(), revertedByUserId: ctx.user.id }).where(eq(csvImportBatches.id, batch.id));
-      });
-      await recordAudit(ctx.user.id, "csv_import", batch.id, "reverted", `Lote ${batch.id} de inventário revertido com ${items.length} item(ns) auditado(s).`); return { batchId: batch.id, revertedItems: items.length, kind: batch.kind };
-    }
-    await db.transaction(async tx => {
-      if (batch.kind === "customers") { const createdIds = items.filter(item => item.entityType === "customer" && item.action === "created").map(item => item.entityId); if (createdIds.length) { const dependencies = await tx.select({ id: contracts.id }).from(contracts).where(inArray(contracts.customerId, createdIds)); if (dependencies.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já possui contrato vinculado." }); await tx.delete(customers).where(inArray(customers.id, createdIds)); } for (const item of items.filter(item => item.entityType === "customer" && item.action === "updated" && item.beforeSnapshot)) await tx.update(customers).set(restoreCustomerValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(customers.id, item.entityId)); } else { const contractIds = items.filter(item => item.entityType === "contract" && item.action === "created").map(item => item.entityId); if (contractIds.length) { const installmentRows = await tx.select({ id: installments.id }).from(installments).where(inArray(installments.contractId, contractIds)); const installmentIds = installmentRows.map(item => item.id); const [docs, bookings, taskRows, financial, billings] = await Promise.all([tx.select({ id: contractDocuments.id }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)), tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.contractId, contractIds)), tx.select({ id: tasks.id }).from(tasks).where(inArray(tasks.contractId, contractIds)), tx.select({ id: financialTransactions.id }).from(financialTransactions).where(inArray(financialTransactions.contractId, contractIds)), installmentIds.length ? tx.select({ id: billingRecords.id }).from(billingRecords).where(inArray(billingRecords.installmentId, installmentIds)) : Promise.resolve([])]); if (docs.length || bookings.length || taskRows.length || financial.length || billings.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança ou lançamento financeiro vinculado." }); await tx.delete(installments).where(inArray(installments.contractId, contractIds)); await tx.delete(contracts).where(inArray(contracts.id, contractIds)); } }
-      await tx.update(csvImportBatches).set({ status: "reverted", revertedAt: new Date(), revertedByUserId: ctx.user.id }).where(eq(csvImportBatches.id, batch.id));
+      } else if (batch.kind === "customers") {
+        const createdIds = items.filter(item => item.entityType === "customer" && item.action === "created").map(item => item.entityId);
+        if (createdIds.length) {
+          const dependencies = await tx.select({ id: contracts.id }).from(contracts).where(inArray(contracts.customerId, createdIds));
+          if (dependencies.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já possui contrato vinculado." });
+          await tx.delete(customers).where(inArray(customers.id, createdIds));
+        }
+        for (const item of items.filter(item => item.entityType === "customer" && item.action === "updated" && item.beforeSnapshot)) await tx.update(customers).set(restoreCustomerValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(customers.id, item.entityId));
+      } else {
+        const contractIds = items.filter(item => item.entityType === "contract" && item.action === "created").map(item => item.entityId);
+        if (contractIds.length) {
+          const installmentRows = await tx.select({ id: installments.id }).from(installments).where(inArray(installments.contractId, contractIds));
+          const installmentIds = installmentRows.map(item => item.id);
+          const [docs, bookings, taskRows, financial, billings] = await Promise.all([
+            tx.select({ id: contractDocuments.id }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)),
+            tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.contractId, contractIds)),
+            tx.select({ id: tasks.id }).from(tasks).where(inArray(tasks.contractId, contractIds)),
+            tx.select({ id: financialTransactions.id }).from(financialTransactions).where(inArray(financialTransactions.contractId, contractIds)),
+            installmentIds.length ? tx.select({ id: billingRecords.id }).from(billingRecords).where(inArray(billingRecords.installmentId, installmentIds)) : Promise.resolve([]),
+          ]);
+          if (docs.length || bookings.length || taskRows.length || financial.length || billings.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança ou lançamento financeiro vinculado." });
+          await tx.delete(installments).where(inArray(installments.contractId, contractIds));
+          await tx.delete(contracts).where(inArray(contracts.id, contractIds));
+        }
+      }
+
+      const batchUpdate = await tx.update(csvImportBatches).set({ status: "reverted", revertedAt: new Date(), revertedByUserId: ctx.user.id }).where(and(eq(csvImportBatches.id, batch.id), eq(csvImportBatches.status, "completed")));
+      if (batchUpdate && typeof batchUpdate === "object" && "affectedRows" in batchUpdate && Number(batchUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O lote foi alterado por outra operação. Recarregue e tente novamente." });
+      return { batchId: batch.id, revertedItems: items.length, kind: batch.kind };
     });
-    await recordAudit(ctx.user.id, "csv_import", batch.id, "reverted", `Lote ${batch.id} revertido com ${items.length} item(ns) auditado(s).`); return { batchId: batch.id, revertedItems: items.length, kind: batch.kind };
-  }),
+    await recordAudit(ctx.user.id, "csv_import", outcome.batchId, "reverted", `Lote ${outcome.batchId} revertido com ${outcome.revertedItems} item(ns) auditado(s).`);
+    return outcome;
+  })
 });

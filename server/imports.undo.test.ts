@@ -14,8 +14,11 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
     select: vi.fn(() => ({
-      from: (table: unknown) => ({
+      from: (table: unknown) => {
+        if (table === csvImportBatches) return { orderBy: () => ({ limit: () => Object.assign(Promise.resolve([batch]), { for: async () => [batch] }) }) };
+        return {
         where: () => {
+          if (table === csvImportItems) return items;
           if (table === contracts) return contractDependencies;
           if (table === installments) return options.installments ?? [];
           if (table === contractDocuments) return options.documents ?? [];
@@ -29,7 +32,8 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
           if (table === units) return options.units ?? [];
           return [];
         },
-      }),
+      };
+      },
     })),
     delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { deletes.push(table); return Promise.resolve(); }) })),
     update: vi.fn((table: unknown) => ({ set: vi.fn((values: unknown) => ({ where: vi.fn(() => { updates.push({ table, values }); return Promise.resolve(); }) })) })),
