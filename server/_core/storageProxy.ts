@@ -1,12 +1,34 @@
 import type { Express } from "express";
+import { authorizeStorageRead } from "../storageAccess";
+import { recordAudit } from "../db";
+import { createContext } from "./context";
 import { ENV } from "./env";
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*splat", async (req, res) => {
     const splat = req.params.splat;
-    const key = Array.isArray(splat) ? splat.join("/") : splat;
-    if (!key) {
+    const rawKey = Array.isArray(splat) ? splat.join("/") : splat;
+    if (!rawKey) {
       res.status(400).send("Missing storage key");
+      return;
+    }
+
+    let key: string;
+    try {
+      key = decodeURIComponent(rawKey);
+    } catch {
+      res.status(403).send("Storage access denied");
+      return;
+    }
+
+    const context = await createContext({ req, res } as never);
+    const authorization = await authorizeStorageRead(context.user, key);
+    if (!authorization.allowed) {
+      res.status(authorization.status).send(
+        authorization.reason === "authorization_unavailable"
+          ? "Storage authorization unavailable"
+          : "Storage access denied",
+      );
       return;
     }
 
@@ -14,6 +36,14 @@ export function registerStorageProxy(app: Express) {
       res.status(500).send("Storage proxy not configured");
       return;
     }
+
+    await recordAudit(
+      context.user!.id,
+      `${authorization.scope}_document`,
+      authorization.resourceId,
+      "read",
+      "Documento acessado por usuário autenticado.",
+    );
 
     try {
       const forgeUrl = new URL(

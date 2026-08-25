@@ -2,13 +2,12 @@ export type CommissionRole = "liner" | "closer" | "ftb";
 export type CommissionStatus = "expected" | "awaiting_customer_payment" | "closing" | "cancellation_window" | "payable" | "paid" | "cancelled" | "overdue";
 export type PaymentMethod = "pix" | "debit" | "credit" | "boleto" | "cash" | "cheque" | "other";
 
-export const commissionRates: Record<CommissionRole, number> = { liner: 0.0191, closer: 0.0151, ftb: 0.0342 };
 export function commissionAssignments(input: { linerId: number | null; closerId: number | null }) { if (input.linerId && input.linerId === input.closerId) return [{ userId: input.linerId, role: "ftb" as const }]; return [{ userId: input.linerId, role: "liner" as const }, { userId: input.closerId, role: "closer" as const }].filter((item): item is { userId: number; role: "liner" | "closer" } => Boolean(item.userId)); }
 const money = (value: number) => Math.round(value * 100) / 100;
 const endOfMonth = (date: Date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
 const nextMonthDay = (date: Date, day: number) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, day));
 
-export function totalCommission(baseAmount: number, role: CommissionRole) { return baseAmount > 0 ? money(baseAmount * commissionRates[role]) : 0; }
+export function totalCommission(baseAmount: number, _role: CommissionRole, rate: number) { return baseAmount > 0 && Number.isFinite(rate) && rate >= 0 ? money(baseAmount * rate) : 0; }
 export function releasedCommission(installmentAmount: number, entryTotal: number, commissionTotal: number) { return installmentAmount > 0 && entryTotal > 0 ? money(commissionTotal * installmentAmount / entryTotal) : 0; }
 export function commissionDates(method: PaymentMethod, compensatedAt: Date, policy?: { cancellationDeadlineDay?: number; expectedPaymentDay?: number }) { const closing = endOfMonth(method === "credit" ? new Date(Date.UTC(compensatedAt.getUTCFullYear(), compensatedAt.getUTCMonth() + 1, 1)) : compensatedAt); const cancellationDay = policy?.cancellationDeadlineDay && policy.cancellationDeadlineDay >= 1 && policy.cancellationDeadlineDay <= 28 ? policy.cancellationDeadlineDay : 7; const paymentDay = policy?.expectedPaymentDay && policy.expectedPaymentDay >= 1 && policy.expectedPaymentDay <= 28 ? policy.expectedPaymentDay : 25; return { closingAt: closing, cancellationDeadlineAt: nextMonthDay(closing, cancellationDay), expectedPaymentAt: nextMonthDay(closing, paymentDay) }; }
 export function commissionStatus(input: { compensatedAt: Date | null; receivedAt: Date | null; cancelledAt: Date | null; closingAt: Date; cancellationDeadlineAt: Date; expectedPaymentAt: Date; now: Date }) : CommissionStatus {

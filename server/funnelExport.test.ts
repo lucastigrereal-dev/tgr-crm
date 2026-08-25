@@ -22,9 +22,9 @@ describe("exportação filtrada de propostas", () => {
 
   it("identifica o arquivo pelo estágio, período e formato efetivamente filtrados", () => {
     expect(buildFunnelExportFilename("proposal", "2026-08-01", "2026-08-31", "xlsx"))
-      .toBe("tse-propostas-proposal-2026-08-01-2026-08-31.xlsx");
+      .toBe("tgr-propostas-proposal-2026-08-01-2026-08-31.xlsx");
     expect(buildFunnelExportFilename("won", "2026-08-01", "2026-08-31", "pdf"))
-      .toBe("tse-propostas-won-2026-08-01-2026-08-31.pdf");
+      .toBe("tgr-propostas-won-2026-08-01-2026-08-31.pdf");
   });
 
   it("entrega as linhas filtradas ao escritor XLSX seguro e grava com o nome esperado", async () => {
@@ -35,7 +35,7 @@ describe("exportação filtrada de propostas", () => {
 
     await writeFunnelExportXlsx(rows, buildFunnelExportFilename("proposal", "2026-08-01", "2026-08-31", "xlsx"), exceljs, (_, filename) => downloads.push(filename));
     expect(worksheet.columns).toHaveLength(7);
-    expect(downloads).toEqual(["tse-propostas-proposal-2026-08-01-2026-08-31.xlsx"]);
+    expect(downloads).toEqual(["tgr-propostas-proposal-2026-08-01-2026-08-31.xlsx"]);
   });
 
   it("escreve o cabeçalho e salva o PDF filtrado com o nome esperado", () => {
@@ -44,6 +44,6 @@ describe("exportação filtrada de propostas", () => {
     const doc = { setFillColor: () => calls.push("fill"), rect: () => calls.push("rect"), setTextColor: () => calls.push("textColor"), setFontSize: () => calls.push("fontSize"), text: (text: string) => calls.push(`text:${text}`), setFont: () => calls.push("font"), addPage: () => calls.push("page"), save: (filename: string) => calls.push(`save:${filename}`) };
 
     writeFunnelExportPdf(rows, "won", "2026-08-01", "2026-08-31", buildFunnelExportFilename("won", "2026-08-01", "2026-08-31", "pdf"), doc);
-    expect(calls).toEqual(expect.arrayContaining(["text:TSE Exclusive · Propostas do funil", "text:Ganhos · 01/08/2026 a 31/08/2026", "text:Cota vendida", "save:tse-propostas-won-2026-08-01-2026-08-31.pdf"]));
+    expect(calls).toEqual(expect.arrayContaining(["text:TGR-CRM · Propostas do funil", "text:Ganhos · 01/08/2026 a 31/08/2026", "text:Cota vendida", "save:tgr-propostas-won-2026-08-01-2026-08-31.pdf"]));
   });
 });

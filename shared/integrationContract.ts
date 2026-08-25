@@ -1,14 +1,14 @@
 import { DomainEventName } from "./domainEvents";
 
-export const integrationContractVersion = "tse.events.v1";
+export const integrationContractVersion = "tgr.events.v1";
 
 const allowedPayloadFields: Record<DomainEventName, readonly string[]> = {
   "customer.created": ["status", "acquisitionSource"], "customer.updated": ["status", "city", "state"], "customer.interaction.created": ["customerId", "type", "direction"], "customer.document.uploaded": ["customerId", "category", "filename"],
   "contract.created": ["customerId", "status", "usageModel"], "contract.status.updated": ["status"], "contract.document.uploaded": ["contractId", "category", "filename"],
   "ownership.entitlement.created": ["contractId", "unitId", "priorityLevel"], "unit.maintenance.blocked": ["unitId", "startsAt", "endsAt"],
-  "opportunity.created": ["customerId", "stage", "campaignId"], "opportunity.updated": ["stage", "campaignId"], "proposal.created": ["opportunityId", "amount"], "sales.playbook.created": ["stage", "title"],
+  "opportunity.created": ["customerId", "stage", "campaignId"], "opportunity.updated": ["stage", "campaignId"], "proposal.created": ["opportunityId", "status", "totalAmount", "saleTruthStage"], "proposal.accepted": ["opportunityId", "status", "totalAmount", "saleTruthStage"], "sales.playbook.created": ["stage", "title"],
   "capture.created": ["customerId", "campaignId", "qualificationStatus"], "capture.status.updated": ["presentationStatus", "qualificationStatus"], "capture.checked_in": ["salesRoom"], "capture.room.assigned": ["salesRoom", "salesTable", "linerId", "closerId", "roomManagerId"], "capture.presentation.started": ["salesRoom", "salesTable"], "capture.presentation.ended": ["salesRoom", "salesTable", "durationMinutes"], "capture.no_tour": ["salesRoom", "reason"],
-  "installment.renegotiation.proposed": ["installmentId", "proposalAmount"], "installment.paid": ["installmentId", "paidAmount"], "revenue_quality_ledger.synced": ["factCount", "policyVersion"], "financial.portfolio.assigned": ["contractId", "ownerUserId"], "financial.entry.created": ["type", "amount", "campaignId"], "financial.entry.reconciled": ["reference", "reconciledAt"], "financial.transfer.created": ["amount", "recipient"], "ai.assistance.requested": ["role", "evidenceCount", "model"],
+  "installment.renegotiation.proposed": ["installmentId", "proposalAmount"], "installment.paid": ["installmentId", "paidAmount", "contractId", "sequence", "amount", "source", "gatewayPaymentId", "commissionBlocked"], "commission.automatic.blocked": ["contractId", "reason", "source"], "revenue_quality_ledger.synced": ["factCount", "policyVersion"], "financial.portfolio.assigned": ["contractId", "ownerUserId"], "financial.entry.created": ["type", "amount", "campaignId"], "financial.entry.reconciled": ["reference", "reconciledAt"], "financial.transfer.created": ["amount", "recipient"], "ai.assistance.requested": ["role", "evidenceCount", "model"],
 };
 
 function safeObject(value: string | null) {

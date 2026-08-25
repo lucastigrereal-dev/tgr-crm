@@ -3,7 +3,7 @@ import { billingRecords, captureRecords, commercialProjectSettings, contracts, f
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
 import { buildInstallmentCommissions } from "./commissionAutomation";
-import { parseCommissionPolicy } from "./projectPolicy";
+import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 
 export type AsaasWebhookPayload = {
@@ -66,8 +66,8 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   if (billing && installmentPaid) {
     const context = (await db.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).limit(1))[0];
     const policyRow = context?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
-    const policy = parseCommissionPolicy(policyRow?.commissionPolicy);
-    if (context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0) {
+    const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
+    if (context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0 && policy) {
       const existingCommission = (await db.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, billing.installment.id)).limit(1))[0];
       if (!existingCommission) {
         const paymentMethod = billing.billing.type === "pix" ? "pix" : "boleto";
@@ -75,7 +75,11 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         if (rows.length) await db.insert(salesCommissions).values(rows.map(row => ({ ...row, contractId: billing.installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod })));
       }
     }
-    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId } });
+    if (context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0 && !policy) {
+      await recordAudit(null, "installment", billing.installment.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada.");
+      await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, reason: "incomplete_project_policy", source: "asaas" } });
+    }
+    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked: Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0 && !policy) } });
     await syncRevenueQualityForContract({ contractId: billing.installment.contractId, actorUserId: null, trigger: "webhook Asaas" });
   }
 

@@ -15,9 +15,9 @@ test.describe("exportações e reversão autenticadas", () => {
     await page.locator(".recharts-bar-rectangle").nth(2).click();
     await expect(page.getByRole("button", { name: "Excel" })).toBeVisible();
     const xlsxDownload = page.waitForEvent("download"); await page.getByRole("button", { name: "Excel" }).click();
-    expect((await xlsxDownload).suggestedFilename()).toMatch(/tse-propostas-proposal-.*\.xlsx/);
+    expect((await xlsxDownload).suggestedFilename()).toMatch(/tgr-propostas-proposal-.*\.xlsx/);
     const pdfDownload = page.waitForEvent("download"); await page.getByRole("button", { name: "PDF" }).click();
-    expect((await pdfDownload).suggestedFilename()).toMatch(/tse-propostas-proposal-.*\.pdf/);
+    expect((await pdfDownload).suggestedFilename()).toMatch(/tgr-propostas-proposal-.*\.pdf/);
   });
 
   test("confirma e executa reversão do último lote CSV na interface", async ({ page }) => {

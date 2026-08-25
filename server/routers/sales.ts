@@ -7,6 +7,7 @@ import { router } from "../_core/trpc";
 import { adminProcedure, salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
 import { buildSellerQualityRanking } from "../salesQuality";
+import { saleStageFromFacts } from "../saleLifecycle";
 
 const opportunityInput = z.object({
   customerId: z.number().int().positive(),
@@ -159,9 +160,9 @@ export const salesRouter = router({
     }).$returningId();
     const id = result[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
-    await db.update(opportunities).set({ stage: input.status === "approved" ? "won" : "proposal", updatedAt: new Date() }).where(eq(opportunities.id, input.opportunityId));
+    await db.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(eq(opportunities.id, input.opportunityId));
     await recordAudit(ctx.user.id, "proposal", id, "created", `Proposta ${input.reference} criada.`);
-    await recordDomainEvent({ eventName: "proposal.created", aggregateType: "proposal", aggregateId: id, actorUserId: ctx.user.id, payload: { opportunityId: input.opportunityId, status: input.status, totalAmount: input.totalAmount } });
+    await recordDomainEvent({ eventName: input.status === "approved" ? "proposal.accepted" : "proposal.created", aggregateType: "proposal", aggregateId: id, actorUserId: ctx.user.id, payload: { opportunityId: input.opportunityId, status: input.status, totalAmount: input.totalAmount, saleTruthStage: saleStageFromFacts({ proposalAccepted: input.status === "approved" }) } });
     return { id };
   }),
 
