@@ -5,23 +5,24 @@ vi.mock("./db", () => dbMocks);
 
 import { salesRouter } from "./routers/sales";
 
-function makeDb(opportunityExists: boolean, duplicateReference = false) {
+function makeDb(opportunityExists: boolean, duplicateReference = false, affectedRows?: number) {
   let selectCall = 0;
-  const select = vi.fn(() => ({
-    from: vi.fn(() => ({
-      where: vi.fn(() => ({
-        limit: vi.fn(async () => {
-          const rows = selectCall++ === 0 ? (opportunityExists ? [{ id: 11 }] : []) : (duplicateReference ? [{ id: 702 }] : []);
-          return rows;
-        }),
-      })),
-    })),
-  }));
+  const select = vi.fn(() => {
+    const result = Promise.resolve(selectCall++ === 0 ? (opportunityExists ? [{ id: 11 }] : []) : (duplicateReference ? [{ id: 702 }] : []));
+    const limitChain = { for: vi.fn(async () => result), then: result.then.bind(result) };
+    const chain = {
+      from: vi.fn(() => chain),
+      where: vi.fn(() => chain),
+      limit: vi.fn(() => limitChain),
+    };
+    return chain;
+  });
   const insert = vi.fn(() => ({
     values: vi.fn(() => ({ $returningId: async () => [{ id: 701 }] })),
   }));
-  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) }));
-  return { select, insert, update };
+  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => affectedRows === undefined ? undefined : { affectedRows }) })) }));
+  const transaction = vi.fn(async (callback: (tx: { select: typeof select; insert: typeof insert; update: typeof update }) => Promise<unknown>) => callback({ select, insert, update }));
+  return { select, insert, update, transaction };
 }
 
 describe("integridade de propostas", () => {
@@ -70,7 +71,7 @@ describe("integridade de propostas", () => {
   });
 
   it("mantém o fluxo válido quando a oportunidade existe", async () => {
-    const db = makeDb(true);
+    const db = makeDb(true, false, 1);
     dbMocks.getDb.mockResolvedValue(db);
     const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
 
@@ -87,5 +88,23 @@ describe("integridade de propostas", () => {
 
     expect(db.insert).toHaveBeenCalled();
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "proposal", 701, "created", expect.stringContaining("PROP-11"));
+  });
+
+  it("rejeita proposta quando o avanço da oportunidade perde a corrida", async () => {
+    const db = makeDb(true, false, 0);
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
+
+    await expect(caller.createProposal({
+      opportunityId: 11,
+      reference: "PROP-RACE",
+      productDescription: "Proposta concorrente",
+      totalAmount: 1000,
+      downPaymentAmount: 100,
+      installmentCount: 10,
+      status: "draft",
+      expiresAt: null,
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });

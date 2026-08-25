@@ -21,7 +21,7 @@ function makeDb() {
     return chain;
   };
   const tx = {
-    select: vi.fn(() => ({ from: (table: unknown) => table === unitMaintenanceBlocks || table === installmentRenegotiations ? queryRows([]) : table === installments ? queryRows([installment]) : queryRows([{ id: 51 }]) })),
+    select: vi.fn(() => ({ from: (table: unknown) => table === unitMaintenanceBlocks || table === installmentRenegotiations || table === proposals ? queryRows([]) : table === installments ? queryRows([installment]) : queryRows([{ id: 51 }]) })),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 901 }] })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };

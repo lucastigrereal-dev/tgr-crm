@@ -186,19 +186,23 @@ export const salesRouter = router({
     assertCapability(ctx.user.role, "sales.proposal.create");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const opportunity = (await db.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1))[0];
-    if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
-    const duplicate = (await db.select({ id: proposals.id }).from(proposals).where(eq(proposals.reference, input.reference)).limit(1))[0];
-    if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma proposta com esta referência." });
-    const result = await db.insert(proposals).values({
-      ...input,
-      totalAmount: input.totalAmount.toFixed(2),
-      downPaymentAmount: input.downPaymentAmount.toFixed(2),
-      expiresAt: input.expiresAt ? new Date(`${input.expiresAt}T12:00:00Z`) : null,
-    }).$returningId();
-    const id = result[0]?.id;
-    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
-    await db.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(eq(opportunities.id, input.opportunityId));
+    const id = await db.transaction(async tx => {
+      const opportunity = (await tx.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1).for("update"))[0];
+      if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
+      const duplicate = (await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.reference, input.reference)).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma proposta com esta referência." });
+      const result = await tx.insert(proposals).values({
+        ...input,
+        totalAmount: input.totalAmount.toFixed(2),
+        downPaymentAmount: input.downPaymentAmount.toFixed(2),
+        expiresAt: input.expiresAt ? new Date(`${input.expiresAt}T12:00:00Z`) : null,
+      }).$returningId();
+      const proposalId = result[0]?.id;
+      if (!proposalId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
+      const stageUpdate = await tx.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(eq(opportunities.id, input.opportunityId));
+      if (stageUpdate && typeof stageUpdate === "object" && "affectedRows" in stageUpdate && Number(stageUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
+      return proposalId;
+    });
     await recordAudit(ctx.user.id, "proposal", id, "created", `Proposta ${input.reference} criada.`);
     await recordDomainEvent({ eventName: input.status === "approved" ? "proposal.accepted" : "proposal.created", aggregateType: "proposal", aggregateId: id, actorUserId: ctx.user.id, payload: { opportunityId: input.opportunityId, status: input.status, totalAmount: input.totalAmount, saleTruthStage: saleStageFromFacts({ proposalAccepted: input.status === "approved" }) } });
     return { id };
