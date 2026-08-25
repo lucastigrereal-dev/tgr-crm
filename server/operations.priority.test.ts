@@ -1,17 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ownershipEntitlements, reservations, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { contracts, customers, ownershipEntitlements, reservations, resorts, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(options: { entitlementPriority?: number; maintenance?: boolean } = {}) {
+function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; resortMissing?: boolean } = {}) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
   let unitSelectCall = 0;
   const select = vi.fn(() => ({
     from: (table: unknown) => {
+      if (table === customers) return { where: () => ({ limit: async () => options.customerMissing ? [] : [{ id: 3 }] }) };
+      if (table === contracts) return { where: () => ({ limit: async () => options.contractMissing ? [] : [{ id: 8, customerId: 3 }] }) };
+      if (table === resorts) return { where: () => ({ limit: async () => options.resortMissing ? [] : [{ id: 5 }] }) };
       if (table === ownershipEntitlements) return { where: () => ({ limit: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] }) };
       if (table === units) return { where: () => ({ limit: async () => unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active" }] : [] }) };
       if (table === reservations) return { where: () => ({ limit: async () => [] }) };
@@ -37,6 +40,24 @@ describe("prioridade de direitos e bloqueio operacional", () => {
     await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14", priorityScore: 15 })).resolves.toEqual({ id: 501, priorityScore: 90, entitlementScore: 90 });
     expect(fixture.inserted[0]).toMatchObject({ contractId: 8, priorityScore: 90 });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(12, "reservation_waitlist", 501, "created", expect.stringContaining("90"));
+  });
+
+  it("bloqueia referências órfãs na fila de espera", async () => {
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+    const missingCustomer = makeDb({ customerMissing: true });
+    dbMocks.getDb.mockResolvedValue(missingCustomer.db);
+    await expect(caller.joinWaitlist({ customerId: 3, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(missingCustomer.inserted).toEqual([]);
+
+    const missingContract = makeDb({ contractMissing: true });
+    dbMocks.getDb.mockResolvedValue(missingContract.db);
+    await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(missingContract.inserted).toEqual([]);
+
+    const missingResort = makeDb({ resortMissing: true });
+    dbMocks.getDb.mockResolvedValue(missingResort.db);
+    await expect(caller.joinWaitlist({ customerId: 3, resortId: 5, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(missingResort.inserted).toEqual([]);
   });
 
   it("impede reserva direta em unidade bloqueada para manutenção", async () => {

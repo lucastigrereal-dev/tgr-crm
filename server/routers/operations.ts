@@ -98,9 +98,18 @@ export const operationsRouter = router({
 
   joinWaitlist: serviceProcedure.input(z.object({ customerId: z.number().int().positive(), contractId: z.number().int().positive().nullable().optional(), resortId: z.number().int().positive().nullable().optional(), desiredCheckIn: z.string().date(), desiredCheckOut: z.string().date(), partySize: z.number().int().min(1).max(30).default(1), priorityScore: z.number().int().min(0).max(999).default(0), preferenceNotes: z.string().trim().max(2000).nullable().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const checkIn = dateValue(input.desiredCheckIn), checkOut = dateValue(input.desiredCheckOut); if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída desejada precisa ser posterior à entrada." });
+    const checkIn = dateValue(input.desiredCheckIn), checkOut = dateValue(input.desiredCheckOut);
+    if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída desejada precisa ser posterior à entrada." });
+    const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
+    if (input.resortId) {
+      const resort = (await db.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1))[0];
+      if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento não encontrado." });
+    }
     let entitlementScore = 0;
     if (input.contractId) {
+      const contract = (await db.select({ id: contracts.id, customerId: contracts.customerId }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
+      if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao associado." });
       const entitlements = await db.select().from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"))).limit(1000);
       const highestPriority = entitlements.reduce<number | null>((current, entitlement) => current === null || entitlement.priorityLevel < current ? entitlement.priorityLevel : current, null);
       entitlementScore = highestPriority === null ? 0 : entitlementPriorityScore(highestPriority);
