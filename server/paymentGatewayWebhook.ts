@@ -25,6 +25,12 @@ export type ProcessAsaasWebhookResult = {
   message: string;
 };
 
+function isDuplicateKeyError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; errno?: unknown; sqlState?: unknown };
+  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062 || candidate.sqlState === "23000";
+}
+
 export async function processAsaasWebhook(token: string | undefined, payload: AsaasWebhookPayload): Promise<ProcessAsaasWebhookResult> {
   const config = getAsaasConfig();
   if (!config) return { status: 503, message: "Gateway Asaas não configurado." };
@@ -43,25 +49,30 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   const billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
 
-  await db.transaction(async tx => {
-    await tx.insert(paymentGatewayWebhookEvents).values({ gatewayProvider: "asaas", gatewayEventId: eventId, eventType: event, billingRecordId: billing?.billing.id ?? null });
-    if (!billing) return;
+  try {
+    await db.transaction(async tx => {
+      await tx.insert(paymentGatewayWebhookEvents).values({ gatewayProvider: "asaas", gatewayEventId: eventId, eventType: event, billingRecordId: billing?.billing.id ?? null });
+      if (!billing) return;
 
-    if (isAsaasPaymentConfirmed(event)) {
-      await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
-      const paidAt = new Date();
-      const installmentUpdate = await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(and(eq(installments.id, billing.installment.id), ne(installments.status, "paid")));
-      const installmentWasSettled = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
-      if (installmentWasSettled) {
-        installmentPaid = true;
-        await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
+      if (isAsaasPaymentConfirmed(event)) {
+        await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
+        const paidAt = new Date();
+        const installmentUpdate = await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(and(eq(installments.id, billing.installment.id), ne(installments.status, "paid")));
+        const installmentWasSettled = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
+        if (installmentWasSettled) {
+          installmentPaid = true;
+          await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
+        }
+      } else if (isAsaasPaymentOverdue(event)) {
+        await tx.update(billingRecords).set({ status: "expired", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
+      } else {
+        await tx.update(billingRecords).set({ gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
       }
-    } else if (isAsaasPaymentOverdue(event)) {
-      await tx.update(billingRecords).set({ status: "expired", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
-    } else {
-      await tx.update(billingRecords).set({ gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
-    }
-  });
+    });
+  } catch (error) {
+    if (isDuplicateKeyError(error)) return { status: 200, duplicate: true, message: "Evento já processado." };
+    throw error;
+  }
 
   await recordAudit(null, "billing_record", billing?.billing.id ?? paymentId, `gateway_${event.toLowerCase()}`, `Webhook Asaas recebido para pagamento ${paymentId}.`);
   if (billing && installmentPaid) {

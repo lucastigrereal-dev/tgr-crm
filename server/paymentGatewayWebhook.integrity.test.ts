@@ -65,3 +65,28 @@ void billingRecords;
 void installments;
 void paymentGatewayWebhookEvents;
 
+
+
+describe("deduplicação concorrente de eventos", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("responde duplicado quando outro worker vence o insert único do evento", async () => {
+    const duplicateError = { code: "ER_DUP_ENTRY", errno: 1062 };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(query([]))
+        .mockReturnValueOnce(query([])),
+      transaction: vi.fn(async (callback: (transaction: { insert: ReturnType<typeof vi.fn> }) => Promise<unknown>) => callback({
+        insert: vi.fn(() => ({ values: vi.fn(async () => { throw duplicateError; }) })),
+      })),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+
+    await expect(processAsaasWebhook("secret", { id: "evt-race-93", event: "PAYMENT_CONFIRMED", payment: { id: "pay-unlinked", status: "CONFIRMED" } })).resolves.toEqual({
+      status: 200,
+      duplicate: true,
+      message: "Evento já processado.",
+    });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+});
