@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
@@ -49,10 +49,11 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
 
     if (isAsaasPaymentConfirmed(event)) {
       await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
-      if (billing.installment.status !== "paid") {
+      const paidAt = new Date();
+      const installmentUpdate = await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(and(eq(installments.id, billing.installment.id), ne(installments.status, "paid")));
+      const installmentWasSettled = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
+      if (installmentWasSettled) {
         installmentPaid = true;
-        const paidAt = new Date();
-        await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(eq(installments.id, billing.installment.id));
         await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
       }
     } else if (isAsaasPaymentOverdue(event)) {
