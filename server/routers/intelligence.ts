@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { contractCancellationRequests, contractDocuments, contracts, customerInteractions, installments, opportunities, proposals, tasks } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -23,7 +23,12 @@ export const intelligenceRouter = router({
     if (!contractIds.length) return { generatedAt: new Date(), truncated, summary: { total: 0, healthy: 0, attention: 0, critical: 0 }, rows: [] };
 
     const [installmentRows, documentRows, taskRows, cancellationRows, interactionRows, proposalRows] = await Promise.all([
-      db.select().from(installments).where(inArray(installments.contractId, contractIds)),
+      db.select({
+        contractId: installments.contractId,
+        total: count(),
+        paid: sql<number>`sum(case when ${installments.status} = 'paid' then 1 else 0 end)`,
+        overdue: sql<number>`sum(case when ${installments.status} = 'overdue' then 1 else 0 end)`,
+      }).from(installments).where(inArray(installments.contractId, contractIds)).groupBy(installments.contractId),
       db.select({ id: contractDocuments.id, contractId: contractDocuments.contractId }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)),
       db.select({ id: tasks.id, contractId: tasks.contractId, status: tasks.status, type: tasks.type }).from(tasks).where(inArray(tasks.contractId, contractIds)),
       db.select({ id: contractCancellationRequests.id, contractId: contractCancellationRequests.contractId, status: contractCancellationRequests.status }).from(contractCancellationRequests).where(and(inArray(contractCancellationRequests.contractId, contractIds), inArray(contractCancellationRequests.status, ["requested", "approved"]))),
@@ -35,13 +40,13 @@ export const intelligenceRouter = router({
     const opportunityRows = opportunityIds.length ? await db.select({ id: opportunities.id, stage: opportunities.stage }).from(opportunities).where(inArray(opportunities.id, opportunityIds)) : [];
     const proposalById = new Map(proposalRows.map(proposal => [proposal.id, proposal]));
     const opportunityById = new Map(opportunityRows.map(opportunity => [opportunity.id, opportunity]));
-    const installmentsByContract = new Map<number, typeof installmentRows>();
+    const installmentsByContract = new Map<number, { total: number; paid: number; overdue: number }>();
     const documentsByContract = new Map<number, number>();
     const tasksByContract = new Map<number, number>();
     const cancellationsByContract = new Set<number>();
     const latestInteractionByCustomer = new Map<number, Date>();
 
-    for (const row of installmentRows) installmentsByContract.set(row.contractId, [...(installmentsByContract.get(row.contractId) ?? []), row]);
+    for (const row of installmentRows) installmentsByContract.set(row.contractId, { total: Number(row.total ?? 0), paid: Number(row.paid ?? 0), overdue: Number(row.overdue ?? 0) });
     for (const row of documentRows) documentsByContract.set(row.contractId, (documentsByContract.get(row.contractId) ?? 0) + 1);
     for (const row of taskRows) if (row.status === "open" || row.status === "in_progress") tasksByContract.set(row.contractId ?? 0, (tasksByContract.get(row.contractId ?? 0) ?? 0) + 1);
     for (const row of cancellationRows) cancellationsByContract.add(row.contractId);
@@ -49,7 +54,7 @@ export const intelligenceRouter = router({
 
     const now = Date.now();
     const rows = selectedContracts.map(contract => {
-      const installmentsForContract = installmentsByContract.get(contract.id) ?? [];
+      const installmentSummary = installmentsByContract.get(contract.id) ?? { total: 0, paid: 0, overdue: 0 };
       const proposal = contract.proposalId ? proposalById.get(contract.proposalId) : undefined;
       const opportunity = proposal ? opportunityById.get(proposal.opportunityId) : undefined;
       const latestInteraction = latestInteractionByCustomer.get(contract.customerId);
@@ -57,9 +62,9 @@ export const intelligenceRouter = router({
       const health = calculateSaleHealth({
         commercialStage: opportunity?.stage ?? "new",
         contractStatus: contract.status,
-        paidInstallments: installmentsForContract.filter(item => item.status === "paid").length,
-        overdueInstallments: installmentsForContract.filter(item => item.status === "overdue").length,
-        totalInstallments: installmentsForContract.length,
+        paidInstallments: installmentSummary.paid,
+        overdueInstallments: installmentSummary.overdue,
+        totalInstallments: installmentSummary.total,
         documentCount: documentsByContract.get(contract.id) ?? 0,
         requiredDocumentCount: 0,
         daysSinceLastInteraction,
