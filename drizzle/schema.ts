@@ -77,7 +77,7 @@ export const customers = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("customers_name_idx").on(table.fullName), index("customers_document_idx").on(table.documentNumber), index("customers_location_idx").on(table.state, table.city)],
+  table => [index("customers_name_idx").on(table.fullName), index("customers_document_idx").on(table.documentNumber), uniqueIndex("customers_document_unique").on(table.documentNumber), index("customers_location_idx").on(table.state, table.city)],
 );
 
 export const customerDocuments = mysqlTable("customer_documents", {

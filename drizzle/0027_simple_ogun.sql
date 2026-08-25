@@ -1,0 +1,1 @@
+ALTER TABLE `customers` ADD CONSTRAINT `customers_document_unique` UNIQUE(`documentNumber`);
