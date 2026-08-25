@@ -1,0 +1,1 @@
+ALTER TABLE `proposals` ADD CONSTRAINT `proposals_reference_unique` UNIQUE(`reference`);
