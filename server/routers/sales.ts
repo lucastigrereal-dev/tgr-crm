@@ -159,14 +159,15 @@ export const salesRouter = router({
       const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.data.campaignId)).limit(1))[0];
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da oportunidade não encontrada." });
     }
-    await db.update(opportunities).set({
+    const updateResult = await db.update(opportunities).set({
       ...input.data,
       expectedAmount: input.data.expectedAmount.toFixed(2),
       source: input.data.source?.trim() || null,
       nextFollowUpAt: input.data.nextFollowUpAt ? new Date(input.data.nextFollowUpAt) : null,
       lossReason: input.data.lossReason?.trim() || null,
       closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
-    }).where(eq(opportunities.id, input.id));
+    }).where(and(eq(opportunities.id, input.id), eq(opportunities.stage, previous.stage)));
+    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "opportunity", input.id, "updated", `Oportunidade atualizada para ${input.data.stage}.`);
     await recordDomainEvent({ eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: input.id, actorUserId: ctx.user.id, payload: { campaignId: input.data.campaignId ?? null, previousStage: previous.stage, stage: input.data.stage, expectedAmount: input.data.expectedAmount } });
     return { success: true };

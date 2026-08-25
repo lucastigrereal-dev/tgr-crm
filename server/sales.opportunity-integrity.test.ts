@@ -18,7 +18,7 @@ const data = {
   lossReason: null,
 };
 
-function makeDb(selectRows: unknown[][]) {
+function makeDb(selectRows: unknown[][], affectedRows?: number) {
   let selectCall = 0;
   const select = vi.fn(() => ({
     from: vi.fn(() => ({
@@ -27,7 +27,7 @@ function makeDb(selectRows: unknown[][]) {
       })),
     })),
   }));
-  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) }));
+  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => affectedRows === undefined ? undefined : { affectedRows }) })) }));
   return { select, update };
 }
 
@@ -63,11 +63,20 @@ describe("integridade da atualização de oportunidade", () => {
   });
 
   it("atualiza oportunidade válida e registra a transição", async () => {
-    const db = makeDb([[{ stage: "new" }], [{ id: 10 }], [{ id: 20 }], [{ id: 30 }]]);
+    const db = makeDb([[{ stage: "new" }], [{ id: 10 }], [{ id: 20 }], [{ id: 30 }]], 1);
     dbMocks.getDb.mockResolvedValue(db);
 
     await expect(caller().updateOpportunity({ id: 701, data })).resolves.toEqual({ success: true });
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "opportunity", 701, "updated", "Oportunidade atualizada para qualified.");
+  });
+
+  it("não audita atualização de oportunidade que perdeu a corrida", async () => {
+    const db = makeDb([[{ stage: "new" }], [{ id: 10 }], [{ id: 20 }], [{ id: 30 }]], 0);
+    dbMocks.getDb.mockResolvedValue(db);
+
+    await expect(caller().updateOpportunity({ id: 701, data })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(db.update).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });
