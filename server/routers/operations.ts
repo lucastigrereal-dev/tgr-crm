@@ -62,12 +62,14 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const existing = (await db.select({ id: units.id, resortId: units.resortId }).from(units).where(eq(units.id, input.id)).limit(1))[0];
-      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade não encontrada." });
-      const duplicate = (await db.select({ id: units.id }).from(units).where(and(eq(units.resortId, existing.resortId), eq(units.code, input.code), ne(units.id, input.id))).limit(1))[0];
-      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outra unidade com este código no empreendimento." });
-      const updateResult = await db.update(units).set({ code: input.code, category: input.category || null, capacity: input.capacity, beds: input.beds, status: input.status }).where(eq(units.id, input.id));
-      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A unidade foi alterada por outra operação. Recarregue e tente novamente." });
+      await db.transaction(async tx => {
+        const existing = (await tx.select({ id: units.id, resortId: units.resortId }).from(units).where(eq(units.id, input.id)).limit(1).for("update"))[0];
+        if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade não encontrada." });
+        const duplicate = (await tx.select({ id: units.id }).from(units).where(and(eq(units.resortId, existing.resortId), eq(units.code, input.code), ne(units.id, input.id))).limit(1))[0];
+        if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outra unidade com este código no empreendimento." });
+        const updateResult = await tx.update(units).set({ code: input.code, category: input.category || null, capacity: input.capacity, beds: input.beds, status: input.status }).where(eq(units.id, input.id));
+        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A unidade foi alterada por outra operação. Recarregue e tente novamente." });
+      });
       await recordAudit(ctx.user.id, "unit", input.id, "updated", `Unidade ${input.code} atualizada para ${input.status}.`);
       return { success: true };
     }),
