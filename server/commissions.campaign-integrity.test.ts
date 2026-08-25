@@ -6,10 +6,11 @@ vi.mock("./db", () => dbMocks);
 
 import { commissionsRouter } from "./routers/commissions";
 
-function makeDb() {
+function makeDb({ existingCampaign = false } = {}) {
   const inserted: unknown[] = [];
+  const select = vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => existingCampaign ? [{ id: 800 }] : []) })) })) }));
   const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 901 }] }; }) }));
-  return { db: { insert }, inserted };
+  return { db: { select, insert }, inserted };
 }
 
 function caller() {
@@ -35,6 +36,15 @@ describe("integridade de calendário de campanhas", () => {
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().createCampaign({ ...baseInput, startsAt: "2026-12-01", endsAt: "2026-11-30" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita código de campanha duplicado antes do insert", async () => {
+    const fixture = makeDb({ existingCampaign: true });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().createCampaign({ ...baseInput, startsAt: "2026-11-01", endsAt: "2026-12-31" })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(fixture.inserted).toEqual([]);
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
