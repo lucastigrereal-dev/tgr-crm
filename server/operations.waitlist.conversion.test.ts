@@ -45,6 +45,15 @@ describe("conversão de lista de espera e saída integrada", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(4, "reservation_waitlist", 33, "converted_to_reservation", expect.stringContaining("901"));
   });
 
+  it("não audita uma transição perdida por concorrência", async () => {
+    const db = { select: querySequence([[{ status: "confirmed" }]]), update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 0 })) })) })) };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
+
+    await expect(caller.updateReservationStatus({ id: 901, status: "checked_in" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("encerra automaticamente os acompanhantes presentes quando a reserva faz checkout", async () => {
     const updates: unknown[] = [];
     const db = { select: querySequence([[{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
