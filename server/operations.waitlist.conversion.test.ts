@@ -14,7 +14,8 @@ function querySequence(responses: unknown[][]) {
     chain.innerJoin = () => chain;
     chain.leftJoin = () => chain;
     chain.where = () => chain;
-    chain.limit = () => result;
+    const limitChain = { for: async () => result, then: result.then.bind(result) };
+    chain.limit = () => limitChain;
     return chain;
   });
 }
@@ -51,7 +52,9 @@ describe("conversão de lista de espera e saída integrada", () => {
   });
 
   it("não audita uma transição perdida por concorrência", async () => {
-    const db = { select: querySequence([[{ status: "confirmed" }]]), update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 0 })) })) })) };
+    const select = querySequence([[{ status: "confirmed" }]]);
+    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 0 })) })) }));
+    const db = { select, update, transaction: vi.fn(async (callback: (tx: { select: typeof select; update: typeof update }) => Promise<unknown>) => callback({ select, update })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 
@@ -61,7 +64,9 @@ describe("conversão de lista de espera e saída integrada", () => {
 
   it("encerra automaticamente os acompanhantes presentes quando a reserva faz checkout", async () => {
     const updates: unknown[] = [];
-    const db = { select: querySequence([[{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const select = querySequence([[{ status: "checked_in" }]]);
+    const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) }));
+    const db = { select, update, transaction: vi.fn(async (callback: (tx: { select: typeof select; update: typeof update }) => Promise<unknown>) => callback({ select, update })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 
@@ -74,7 +79,9 @@ describe("conversão de lista de espera e saída integrada", () => {
 
   it("mantém a jornada completa de chegada e saída coerente para reserva e acompanhante", async () => {
     const updates: unknown[] = [];
-    const db = { select: querySequence([[{ status: "confirmed" }], [{ checkedInAt: null, checkedOutAt: null, reservationStatus: "checked_in" }], [{ status: "checked_in" }]]), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const select = querySequence([[{ status: "confirmed" }], [{ checkedInAt: null, checkedOutAt: null, reservationStatus: "checked_in" }], [{ status: "checked_in" }]]);
+    const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) }));
+    const db = { select, update, transaction: vi.fn(async (callback: (tx: { select: typeof select; update: typeof update }) => Promise<unknown>) => callback({ select, update })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 

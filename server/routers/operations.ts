@@ -227,13 +227,15 @@ export const operationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const current = (await db.select({ status: reservations.status }).from(reservations).where(eq(reservations.id, input.id)).limit(1))[0];
-      if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
-      if (!canTransitionReservationStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de reserva inválida: ${current.status} → ${input.status}.` });
-      const now = new Date();
-      const updateResult = await db.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(and(eq(reservations.id, input.id), eq(reservations.status, current.status)));
-      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A reserva foi alterada por outra operação. Recarregue e tente novamente." });
-      if (input.status === "completed") await db.update(reservationGuests).set({ checkedOutAt: now }).where(and(eq(reservationGuests.reservationId, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
+      await db.transaction(async tx => {
+        const current = (await tx.select({ status: reservations.status }).from(reservations).where(eq(reservations.id, input.id)).limit(1).for("update"))[0];
+        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
+        if (!canTransitionReservationStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de reserva inválida: ${current.status} → ${input.status}.` });
+        const now = new Date();
+        const updateResult = await tx.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(and(eq(reservations.id, input.id), eq(reservations.status, current.status)));
+        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A reserva foi alterada por outra operação. Recarregue e tente novamente." });
+        if (input.status === "completed") await tx.update(reservationGuests).set({ checkedOutAt: now }).where(and(eq(reservationGuests.reservationId, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
+      });
       await recordAudit(ctx.user.id, "reservation", input.id, "status_updated", `Reserva atualizada para ${input.status}.`);
       return { success: true };
     }),
