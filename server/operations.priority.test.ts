@@ -6,7 +6,7 @@ vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; resortMissing?: boolean } = {}) {
+function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; resortMissing?: boolean } = {}, updateAffectedRows?: number) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
   let unitSelectCall = 0;
@@ -23,7 +23,7 @@ function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; 
     },
   }));
   const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 501 }] }; }) }));
-  const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) }));
+  const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); return updateAffectedRows === undefined ? undefined : { affectedRows: updateAffectedRows }; }) })) }));
   const transaction = vi.fn(async (callback: (tx: { select: typeof select; insert: typeof insert; update: typeof update }) => Promise<unknown>) => callback({ select, insert, update }));
   const db = { select, insert, update, transaction };
   return { db, inserted, updates };
@@ -76,6 +76,16 @@ describe("prioridade de direitos e bloqueio operacional", () => {
 
     await expect(caller.createReservation({ customerId: 3, unitId: 18, checkIn: "2026-11-10", checkOut: "2026-11-14", status: "confirmed" })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("manutenção") });
     expect(fixture.inserted).toEqual([]);
+  });
+
+  it("não audita atualização de unidade que perdeu a corrida", async () => {
+    const fixture = makeDb({}, 0);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    await expect(caller.updateUnit({ id: 18, code: "1803", category: "Premium", capacity: 4, beds: 2, status: "maintenance" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.updates).toHaveLength(1);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("atualiza o status operacional da unidade e cria trilha de auditoria", async () => {
