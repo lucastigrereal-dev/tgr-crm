@@ -112,7 +112,7 @@ export const resorts = mysqlTable("resorts", {
   state: varchar("state", { length: 2 }),
   status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("resorts_name_unique").on(table.name)]);
 
 export const commercialProjectSettings = mysqlTable("commercial_project_settings", {
   id: int("id").autoincrement().primaryKey(),
@@ -154,7 +154,7 @@ export const units = mysqlTable(
     status: mysqlEnum("status", ["active", "maintenance", "inactive"]).default("active").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("units_resort_code_idx").on(table.resortId, table.code)],
+  table => [uniqueIndex("units_resort_code_unique").on(table.resortId, table.code)],
 );
 
 export const opportunities = mysqlTable(

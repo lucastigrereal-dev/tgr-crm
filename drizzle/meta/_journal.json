@@ -183,6 +183,13 @@
       "when": 1787682094694,
       "tag": "0025_even_falcon",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1787690939495,
+      "tag": "0026_inventory-unique-constraints",
+      "breakpoints": true
     }
   ]
 }
