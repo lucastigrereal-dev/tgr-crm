@@ -60,6 +60,15 @@ describe("prioridade de direitos e bloqueio operacional", () => {
     expect(missingResort.inserted).toEqual([]);
   });
 
+  it("bloqueia reserva direta com cliente inexistente", async () => {
+    const fixture = makeDb({ customerMissing: true });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.createReservation({ customerId: 999, unitId: 18, checkIn: "2026-11-10", checkOut: "2026-11-14", status: "confirmed" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fixture.inserted).toEqual([]);
+  });
+
   it("impede reserva direta em unidade bloqueada para manutenção", async () => {
     const fixture = makeDb({ maintenance: true });
     dbMocks.getDb.mockResolvedValue(fixture.db);

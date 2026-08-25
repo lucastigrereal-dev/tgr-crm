@@ -197,6 +197,8 @@ export const operationsRouter = router({
     const checkIn = dateValue(input.checkIn); const checkOut = dateValue(input.checkOut);
     if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída precisa ser posterior ao check-in." });
     const id = await db.transaction(async tx => {
+      const customer = (await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
+      if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente da reserva não encontrado." });
       const unit = (await tx.select({ id: units.id, status: units.status }).from(units).where(eq(units.id, input.unitId)).limit(1).for("update"))[0];
       if (!unit || unit.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para criar a reserva." });
       const conflict = await tx.select({ id: reservations.id }).from(reservations).where(and(
