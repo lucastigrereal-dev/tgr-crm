@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
-import { ownershipEntitlements, resorts, unitMaintenanceBlocks, units } from "../../drizzle/schema";
+import { contracts, ownershipEntitlements, resorts, unitMaintenanceBlocks, units } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { contractsProcedure, serviceProcedure } from "./access";
@@ -20,9 +20,24 @@ export const ownershipRouter = router({
       .orderBy(desc(unitMaintenanceBlocks.startsAt)).limit(100);
   }),
   createEntitlement: contractsProcedure.input(z.object({ contractId: z.number().int().positive(), resortId: z.number().int().positive().nullable().optional(), unitId: z.number().int().positive().nullable().optional(), entitlementType: z.enum(["fixed_week", "flexible_week", "points", "exchange"]), fixedWeek: z.number().int().min(1).max(53).nullable().optional(), annualPoints: z.number().int().min(0).default(0), priorityLevel: z.number().int().min(1).max(9).default(1), validFrom: z.string().nullable().optional(), validUntil: z.string().nullable().optional() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb(); if (!db) throw new Error("Banco indisponível");
-    if (input.entitlementType === "fixed_week" && !input.fixedWeek) throw new Error("Semana fixa é obrigatória para este direito.");
-    const [created] = await db.insert(ownershipEntitlements).values({ contractId: input.contractId, resortId: input.resortId ?? null, unitId: input.unitId ?? null, entitlementType: input.entitlementType, fixedWeek: input.fixedWeek ?? null, annualPoints: input.annualPoints, priorityLevel: input.priorityLevel, validFrom: input.validFrom ? new Date(input.validFrom) : null, validUntil: input.validUntil ? new Date(input.validUntil) : null }).$returningId();
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    if (input.entitlementType === "fixed_week" && !input.fixedWeek) throw new TRPCError({ code: "BAD_REQUEST", message: "Semana fixa é obrigatória para este direito." });
+    const validFrom = input.validFrom ? new Date(input.validFrom) : null;
+    const validUntil = input.validUntil ? new Date(input.validUntil) : null;
+    if ((validFrom && Number.isNaN(validFrom.getTime())) || (validUntil && Number.isNaN(validUntil.getTime()))) throw new TRPCError({ code: "BAD_REQUEST", message: "Período de vigência inválido." });
+    if (validFrom && validUntil && validUntil <= validFrom) throw new TRPCError({ code: "BAD_REQUEST", message: "O fim da vigência precisa ser posterior ao início." });
+    const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+    if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do direito não encontrado." });
+    if (input.resortId) {
+      const resort = (await db.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1))[0];
+      if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento do direito não encontrado." });
+    }
+    if (input.unitId) {
+      const unit = (await db.select({ id: units.id, resortId: units.resortId }).from(units).where(eq(units.id, input.unitId)).limit(1))[0];
+      if (!unit) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade do direito não encontrada." });
+      if (input.resortId && unit.resortId !== input.resortId) throw new TRPCError({ code: "BAD_REQUEST", message: "A unidade do direito não pertence ao empreendimento informado." });
+    }
+    const [created] = await db.insert(ownershipEntitlements).values({ contractId: input.contractId, resortId: input.resortId ?? null, unitId: input.unitId ?? null, entitlementType: input.entitlementType, fixedWeek: input.fixedWeek ?? null, annualPoints: input.annualPoints, priorityLevel: input.priorityLevel, validFrom, validUntil }).$returningId();
     await recordAudit(ctx.user.id, "ownership_entitlement", created.id, "created", `Direito ${input.entitlementType} criado.`);
     await recordDomainEvent({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", aggregateId: created.id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, entitlementType: input.entitlementType } });
     return created;
