@@ -143,7 +143,8 @@ export const operationsRouter = router({
       const contract = (await db.select({ id: contracts.id, customerId: contracts.customerId, status: contracts.status }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
       if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao associado." });
       if (["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível entrar na fila com contrato cancelado ou encerrado." });
-      const highestPriorityRow = (await db.select({ priorityLevel: ownershipEntitlements.priorityLevel }).from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"))).orderBy(asc(ownershipEntitlements.priorityLevel)).limit(1))[0];
+      const entitlementScope = input.resortId ? or(eq(ownershipEntitlements.resortId, input.resortId), isNull(ownershipEntitlements.resortId)) : undefined;
+      const highestPriorityRow = (await db.select({ priorityLevel: ownershipEntitlements.priorityLevel }).from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"), entitlementScope)).orderBy(asc(ownershipEntitlements.priorityLevel)).limit(1))[0];
       const highestPriority = highestPriorityRow?.priorityLevel ?? null;
       entitlementScore = highestPriority === null ? 0 : entitlementPriorityScore(highestPriority);
     }

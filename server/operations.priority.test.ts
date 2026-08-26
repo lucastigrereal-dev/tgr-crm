@@ -6,7 +6,7 @@ vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(options: { entitlementPriority?: number; entitlementPriorities?: number[]; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean; waitlistDuplicate?: boolean; waitlistInsertDuplicate?: boolean; unitCapacity?: number } = {}, updateAffectedRows?: number) {
+function makeDb(options: { entitlementPriority?: number; entitlementPriorities?: number[]; entitlementRows?: Array<{ priorityLevel: number; status: "active"; resortId: number | null }>; entitlementResortFilter?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean; waitlistDuplicate?: boolean; waitlistInsertDuplicate?: boolean; unitCapacity?: number } = {}, updateAffectedRows?: number) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
   let unitSelectCall = 0;
@@ -15,7 +15,7 @@ function makeDb(options: { entitlementPriority?: number; entitlementPriorities?:
       if (table === customers) return { where: () => ({ limit: async () => options.customerMissing ? [] : [{ id: 3 }] }) };
       if (table === contracts) return { where: () => ({ limit: async () => options.contractMissing ? [] : [{ id: 8, customerId: 3, status: options.contractStatus ?? "active" }] }) };
       if (table === resorts) return { where: () => ({ limit: async () => options.resortMissing ? [] : [{ id: 5 }] }) };
-      if (table === ownershipEntitlements) return { where: () => ({ orderBy: () => ({ limit: async () => (options.entitlementPriorities ?? (options.entitlementPriority ? [options.entitlementPriority] : [])).map(priorityLevel => ({ priorityLevel, status: "active" })).sort((left, right) => left.priorityLevel - right.priorityLevel) }) }) };
+      if (table === ownershipEntitlements) return { where: () => ({ orderBy: () => ({ limit: async () => { const rows = options.entitlementRows ?? (options.entitlementPriorities ?? (options.entitlementPriority ? [options.entitlementPriority] : [])).map(priorityLevel => ({ priorityLevel, status: "active" as const, resortId: null })); return rows.filter(row => options.entitlementResortFilter === undefined || row.resortId === null || row.resortId === options.entitlementResortFilter).sort((left, right) => left.priorityLevel - right.priorityLevel); } }) }) };
       if (table === reservationWaitlist) return { where: () => ({ limit: async () => options.waitlistDuplicate ? [{ id: 700 }] : [] }) };
       if (table === units) return { where: () => ({ limit: () => { const rows = unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active", capacity: options.unitCapacity ?? 2 }] : []; return { for: async () => rows, then: (resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(rows).then(resolve, reject) }; } }) };
       if (table === reservations) return { where: () => ({ limit: async () => [] }) };
@@ -49,6 +49,15 @@ describe("prioridade de direitos e bloqueio operacional", () => {
     const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
 
     await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14", priorityScore: 15 })).resolves.toMatchObject({ priorityScore: 90, entitlementScore: 90 });
+  });
+
+  it("não usa direito de outro empreendimento para elevar a prioridade", async () => {
+    const fixture = makeDb({ entitlementRows: [{ priorityLevel: 1, status: "active", resortId: 99 }], entitlementResortFilter: 5 });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, resortId: 5, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14", priorityScore: 15 })).resolves.toEqual({ id: 501, priorityScore: 15, entitlementScore: 0 });
+    expect(fixture.inserted[0]).toMatchObject({ contractId: 8, resortId: 5, priorityScore: 15 });
   });
 
   it("bloqueia duplicata ativa na fila de espera", async () => {
