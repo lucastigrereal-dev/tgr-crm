@@ -82,6 +82,8 @@ export const operationsRouter = router({
         if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade não encontrada." });
         const duplicate = (await tx.select({ id: units.id }).from(units).where(and(eq(units.resortId, existing.resortId), eq(units.code, input.code), ne(units.id, input.id))).limit(1))[0];
         if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outra unidade com este código no empreendimento." });
+        const activeReservations = await tx.select({ partySize: sql<number>`coalesce(${reservations.adults}, 1) + coalesce(${reservations.children}, 0) + count(${reservationGuests.id})` }).from(reservations).leftJoin(reservationGuests, eq(reservationGuests.reservationId, reservations.id)).where(and(eq(reservations.unitId, input.id), inArray(reservations.status, ["pending", "confirmed", "checked_in"]))).groupBy(reservations.id, reservations.adults, reservations.children);
+        if (activeReservations.some(row => Number(row.partySize) > input.capacity)) throw new TRPCError({ code: "CONFLICT", message: "A nova capacidade fica abaixo da lotação de uma reserva ativa." });
         const updateResult = await tx.update(units).set({ code: input.code, category: input.category || null, capacity: input.capacity, beds: input.beds, status: input.status }).where(eq(units.id, input.id));
         if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A unidade foi alterada por outra operação. Recarregue e tente novamente." });
       });
