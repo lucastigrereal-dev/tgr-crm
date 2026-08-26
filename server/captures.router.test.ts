@@ -40,6 +40,18 @@ describe("captures.create", () => {
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
+  it("rejeita membro de equipe inexistente antes de criar qualquer entidade", async () => {
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([{ id: 12 }]))
+      .mockReturnValueOnce(chain([]));
+    const insert = vi.fn();
+    mockedDb.mockResolvedValue({ transaction: (callback: (tx: unknown) => unknown) => callback({ select, insert }) } as never);
+
+    await expect(caller("seller").captures.create({ ...baseInput, promoterId: 999 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(insert).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
   it("aborta captação quando a oportunidade não devolve ID persistido", async () => {
     const select = vi.fn()
       .mockReturnValueOnce(chain([{ id: 12 }]))

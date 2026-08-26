@@ -210,6 +210,11 @@ export const capturesRouter = router({
       ]);
       if (input.campaignId && !campaignRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da captação não encontrada." });
       if (input.resortId && !resortRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento da captação não encontrado." });
+      const staffIds = [input.promoterId, input.qualifierId, input.linerId, input.closerId, input.roomManagerId].filter((id): id is number => id !== undefined && id !== null);
+      if (staffIds.length) {
+        const staffRows = await tx.select({ id: users.id }).from(users).where(inArray(users.id, Array.from(new Set(staffIds))));
+        if (staffRows.length !== new Set(staffIds).size) throw new TRPCError({ code: "NOT_FOUND", message: "Membro da equipe da captação não encontrado." });
+      }
       if (input.resortId) {
         const settings = (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0];
         const readiness = getProjectCaptureReadiness({ customerName: input.customer?.fullName, phone: input.customer?.phone, city: input.customer?.city, promoterId: input.promoterId, captureLocation: input.captureLocation, averageIncome: input.averageIncome, travelWeeksPerYear: input.travelWeeksPerYear, qualificationStatus: input.qualificationStatus, vehicle: input.vehicleBrand || input.vehicleModel, homeOwnership: input.ownsHome === true ? "sim" : null }, settings?.requiredCaptureFields);
