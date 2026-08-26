@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { commercialProjectSettings, resorts } from "../../drizzle/schema";
@@ -21,7 +21,14 @@ function normalizeJsonText(value: string | null | undefined) {
   return value?.trim() ? value.trim() : null;
 }
 export const projectSettingsRouter = router({
-  list: adminProcedure.query(async () => { const db = await getDb(); if (!db) return []; return db.select({ resort: resorts, settings: commercialProjectSettings }).from(resorts).leftJoin(commercialProjectSettings, eq(commercialProjectSettings.resortId, resorts.id)).limit(1000); }),
+  list: adminProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 1_000;
+    const rawRows = await db.select({ resort: resorts, settings: commercialProjectSettings }).from(resorts).leftJoin(commercialProjectSettings, eq(commercialProjectSettings.resortId, resorts.id)).orderBy(asc(resorts.name)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["configurações por empreendimento"] : [] };
+  }),
   upsert: adminProcedure.input(settingsInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
