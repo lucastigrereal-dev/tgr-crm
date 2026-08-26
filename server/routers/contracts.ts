@@ -91,12 +91,24 @@ export const contractsRouter = router({
     const contract = (await db.select({ contract: contracts, customerName: customers.fullName, customerEmail: customers.email, customerPhone: customers.phone })
       .from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!contract) return null;
-    const [schedule, documents, cancellationRequests] = await Promise.all([
-      db.select().from(installments).where(eq(installments.contractId, input.id)).orderBy(installments.sequence).limit(360),
-      db.select().from(contractDocuments).where(eq(contractDocuments.contractId, input.id)).orderBy(desc(contractDocuments.createdAt)).limit(100),
-      db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, input.id)).orderBy(desc(contractCancellationRequests.createdAt)).limit(50),
+    const [rawSchedule, rawDocuments, rawCancellationRequests] = await Promise.all([
+      db.select().from(installments).where(eq(installments.contractId, input.id)).orderBy(installments.sequence).limit(361),
+      db.select().from(contractDocuments).where(eq(contractDocuments.contractId, input.id)).orderBy(desc(contractDocuments.createdAt)).limit(101),
+      db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, input.id)).orderBy(desc(contractCancellationRequests.createdAt)).limit(51),
     ]);
-    return { ...contract, installments: schedule, documents, cancellationRequests };
+    const truncatedSources = [
+      rawSchedule.length > 360 ? "parcelas" : null,
+      rawDocuments.length > 100 ? "documentos" : null,
+      rawCancellationRequests.length > 50 ? "distratos" : null,
+    ].filter((source): source is string => Boolean(source));
+    return {
+      ...contract,
+      installments: rawSchedule.slice(0, 360),
+      documents: rawDocuments.slice(0, 100),
+      cancellationRequests: rawCancellationRequests.slice(0, 50),
+      truncated: truncatedSources.length > 0,
+      truncatedSources,
+    };
   }),
 
   simulateCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
