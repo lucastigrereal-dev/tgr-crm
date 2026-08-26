@@ -98,9 +98,11 @@ export const salesRouter = router({
 
   qualityRanking: salesProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    const rows = await db.select({ sellerId: opportunities.sellerId, sellerName: users.name, stage: opportunities.stage, expectedAmount: opportunities.expectedAmount, nextFollowUpAt: opportunities.nextFollowUpAt }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).orderBy(desc(opportunities.updatedAt)).limit(1000);
-    return buildSellerQualityRanking(rows);
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 1000;
+    const rawRows = await db.select({ sellerId: opportunities.sellerId, sellerName: users.name, stage: opportunities.stage, expectedAmount: opportunities.expectedAmount, nextFollowUpAt: opportunities.nextFollowUpAt }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).orderBy(desc(opportunities.updatedAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: buildSellerQualityRanking(rawRows.slice(0, limit)), truncated, truncatedSources: truncated ? ["oportunidades do ranking"] : [] };
   }),
 
   createOpportunity: salesProcedure.input(opportunityInput).mutation(async ({ ctx, input }) => {
