@@ -25,19 +25,24 @@ const dateTimeValue = (value: string | null | undefined) => value ? new Date(val
 export const operationsRouter = router({
   resorts: internalProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select().from(resorts).orderBy(resorts.name).limit(1000);
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] as string[] };
+    const rows = await db.select().from(resorts).orderBy(resorts.name).limit(1001);
+    const truncated = rows.length > 1000;
+    return { rows: rows.slice(0, 1000), truncated, truncatedSources: truncated ? ["resorts"] : [] };
   }),
 
   units: internalProcedure.input(z.object({ resortId: z.number().int().positive().optional(), status: z.enum(["active", "maintenance", "inactive"]).optional(), search: z.string().trim().max(120).optional(), limit: z.number().int().min(1).max(5000).default(5000) }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] as string[] };
     const filters: SQL[] = [];
     if (input?.resortId) filters.push(eq(units.resortId, input.resortId));
     if (input?.status) filters.push(eq(units.status, input.status));
     if (input?.search) filters.push(or(like(units.code, `%${input.search}%`), like(units.category, `%${input.search}%`), like(resorts.name, `%${input.search}%`))!);
-    return db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
-      .where(filters.length ? and(...filters) : undefined).orderBy(resorts.name, units.code).limit(input?.limit ?? 5000);
+    const requestedLimit = input?.limit ?? 5000;
+    const rows = await db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
+      .where(filters.length ? and(...filters) : undefined).orderBy(resorts.name, units.code).limit(requestedLimit + 1);
+    const truncated = rows.length > requestedLimit;
+    return { rows: rows.slice(0, requestedLimit), truncated, truncatedSources: truncated ? ["units"] : [] };
   }),
 
   createResort: adminProcedure.input(z.object({ name: z.string().trim().min(3).max(180), city: z.string().trim().max(120).optional(), state: z.string().trim().toUpperCase().max(2).optional() }))
