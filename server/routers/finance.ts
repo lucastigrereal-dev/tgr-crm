@@ -140,11 +140,14 @@ export const financeRouter = router({
 
   installments: financeProcedure.input(z.object({ status: z.enum(["open", "overdue", "paid", "cancelled"]).optional(), limit: z.number().int().min(1).max(1000).default(300) }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = input?.limit ?? 300;
+    const rawRows = await db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
       .from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
       .where(input?.status ? eq(installments.status, input.status) : undefined)
-      .orderBy(desc(installments.dueDate)).limit(input?.limit ?? 300);
+      .orderBy(desc(installments.dueDate)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["recebíveis"] : [] };
   }),
 
   collectionQueue: financeProcedure.query(async () => {
