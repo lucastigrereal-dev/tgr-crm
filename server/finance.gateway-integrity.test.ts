@@ -35,8 +35,8 @@ function query(rows: unknown[]) {
   return chain;
 }
 
-function makeDb() {
-  const billingState: unknown[] = [];
+function makeDb(existingBillingType?: "pix" | "boleto") {
+  const billingState: unknown[] = existingBillingType ? [{ billing: { id: 902, gatewayPaymentId: "pay-existing", type: existingBillingType, status: "generated" } }] : [];
   const gatewayCustomerState: unknown[] = [];
   const inserted: unknown[] = [];
   const installment = { id: 91, contractId: 61, sequence: 1, status: "open", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") };
@@ -52,7 +52,7 @@ function makeDb() {
       inserted.push(value);
       return {
         onDuplicateKeyUpdate: vi.fn(async () => { gatewayCustomerState.push({ gatewayCustomerId: "cus-7" }); }),
-        $returningId: async () => { billingState.push({ billing: { id: 901, gatewayPaymentId: "pay-91" } }); return [{ id: 901 }]; },
+        $returningId: async () => { billingState.push({ billing: { id: 901, gatewayPaymentId: "pay-91", type: "pix", status: "generated" } }); return [{ id: 901 }]; },
       };
     }) })),
   };
@@ -83,6 +83,19 @@ describe("idempotência de emissão Asaas", () => {
 
 describe("isolamento de erro do gateway", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("recusa trocar o tipo de uma cobrança Asaas já existente", async () => {
+    const fixture = makeDb("pix");
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.issueGatewayBilling({ installmentId: 91, type: "boleto" })).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Já existe uma cobrança Asaas do tipo pix para esta parcela.",
+    });
+    expect(gatewayMocks.createAsaasPayment).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
 
   it("não vaza payload remoto nem audita falha de emissão", async () => {
     const fixture = makeDb();

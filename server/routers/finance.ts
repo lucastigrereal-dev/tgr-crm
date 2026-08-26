@@ -204,7 +204,10 @@ export const financeRouter = router({
         if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
         if (["paid", "cancelled"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga ou cancelada." });
         const existing = (await tx.select({ billing: billingRecords }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.gatewayProvider, "asaas"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).orderBy(desc(billingRecords.createdAt)).limit(1))[0];
-        if (existing?.billing.gatewayPaymentId) return { id: existing.billing.id, gatewayPaymentId: existing.billing.gatewayPaymentId, reused: true };
+        if (existing?.billing.gatewayPaymentId) {
+          if (existing.billing.type !== input.type) throw new TRPCError({ code: "CONFLICT", message: `Já existe uma cobrança Asaas do tipo ${existing.billing.type} para esta parcela.` });
+          return { id: existing.billing.id, gatewayPaymentId: existing.billing.gatewayPaymentId, reused: true };
+        }
 
         const cpfCnpj = (row.customer.documentNumber || "").replace(/\\D/g, "");
         if (![11, 14].includes(cpfCnpj.length)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Cadastre um CPF ou CNPJ válido no associado antes de emitir a cobrança." });
