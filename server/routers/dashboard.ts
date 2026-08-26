@@ -196,7 +196,7 @@ export const dashboardRouter = router({
     };
   }),
   operationalPulse: internalProcedure.query(async () => {
-    const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } };
+    const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 }, truncated: false, truncatedSources: [] };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
     const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows, rhythmCaptureRows, userRows, customerRows, opportunityEventRows, discountApprovalRows] = await Promise.all([
       db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).orderBy(desc(installments.dueDate)).limit(MAX_OPERATIONAL_ROWS),
@@ -218,6 +218,26 @@ export const dashboardRouter = router({
       db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents).where(eq(domainEvents.eventName, "opportunity.updated")).orderBy(desc(domainEvents.occurredAt)).limit(3000),
       db.select({ approval: proposalDiscountApprovals, proposal: proposals }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).where(eq(proposalDiscountApprovals.status, "pending")).orderBy(desc(proposalDiscountApprovals.createdAt)).limit(500),
     ]);
+    const truncatedSources = [
+      { label: "parcelas", rows: installmentRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "tarefas", rows: taskRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "manutenção", rows: maintenanceRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "lista de espera", rows: waitlistRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "eventos", rows: eventRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "interações", rows: interactionRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "captações", rows: captureRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "oportunidades", rows: opportunityRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "distratos", rows: cancellationRows, limit: 1000 },
+      { label: "comissões", rows: commissionRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "contratos", rows: contractRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "documentos", rows: documentRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "configurações", rows: settingsRows, limit: 1000 },
+      { label: "contexto de captações", rows: rhythmCaptureRows, limit: MAX_OPERATIONAL_ROWS },
+      { label: "usuários", rows: userRows, limit: 1000 },
+      { label: "clientes", rows: customerRows, limit: 2000 },
+      { label: "eventos de oportunidade", rows: opportunityEventRows, limit: 3000 },
+      { label: "aprovações de desconto", rows: discountApprovalRows, limit: 500 },
+    ].filter(source => source.rows.length >= source.limit).map(source => source.label);
     const integrityAlerts = buildCommercialIntegrityAlerts({
       commissions: commissionRows.map(row => ({ id: row.commission.id, contractId: row.commission.contractId ?? 0, amount: Number(row.commission.amount), status: row.commission.status, sourceInstallmentId: row.commission.sourceInstallmentId, sourceInstallmentStatus: row.sourceInstallmentStatus })),
       proposals: discountApprovalRows.map(row => ({ id: row.proposal.id, discountPercent: Number(row.approval.discountPercent), allowedDiscountPercent: Number(row.approval.discountPercent), approvalStatus: row.approval.status === "cancelled" ? "pending" : row.approval.status })),
@@ -257,7 +277,7 @@ export const dashboardRouter = router({
     }
     const userNames = new Map(userRows.map(user => [user.id, user.name || user.email || `Usuário #${user.id}`]));
     const rhythmAlerts = buildProfessionalRhythmAlerts({ roster: rhythmRoster, facts: rhythmFacts, now });
-    return buildOperationalInsights({ exceptions: [
+    const insights = buildOperationalInsights({ exceptions: [
       ...installmentRows.map(row => ({ id: row.installment.id, kind: "installment" as const, label: `${row.customerName} · ${row.contractNumber}`, dueAt: row.installment.dueDate, status: row.installment.status, amount: row.installment.amount })),
       ...taskRows.map(row => ({ id: row.task.id, kind: "task" as const, label: row.task.title, dueAt: row.task.dueAt, status: row.task.status })),
       ...maintenanceRows.map(row => ({ id: row.id, kind: "maintenance" as const, label: `Unidade #${row.unitId}`, dueAt: row.startsAt, status: row.status })),
@@ -270,5 +290,6 @@ export const dashboardRouter = router({
       ...documentIntegrityAlerts,
       ...rhythmAlerts.map(alert => ({ id: alert.userId, kind: "rhythm" as const, label: `${userNames.get(alert.userId) || `Usuário #${alert.userId}`} · ${alert.role}`, status: alert.severity, responsibleRole: "Gerência comercial", dueAt: new Date(now.getTime() + (alert.severity === "critical" ? 0 : 86_400_000)), evidence: `${alert.daysWithoutEvent} dia(s) sem evento relevante. ${alert.evidence} ${alert.recommendedAction}` })),
     ], eventsLast30Days: eventRows, interactionsLast30Days: interactionRows.length }, now);
+    return { ...insights, truncated: truncatedSources.length > 0, truncatedSources };
   }),
 });
