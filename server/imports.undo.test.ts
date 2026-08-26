@@ -119,6 +119,19 @@ describe("imports.undoLast", () => {
     ]));
   });
 
+  it("bloqueia undo de contrato importado com direito de uso vinculado", async () => {
+    const fixture = makeDb(
+      { id: 86, kind: "contracts", status: "completed" },
+      [{ entityType: "contract", entityId: 703, action: "created", beforeSnapshot: null }],
+      [],
+      { entitlements: [{ id: 9004 }] },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(fixture.deletes).toEqual([]);
+  });
+
   it("bloqueia contrato importado quando já existe qualquer dependência operacional", async () => {
     const fixture = makeDb(
       { id: 85, kind: "contracts", status: "completed" },

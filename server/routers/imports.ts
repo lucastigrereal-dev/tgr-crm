@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, revenueQualityLedger, salesCommissions, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
@@ -139,14 +139,21 @@ export const importsRouter = router({
         if (contractIds.length) {
           const installmentRows = await tx.select({ id: installments.id }).from(installments).where(inArray(installments.contractId, contractIds));
           const installmentIds = installmentRows.map(item => item.id);
-          const [docs, bookings, taskRows, financial, billings] = await Promise.all([
+          const [docs, bookings, taskRows, financial, billings, entitlements, waitlistRows, renegotiations, portfolioAssignments, transfers, commissions, revenueLedger] = await Promise.all([
             tx.select({ id: contractDocuments.id }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)),
             tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.contractId, contractIds)),
             tx.select({ id: tasks.id }).from(tasks).where(inArray(tasks.contractId, contractIds)),
             tx.select({ id: financialTransactions.id }).from(financialTransactions).where(inArray(financialTransactions.contractId, contractIds)),
             installmentIds.length ? tx.select({ id: billingRecords.id }).from(billingRecords).where(inArray(billingRecords.installmentId, installmentIds)) : Promise.resolve([]),
+            tx.select({ id: ownershipEntitlements.id }).from(ownershipEntitlements).where(inArray(ownershipEntitlements.contractId, contractIds)),
+            tx.select({ id: reservationWaitlist.id }).from(reservationWaitlist).where(inArray(reservationWaitlist.contractId, contractIds)),
+            tx.select({ id: installmentRenegotiations.id }).from(installmentRenegotiations).where(inArray(installmentRenegotiations.contractId, contractIds)),
+            tx.select({ id: financialPortfolioAssignments.id }).from(financialPortfolioAssignments).where(inArray(financialPortfolioAssignments.contractId, contractIds)),
+            tx.select({ id: financialTransfers.id }).from(financialTransfers).where(inArray(financialTransfers.contractId, contractIds)),
+            tx.select({ id: salesCommissions.id }).from(salesCommissions).where(inArray(salesCommissions.contractId, contractIds)),
+            tx.select({ id: revenueQualityLedger.id }).from(revenueQualityLedger).where(inArray(revenueQualityLedger.contractId, contractIds)),
           ]);
-          if (docs.length || bookings.length || taskRows.length || financial.length || billings.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança ou lançamento financeiro vinculado." });
+          if (docs.length || bookings.length || taskRows.length || financial.length || billings.length || entitlements.length || waitlistRows.length || renegotiations.length || portfolioAssignments.length || transfers.length || commissions.length || revenueLedger.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança, lançamento, direito, fila, renegociação, carteira, repasse, comissão ou ledger vinculado." });
           await tx.delete(installments).where(inArray(installments.contractId, contractIds));
           await tx.delete(contracts).where(inArray(contracts.id, contractIds));
         }
