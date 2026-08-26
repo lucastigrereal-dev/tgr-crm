@@ -326,7 +326,8 @@ export const financeRouter = router({
   }),
 
   dreByCampaign: financeProcedure.input(z.object({ from: z.string().date().optional(), to: z.string().date().optional() }).optional()).query(async ({ input }) => {
-    const db = await getDb(); if (!db) return [];
+    const db = await getDb(); if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 1000;
     const transactions = await db.select({
       campaignId: sql<number | null>`coalesce(${financialTransactions.campaignId}, ${opportunities.campaignId})`,
       campaignName: salesCampaigns.name,
@@ -339,8 +340,9 @@ export const financeRouter = router({
       .leftJoin(salesCampaigns, sql`${salesCampaigns.id} = coalesce(${financialTransactions.campaignId}, ${opportunities.campaignId})`)
       .where(and(eq(financialTransactions.status, "paid"), isNotNull(financialTransactions.paidAt), input?.from ? gte(financialTransactions.paidAt, dateValue(input.from)) : undefined, input?.to ? lte(financialTransactions.paidAt, new Date(`${input.to}T23:59:59Z`)) : undefined))
       .groupBy(sql`coalesce(${financialTransactions.campaignId}, ${opportunities.campaignId})`, salesCampaigns.name, financialTransactions.type)
-      .limit(1000);
-    return buildCampaignDre(transactions.map(row => ({ campaignId: row.campaignId, campaignName: row.campaignName, type: row.type, amount: row.amount })));
+      .limit(limit + 1);
+    const truncated = transactions.length > limit;
+    return { rows: buildCampaignDre(transactions.slice(0, limit).map(row => ({ campaignId: row.campaignId, campaignName: row.campaignName, type: row.type, amount: row.amount }))), truncated, truncatedSources: truncated ? ["grupos do DRE"] : [] };
   }),
 
   createEntry: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), campaignId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))
