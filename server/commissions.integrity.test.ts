@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { salesCommissions } from "../drizzle/schema";
 
-const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { commissionsRouter } from "./routers/commissions";
@@ -49,6 +49,7 @@ describe("integridade do status de comissão", () => {
 
     await expect(caller().setStatus({ id: 901, status: "approved" })).resolves.toEqual({ success: true });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "approved", "Comissão marcada como approved.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: null } });
   });
 });
 

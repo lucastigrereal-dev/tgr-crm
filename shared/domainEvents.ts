@@ -25,6 +25,8 @@ export const domainEventCatalog = {
   "sales.playbook.created": { aggregateType: "sales_playbook", description: "Playbook comercial publicado." },
   "installment.renegotiation.proposed": { aggregateType: "installment_renegotiation", description: "Renegociação proposta." },
   "installment.paid": { aggregateType: "installment", description: "Parcela baixada." },
+  "commission.created": { aggregateType: "sales_commission", description: "Comissão financeira criada." },
+  "commission.status.updated": { aggregateType: "sales_commission", description: "Status de comissão atualizado." },
   "commission.automatic.blocked": { aggregateType: "installment", description: "Comissão automática bloqueada por política incompleta." },
   "revenue_quality_ledger.synced": { aggregateType: "contract", description: "Fatos de qualidade de receita projetados de forma idempotente." },
   "financial.portfolio.assigned": { aggregateType: "financial_portfolio_assignment", description: "Responsável da carteira financeira atribuído." },

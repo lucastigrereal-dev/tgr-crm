@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { contracts, opportunities, salesCampaigns, salesCommissions, users } from "../drizzle/schema";
 
-const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { commissionsRouter } from "./routers/commissions";
@@ -59,6 +59,7 @@ describe("integridade do lançamento manual de comissão", () => {
     await expect(caller().record(baseInput)).resolves.toEqual({ id: 901, amount: 100 });
     expect(fixture.inserted[0]).toMatchObject({ sellerId: 55, baseAmount: "1000.00", rate: "10.00", amount: "100.00" });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "created", "Comissão de 100.00 lançada.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { sellerId: 55, campaignId: null, opportunityId: null, contractId: null, amount: 100, rate: 10 } });
   });
 });
 
