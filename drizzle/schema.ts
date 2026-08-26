@@ -619,8 +619,9 @@ export const auditLogs = mysqlTable("audit_logs", {
   entityId: varchar("entityId", { length: 80 }).notNull(),
   action: varchar("action", { length: 80 }).notNull(),
   summary: text("summary"),
+  idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("audit_logs_idempotency_unique").on(table.idempotencyKey)]);
 
 export const domainEvents = mysqlTable("domain_events", {
   id: int("id").autoincrement().primaryKey(),
@@ -629,8 +630,9 @@ export const domainEvents = mysqlTable("domain_events", {
   aggregateId: varchar("aggregateId", { length: 80 }).notNull(),
   actorUserId: int("actorUserId").references(() => users.id),
   payload: text("payload"),
+  idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   occurredAt: timestamp("occurredAt").defaultNow().notNull(),
-}, table => [index("domain_events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.occurredAt), index("domain_events_name_idx").on(table.eventName, table.occurredAt)]);
+}, table => [index("domain_events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.occurredAt), index("domain_events_name_idx").on(table.eventName, table.occurredAt), uniqueIndex("domain_events_idempotency_unique").on(table.idempotencyKey)]);
 
 export const revenueQualityLedger = mysqlTable("revenue_quality_ledger", {
   id: int("id").autoincrement().primaryKey(),

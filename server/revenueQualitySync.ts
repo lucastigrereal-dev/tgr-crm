@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
 import { captureRecords, commercialPolicyVersions, contractCancellationRequests, contracts, installments, opportunities, proposals, revenueQualityLedger, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
@@ -5,6 +6,12 @@ import { summarizeRevenueQualityLedger } from "./revenueQualityLedger";
 import { buildPersistableRevenueProjection } from "./revenueQualityProjection";
 
 const POLICY_VERSION = "tgr-derived-ledger/v1";
+
+export function revenueQualitySyncIdempotencyKey(input: { contractId: number; policyVersion: string; sourceFingerprints: string[] }) {
+  const stateFingerprint = [...input.sourceFingerprints].sort().join("|");
+  const digest = createHash("sha256").update(`${input.contractId}|${input.policyVersion}|${stateFingerprint}`).digest("hex");
+  return `revenue_quality_sync:${input.contractId}:${digest}`;
+}
 
 /**
  * Recalcula a projeção derivada de um contrato depois que a fonte transacional
@@ -32,6 +39,11 @@ export async function syncRevenueQualityForContract(input: { contractId: number;
     cancellation: cancellation ? { status: cancellation.status } : null,
     policyVersion,
   });
+  const idempotencyKey = revenueQualitySyncIdempotencyKey({
+    contractId: contract.id,
+    policyVersion,
+    sourceFingerprints: projection.map(fact => fact.sourceFingerprint),
+  });
   if (projection.length) {
     await db.insert(revenueQualityLedger).values(projection.map(fact => ({
       contractId: fact.contractId,
@@ -46,13 +58,14 @@ export async function syncRevenueQualityForContract(input: { contractId: number;
       occurredAt: new Date(),
     }))).onDuplicateKeyUpdate({ set: { sourceFingerprint: sql`sourceFingerprint` } });
   }
-  await recordAudit(input.actorUserId, "revenue_quality_ledger", contract.id, "synced", `${projection.length} fato(s) econômicos projetados por ${input.trigger}.`);
+  await recordAudit(input.actorUserId, "revenue_quality_ledger", contract.id, "synced", `${projection.length} fato(s) econômicos projetados por ${input.trigger}.`, { idempotencyKey });
   await recordDomainEvent({
     eventName: "revenue_quality_ledger.synced",
     aggregateType: "contract",
     aggregateId: contract.id,
     actorUserId: input.actorUserId,
     payload: { factCount: projection.length, policyVersion },
+    idempotencyKey,
   });
   return { contractId: contract.id, factCount: projection.length, policyVersion, policyVersionId: appliedPolicy?.id ?? null, summary: summarizeRevenueQualityLedger(projection) };
 }

@@ -232,6 +232,13 @@
       "when": 1787705038200,
       "tag": "0032_sturdy_king_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1787707100832,
+      "tag": "0033_mysterious_patriot",
+      "breakpoints": true
     }
   ]
 }

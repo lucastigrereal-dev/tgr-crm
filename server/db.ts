@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, auditLogs, domainEvents, users } from "../drizzle/schema";
 import type { DomainEventName } from "../shared/domainEvents";
@@ -48,10 +48,16 @@ export async function getUserByOpenId(openId: string) {
   return (await db.select().from(users).where(eq(users.openId, openId)).limit(1))[0];
 }
 
-export async function recordAudit(actorUserId: number | null, entityType: string, entityId: number | string, action: string, summary?: string) {
+export async function recordAudit(actorUserId: number | null, entityType: string, entityId: number | string, action: string, summary?: string, options?: { idempotencyKey?: string }) {
   const db = await getDb();
   if (!db) return;
-  await db.insert(auditLogs).values({ actorUserId, entityType, entityId: String(entityId), action, summary: summary ?? null });
+  const values = { actorUserId, entityType, entityId: String(entityId), action, summary: summary ?? null, idempotencyKey: options?.idempotencyKey ?? null };
+  const insert = db.insert(auditLogs).values(values);
+  if (options?.idempotencyKey) {
+    await insert.onDuplicateKeyUpdate({ set: { idempotencyKey: sql`idempotencyKey` } });
+    return;
+  }
+  await insert;
 }
 
 export async function recordDomainEvent(input: {
@@ -60,16 +66,24 @@ export async function recordDomainEvent(input: {
   aggregateId: number | string;
   actorUserId?: number | null;
   payload?: Record<string, unknown>;
+  idempotencyKey?: string;
 }) {
   const db = await getDb();
   if (!db) return;
-  await db.insert(domainEvents).values({
+  const values = {
     eventName: input.eventName,
     aggregateType: input.aggregateType,
     aggregateId: String(input.aggregateId),
     actorUserId: input.actorUserId ?? null,
     payload: input.payload ? JSON.stringify(input.payload) : null,
-  });
+    idempotencyKey: input.idempotencyKey ?? null,
+  };
+  const insert = db.insert(domainEvents).values(values);
+  if (input.idempotencyKey) {
+    await insert.onDuplicateKeyUpdate({ set: { idempotencyKey: sql`idempotencyKey` } });
+    return;
+  }
+  await insert;
 }
 
 export async function recentAudit(limit = 20) {
