@@ -19,8 +19,11 @@ export const commissionsRouter = router({
   scorecards: commissionsProcedure.input(z.object({ minimumMaturedSales: z.number().int().min(1).max(100).default(10) }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { rolesCovered: [], scorecards: [] };
+    const contractRowsPromise = ctx.user.role === "seller"
+      ? db.select({ contract: contracts }).from(contracts).innerJoin(proposals, eq(contracts.proposalId, proposals.id)).innerJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).where(eq(opportunities.sellerId, ctx.user.id)).limit(5000).then(rows => rows.map(row => row.contract))
+      : db.select().from(contracts).limit(5000);
     const [contractRows, proposalRows, opportunityRows, captureRows, installmentRows, cancellationRows, userRows] = await Promise.all([
-      db.select().from(contracts).limit(5000), db.select().from(proposals).limit(5000), db.select().from(opportunities).limit(5000), db.select().from(captureRecords).limit(10_000), db.select().from(installments).limit(20_000), db.select().from(contractCancellationRequests).limit(2000), db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
+      contractRowsPromise, db.select().from(proposals).limit(5000), db.select().from(opportunities).limit(5000), db.select().from(captureRecords).limit(10_000), db.select().from(installments).limit(20_000), db.select().from(contractCancellationRequests).limit(2000), db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
     ]);
     const proposalById = new Map(proposalRows.map(row => [row.id, row]));
     const opportunityById = new Map(opportunityRows.map(row => [row.id, row]));
