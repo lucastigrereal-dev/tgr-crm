@@ -495,6 +495,7 @@ export const financialPortfolioAssignments = mysqlTable("financial_portfolio_ass
 
 export const financialTransfers = mysqlTable("financial_transfers", {
   id: int("id").autoincrement().primaryKey(),
+  idempotencyKey: varchar("idempotencyKey", { length: 128 }),
   contractId: int("contractId").references(() => contracts.id),
   beneficiaryName: varchar("beneficiaryName", { length: 255 }).notNull(),
   description: text("description"),
@@ -503,7 +504,7 @@ export const financialTransfers = mysqlTable("financial_transfers", {
   status: mysqlEnum("status", ["pending", "paid", "cancelled"]).default("pending").notNull(),
   paidAt: timestamp("paidAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("financial_transfers_idempotency_unique").on(table.idempotencyKey)]);
 
 export const reservations = mysqlTable(
   "reservations",

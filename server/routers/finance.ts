@@ -386,7 +386,7 @@ export const financeRouter = router({
     return db.select({ transfer: financialTransfers, contractNumber: contracts.number }).from(financialTransfers).leftJoin(contracts, eq(financialTransfers.contractId, contracts.id)).orderBy(desc(financialTransfers.dueDate)).limit(300);
   }),
 
-  createTransfer: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), beneficiaryName: z.string().trim().min(2).max(255), description: z.string().trim().max(2000).optional().nullable(), amount: z.coerce.number().positive(), dueDate: z.string().date() }))
+  createTransfer: financeProcedure.input(z.object({ idempotencyKey: z.string().trim().min(16).max(128).optional(), contractId: z.number().int().positive().optional().nullable(), beneficiaryName: z.string().trim().min(2).max(255), description: z.string().trim().max(2000).optional().nullable(), amount: z.coerce.number().positive(), dueDate: z.string().date() }))
     .mutation(async ({ ctx, input }) => {
       assertCapability(ctx.user.role, "finance.transfer.create");
       const db = await getDb();
@@ -395,12 +395,31 @@ export const financeRouter = router({
         const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
         if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do repasse não encontrado." });
       }
-      const created = await db.insert(financialTransfers).values({ ...input, contractId: input.contractId ?? null, description: input.description || null, amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate) }).$returningId();
+      const expectedAmount = input.amount.toFixed(2);
+      const expectedDueDate = dateValue(input.dueDate);
+      const matchesExisting = (existing: { contractId: number | null; beneficiaryName: string; description: string | null; amount: string; dueDate: Date }) => existing.contractId === (input.contractId ?? null) && existing.beneficiaryName === input.beneficiaryName && existing.description === (input.description || null) && existing.amount === expectedAmount && existing.dueDate.getTime() === expectedDueDate.getTime();
+      if (input.idempotencyKey) {
+        const existing = (await db.select({ id: financialTransfers.id, contractId: financialTransfers.contractId, beneficiaryName: financialTransfers.beneficiaryName, description: financialTransfers.description, amount: financialTransfers.amount, dueDate: financialTransfers.dueDate }).from(financialTransfers).where(eq(financialTransfers.idempotencyKey, input.idempotencyKey)).limit(1))[0];
+        if (existing) {
+          if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outro repasse." });
+          return { id: existing.id, reused: true };
+        }
+      }
+      let created;
+      try {
+        created = await db.insert(financialTransfers).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: input.contractId ?? null, beneficiaryName: input.beneficiaryName, description: input.description || null, amount: expectedAmount, dueDate: expectedDueDate }).$returningId();
+      } catch (error) {
+        if (!input.idempotencyKey || !(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY")) throw error;
+        const existing = (await db.select({ id: financialTransfers.id, contractId: financialTransfers.contractId, beneficiaryName: financialTransfers.beneficiaryName, description: financialTransfers.description, amount: financialTransfers.amount, dueDate: financialTransfers.dueDate }).from(financialTransfers).where(eq(financialTransfers.idempotencyKey, input.idempotencyKey)).limit(1))[0];
+        if (!existing) throw new TRPCError({ code: "CONFLICT", message: "O repasse foi criado por outra operação. Recarregue a tela." });
+        if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outro repasse." });
+        return { id: existing.id, reused: true };
+      }
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o repasse." });
       await recordAudit(ctx.user.id, "financial_transfer", id, "created", `Repasse para ${input.beneficiaryName} registrado.`);
       await recordDomainEvent({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: id, actorUserId: ctx.user.id, payload: { beneficiaryName: input.beneficiaryName, amount: input.amount, contractId: input.contractId ?? null } });
-      return { id };
+      return { id, reused: false };
     }),
 
   markTransferPaid: financeProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
