@@ -406,10 +406,11 @@ export const financeRouter = router({
     if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento não encontrado." });
     if (entry.status !== "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Apenas lançamentos pagos podem ser conciliados." });
     if (entry.reconciledAt) return { success: true, alreadyReconciled: true };
-    const updateResult = await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt: new Date(), reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
+    const reconciledAt = new Date();
+    const updateResult = await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt, reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
     if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadyReconciled: true };
     await recordAudit(ctx.user.id, "financial_transaction", input.id, "reconciled", `Lançamento conciliado pela referência ${input.reconciliationReference}.`);
-    await recordDomainEvent({ eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reconciliationReference: input.reconciliationReference } });
+    await recordDomainEvent({ eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt } });
     return { success: true };
   }),
 
@@ -454,7 +455,7 @@ export const financeRouter = router({
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o repasse." });
       await recordAudit(ctx.user.id, "financial_transfer", id, "created", `Repasse para ${input.beneficiaryName} registrado.`);
-      await recordDomainEvent({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: id, actorUserId: ctx.user.id, payload: { beneficiaryName: input.beneficiaryName, amount: input.amount, contractId: input.contractId ?? null } });
+      await recordDomainEvent({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: id, actorUserId: ctx.user.id, payload: { recipient: input.beneficiaryName, amount: input.amount, contractId: input.contractId ?? null } });
       return { id, reused: false };
     }),
 

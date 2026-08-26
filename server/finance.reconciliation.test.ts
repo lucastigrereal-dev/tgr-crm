@@ -26,7 +26,7 @@ describe("conciliação financeira", () => {
     await expect(caller.reconcileEntry({ id: 81, reconciliationReference: "OFX-2026-00081" })).resolves.toEqual({ success: true });
     expect(fixture.updates[0]).toMatchObject({ reconciliationReference: "OFX-2026-00081", reconciledAt: expect.any(Date), reconciledByUserId: 5 });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(5, "financial_transaction", 81, "reconciled", expect.stringContaining("OFX-2026-00081"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.reconciled", aggregateId: 81, actorUserId: 5 }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.reconciled", aggregateId: 81, actorUserId: 5, payload: { reference: "OFX-2026-00081", reconciledAt: expect.any(Date) } }));
   });
 
   it("recusa conciliar lançamento que ainda não foi pago", async () => {

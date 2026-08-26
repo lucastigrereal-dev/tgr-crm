@@ -89,7 +89,7 @@ describe("idempotência concorrente de repasse", () => {
 
     expect(inserted).toHaveLength(1);
     expect(dbMocks.recordAudit).toHaveBeenCalledTimes(1);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: 51, payload: { recipient: "Parceiro", amount: 125.5, contractId: null } }));
   });
 
   it("recusa reutilizar a mesma chave para outro valor", async () => {

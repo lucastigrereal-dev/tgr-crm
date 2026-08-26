@@ -76,7 +76,7 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposedAmount: 900 } }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: 71, payload: expect.objectContaining({ contractId: 61, sequence: 2 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", actorUserId: 71, payload: expect.objectContaining({ category: "Taxa", amount: 125 }) }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ beneficiaryName: "Parceiro Operacional", amount: 250 }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ recipient: "Parceiro Operacional", amount: 250 }) }));
   });
 
   it("emite e audita direito de uso e bloqueio operacional de unidade", async () => {
