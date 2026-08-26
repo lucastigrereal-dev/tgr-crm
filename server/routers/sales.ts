@@ -119,7 +119,7 @@ export const salesRouter = router({
     const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente da oportunidade não encontrado." });
     const sellerId = input.sellerId ?? ctx.user.id;
-    const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, sellerId)).limit(1))[0];
+    const seller = (await db.select({ id: users.id }).from(users).where(and(eq(users.id, sellerId), inArray(users.role, ["admin", "seller"]))).limit(1))[0];
     if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor da oportunidade não encontrado." });
     if (input.campaignId) {
       const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1))[0];
@@ -165,7 +165,7 @@ export const salesRouter = router({
     const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.data.customerId)).limit(1))[0];
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente da oportunidade não encontrado." });
     if (input.data.sellerId !== null && input.data.sellerId !== undefined) {
-      const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, input.data.sellerId)).limit(1))[0];
+      const seller = (await db.select({ id: users.id }).from(users).where(and(eq(users.id, input.data.sellerId), inArray(users.role, ["admin", "seller"]))).limit(1))[0];
       if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor da oportunidade não encontrado." });
     }
     if (input.data.campaignId !== null && input.data.campaignId !== undefined) {
