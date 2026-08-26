@@ -133,7 +133,7 @@ export const dashboardRouter = router({
     const [opportunityRows, captureRows, goalRows, sellerRows, campaignRows, resortRows] = await Promise.all([
       db.select().from(opportunities).where(opportunityPeriodWhere).limit(MAX_ANALYTICS_ROWS),
       db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
-      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).limit(1000),
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).where(and(input?.sellerId ? eq(salesGoals.sellerId, input.sellerId) : undefined, gte(salesGoals.monthReference, start), lt(salesGoals.monthReference, end))).limit(1000),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")).limit(1000),
       db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")).limit(1000),
       db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")).limit(1000),
