@@ -581,12 +581,13 @@ export const reservationWaitlist = mysqlTable("reservation_waitlist", {
   priorityScore: int("priorityScore").default(0).notNull(),
   preferenceNotes: text("preferenceNotes"),
   status: mysqlEnum("status", ["waiting", "offered", "confirmed", "expired", "cancelled"]).default("waiting").notNull(),
+  activeKey: varchar("activeKey", { length: 255 }),
   offeredAt: timestamp("offeredAt"),
   expiresAt: timestamp("expiresAt"),
   createdByUserId: int("createdByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, table => [index("waitlist_resort_window_idx").on(table.resortId, table.desiredCheckIn, table.desiredCheckOut, table.status), index("waitlist_customer_idx").on(table.customerId, table.status)]);
+}, table => [index("waitlist_resort_window_idx").on(table.resortId, table.desiredCheckIn, table.desiredCheckOut, table.status), index("waitlist_customer_idx").on(table.customerId, table.status), uniqueIndex("waitlist_active_key_unique").on(table.activeKey)]);
 
 export const tasks = mysqlTable(
   "tasks",

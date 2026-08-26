@@ -9,6 +9,16 @@ import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod,
 import { canTransitionReservationStatus, canTransitionWaitlistStatus } from "../../shared/reservationLifecycle";
 import { canTransitionTaskStatus } from "../../shared/taskLifecycle";
 
+function isDuplicateKeyError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; errno?: unknown };
+  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
+}
+
+function waitlistActiveKey(input: { customerId: number; contractId?: number | null; resortId?: number | null; desiredCheckIn: string; desiredCheckOut: string }) {
+  return `customer:${input.customerId}|contract:${input.contractId ?? 0}|resort:${input.resortId ?? 0}|from:${input.desiredCheckIn}|to:${input.desiredCheckOut}`;
+}
+
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const dateTimeValue = (value: string | null | undefined) => value ? new Date(value) : null;
 
@@ -127,17 +137,27 @@ export const operationsRouter = router({
       entitlementScore = highestPriority === null ? 0 : entitlementPriorityScore(highestPriority);
     }
     const effectivePriorityScore = Math.max(input.priorityScore, entitlementScore);
-    const created = await db.insert(reservationWaitlist).values({ customerId: input.customerId, contractId: input.contractId ?? null, resortId: input.resortId ?? null, desiredCheckIn: checkIn, desiredCheckOut: checkOut, partySize: input.partySize, priorityScore: effectivePriorityScore, preferenceNotes: input.preferenceNotes || null, createdByUserId: ctx.user.id }).$returningId(); const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível entrar na fila." });
+    const activeKey = waitlistActiveKey(input);
+    const existingActive = await db.select({ id: reservationWaitlist.id }).from(reservationWaitlist).where(eq(reservationWaitlist.activeKey, activeKey)).limit(1);
+    if (existingActive[0]) throw new TRPCError({ code: "CONFLICT", message: "Este pedido já está ativo na fila de espera." });
+    let created;
+    try {
+      created = await db.insert(reservationWaitlist).values({ customerId: input.customerId, contractId: input.contractId ?? null, resortId: input.resortId ?? null, desiredCheckIn: checkIn, desiredCheckOut: checkOut, partySize: input.partySize, priorityScore: effectivePriorityScore, preferenceNotes: input.preferenceNotes || null, activeKey, createdByUserId: ctx.user.id }).$returningId();
+    } catch (error) {
+      if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Este pedido já foi inserido na fila por outra operação." });
+      throw error;
+    }
+    const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível entrar na fila." });
     await recordAudit(ctx.user.id, "reservation_waitlist", id, "created", `Fila de espera criada com prioridade efetiva ${effectivePriorityScore}.`); return { id, priorityScore: effectivePriorityScore, entitlementScore };
   }),
 
   updateWaitlistStatus: serviceProcedure.input(z.object({ id: z.number().int().positive(), status: z.enum(["waiting", "offered", "confirmed", "expired", "cancelled"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const current = (await db.select({ status: reservationWaitlist.status }).from(reservationWaitlist).where(eq(reservationWaitlist.id, input.id)).limit(1))[0];
+    const current = (await db.select({ status: reservationWaitlist.status, activeKey: reservationWaitlist.activeKey }).from(reservationWaitlist).where(eq(reservationWaitlist.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Item da fila não encontrado." });
     if (!canTransitionWaitlistStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de fila inválida: ${current.status} → ${input.status}.` });
     const now = new Date();
-    const updateResult = await db.update(reservationWaitlist).set({ status: input.status, offeredAt: input.status === "offered" ? now : undefined, expiresAt: input.status === "offered" ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : undefined }).where(and(eq(reservationWaitlist.id, input.id), eq(reservationWaitlist.status, current.status)));
+    const updateResult = await db.update(reservationWaitlist).set({ status: input.status, activeKey: ["waiting", "offered"].includes(input.status) ? current.activeKey : null, offeredAt: input.status === "offered" ? now : undefined, expiresAt: input.status === "offered" ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : undefined }).where(and(eq(reservationWaitlist.id, input.id), eq(reservationWaitlist.status, current.status)));
     if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A posição da fila foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "reservation_waitlist", input.id, "status_updated", `Fila de espera atualizada para ${input.status}.`);
     return { success: true };
