@@ -239,10 +239,14 @@ export const salesRouter = router({
     const db = await getDb();
     if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const sellerId = ctx.user.role === "seller" ? ctx.user.id : undefined;
-    const [goalRows, wonOpportunities] = await Promise.all([
-      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).where(sellerId ? eq(salesGoals.sellerId, sellerId) : undefined).orderBy(desc(salesGoals.monthReference)).limit(1000),
-      db.select().from(opportunities).where(and(eq(opportunities.stage, "won"), sellerId ? eq(opportunities.sellerId, sellerId) : undefined)).limit(5000),
+    const goalLimit = 1_000;
+    const wonOpportunityLimit = 5_000;
+    const [rawGoalRows, rawWonOpportunities] = await Promise.all([
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).where(sellerId ? eq(salesGoals.sellerId, sellerId) : undefined).orderBy(desc(salesGoals.monthReference)).limit(goalLimit + 1),
+      db.select().from(opportunities).where(and(eq(opportunities.stage, "won"), sellerId ? eq(opportunities.sellerId, sellerId) : undefined)).limit(wonOpportunityLimit + 1),
     ]);
+    const goalRows = rawGoalRows.slice(0, goalLimit);
+    const wonOpportunities = rawWonOpportunities.slice(0, wonOpportunityLimit);
     const progressBySellerMonth = new Map<string, { currentAmount: number; currentContracts: number }>();
     for (const opportunity of wonOpportunities) {
       if (opportunity.sellerId === null || !opportunity.closedAt) continue;
@@ -254,8 +258,8 @@ export const salesRouter = router({
       progressBySellerMonth.set(key, progress);
     }
     const truncatedSources = [
-      goalRows.length >= 1_000 ? "metas" : null,
-      wonOpportunities.length >= 5_000 ? "oportunidades ganhas" : null,
+      rawGoalRows.length > goalLimit ? "metas" : null,
+      rawWonOpportunities.length > wonOpportunityLimit ? "oportunidades ganhas" : null,
     ].filter((source): source is string => Boolean(source));
     const rows = goalRows.map(row => {
       const reference = new Date(row.goal.monthReference);

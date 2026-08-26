@@ -60,5 +60,51 @@ describe("progresso de metas comerciais", () => {
       truncatedSources: [],
     });
   });
+
+  it("usa uma linha extra para detectar truncamento de metas e progresso", async () => {
+    const goalRows = Array.from({ length: 1001 }, (_, id) => ({
+      goal: {
+        id,
+        sellerId: 21,
+        monthReference: new Date("2026-08-01T12:00:00Z"),
+        targetAmount: "10000.00",
+        targetContracts: 3,
+      },
+      sellerName: "Ana",
+    }));
+    const wonOpportunities = Array.from({ length: 5001 }, (_, id) => ({
+      id,
+      sellerId: 21,
+      expectedAmount: "1.00",
+      closedAt: new Date("2026-08-05T10:00:00Z"),
+    }));
+    const limitCalls: number[] = [];
+    let selectCall = 0;
+    const select = vi.fn(() => {
+      const chain = {
+        from: vi.fn(),
+        innerJoin: vi.fn(),
+        orderBy: vi.fn(),
+        where: vi.fn(),
+        limit: vi.fn((value: number) => {
+          limitCalls.push(value);
+          return Promise.resolve(selectCall++ === 0 ? goalRows : wonOpportunities);
+        }),
+      };
+      chain.from.mockReturnValue(chain);
+      chain.innerJoin.mockReturnValue(chain);
+      chain.orderBy.mockReturnValue(chain);
+      chain.where.mockReturnValue(chain);
+      return chain;
+    });
+    dbMocks.getDb.mockResolvedValue({ select });
+    const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
+
+    const result = await caller.goals();
+    expect(result.rows).toHaveLength(1000);
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedSources).toEqual(["metas", "oportunidades ganhas"]);
+    expect(limitCalls).toEqual([1001, 5001]);
+  });
 });
 
