@@ -6,7 +6,7 @@ vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean; waitlistDuplicate?: boolean } = {}, updateAffectedRows?: number) {
+function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean; waitlistDuplicate?: boolean; waitlistInsertDuplicate?: boolean } = {}, updateAffectedRows?: number) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
   let unitSelectCall = 0;
@@ -23,7 +23,7 @@ function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; 
       throw new Error("Tabela não prevista neste teste");
     },
   }));
-  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 501 }] }; }) }));
+  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => { if (options.waitlistInsertDuplicate) throw { code: "ER_DUP_ENTRY", errno: 1062 }; return [{ id: 501 }]; } }; }) }));
   const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); return updateAffectedRows === undefined ? undefined : { affectedRows: updateAffectedRows }; }) })) }));
   const transaction = vi.fn(async (callback: (tx: { select: typeof select; insert: typeof insert; update: typeof update }) => Promise<unknown>) => callback({ select, insert, update }));
   const db = { select, insert, update, transaction };
@@ -50,6 +50,15 @@ describe("prioridade de direitos e bloqueio operacional", () => {
 
     await expect(caller.joinWaitlist({ customerId: 3, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14" })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("normaliza corrida da unique key da fila como conflito", async () => {
+    const fixture = makeDb({ waitlistInsertDuplicate: true });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.joinWaitlist({ customerId: 3, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14" })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
