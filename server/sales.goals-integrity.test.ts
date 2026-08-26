@@ -46,6 +46,22 @@ describe("integridade de metas comerciais", () => {
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
+  it("rejeita meta para usuário fora da equipe de vendas antes do insert", async () => {
+    const db = makeDb(false);
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
+
+    await expect(caller.createGoal({
+      sellerId: 21,
+      monthReference: "2026-08-01",
+      targetAmount: 10000,
+      targetContracts: 2,
+    })).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("rejeita meta duplicada para o mesmo vendedor e mês antes do insert", async () => {
     const db = makeDb(true, true);
     dbMocks.getDb.mockResolvedValue(db);
