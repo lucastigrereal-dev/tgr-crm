@@ -8,7 +8,7 @@ vi.mock("./storage", () => storageMocks);
 
 import { customersRouter } from "./routers/customers";
 
-function makeDb(options: { existingId?: number | null; duplicateDocumentId?: number } = {}) {
+function makeDb(options: { existingId?: number | null; duplicateDocumentId?: number; insertDuplicate?: boolean } = {}) {
   let customerSelectCall = 0;
   return {
     select: vi.fn(() => ({
@@ -22,7 +22,7 @@ function makeDb(options: { existingId?: number | null; duplicateDocumentId?: num
         } }) };
       },
     })),
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 121 }] })) })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => { if (options.insertDuplicate) throw { code: "ER_DUP_ENTRY", errno: 1062 }; return [{ id: 121 }]; } })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
 }
@@ -63,6 +63,11 @@ describe("eventos e auditoria de associados", () => {
     dbMocks.getDb.mockResolvedValue(updateDuplicate);
     await expect(caller().update({ id: 121, data: { fullName: "Ana da Silva", documentNumber: "CPF-999", status: "active" } })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(updateDuplicate.update).not.toHaveBeenCalled();
+
+    const raced = makeDb({ insertDuplicate: true });
+    dbMocks.getDb.mockResolvedValue(raced);
+    await expect(caller().create({ fullName: "Cliente Concorrente", documentNumber: "CPF-RACE", status: "prospect" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("bloqueia interação e upload quando o cliente não existe", async () => {

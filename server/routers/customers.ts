@@ -42,6 +42,12 @@ function nullableText(value?: string | null) {
   return value?.trim() ? value.trim() : null;
 }
 
+function isDuplicateKeyError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; errno?: unknown };
+  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
+}
+
 function decodeUpload(base64: string) {
   const payload = base64.includes(",") ? base64.split(",").at(-1)! : base64;
   const buffer = Buffer.from(payload, "base64");
@@ -75,24 +81,30 @@ export const customersRouter = router({
       const duplicate = (await db.select({ id: customers.id }).from(customers).where(eq(customers.documentNumber, documentNumber)).limit(1))[0];
       if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe um cliente com este documento." });
     }
-    const inserted = await db.insert(customers).values({
-      ...input,
-      documentNumber,
-      email: nullableText(input.email),
-      phone: nullableText(input.phone),
-      birthDate: input.birthDate ? new Date(`${input.birthDate}T12:00:00Z`) : null,
-      maritalStatus: nullableText(input.maritalStatus),
-      occupation: nullableText(input.occupation),
-      zipCode: nullableText(input.zipCode),
-      address: nullableText(input.address),
-      addressNumber: nullableText(input.addressNumber),
-      complement: nullableText(input.complement),
-      neighborhood: nullableText(input.neighborhood),
-      city: nullableText(input.city),
-      state: nullableText(input.state),
-      acquisitionSource: nullableText(input.acquisitionSource),
-      notes: nullableText(input.notes),
-    }).$returningId();
+    let inserted;
+    try {
+      inserted = await db.insert(customers).values({
+        ...input,
+        documentNumber,
+        email: nullableText(input.email),
+        phone: nullableText(input.phone),
+        birthDate: input.birthDate ? new Date(`${input.birthDate}T12:00:00Z`) : null,
+        maritalStatus: nullableText(input.maritalStatus),
+        occupation: nullableText(input.occupation),
+        zipCode: nullableText(input.zipCode),
+        address: nullableText(input.address),
+        addressNumber: nullableText(input.addressNumber),
+        complement: nullableText(input.complement),
+        neighborhood: nullableText(input.neighborhood),
+        city: nullableText(input.city),
+        state: nullableText(input.state),
+        acquisitionSource: nullableText(input.acquisitionSource),
+        notes: nullableText(input.notes),
+      }).$returningId();
+    } catch (error) {
+      if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Já existe um cliente com este documento." });
+      throw error;
+    }
     const id = inserted[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o cliente." });
     await recordAudit(ctx.user.id, "customer", id, "created", `Cliente ${input.fullName} criado.`);
