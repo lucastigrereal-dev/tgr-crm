@@ -69,7 +69,7 @@ export default function DashboardLayout({
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f2efe8] p-5">
         <div className="relative flex w-full max-w-4xl overflow-hidden rounded-[2rem] bg-[#1d2b2a] shadow-2xl">
-          <div className="hidden w-1/2 bg-cover bg-center lg:block" style={{ backgroundImage: "linear-gradient(120deg, rgba(25,40,38,.42), rgba(25,40,38,.75)), url('/manus-storage/tse-lobby-unsplash_1650f5f7.jpg')" }} />
+          <div className="hidden w-1/2 bg-cover bg-center lg:block" style={{ backgroundImage: "linear-gradient(120deg, rgba(25,40,38,.42), rgba(25,40,38,.75))" }} />
           <div className="flex min-h-[520px] w-full flex-col items-center justify-center gap-8 p-10 lg:w-1/2">
           <div className="flex flex-col items-center gap-6">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#c7a35a] font-serif text-2xl text-[#1d2b2a]">T</div>
