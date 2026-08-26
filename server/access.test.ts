@@ -47,7 +47,7 @@ describe("perfis internos", () => {
     const service = appRouter.createCaller(contextFor("service"));
     const seller = appRouter.createCaller(contextFor("seller"));
     const finance = appRouter.createCaller(contextFor("finance"));
-    await expect(service.customers.list()).resolves.toBeInstanceOf(Array);
+    await expect(service.customers.list()).resolves.toMatchObject({ rows: expect.any(Array), truncated: expect.any(Boolean), truncatedSources: expect.any(Array) });
     await expect(service.operations.reservations()).resolves.toMatchObject({ rows: expect.any(Array), truncated: expect.any(Boolean), truncatedSources: expect.any(Array) });
     await expect(seller.sales.pipeline()).resolves.toMatchObject({ rows: expect.any(Array), truncated: expect.any(Boolean), truncatedSources: expect.any(Array) });
     await expect(finance.contracts.list()).resolves.toMatchObject({ rows: expect.any(Array), truncated: expect.any(Boolean), truncatedSources: expect.any(Array) });

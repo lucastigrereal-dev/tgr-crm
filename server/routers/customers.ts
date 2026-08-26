@@ -54,15 +54,18 @@ export const customersRouter = router({
     .input(z.object({ search: z.string().trim().max(120).optional(), status: z.enum(["active", "inactive", "prospect"]).optional(), city: z.string().trim().max(120).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional())
     .query(async ({ input }) => {
       const db = await getDb();
-      if (!db) return [];
+      if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+      const limit = input?.limit ?? 100;
       const term = input?.search ? `%${input.search}%` : null;
       const cityTerm = input?.city ? `%${input.city}%` : null;
-      return db
+      const rawRows = await db
         .select()
         .from(customers)
         .where(and(term ? or(like(customers.fullName, term), like(customers.documentNumber, term), like(customers.email, term)) : undefined, input?.status ? eq(customers.status, input.status) : undefined, cityTerm ? like(customers.city, cityTerm) : undefined))
         .orderBy(desc(customers.updatedAt))
-        .limit(input?.limit ?? 100);
+        .limit(limit + 1);
+      const truncated = rawRows.length > limit;
+      return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["clientes"] : [] };
     }),
 
   create: internalProcedure.input(customerInput).mutation(async ({ ctx, input }) => {
