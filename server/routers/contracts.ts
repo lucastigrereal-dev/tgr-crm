@@ -166,7 +166,7 @@ export const contractsRouter = router({
       const contract = (await tx.select().from(contracts).where(eq(contracts.id, request.contractId)).limit(1).for("update"))[0];
       if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
       if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
-      const schedule = await tx.select({ id: installments.id, amount: installments.amount, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id));
+      const schedule = await tx.select({ id: installments.id, amount: installments.amount, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id)).for("update");
       const commissionRows = await tx.select({ id: salesCommissions.id, status: salesCommissions.status }).from(salesCommissions).where(eq(salesCommissions.contractId, contract.id)).for("update");
       const impact = planCancellationExecution({ requestStatus: request.status, contractStatus: contract.status, installments: schedule, commissions: commissionRows });
       const simulation = JSON.parse(request.simulationSnapshot) as { paidAmount?: number; penalty?: number; retained?: number; refund?: number };
