@@ -145,6 +145,7 @@ describe("eventos e auditoria de contratos", () => {
     expect(db.financialEntries).toEqual(expect.arrayContaining([expect.objectContaining({ type: "income", category: "Distrato · multa/retenção", amount: "120.00" }), expect.objectContaining({ type: "expense", category: "Distrato · reembolso", amount: "80.00" })]));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("parcelas canceladas: 2"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701, payload: expect.objectContaining({ status: "cancelled" }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: 801, actorUserId: 55, payload: { contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 } });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 91, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 93, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 91, payload: { status: "cancelled", contractId: 701 } }));

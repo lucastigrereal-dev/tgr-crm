@@ -7,6 +7,7 @@ export const domainEventCatalog = {
   "contract.status.updated": { aggregateType: "contract", description: "Status contratual alterado." },
   "contract.cancellation.requested": { aggregateType: "contract_cancellation_request", description: "Pedido de distrato registrado." },
   "contract.cancellation.decided": { aggregateType: "contract_cancellation_request", description: "Decisão de distrato registrada." },
+  "contract.cancellation.executed": { aggregateType: "contract_cancellation_request", description: "Execução de distrato e efeitos derivados registrados." },
   "contract.document.uploaded": { aggregateType: "contract_document", description: "Documento contratual anexado." },
   "contract.document.signed": { aggregateType: "contract_document", description: "Assinatura documental confirmada pela administração." },
   "ownership.entitlement.created": { aggregateType: "ownership_entitlement", description: "Direito de uso criado." },
