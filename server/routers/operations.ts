@@ -280,8 +280,11 @@ export const operationsRouter = router({
     }),
 
   reservationGuests: serviceProcedure.input(z.object({ reservationId: z.number().int().positive() })).query(async ({ input }) => {
-    const db = await getDb(); if (!db) return [];
-    return db.select().from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).orderBy(reservationGuests.createdAt).limit(100);
+    const db = await getDb(); if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 100;
+    const rawRows = await db.select().from(reservationGuests).where(eq(reservationGuests.reservationId, input.reservationId)).orderBy(reservationGuests.createdAt).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["acompanhantes"] : [] };
   }),
 
   addReservationGuest: serviceProcedure.input(z.object({ reservationId: z.number().int().positive(), fullName: z.string().trim().min(3).max(255), documentNumber: z.string().trim().max(32).nullable().optional(), relationship: z.string().trim().max(80).nullable().optional(), birthDate: z.string().date().nullable().optional() })).mutation(async ({ ctx, input }) => {
