@@ -62,13 +62,17 @@ export function registerStorageProxy(app: Express) {
         return;
       }
 
-      await recordAudit(
-        context.user!.id,
-        `${authorization.scope}_document`,
-        authorization.resourceId,
-        "read",
-        "Documento acessado por usuário autenticado.",
-      );
+      try {
+        await recordAudit(
+          context.user!.id,
+          `${authorization.scope}_document`,
+          authorization.resourceId,
+          "read",
+          "Documento acessado por usuário autenticado.",
+        );
+      } catch (error) {
+        logger.warn("Storage read audit failed after presign", { error: error instanceof Error ? error.message : "unknown_error" });
+      }
       res.set("Cache-Control", "no-store");
       res.redirect(307, url);
     } catch (err) {
