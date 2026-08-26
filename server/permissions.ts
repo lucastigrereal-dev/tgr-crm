@@ -27,6 +27,7 @@ export const capabilityMatrix = {
   "contract.cancel.decide": ["admin", "finance"],
   "contract.cancel.execute": ["admin", "finance"],
   "document.read": ["admin", "seller", "finance", "service"],
+  "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],
 } as const satisfies Record<string, readonly InternalPermissionRole[]>;
 

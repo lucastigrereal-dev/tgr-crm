@@ -223,13 +223,26 @@ export const contractsRouter = router({
       category: input.category,
       filename: input.filename,
       storageKey: upload.key,
-      signed: input.signed,
+      signed: false,
       uploadedByUserId: ctx.user.id,
     }).$returningId();
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento." });
     await recordAudit(ctx.user.id, "contract_document", id, "uploaded", `Documento ${input.filename} anexado.`);
-    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed: input.signed, filename: input.filename } });
+    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed: false, filename: input.filename } });
     return { id, url: upload.url };
+  }),
+
+  markDocumentSigned: contractsProcedure.input(z.object({ documentId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "document.sign", "Somente a administração pode confirmar assinatura documental.");
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const document = (await db.select({ id: contractDocuments.id, contractId: contractDocuments.contractId, signed: contractDocuments.signed }).from(contractDocuments).where(eq(contractDocuments.id, input.documentId)).limit(1))[0];
+    if (!document) throw new TRPCError({ code: "NOT_FOUND", message: "Documento contratual não encontrado." });
+    if (document.signed) return { success: true, alreadySigned: true } as const;
+    const updateResult = await db.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, input.documentId), eq(contractDocuments.signed, false)));
+    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadySigned: true } as const;
+    await recordAudit(ctx.user.id, "contract_document", input.documentId, "signed", `Assinatura do documento contratual #${input.documentId} confirmada.`);
+    await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: input.documentId, actorUserId: ctx.user.id, payload: { contractId: document.contractId } });
+    return { success: true, alreadySigned: false } as const;
   }),
 });

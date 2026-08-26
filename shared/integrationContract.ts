@@ -4,7 +4,7 @@ export const integrationContractVersion = "tgr.events.v1";
 
 const allowedPayloadFields: Record<DomainEventName, readonly string[]> = {
   "customer.created": ["status", "acquisitionSource"], "customer.updated": ["status", "city", "state"], "customer.interaction.created": ["customerId", "type", "direction"], "customer.document.uploaded": ["customerId", "category", "filename"],
-  "contract.created": ["customerId", "status", "usageModel"], "contract.status.updated": ["status"], "contract.document.uploaded": ["contractId", "category", "filename"],
+  "contract.created": ["customerId", "status", "usageModel"], "contract.status.updated": ["status"], "contract.document.uploaded": ["contractId", "category", "filename"], "contract.document.signed": ["contractId"],
   "ownership.entitlement.created": ["contractId", "unitId", "priorityLevel"], "unit.maintenance.blocked": ["unitId", "startsAt", "endsAt"],
   "opportunity.created": ["customerId", "stage", "campaignId"], "opportunity.updated": ["stage", "campaignId"], "proposal.created": ["opportunityId", "status", "totalAmount", "saleTruthStage"], "proposal.accepted": ["opportunityId", "status", "totalAmount", "saleTruthStage"], "sales.playbook.created": ["stage", "title"],
   "capture.created": ["customerId", "campaignId", "qualificationStatus"], "capture.status.updated": ["presentationStatus", "qualificationStatus"], "capture.checked_in": ["salesRoom"], "capture.room.assigned": ["salesRoom", "salesTable", "linerId", "closerId", "roomManagerId"], "capture.presentation.started": ["salesRoom", "salesTable"], "capture.presentation.ended": ["salesRoom", "salesTable", "durationMinutes"], "capture.no_tour": ["salesRoom", "reason"],

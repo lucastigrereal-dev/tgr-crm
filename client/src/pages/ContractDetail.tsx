@@ -7,10 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
-import { ArrowLeft, FileUp, Paperclip, RefreshCw } from "lucide-react";
+import { ArrowLeft, FileUp, Paperclip, RefreshCw, ShieldCheck } from "lucide-react";
 import { ChangeEvent, FormEvent, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
 
 type ContractStatus = "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed";
 
@@ -25,11 +26,13 @@ export default function ContractDetail() {
   const [cancellationReason, setCancellationReason] = useState("");
   const [portfolioOwnerId, setPortfolioOwnerId] = useState("");
   const [portfolioNotes, setPortfolioNotes] = useState("");
+  const { user } = useAuth();
   const utils = trpc.useUtils();
   const detail = trpc.contracts.detail.useQuery({ id }, { enabled: Boolean(id) });
   const cancellationSimulation = trpc.contracts.simulateCancellation.useQuery({ contractId: id }, { enabled: Boolean(id) });
   const updateStatus = trpc.contracts.updateStatus.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); utils.contracts.list.invalidate(); toast.success("Status do contrato atualizado."); }, onError: error => toast.error(error.message) });
-  const upload = trpc.contracts.uploadDocument.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); setUploadOpen(false); setFile(null); toast.success("Documento contratual anexado."); }, onError: error => toast.error(error.message) });
+  const upload = trpc.contracts.uploadDocument.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); setUploadOpen(false); setFile(null); toast.success("Documento contratual anexado para conferência."); }, onError: error => toast.error(error.message) });
+  const signDocument = trpc.contracts.markDocumentSigned.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); toast.success("Assinatura confirmada com trilha de auditoria."); }, onError: error => toast.error(error.message) });
   const requestCancellation = trpc.contracts.requestCancellation.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); setCancellationOpen(false); setCancellationReason(""); toast.success("Distrato enviado para aprovação humana."); }, onError: error => toast.error(error.message) });
   const decideCancellation = trpc.contracts.decideCancellation.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); toast.success("Decisão de distrato registrada."); }, onError: error => toast.error(error.message) });
   const executeCancellation = trpc.contracts.executeCancellation.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); utils.contracts.list.invalidate(); toast.success("Distrato aprovado executado com trilha auditável."); }, onError: error => toast.error(error.message) });
@@ -41,7 +44,7 @@ export default function ContractDetail() {
     event.preventDefault();
     if (!file) return toast.error("Escolha um arquivo.");
     const base64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(file); });
-    upload.mutate({ contractId: id, category, filename: file.name, contentType: file.type || "application/octet-stream", base64, signed: category === "Contrato assinado" });
+    upload.mutate({ contractId: id, category, filename: file.name, contentType: file.type || "application/octet-stream", base64, signed: false });
   };
 
   if (detail.isLoading) return <p className="text-sm text-muted-foreground">Abrindo pasta contratual...</p>;
@@ -63,7 +66,7 @@ export default function ContractDetail() {
         <RevenueQualityCard contractId={id} />
         <PortfolioOwnerCard assignments={portfolioAssignments.data ?? []} candidates={portfolioCandidates.data ?? []} selectedOwnerId={portfolioOwnerId} notes={portfolioNotes} pending={assignPortfolioOwner.isPending} onOwnerChange={setPortfolioOwnerId} onNotesChange={setPortfolioNotes} onAssign={() => assignPortfolioOwner.mutate({ contractId: id, ownerUserId: Number(portfolioOwnerId), notes: portfolioNotes || null })} />
         <CancellationCard simulation={cancellationSimulation.data} request={latestCancellation} open={cancellationOpen} setOpen={setCancellationOpen} reason={cancellationReason} setReason={setCancellationReason} isCancelled={contract.status === "cancelled"} requestPending={requestCancellation.isPending} decisionPending={decideCancellation.isPending} executionPending={executeCancellation.isPending} onRequest={() => requestCancellation.mutate({ contractId: id, reason: cancellationReason })} onDecision={(decision) => decideCancellation.mutate({ requestId: latestCancellation.id, decision })} onExecute={() => executeCancellation.mutate({ requestId: latestCancellation.id })} />
-        <DocumentsCard documents={documents} />
+        <DocumentsCard documents={documents} canSign={user?.role === "admin"} signPending={signDocument.isPending} onSign={documentId => signDocument.mutate({ documentId })} />
       </div>
       <Card className="overflow-hidden rounded-xl border-[#e9e4da] shadow-none"><CardHeader className="border-b border-[#eee9df]"><div className="flex items-center justify-between"><div><p className="tgr-data-label text-[#94702e]">Cronograma financeiro</p><CardTitle className="mt-1 font-serif text-2xl text-[#1d2b2a]">Parcelas</CardTitle></div><RefreshCw className="h-5 w-5 text-[#b18f4b]" /></div></CardHeader><CardContent className="p-0">{installments.map(item => <div key={item.id} className="grid grid-cols-[56px_1fr_1fr_auto] items-center gap-3 border-t border-[#f0ece4] px-5 py-4 text-sm first:border-t-0 sm:grid-cols-[80px_1fr_1fr_auto] sm:px-6"><span className="font-semibold text-[#1d2b2a]">#{item.sequence}</span><span>{dateLabel(item.dueDate)}</span><strong className="tabular-nums">{money(item.amount)}</strong><StatusPill value={item.status} /></div>)}</CardContent></Card>
     </div>
@@ -79,6 +82,6 @@ function PortfolioOwnerCard({ assignments, candidates, selectedOwnerId, notes, p
   return <Card className="rounded-[1.35rem] border-[#e9e4da]"><CardHeader><CardTitle className="font-serif text-xl text-[#1d2b2a]">Responsável financeiro</CardTitle></CardHeader><CardContent className="space-y-3 text-sm"><div className="rounded-xl bg-[#faf8f3] p-3"><p className="font-medium text-[#1d2b2a]">{current?.ownerName || current?.ownerEmail || "Sem carteira atribuída"}</p><p className="mt-1 text-xs text-muted-foreground">{current ? `Desde ${new Date(current.assignment.startsAt).toLocaleDateString("pt-BR")}${current.assignment.notes ? ` · ${current.assignment.notes}` : ""}` : "Quem cria ou baixa lançamento não vira automaticamente dono da cobrança."}</p></div><div className="grid gap-2"><Label>Transferir / atribuir carteira</Label><Select value={selectedOwnerId || undefined} onValueChange={onOwnerChange}><SelectTrigger><SelectValue placeholder="Escolher responsável" /></SelectTrigger><SelectContent>{candidates.map(candidate => <SelectItem key={candidate.id} value={String(candidate.id)}>{candidate.name || candidate.email || `Usuário #${candidate.id}`}</SelectItem>)}</SelectContent></Select></div><div className="grid gap-2"><Label>Motivo da atribuição</Label><Input value={notes} onChange={event => onNotesChange(event.target.value)} placeholder="Ex.: carteira de inadimplência da sala A" /></div><Button className="w-full bg-[#1d2b2a] hover:bg-[#29413e]" disabled={!selectedOwnerId || pending} onClick={onAssign}>{pending ? "Atribuindo..." : "Salvar responsável financeiro"}</Button></CardContent></Card>;
 }
 
-function DocumentsCard({ documents }: { documents: Array<{ id: number; storageKey: string; filename: string; category: string; signed: boolean }> }) {
-  return <Card className="rounded-[1.35rem] border-[#e9e4da]"><CardHeader><CardTitle className="font-serif text-xl text-[#1d2b2a]">Documentos</CardTitle></CardHeader><CardContent className="space-y-2">{documents.length ? documents.map(document => <a key={document.id} href={`/manus-storage/${document.storageKey}`} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-xl bg-[#faf8f3] p-3 text-sm hover:bg-[#f3efe6]"><div><p className="font-medium text-[#1d2b2a]">{document.filename}</p><p className="mt-1 text-[11px] text-muted-foreground">{document.category} · {document.signed ? "assinado" : "pendente"}</p></div><Paperclip className="h-4 w-4 text-[#b18f4b]" /></a>) : <p className="rounded-xl bg-[#faf8f3] p-4 text-sm text-muted-foreground">Nenhum documento anexado.</p>}</CardContent></Card>;
+function DocumentsCard({ documents, canSign, signPending, onSign }: { documents: Array<{ id: number; storageKey: string; filename: string; category: string; signed: boolean }>; canSign: boolean; signPending: boolean; onSign: (documentId: number) => void }) {
+  return <Card className="rounded-[1.35rem] border-[#e9e4da]"><CardHeader><CardTitle className="font-serif text-xl text-[#1d2b2a]">Documentos</CardTitle></CardHeader><CardContent className="space-y-2">{documents.length ? documents.map(document => <div key={document.id} className="flex items-center gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm"><a href={`/manus-storage/${document.storageKey}`} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center justify-between rounded-lg hover:bg-[#f3efe6]"><div className="min-w-0"><p className="truncate font-medium text-[#1d2b2a]">{document.filename}</p><p className="mt-1 text-[11px] text-muted-foreground">{document.category} · {document.signed ? "assinado e confirmado" : "aguardando confirmação"}</p></div><Paperclip className="ml-2 h-4 w-4 shrink-0 text-[#b18f4b]" /></a>{canSign && !document.signed && <Button type="button" size="sm" variant="outline" className="shrink-0 border-[#b18f4b] text-[#8a6b2d]" disabled={signPending} onClick={() => onSign(document.id)}><ShieldCheck className="mr-1.5 h-3.5 w-3.5" />Confirmar</Button>}</div>) : <p className="rounded-xl bg-[#faf8f3] p-4 text-sm text-muted-foreground">Nenhum documento anexado.</p>}</CardContent></Card>;
 }
