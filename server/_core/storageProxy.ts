@@ -39,14 +39,6 @@ export function registerStorageProxy(app: Express) {
       return;
     }
 
-    await recordAudit(
-      context.user!.id,
-      `${authorization.scope}_document`,
-      authorization.resourceId,
-      "read",
-      "Documento acessado por usuário autenticado.",
-    );
-
     try {
       const forgeUrl = new URL(
         "v1/storage/presign/get",
@@ -59,8 +51,7 @@ export function registerStorageProxy(app: Express) {
       });
 
       if (!forgeResp.ok) {
-        const body = await forgeResp.text().catch(() => "");
-        logger.error("Storage provider returned an error", { status: forgeResp.status, body });
+        logger.error("Storage provider returned an error", { status: forgeResp.status });
         res.status(502).send("Storage backend error");
         return;
       }
@@ -71,6 +62,13 @@ export function registerStorageProxy(app: Express) {
         return;
       }
 
+      await recordAudit(
+        context.user!.id,
+        `${authorization.scope}_document`,
+        authorization.resourceId,
+        "read",
+        "Documento acessado por usuário autenticado.",
+      );
       res.set("Cache-Control", "no-store");
       res.redirect(307, url);
     } catch (err) {
