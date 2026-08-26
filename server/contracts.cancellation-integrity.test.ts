@@ -59,5 +59,6 @@ describe("integridade da decisão de distrato", () => {
     await expect(caller().decideCancellation({ requestId: 901, decision: "approved", notes: "Validado" })).resolves.toEqual({ success: true });
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 901, "approved", "Distrato approved.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "contract.cancellation.decided", aggregateType: "contract_cancellation_request", aggregateId: 901, actorUserId: 55, payload: { decision: "approved" } });
   });
 });

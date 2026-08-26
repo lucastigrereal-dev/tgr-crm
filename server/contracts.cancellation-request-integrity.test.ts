@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { contractCancellationRequests, contracts, installments } from "../drizzle/schema";
 
-const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { contractsRouter } from "./routers/contracts";
@@ -78,6 +78,7 @@ describe("integridade da solicitação de distrato", () => {
     await expect(caller().requestCancellation(input)).resolves.toMatchObject({ id: 901 });
     expect(fixture.inserted[0]).toMatchObject({ contractId: 701, requestedByUserId: 55 });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 901, "requested", expect.stringContaining("701"));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "contract.cancellation.requested", aggregateType: "contract_cancellation_request", aggregateId: 901, actorUserId: 55, payload: { contractId: 701, paidAmount: 1000 } });
   });
 });
 

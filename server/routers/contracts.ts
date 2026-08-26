@@ -141,6 +141,7 @@ export const contractsRouter = router({
       return { id, simulation };
     });
     await recordAudit(ctx.user.id, "contract_cancellation_request", requested.id, "requested", `Distrato solicitado para contrato ${input.contractId}.`);
+    await recordDomainEvent({ eventName: "contract.cancellation.requested", aggregateType: "contract_cancellation_request", aggregateId: requested.id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, paidAmount: requested.simulation.paidAmount } });
     return requested;
   }),
   decideCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approved", "rejected"]), notes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
@@ -149,7 +150,9 @@ export const contractsRouter = router({
     const request = (await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0]; if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." }); if (request.status !== "requested") throw new TRPCError({ code: "CONFLICT", message: "Esta solicitação já recebeu uma decisão." });
     const updateResult = await db.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(and(eq(contractCancellationRequests.id, input.requestId), eq(contractCancellationRequests.status, "requested")));
     if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
-    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`); return { success: true };
+    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`);
+    await recordDomainEvent({ eventName: "contract.cancellation.decided", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { decision: input.decision } });
+    return { success: true };
   }),
 
   executeCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), executionNotes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {

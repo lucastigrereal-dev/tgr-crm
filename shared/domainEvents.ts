@@ -5,6 +5,8 @@ export const domainEventCatalog = {
   "customer.document.uploaded": { aggregateType: "customer_document", description: "Documento do associado anexado." },
   "contract.created": { aggregateType: "contract", description: "Contrato e cronograma criados." },
   "contract.status.updated": { aggregateType: "contract", description: "Status contratual alterado." },
+  "contract.cancellation.requested": { aggregateType: "contract_cancellation_request", description: "Pedido de distrato registrado." },
+  "contract.cancellation.decided": { aggregateType: "contract_cancellation_request", description: "Decisão de distrato registrada." },
   "contract.document.uploaded": { aggregateType: "contract_document", description: "Documento contratual anexado." },
   "contract.document.signed": { aggregateType: "contract_document", description: "Assinatura documental confirmada pela administração." },
   "ownership.entitlement.created": { aggregateType: "ownership_entitlement", description: "Direito de uso criado." },
