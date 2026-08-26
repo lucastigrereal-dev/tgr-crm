@@ -60,7 +60,7 @@ describe("integridade do lançamento manual de comissão", () => {
     await expect(caller().record(baseInput)).resolves.toEqual({ id: 901, amount: 100 });
     expect(fixture.inserted[0]).toMatchObject({ sellerId: 55, baseAmount: "1000.00", rate: "10.00", amount: "100.00" });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "created", "Comissão de 100.00 lançada.");
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { sellerId: 55, campaignId: null, opportunityId: null, contractId: null, amount: 100, rate: 10 } });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { sellerId: 55, campaignId: null, opportunityId: null, contractId: null, sourceInstallmentId: null, commissionRole: "manual", amount: 100, rate: 10 } });
   });
 
   it("reutiliza comissão idempotente sem repetir efeitos", async () => {
