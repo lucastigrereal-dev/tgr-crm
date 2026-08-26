@@ -70,6 +70,8 @@ export const financeRouter = router({
     if (!owner) throw new TRPCError({ code: "NOT_FOUND", message: "Responsável financeiro não encontrado." });
     const now = new Date();
     const assignmentId = await db.transaction(async tx => {
+      const lockedContract = (await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
+      if (!lockedContract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
       await tx.update(financialPortfolioAssignments).set({ endsAt: now }).where(and(eq(financialPortfolioAssignments.contractId, input.contractId), isNull(financialPortfolioAssignments.endsAt)));
       const created = await tx.insert(financialPortfolioAssignments).values({ contractId: input.contractId, ownerUserId: input.ownerUserId, assignedByUserId: ctx.user.id, startsAt: now, notes: input.notes || null }).$returningId();
       return created[0]?.id;
