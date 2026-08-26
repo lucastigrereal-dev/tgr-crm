@@ -16,6 +16,7 @@ function makeDb(selectResponses: unknown[][] = [], updateAffectedRows?: number) 
     chain.innerJoin = () => chain;
     chain.where = () => chain;
     chain.limit = () => limitChain;
+    chain.then = result.then.bind(result);
     return chain;
   });
   const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 722 }] }; }) }));
@@ -56,6 +57,15 @@ describe("operação de fila e acompanhantes", () => {
     await expect(caller.addReservationGuest({ reservationId: 44, fullName: "Maria Tigre", documentNumber: "12345678900", relationship: "Cônjuge", birthDate: "1990-04-10" })).resolves.toEqual({ id: 722 });
     expect(fixture.inserts[0]).toMatchObject({ reservationId: 44, fullName: "Maria Tigre", documentNumber: "12345678900", relationship: "Cônjuge", birthDate: expect.any(Date) });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(9, "reservation_guest", 722, "created", expect.stringContaining("Maria Tigre"));
+  });
+
+  it("bloqueia novo acompanhante quando a contagem já atingiu a capacidade", async () => {
+    const fixture = makeDb([[{ id: 44, capacity: 4 }], [{ count: "4" }]]); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
+
+    await expect(caller.addReservationGuest({ reservationId: 44, fullName: "João Tigre" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.inserts).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("bloqueia presença fora de uma hospedagem ativa", async () => {
