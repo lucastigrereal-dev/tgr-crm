@@ -111,8 +111,9 @@ export const contractsRouter = router({
     const requested = await db.transaction(async tx => {
       const contract = (await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
       if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-      const existingRequest = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, input.contractId), eq(contractCancellationRequests.status, "requested"))).limit(1))[0];
-      if (existingRequest) throw new TRPCError({ code: "CONFLICT", message: "Já existe um distrato aguardando decisão para este contrato." });
+      if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
+      const existingRequest = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, input.contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))).limit(1))[0];
+      if (existingRequest) throw new TRPCError({ code: "CONFLICT", message: "Já existe um distrato aguardando decisão ou execução para este contrato." });
       const paid = await tx.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360);
       const paidAmount = paid.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0);
       const context = await tx.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);

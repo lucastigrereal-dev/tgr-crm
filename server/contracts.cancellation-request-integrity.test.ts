@@ -6,10 +6,10 @@ vi.mock("./db", () => dbMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb({ contractExists = true, pendingRequest = false, returningId = 901 }: { contractExists?: boolean; pendingRequest?: boolean; returningId?: number } = {}) {
+function makeDb({ contractExists = true, contractStatus = "active", pendingRequest = false, returningId = 901 }: { contractExists?: boolean; contractStatus?: "active" | "cancelled"; pendingRequest?: boolean; returningId?: number } = {}) {
   let selectCall = 0;
   const inserted: unknown[] = [];
-  const contract = { id: 701, status: "active", totalAmount: "12000.00", proposalId: null };
+  const contract = { id: 701, status: contractStatus, totalAmount: "12000.00", proposalId: null };
   const rowsForCall = () => {
     const call = selectCall++;
     if (call === 0) return contractExists ? [contract] : [];
@@ -49,6 +49,15 @@ describe("integridade da solicitação de distrato", () => {
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().requestCancellation(input)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita contrato já cancelado antes de consultar ou inserir pedido", async () => {
+    const fixture = makeDb({ contractStatus: "cancelled" });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().requestCancellation(input)).rejects.toMatchObject({ code: "CONFLICT", message: "Contrato já está cancelado." });
     expect(fixture.inserted).toEqual([]);
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
