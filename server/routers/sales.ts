@@ -68,8 +68,11 @@ export const salesRouter = router({
 
   discountApprovals: adminProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ approval: proposalDiscountApprovals, proposalReference: proposals.reference, requesterName: users.name }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).innerJoin(users, eq(proposalDiscountApprovals.requestedByUserId, users.id)).orderBy(desc(proposalDiscountApprovals.createdAt)).limit(500);
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 500;
+    const rawRows = await db.select({ approval: proposalDiscountApprovals, proposalReference: proposals.reference, requesterName: users.name }).from(proposalDiscountApprovals).innerJoin(proposals, eq(proposalDiscountApprovals.proposalId, proposals.id)).innerJoin(users, eq(proposalDiscountApprovals.requestedByUserId, users.id)).orderBy(desc(proposalDiscountApprovals.createdAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["pedidos de desconto"] : [] };
   }),
 
   decideDiscount: adminProcedure.input(z.object({ id: z.number().int().positive(), approve: z.boolean(), decisionNotes: z.string().trim().max(3000).optional() })).mutation(async ({ ctx, input }) => {
@@ -216,12 +219,15 @@ export const salesRouter = router({
 
   proposals: salesProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ proposal: proposals, opportunityTitle: opportunities.title, customerName: customers.fullName })
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 100;
+    const rawRows = await db.select({ proposal: proposals, opportunityTitle: opportunities.title, customerName: customers.fullName })
       .from(proposals)
       .innerJoin(opportunities, eq(proposals.opportunityId, opportunities.id))
       .innerJoin(customers, eq(opportunities.customerId, customers.id))
-      .orderBy(desc(proposals.updatedAt)).limit(100);
+      .orderBy(desc(proposals.updatedAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["propostas"] : [] };
   }),
 
   goals: salesProcedure.query(async ({ ctx }) => {
