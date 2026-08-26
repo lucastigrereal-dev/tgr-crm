@@ -26,6 +26,15 @@ function makeDb(duplicate = false, activeDuplicate = false) {
   return db;
 }
 
+function makeIdempotentDb(existing: { id: number; installmentId: number; type: "card" | "transfer"; amount: string; dueDate: Date; externalReference: string | null }) {
+  const db = {
+    select: vi.fn().mockReturnValue(query([{ billing: existing }])),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 702 }] })) })),
+    transaction: vi.fn(async (callback: (transaction: typeof db) => Promise<unknown>) => callback(db)),
+  };
+  return db;
+}
+
 describe("integridade de referências de cobrança", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -65,6 +74,48 @@ describe("integridade de referências de cobrança", () => {
 
     expect(db.insert).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("reutiliza cobrança manual no retry da mesma chave idempotente", async () => {
+    const db = makeIdempotentDb({ id: 702, installmentId: 91, type: "card", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z"), externalReference: "MANUAL-IDEMP-91" });
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.registerBilling({
+      idempotencyKey: "billing-retry-key-91-abcdef",
+      installmentId: 91,
+      type: "card",
+      amount: 1000,
+      dueDate: "2026-09-10",
+      externalReference: "MANUAL-IDEMP-91",
+      digitableLine: null,
+      pixCopyPaste: null,
+    })).resolves.toEqual({ id: 702, reused: true });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("recusa a mesma chave idempotente com payload diferente", async () => {
+    const db = makeIdempotentDb({ id: 703, installmentId: 91, type: "card", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z"), externalReference: "MANUAL-IDEMP-91" });
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.registerBilling({
+      idempotencyKey: "billing-retry-key-91-abcdef",
+      installmentId: 91,
+      type: "card",
+      amount: 1200,
+      dueDate: "2026-09-10",
+      externalReference: "MANUAL-IDEMP-91",
+      digitableLine: null,
+      pixCopyPaste: null,
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("registra cobrança manual com referência normalizada quando livre", async () => {

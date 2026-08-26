@@ -409,6 +409,7 @@ export const billingRecords = mysqlTable("billing_records", {
   gatewayProvider: mysqlEnum("gatewayProvider", ["manual", "asaas"]).default("manual").notNull(),
   gatewayPaymentId: varchar("gatewayPaymentId", { length: 128 }),
   gatewayStatus: varchar("gatewayStatus", { length: 64 }),
+  idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   dueDate: date("dueDate").notNull(),
   externalReference: varchar("externalReference", { length: 255 }),
@@ -420,7 +421,7 @@ export const billingRecords = mysqlTable("billing_records", {
   generatedAt: timestamp("generatedAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status), uniqueIndex("billing_gateway_reference_unique").on(table.gatewayProvider, table.externalReference)]);
+}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status), uniqueIndex("billing_gateway_reference_unique").on(table.gatewayProvider, table.externalReference), uniqueIndex("billing_idempotency_unique").on(table.idempotencyKey)]);
 
 export const paymentGatewayCustomers = mysqlTable("payment_gateway_customers", {
   id: int("id").autoincrement().primaryKey(),

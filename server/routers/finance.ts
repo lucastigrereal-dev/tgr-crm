@@ -262,28 +262,48 @@ export const financeRouter = router({
       return issued;
     }),
 
-  registerBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix", "card", "transfer"]), amount: z.coerce.number().positive(), dueDate: z.string().date(), externalReference: z.string().trim().max(255).optional().nullable(), digitableLine: z.string().trim().max(255).optional().nullable(), pixCopyPaste: z.string().trim().max(4000).optional().nullable() }))
+  registerBilling: financeProcedure.input(z.object({ idempotencyKey: z.string().trim().min(16).max(128).optional(), installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix", "card", "transfer"]), amount: z.coerce.number().positive(), dueDate: z.string().date(), externalReference: z.string().trim().max(255).optional().nullable(), digitableLine: z.string().trim().max(255).optional().nullable(), pixCopyPaste: z.string().trim().max(4000).optional().nullable() }))
     .mutation(async ({ ctx, input }) => {
       if (["boleto", "pix"].includes(input.type)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PIX e boleto precisam ser emitidos pelo gateway configurado; o registro manual foi bloqueado para evitar cobrança fictícia." });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-      const created = await db.transaction(async tx => {
-        const installment = (await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
-        if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela da cobrança não encontrada." });
-        if (["paid", "cancelled"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga ou cancelada." });
-        const externalReference = input.externalReference?.trim() || `TGR-${input.installmentId}-${Date.now()}`;
-        const duplicateReference = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
-        if (duplicateReference) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
-        const activeDuplicate = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.type, input.type), eq(billingRecords.gatewayProvider, "manual"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).limit(1))[0];
-        if (activeDuplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual ativa para esta parcela e tipo." });
-        const inserted = await tx.insert(billingRecords).values({ ...input, gatewayProvider: "manual", amount: input.amount.toFixed(2), dueDate: dateValue(input.dueDate), externalReference, digitableLine: null, pixCopyPaste: null, status: "generated", generatedAt: new Date() }).$returningId();
-        const id = inserted[0]?.id;
-        if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a cobrança." });
-        return { id };
-      });
+      const expectedAmount = input.amount.toFixed(2);
+      const expectedDueDate = dateValue(input.dueDate);
+      const externalReference = input.externalReference?.trim() || `TGR-${input.installmentId}-${input.idempotencyKey ?? Date.now()}`;
+      const matchesExisting = (existing: { installmentId: number; type: string; amount: string; dueDate: Date; externalReference: string | null }) => existing.installmentId === input.installmentId && existing.type === input.type && existing.amount === expectedAmount && existing.dueDate.getTime() === expectedDueDate.getTime() && existing.externalReference === externalReference;
+      let created: { id: number; reused?: boolean };
+      try {
+        created = await db.transaction(async tx => {
+          if (input.idempotencyKey) {
+            const existing = (await tx.select({ billing: billingRecords }).from(billingRecords).where(eq(billingRecords.idempotencyKey, input.idempotencyKey)).limit(1))[0]?.billing;
+            if (existing) {
+              if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outra cobrança." });
+              return { id: existing.id, reused: true };
+            }
+          }
+          const installment = (await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
+          if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela da cobrança não encontrada." });
+          if (["paid", "cancelled"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga ou cancelada." });
+          const duplicateReference = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
+          if (duplicateReference) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
+          const activeDuplicate = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.type, input.type), eq(billingRecords.gatewayProvider, "manual"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).limit(1))[0];
+          if (activeDuplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual ativa para esta parcela e tipo." });
+          const inserted = await tx.insert(billingRecords).values({ idempotencyKey: input.idempotencyKey ?? null, installmentId: input.installmentId, type: input.type, gatewayProvider: "manual", amount: expectedAmount, dueDate: expectedDueDate, externalReference, digitableLine: null, pixCopyPaste: null, status: "generated", generatedAt: new Date() }).$returningId();
+          const id = inserted[0]?.id;
+          if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a cobrança." });
+          return { id, reused: false };
+        });
+      } catch (error) {
+        if (!input.idempotencyKey || !isDuplicateKeyError(error)) throw error;
+        const existing = (await db.select({ billing: billingRecords }).from(billingRecords).where(eq(billingRecords.idempotencyKey, input.idempotencyKey)).limit(1))[0]?.billing;
+        if (!existing) throw new TRPCError({ code: "CONFLICT", message: "A cobrança foi criada por outra operação. Recarregue a tela." });
+        if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outra cobrança." });
+        created = { id: existing.id, reused: true };
+      }
+      if (created.reused) return created;
       await recordAudit(ctx.user.id, "billing_record", created.id, "registered", `Cobrança ${input.type} registrada.`);
       await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: created.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "manual", type: input.type } });
-      return created;
+      return { id: created.id };
     }),
 
   markInstallmentPaid: financeProcedure.input(z.object({ id: z.number().int().positive(), paymentMethod: z.string().trim().max(64).optional().nullable() }))
