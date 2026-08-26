@@ -407,10 +407,17 @@ export const financeRouter = router({
     const entry = (await db.select().from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
     if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento não encontrado." });
     if (entry.status !== "paid") throw new TRPCError({ code: "BAD_REQUEST", message: "Apenas lançamentos pagos podem ser conciliados." });
-    if (entry.reconciledAt) return { success: true, alreadyReconciled: true };
+    if (entry.reconciledAt) {
+      if (entry.reconciliationReference === input.reconciliationReference) return { success: true, alreadyReconciled: true };
+      throw new TRPCError({ code: "CONFLICT", message: "O lançamento já foi conciliado com outra referência." });
+    }
     const reconciledAt = new Date();
     const updateResult = await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt, reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadyReconciled: true };
+    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) {
+      const latest = (await db.select({ reconciliationReference: financialTransactions.reconciliationReference }).from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
+      if (latest?.reconciliationReference === input.reconciliationReference) return { success: true, alreadyReconciled: true };
+      throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi conciliado por outra operação com referência diferente." });
+    }
     await recordAudit(ctx.user.id, "financial_transaction", input.id, "reconciled", `Lançamento conciliado pela referência ${input.reconciliationReference}.`);
     await recordDomainEvent({ eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt } });
     return { success: true };

@@ -5,12 +5,13 @@ vi.mock("./db", () => dbMocks);
 
 import { financeRouter } from "./routers/finance";
 
-function databaseFor(entry: { id: number; status: "open" | "paid" | "cancelled"; reconciledAt?: Date | null }, affectedRows = 1) {
+function databaseFor(entry: { id: number; status: "open" | "paid" | "cancelled"; reconciledAt?: Date | null; reconciliationReference?: string | null }, affectedRows = 1, afterRace = entry) {
   const updates: unknown[] = [];
+  let selectCall = 0;
   return {
     updates,
     db: {
-      select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: async () => [entry] }) }) })),
+      select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: async () => [selectCall++ === 0 ? entry : afterRace] }) }) })),
       update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); return { affectedRows }; }) })) })),
     },
   };
@@ -38,7 +39,7 @@ describe("conciliação financeira", () => {
   });
 
   it("não escreve novamente um lançamento já conciliado", async () => {
-    const fixture = databaseFor({ id: 83, status: "paid", reconciledAt: new Date("2026-08-25T12:00:00Z") }); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const fixture = databaseFor({ id: 83, status: "paid", reconciledAt: new Date("2026-08-25T12:00:00Z"), reconciliationReference: "OFX-REPETIDO" }); dbMocks.getDb.mockResolvedValue(fixture.db);
     const caller = financeRouter.createCaller({ user: { id: 5, role: "finance" } } as never);
 
     await expect(caller.reconcileEntry({ id: 83, reconciliationReference: "OFX-REPETIDO" })).resolves.toEqual({ success: true, alreadyReconciled: true });
@@ -46,8 +47,18 @@ describe("conciliação financeira", () => {
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
+  it("recusa referência diferente em lançamento já conciliado", async () => {
+    const fixture = databaseFor({ id: 84, status: "paid", reconciledAt: new Date("2026-08-25T12:00:00Z"), reconciliationReference: "OFX-ORIGINAL" }); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = financeRouter.createCaller({ user: { id: 5, role: "finance" } } as never);
+
+    await expect(caller.reconcileEntry({ id: 84, reconciliationReference: "OFX-DIFERENTE" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.updates).toHaveLength(0);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("não audita quando outra conciliação vence a corrida", async () => {
-    const fixture = databaseFor({ id: 84, status: "paid" }, 0); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const fixture = databaseFor({ id: 84, status: "paid" }, 0, { id: 84, status: "paid", reconciledAt: new Date("2026-08-26T12:00:00Z"), reconciliationReference: "OFX-CORRIDA" }); dbMocks.getDb.mockResolvedValue(fixture.db);
     const caller = financeRouter.createCaller({ user: { id: 5, role: "finance" } } as never);
 
     await expect(caller.reconcileEntry({ id: 84, reconciliationReference: "OFX-CORRIDA" })).resolves.toEqual({ success: true, alreadyReconciled: true });
