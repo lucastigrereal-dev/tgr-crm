@@ -8,16 +8,24 @@ import { z } from "zod";
 
 export const ownershipRouter = router({
   listEntitlements: contractsProcedure.input(z.object({ contractId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
-    const db = await getDb(); if (!db) return [];
-    return input?.contractId ? db.select().from(ownershipEntitlements).where(eq(ownershipEntitlements.contractId, input.contractId)).limit(1000) : db.select().from(ownershipEntitlements).limit(1000);
+    const db = await getDb(); if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 1000;
+    const rawRows = input?.contractId
+      ? await db.select().from(ownershipEntitlements).where(eq(ownershipEntitlements.contractId, input.contractId)).limit(limit + 1)
+      : await db.select().from(ownershipEntitlements).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["direitos de uso"] : [] };
   }),
   listMaintenanceBlocks: serviceProcedure.query(async () => {
-    const db = await getDb(); if (!db) return [];
-    return db.select({ block: unitMaintenanceBlocks, unitCode: units.code, resortName: resorts.name })
+    const db = await getDb(); if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 100;
+    const rawRows = await db.select({ block: unitMaintenanceBlocks, unitCode: units.code, resortName: resorts.name })
       .from(unitMaintenanceBlocks)
       .innerJoin(units, eq(unitMaintenanceBlocks.unitId, units.id))
       .innerJoin(resorts, eq(units.resortId, resorts.id))
-      .orderBy(desc(unitMaintenanceBlocks.startsAt)).limit(100);
+      .orderBy(desc(unitMaintenanceBlocks.startsAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["bloqueios de manutenção"] : [] };
   }),
   createEntitlement: contractsProcedure.input(z.object({ contractId: z.number().int().positive(), resortId: z.number().int().positive().nullable().optional(), unitId: z.number().int().positive().nullable().optional(), entitlementType: z.enum(["fixed_week", "flexible_week", "points", "exchange"]), fixedWeek: z.number().int().min(1).max(53).nullable().optional(), annualPoints: z.number().int().min(0).default(0), priorityLevel: z.number().int().min(1).max(9).default(1), validFrom: z.string().nullable().optional(), validUntil: z.string().nullable().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });

@@ -16,7 +16,7 @@ describe("ownership.listMaintenanceBlocks", () => {
     dbMocks.getDb.mockResolvedValue(db);
 
     const caller = ownershipRouter.createCaller({ user: { id: 8, role: "service" } } as never);
-    await expect(caller.listMaintenanceBlocks()).resolves.toEqual(rows);
+    await expect(caller.listMaintenanceBlocks()).resolves.toEqual({ rows, truncated: false, truncatedSources: [] });
     expect(db.select).toHaveBeenCalledTimes(1);
   });
 });
