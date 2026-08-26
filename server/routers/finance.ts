@@ -93,12 +93,24 @@ export const financeRouter = router({
       db.select().from(salesCommissions).where(inArray(salesCommissions.contractId, contractIds)),
       db.select().from(contractCancellationRequests).where(inArray(contractCancellationRequests.contractId, contractIds)),
     ]);
+    const installmentsByContractId = new Map<number, typeof installmentRows>();
+    for (const row of installmentRows) installmentsByContractId.set(row.contractId, [...(installmentsByContractId.get(row.contractId) || []), row]);
+    const commissionsByContractId = new Map<number, typeof commissionRows>();
+    for (const row of commissionRows) {
+      if (row.contractId === null) continue;
+      commissionsByContractId.set(row.contractId, [...(commissionsByContractId.get(row.contractId) || []), row]);
+    }
+    const latestCancellationByContractId = new Map<number, typeof cancellationRows[number]>();
+    for (const row of cancellationRows) {
+      const current = latestCancellationByContractId.get(row.contractId);
+      if (!current || row.createdAt.getTime() > current.createdAt.getTime()) latestCancellationByContractId.set(row.contractId, row);
+    }
     return contractRows.map(contract => {
-      const cancellation = cancellationRows.filter(row => row.contractId === contract.id).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
+      const cancellation = latestCancellationByContractId.get(contract.id);
       const facts = buildRevenueQualityLedger({
         contract: { id: contract.id, totalAmount: contract.totalAmount, status: contract.status },
-        installments: installmentRows.filter(row => row.contractId === contract.id).map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, status: row.status })),
-        commissions: commissionRows.filter(row => row.contractId === contract.id).map(row => ({ id: row.id, amount: row.amount, status: row.status, lifecycleStatus: row.lifecycleStatus, sourceInstallmentId: row.sourceInstallmentId })),
+        installments: (installmentsByContractId.get(contract.id) || []).map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, status: row.status })),
+        commissions: (commissionsByContractId.get(contract.id) || []).map(row => ({ id: row.id, amount: row.amount, status: row.status, lifecycleStatus: row.lifecycleStatus, sourceInstallmentId: row.sourceInstallmentId })),
         cancellation: cancellation ? { status: cancellation.status } : null,
         policyVersion: "tgr-derived-ledger/v1",
       });
