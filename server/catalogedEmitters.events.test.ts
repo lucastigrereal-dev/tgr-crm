@@ -60,8 +60,8 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await caller.createOpportunity({ customerId: 10, title: "Tour família", expectedAmount: 12000, stage: "qualified" });
     await caller.createProposal({ opportunityId: 301, reference: "PROP-301", productDescription: "Cota anual", totalAmount: 12000, downPaymentAmount: 0, installmentCount: 1, status: "sent" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", actorUserId: 71, payload: { stage: "qualified", name: "Qualificação do tour" } }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "opportunity.created", aggregateType: "opportunity", actorUserId: 71, payload: expect.objectContaining({ sellerId: 71, stage: "qualified", expectedAmount: 12000 }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", actorUserId: 71, payload: { stage: "qualified", title: "Qualificação do tour" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "opportunity.created", aggregateType: "opportunity", actorUserId: 71, payload: expect.objectContaining({ customerId: 10, sellerId: 71, stage: "qualified", expectedAmount: 12000 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "proposal.created", aggregateType: "proposal", actorUserId: 71, payload: expect.objectContaining({ opportunityId: 301, status: "sent", totalAmount: 12000 }) }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(71, "proposal", expect.any(Number), "created", expect.stringContaining("PROP-301"));
   });

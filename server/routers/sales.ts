@@ -42,7 +42,7 @@ export const salesRouter = router({
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível salvar o playbook." });
     await recordAudit(ctx.user.id, "sales_playbook", id, "created", `Playbook ${input.name} criado para a etapa ${input.stage}.`);
-    await recordDomainEvent({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", aggregateId: id, actorUserId: ctx.user.id, payload: { stage: input.stage, name: input.name } });
+    await recordDomainEvent({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", aggregateId: id, actorUserId: ctx.user.id, payload: { stage: input.stage, title: input.name } });
     return { id };
   }),
 
@@ -150,7 +150,7 @@ export const salesRouter = router({
       return opportunityId;
     });
     await recordAudit(ctx.user.id, "opportunity", id, "created", `Oportunidade ${input.title} criada.`);
-    await recordDomainEvent({ eventName: "opportunity.created", aggregateType: "opportunity", aggregateId: id, actorUserId: ctx.user.id, payload: { campaignId: input.campaignId ?? null, sellerId: input.sellerId ?? ctx.user.id, stage: input.stage, expectedAmount: input.expectedAmount } });
+    await recordDomainEvent({ eventName: "opportunity.created", aggregateType: "opportunity", aggregateId: id, actorUserId: ctx.user.id, payload: { customerId: input.customerId, campaignId: input.campaignId ?? null, sellerId: input.sellerId ?? ctx.user.id, stage: input.stage, expectedAmount: input.expectedAmount } });
     return { id };
   }),
 
