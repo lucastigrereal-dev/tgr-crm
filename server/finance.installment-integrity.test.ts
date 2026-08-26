@@ -49,6 +49,7 @@ describe("idempotência concorrente de baixa de parcela", () => {
     expect(tx.update).toHaveBeenNthCalledWith(1, installments);
     expect(tx.update).toHaveBeenNthCalledWith(2, billingRecords);
     expect(syncMocks.syncRevenueQualityForContract).toHaveBeenCalledWith({ contractId: 61, actorUserId: 71, trigger: "baixa de parcela" });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 2, amount: "1000.00", source: "manual", gatewayPaymentId: null, commissionBlocked: true } }));
   });
 
   it("não cria lançamento nem audita quando a atualização condicional perde a corrida", async () => {

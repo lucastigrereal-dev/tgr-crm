@@ -7,8 +7,10 @@ const paymentMocks = vi.hoisted(() => ({
   isAsaasPaymentConfirmed: vi.fn(() => true),
   isAsaasPaymentOverdue: vi.fn(() => false),
 }));
+const syncMocks = vi.hoisted(() => ({ syncRevenueQualityForContract: vi.fn(async () => ({})) }));
 vi.mock("./db", () => dbMocks);
 vi.mock("./paymentGateway", () => paymentMocks);
+vi.mock("./revenueQualitySync", () => syncMocks);
 
 import { billingRecords, installments, paymentGatewayWebhookEvents } from "../drizzle/schema";
 import { processAsaasWebhook } from "./paymentGatewayWebhook";
@@ -17,17 +19,37 @@ function query(rows: unknown[]) {
   const chain = {
     from: vi.fn(),
     innerJoin: vi.fn(),
+    leftJoin: vi.fn(),
     where: vi.fn(),
     limit: vi.fn(async () => rows),
   };
   chain.from.mockReturnValue(chain);
   chain.innerJoin.mockReturnValue(chain);
+  chain.leftJoin.mockReturnValue(chain);
   chain.where.mockReturnValue(chain);
   return chain;
 }
 
 describe("idempotência financeira do webhook Asaas", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("emite payload completo quando o webhook liquida a parcela", async () => {
+    const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
+    const txUpdate = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) }));
+    const tx = { insert: txInsert, update: txUpdate };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(query([]))
+        .mockReturnValueOnce(query([{ billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }]))
+        .mockReturnValueOnce(query([])),
+      transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+
+    await expect(processAsaasWebhook("secret", { id: "evt-91", event: "PAYMENT_CONFIRMED", payment: { id: "pay-91", status: "CONFIRMED", billingType: "PIX" } })).resolves.toMatchObject({ status: 200, billingRecordId: 301, installmentPaid: true });
+
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: null, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 1, amount: "1000.00", source: "asaas", gatewayPaymentId: "pay-91", commissionBlocked: false } });
+  });
 
   it("não cria segunda receita quando a parcela já foi liquidada por outro evento", async () => {
     const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
