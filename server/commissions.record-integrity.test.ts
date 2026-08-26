@@ -6,13 +6,13 @@ vi.mock("./db", () => dbMocks);
 
 import { commissionsRouter } from "./routers/commissions";
 
-function makeDb({ sellerExists = true, campaignExists = true, opportunityExists = true, contractExists = true, existingCommission, insertError }: { sellerExists?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
+function makeDb({ sellerExists = true, sellerEligible = true, campaignExists = true, opportunityExists = true, contractExists = true, existingCommission, insertError }: { sellerExists?: boolean; sellerEligible?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
   const inserted: unknown[] = [];
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => ({
       where: vi.fn(() => ({
         limit: vi.fn(async () => {
-          if (table === users) return sellerExists ? [{ id: 55 }] : [];
+          if (table === users) return sellerExists && sellerEligible ? [{ id: 55 }] : [];
           if (table === salesCampaigns) return campaignExists ? [{ id: 10 }] : [];
           if (table === opportunities) return opportunityExists ? [{ id: 20 }] : [];
           if (table === contracts) return contractExists ? [{ id: 30 }] : [];
@@ -42,6 +42,16 @@ describe("integridade do lançamento manual de comissão", () => {
     await expect(caller().record(baseInput)).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(fixture.inserted).toEqual([]);
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita comissão para usuário fora da equipe comercial antes do insert", async () => {
+    const fixture = makeDb({ sellerEligible: false });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().record(baseInput)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("rejeita referência opcional de campanha inexistente", async () => {
