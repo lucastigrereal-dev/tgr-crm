@@ -72,6 +72,15 @@ describe("integridade de direitos de uso", () => {
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
+  it("deriva o empreendimento da unidade quando ele não é informado", async () => {
+    const fixture = makeDb();
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = ownershipRouter.createCaller({ user: { id: 72, role: "service" } } as never);
+
+    await expect(caller.createEntitlement({ contractId: 61, unitId: 51, entitlementType: "points", annualPoints: 100, priorityLevel: 2 })).resolves.toEqual({ id: 901 });
+    expect(fixture.inserted[0]).toMatchObject({ contractId: 61, resortId: 2, unitId: 51 });
+  });
+
   it("cria e audita direito válido", async () => {
     const fixture = makeDb();
     dbMocks.getDb.mockResolvedValue(fixture.db);

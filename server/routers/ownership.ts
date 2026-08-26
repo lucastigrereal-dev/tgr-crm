@@ -37,6 +37,7 @@ export const ownershipRouter = router({
     const contract = (await db.select({ id: contracts.id, status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do direito não encontrado." });
     if (["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível criar direito para contrato cancelado ou encerrado." });
+    let effectiveResortId = input.resortId ?? null;
     if (input.resortId) {
       const resort = (await db.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1))[0];
       if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento do direito não encontrado." });
@@ -45,8 +46,9 @@ export const ownershipRouter = router({
       const unit = (await db.select({ id: units.id, resortId: units.resortId }).from(units).where(eq(units.id, input.unitId)).limit(1))[0];
       if (!unit) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade do direito não encontrada." });
       if (input.resortId && unit.resortId !== input.resortId) throw new TRPCError({ code: "BAD_REQUEST", message: "A unidade do direito não pertence ao empreendimento informado." });
+      effectiveResortId = unit.resortId;
     }
-    const [created] = await db.insert(ownershipEntitlements).values({ contractId: input.contractId, resortId: input.resortId ?? null, unitId: input.unitId ?? null, entitlementType: input.entitlementType, fixedWeek: input.fixedWeek ?? null, annualPoints: input.annualPoints, priorityLevel: input.priorityLevel, validFrom, validUntil }).$returningId();
+    const [created] = await db.insert(ownershipEntitlements).values({ contractId: input.contractId, resortId: effectiveResortId, unitId: input.unitId ?? null, entitlementType: input.entitlementType, fixedWeek: input.fixedWeek ?? null, annualPoints: input.annualPoints, priorityLevel: input.priorityLevel, validFrom, validUntil }).$returningId();
     if (!created?.id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o direito de uso." });
     await recordAudit(ctx.user.id, "ownership_entitlement", created.id, "created", `Direito ${input.entitlementType} criado.`);
     await recordDomainEvent({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", aggregateId: created.id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, unitId: input.unitId ?? null, priorityLevel: input.priorityLevel, entitlementType: input.entitlementType } });
