@@ -195,6 +195,8 @@ export const salesRouter = router({
     installmentCount: z.coerce.number().int().min(1).max(360).default(1),
     status: z.enum(["draft", "sent", "approved", "rejected", "expired"]).default("draft"),
     expiresAt: z.string().date().optional().nullable(),
+  }).superRefine((value, refinement) => {
+    if (value.downPaymentAmount > value.totalAmount) refinement.addIssue({ code: "custom", path: ["downPaymentAmount"], message: "A entrada não pode exceder o valor total da proposta." });
   })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "sales.proposal.create");
     const db = await getDb();

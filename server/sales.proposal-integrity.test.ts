@@ -30,6 +30,27 @@ describe("integridade de propostas", () => {
     vi.clearAllMocks();
   });
 
+  it("rejeita entrada maior que o valor total antes da transação", async () => {
+    const db = makeDb(true);
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
+
+    await expect(caller.createProposal({
+      opportunityId: 11,
+      reference: "PROP-ENTRADA-ALTA",
+      productDescription: "Proposta inconsistente",
+      totalAmount: 1000,
+      downPaymentAmount: 1001,
+      installmentCount: 10,
+      status: "draft",
+      expiresAt: null,
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("rejeita proposta sem oportunidade e não grava insert órfão", async () => {
     const db = makeDb(false);
     dbMocks.getDb.mockResolvedValue(db);
