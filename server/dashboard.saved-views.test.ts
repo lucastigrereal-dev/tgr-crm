@@ -15,7 +15,7 @@ function context(userId = 99, role: "admin" | "finance" = "finance"): TrpcContex
 
 function fakeDb(rows: Array<{ id: number; createdByUserId: number; visibility: "personal" | "shared"; filtersJson: string }>, insertId: unknown = 71) {
   return {
-    select: () => ({ from: () => ({ where: () => ({ orderBy: async () => rows, limit: async () => rows.slice(-1) }) }) }),
+    select: () => ({ from: () => ({ where: () => ({ orderBy: () => ({ limit: async () => rows }), limit: async () => rows.slice(-1) }) }) }),
     insert: () => ({ values: async () => [{ insertId }] }),
     delete: () => ({ where: async () => undefined }),
   };
