@@ -49,6 +49,16 @@ describe("integridade referencial de tarefas", () => {
     expect(mismatchedContract.inserted).toEqual([]);
   });
 
+  it("rejeita lembrete posterior ao vencimento antes do insert", async () => {
+    const fixture = makeDb();
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.createTask({ title: "Cobrar cliente", dueAt: "2026-08-25T10:00:00.000Z", reminderAt: "2026-08-25T11:00:00.000Z" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("grava tarefa somente quando todas as referências são válidas", async () => {
     const fixture = makeDb();
     dbMocks.getDb.mockResolvedValue(fixture.db);

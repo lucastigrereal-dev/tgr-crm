@@ -348,7 +348,10 @@ export const operationsRouter = router({
     if (contractId && !contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
     if (contract && customerId && contract.customerId !== customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato não pertence ao cliente informado." });
     if (!assigneeRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Responsável não encontrado." });
-    const created = await db.insert(tasks).values({ ...input, description: input.description || null, customerId, contractId, assignedToUserId, dueAt: dateTimeValue(input.dueAt), reminderAt: dateTimeValue(input.reminderAt), createdByUserId: ctx.user.id }).$returningId();
+    const dueAt = dateTimeValue(input.dueAt);
+    const reminderAt = dateTimeValue(input.reminderAt);
+    if (dueAt && reminderAt && reminderAt > dueAt) throw new TRPCError({ code: "BAD_REQUEST", message: "O lembrete da tarefa não pode ocorrer depois do vencimento." });
+    const created = await db.insert(tasks).values({ ...input, description: input.description || null, customerId, contractId, assignedToUserId, dueAt, reminderAt, createdByUserId: ctx.user.id }).$returningId();
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a tarefa." });
     await recordAudit(ctx.user.id, "task", id, "created", `Tarefa ${input.title} criada.`);
