@@ -105,6 +105,10 @@ function assertAction(state: Parameters<typeof assertReceptionAction>[0], action
   }
 }
 
+function assertCaptureUpdateSucceeded(result: unknown) {
+  if (result && typeof result === "object" && "affectedRows" in result && Number(result.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A ficha de captação foi alterada por outra operação. Recarregue e tente novamente." });
+}
+
 export const capturesRouter = router({
   selectors: receptionProcedure.query(async () => {
     const db = await getDb();
@@ -288,7 +292,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "check_in");
     const checkedInAt = new Date();
-    await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "checked_in", "Chegada confirmada pela recepção.");
     await recordDomainEvent({ eventName: "capture.checked_in", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom } });
     publishSalesRoomEvent({ type: "capture.checked_in", captureId: input.id, salesRoom: capture.salesRoom });
@@ -299,7 +304,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "assign_table");
     const assignedAt = new Date();
-    await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "room_assigned", `Mesa ${input.salesTable} e equipe da sala atribuídas.`);
     await recordDomainEvent({ eventName: "capture.room.assigned", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: input.salesTable, linerId: input.linerId ?? null, closerId: input.closerId ?? null, roomManagerId: input.roomManagerId ?? null } });
     publishSalesRoomEvent({ type: "capture.room.assigned", captureId: input.id, salesRoom: capture.salesRoom });
@@ -310,7 +316,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "start_presentation");
     const presentationStartedAt = new Date();
-    await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_started", `Apresentação iniciada na mesa ${capture.salesTable}.`);
     await recordDomainEvent({ eventName: "capture.presentation.started", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable } });
     publishSalesRoomEvent({ type: "capture.presentation.started", captureId: input.id, salesRoom: capture.salesRoom });
@@ -322,7 +329,8 @@ export const capturesRouter = router({
     assertAction(capture, "end_presentation");
     const presentationEndedAt = new Date();
     const durationMinutes = tourDurationMinutes(capture.presentationStartedAt, presentationEndedAt);
-    await db.update(captureRecords).set({ presentationStatus: "closed", presentationEndedAt }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "closed", presentationEndedAt }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_ended", `Apresentação concluída e encerrada após ${durationMinutes} minutos.`);
     await recordDomainEvent({ eventName: "capture.presentation.ended", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable, durationMinutes } });
     publishSalesRoomEvent({ type: "capture.presentation.ended", captureId: input.id, salesRoom: capture.salesRoom });
@@ -333,7 +341,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "mark_no_tour");
     const endedAt = new Date();
-    await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
     await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: input.reason } });
     publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.id, salesRoom: capture.salesRoom });
