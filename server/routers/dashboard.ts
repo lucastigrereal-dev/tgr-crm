@@ -79,9 +79,11 @@ const MAX_OPERATIONAL_ROWS = 5000;
 export const dashboardRouter = router({
   savedViews: internalProcedure.query(async ({ ctx }) => {
     const db = await getDb();
-    if (!db) return [];
-    const rows = await db.select().from(savedAnalysisViews).where(or(eq(savedAnalysisViews.createdByUserId, ctx.user.id), eq(savedAnalysisViews.visibility, "shared"))).orderBy(desc(savedAnalysisViews.updatedAt)).limit(200);
-    return rows.map(row => ({ ...row, filters: savedViewFilters.parse(JSON.parse(row.filtersJson)) }));
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 200;
+    const rawRows = await db.select().from(savedAnalysisViews).where(or(eq(savedAnalysisViews.createdByUserId, ctx.user.id), eq(savedAnalysisViews.visibility, "shared"))).orderBy(desc(savedAnalysisViews.updatedAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit).map(row => ({ ...row, filters: savedViewFilters.parse(JSON.parse(row.filtersJson)) })), truncated, truncatedSources: truncated ? ["recortes salvos"] : [] };
   }),
   saveView: internalProcedure.input(z.object({ name: z.string().trim().min(3).max(120), visibility: z.enum(["personal", "shared"]), filters: savedViewFilters })).mutation(async ({ ctx, input }) => {
     const db = await getDb();

@@ -41,8 +41,10 @@ describe("dashboard.savedViews", () => {
     const caller = appRouter.createCaller(context());
     const listed = await caller.dashboard.savedViews();
     const created = await caller.dashboard.saveView({ name: "Minha coorte", visibility: "personal", filters: { startDate: "2026-08-01", endDate: "2026-08-31", salesRoom: "Sala Ouro" } });
-    expect(listed.map(item => item.name)).toEqual(["Minha sala", "Risco campanha"]);
-    expect(listed[1]?.filters).toMatchObject({ campaignId: 3, presentationStatus: "presented" });
+    expect(listed.rows.map(item => item.name)).toEqual(["Minha sala", "Risco campanha"]);
+    expect(listed.rows[1]?.filters).toMatchObject({ campaignId: 3, presentationStatus: "presented" });
+    expect(listed.truncated).toBe(false);
+    expect(listed.truncatedSources).toEqual([]);
     expect(created).toEqual({ id: 71 });
     await expect(caller.dashboard.deleteSavedView({ id: 2 })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
