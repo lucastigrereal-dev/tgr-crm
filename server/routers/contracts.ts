@@ -202,19 +202,19 @@ export const contractsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
     const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
     if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
-    if (input.status === "cancelled" && !input.cancellationReason?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "Informe o motivo do cancelamento do contrato." });
     const updateResult = await db.update(contracts).set({
       status: input.status,
       activatedAt: input.status === "active" ? new Date() : undefined,
-      cancelledAt: input.status === "cancelled" ? new Date() : undefined,
-      cancellationReason: input.status === "cancelled" ? input.cancellationReason!.trim() : null,
+      cancelledAt: undefined,
+      cancellationReason: null,
     }).where(and(eq(contracts.id, input.id), eq(contracts.status, current.status)));
     if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
-    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: input.status === "cancelled" ? input.cancellationReason ?? null : null } });
+    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
     return { success: true };
   }),

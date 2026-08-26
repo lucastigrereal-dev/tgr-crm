@@ -89,20 +89,21 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("registra mudança de status e documento contratual com trilha de auditoria", async () => {
-    await caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" });
+    await caller().updateStatus({ id: 701, status: "closed" });
     await caller().uploadDocument({ contractId: 701, category: "Contrato assinado", filename: "contrato.pdf", contentType: "application/pdf", signed: true, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "cancelled", cancellationReason: "Solicitação documentada" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "closed", cancellationReason: null } }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_document", 702, "uploaded", expect.stringContaining("contrato.pdf"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: false, filename: "contrato.pdf" } }));
   });
 
-  it("rejeita atualização de status que perdeu a corrida", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ statusUpdateAffectedRows: 0 }));
-    await expect(caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" })).rejects.toMatchObject({ code: "CONFLICT" });
-    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract", 701, "status_updated", expect.any(String));
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701 }));
-
+  it("bloqueia cancelamento direto fora do workflow de distrato", async () => {
+    const db = makeDb();
+    dbMocks.getDb.mockResolvedValue(db);
+    await expect(caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" })).rejects.toMatchObject({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
+    expect(db.update).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("rejeita base64 inválido antes de chamar o storage", async () => {
