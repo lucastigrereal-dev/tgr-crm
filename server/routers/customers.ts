@@ -153,7 +153,17 @@ export const customersRouter = router({
       db.select().from(captureRecords).where(eq(captureRecords.customerId, input.id)).orderBy(desc(captureRecords.createdAt)).limit(20),
     ]);
     const radar = buildRelationshipRadar({ hasEmail: Boolean(customer.email), hasPhone: Boolean(customer.phone), interactionDates: interactions.map(item => item.occurredAt), documentCount: documents.length, contractStatuses: customerContracts.map(item => item.status), reservationDates: customerReservations.map(item => item.checkIn), installmentStatuses: customerInstallments.map(item => item.status) });
-    return { customer, interactions, documents, contracts: customerContracts, opportunities: customerOpportunities, reservations: customerReservations, relationshipTasks, captures, radar };
+    const truncatedSources = [
+      interactions.length >= 50 ? "interações" : null,
+      documents.length >= 100 ? "documentos" : null,
+      customerContracts.length >= 100 ? "contratos" : null,
+      customerOpportunities.length >= 200 ? "oportunidades" : null,
+      customerReservations.length >= 200 ? "reservas" : null,
+      customerInstallments.length >= 500 ? "parcelas" : null,
+      relationshipTasks.length >= 20 ? "tarefas" : null,
+      captures.length >= 20 ? "captações" : null,
+    ].filter((source): source is string => Boolean(source));
+    return { customer, interactions, documents, contracts: customerContracts, opportunities: customerOpportunities, reservations: customerReservations, relationshipTasks, captures, radar, truncated: truncatedSources.length > 0, truncatedSources };
   }),
 
   addInteraction: internalProcedure.input(z.object({
