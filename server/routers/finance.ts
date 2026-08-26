@@ -149,17 +149,20 @@ export const financeRouter = router({
 
   collectionQueue: financeProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const now = new Date();
-    const rows = await db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
+    const limit = 120;
+    const rawRows = await db.select({ installment: installments, contractNumber: contracts.number, customerName: customers.fullName })
       .from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
       .where(inArray(installments.status, ["open", "overdue"]))
-      .orderBy(installments.dueDate).limit(120);
-    return rows.map(item => {
+      .orderBy(installments.dueDate).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    const rows = rawRows.slice(0, limit).map(item => {
       const dueDate = new Date(item.installment.dueDate);
       const collection = getCollectionStage(dueDate, now);
       return { ...item, collection, daysPastDue: Math.max(0, Math.floor((now.getTime() - dueDate.getTime()) / 86_400_000)) };
     });
+    return { rows, truncated, truncatedSources: truncated ? ["fila de cobrança"] : [] };
   }),
 
   billing: financeProcedure.query(async () => {
