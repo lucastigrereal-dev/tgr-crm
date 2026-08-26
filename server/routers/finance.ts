@@ -302,7 +302,7 @@ export const financeRouter = router({
       }
       if (created.reused) return created;
       await recordAudit(ctx.user.id, "billing_record", created.id, "registered", `Cobrança ${input.type} registrada.`);
-      await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: created.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "manual", type: input.type } });
+      await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: created.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "manual", gatewayPaymentId: null, type: input.type } });
       return { id: created.id };
     }),
 
