@@ -27,6 +27,7 @@ export const domainEventCatalog = {
   "revenue_quality_ledger.synced": { aggregateType: "contract", description: "Fatos de qualidade de receita projetados de forma idempotente." },
   "financial.portfolio.assigned": { aggregateType: "financial_portfolio_assignment", description: "Responsável da carteira financeira atribuído." },
   "financial.entry.created": { aggregateType: "financial_transaction", description: "Lançamento financeiro criado." },
+  "financial.billing.created": { aggregateType: "billing_record", description: "Cobrança financeira criada." },
   "financial.entry.reconciled": { aggregateType: "financial_transaction", description: "Lançamento financeiro conciliado." },
   "financial.transfer.created": { aggregateType: "financial_transfer", description: "Repasse financeiro criado." },
   "financial.transfer.paid": { aggregateType: "financial_transfer", description: "Repasse financeiro pago." },

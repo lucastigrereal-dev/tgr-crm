@@ -84,6 +84,7 @@ describe("integridade de referências de cobrança", () => {
 
     expect(db.insert).toHaveBeenCalledTimes(1);
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(71, "billing_record", 701, "registered", "Cobrança card registrada.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: 701 }));
   });
 });
 

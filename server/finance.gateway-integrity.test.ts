@@ -75,7 +75,7 @@ describe("idempotência de emissão Asaas", () => {
     expect(gatewayMocks.createAsaasPayment).toHaveBeenCalledTimes(1);
     expect(fixture.inserted.filter(value => typeof value === "object" && value !== null && "gatewayPaymentId" in value)).toHaveLength(1);
     expect(dbMocks.recordAudit).toHaveBeenCalledTimes(1);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: 901 }));
   });
 });
 

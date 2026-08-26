@@ -258,7 +258,7 @@ export const financeRouter = router({
       }
       if (issued.reused) return issued;
       await recordAudit(ctx.user.id, "billing_record", issued.id, "gateway_issued", `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.`);
-      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "billing_record", aggregateId: issued.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: issued.gatewayPaymentId, type: input.type } });
+      await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: issued.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: issued.gatewayPaymentId, type: input.type } });
       return issued;
     }),
 
@@ -282,6 +282,7 @@ export const financeRouter = router({
         return { id };
       });
       await recordAudit(ctx.user.id, "billing_record", created.id, "registered", `Cobrança ${input.type} registrada.`);
+      await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: created.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "manual", type: input.type } });
       return created;
     }),
 
