@@ -411,8 +411,11 @@ export const financeRouter = router({
 
   transfers: financeProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ transfer: financialTransfers, contractNumber: contracts.number }).from(financialTransfers).leftJoin(contracts, eq(financialTransfers.contractId, contracts.id)).orderBy(desc(financialTransfers.dueDate)).limit(300);
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 300;
+    const rawRows = await db.select({ transfer: financialTransfers, contractNumber: contracts.number }).from(financialTransfers).leftJoin(contracts, eq(financialTransfers.contractId, contracts.id)).orderBy(desc(financialTransfers.dueDate)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["repasses"] : [] };
   }),
 
   createTransfer: financeProcedure.input(z.object({ idempotencyKey: z.string().trim().min(16).max(128).optional(), contractId: z.number().int().positive().optional().nullable(), beneficiaryName: z.string().trim().min(2).max(255), description: z.string().trim().max(2000).optional().nullable(), amount: z.coerce.number().positive(), dueDate: z.string().date() }))
