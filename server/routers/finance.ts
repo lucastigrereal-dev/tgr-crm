@@ -309,8 +309,15 @@ export const financeRouter = router({
 
   entries: financeProcedure.input(z.object({ type: z.enum(["income", "expense"]).optional(), status: z.enum(["open", "paid", "cancelled"]).optional(), limit: z.number().int().min(1).max(1000).default(300) }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ entry: financialTransactions, contractNumber: contracts.number, campaignName: salesCampaigns.name }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(salesCampaigns, eq(financialTransactions.campaignId, salesCampaigns.id)).where(and(input?.type ? eq(financialTransactions.type, input.type) : undefined, input?.status ? eq(financialTransactions.status, input.status) : undefined)).orderBy(desc(financialTransactions.createdAt)).limit(input?.limit ?? 300);
+    if (!db) return { rows: [], totals: { income: 0, expense: 0 }, truncated: false };
+    const limit = input?.limit ?? 300;
+    const filters = and(input?.type ? eq(financialTransactions.type, input.type) : undefined, input?.status ? eq(financialTransactions.status, input.status) : undefined);
+    const [rawRows, totalRows] = await Promise.all([
+      db.select({ entry: financialTransactions, contractNumber: contracts.number, campaignName: salesCampaigns.name }).from(financialTransactions).leftJoin(contracts, eq(financialTransactions.contractId, contracts.id)).leftJoin(salesCampaigns, eq(financialTransactions.campaignId, salesCampaigns.id)).where(filters).orderBy(desc(financialTransactions.createdAt)).limit(limit + 1),
+      db.select({ income: sql<string>`coalesce(sum(case when ${financialTransactions.type} = 'income' then ${financialTransactions.amount} else 0 end), 0)`, expense: sql<string>`coalesce(sum(case when ${financialTransactions.type} = 'expense' then ${financialTransactions.amount} else 0 end), 0)` }).from(financialTransactions).where(filters).limit(1),
+    ]);
+    const totals = totalRows[0] ?? { income: "0", expense: "0" };
+    return { rows: rawRows.slice(0, limit), totals: { income: Number(Number(totals.income).toFixed(2)), expense: Number(Number(totals.expense).toFixed(2)) }, truncated: rawRows.length > limit };
   }),
 
   campaigns: financeProcedure.query(async () => {
