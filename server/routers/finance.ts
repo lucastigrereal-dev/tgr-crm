@@ -62,8 +62,11 @@ export const financeRouter = router({
 
   portfolioCandidates: financeProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ id: users.id, name: users.name, email: users.email, role: users.role }).from(users).where(inArray(users.role, ["admin", "finance"])).orderBy(users.name).limit(500);
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 500;
+    const rawRows = await db.select({ id: users.id, name: users.name, email: users.email, role: users.role }).from(users).where(inArray(users.role, ["admin", "finance"])).orderBy(users.name).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["responsáveis financeiros"] : [] };
   }),
 
   portfolioAssignments: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
