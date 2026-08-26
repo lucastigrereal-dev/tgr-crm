@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
-import { contracts, ownershipEntitlements, resorts, unitMaintenanceBlocks, units } from "../../drizzle/schema";
+import { and, desc, eq, gte, gt, inArray, lt, lte, ne } from "drizzle-orm";
+import { contracts, ownershipEntitlements, resorts, reservations, unitMaintenanceBlocks, units } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { contractsProcedure, serviceProcedure } from "./access";
@@ -62,8 +62,12 @@ export const ownershipRouter = router({
     const [created] = await db.transaction(async tx => {
       const unit = (await tx.select({ id: units.id }).from(units).where(eq(units.id, input.unitId)).limit(1).for("update"))[0];
       if (!unit) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade não encontrada." });
-      const conflicts = await tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lte(unitMaintenanceBlocks.startsAt, endsAt), gte(unitMaintenanceBlocks.endsAt, startsAt), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
+      const [conflicts, reservationConflicts] = await Promise.all([
+        tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lte(unitMaintenanceBlocks.startsAt, endsAt), gte(unitMaintenanceBlocks.endsAt, startsAt), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1),
+        tx.select({ id: reservations.id }).from(reservations).where(and(eq(reservations.unitId, input.unitId), lt(reservations.checkIn, endsAt), gt(reservations.checkOut, startsAt), inArray(reservations.status, ["pending", "confirmed", "checked_in"]))).limit(1),
+      ]);
       if (conflicts.length) throw new TRPCError({ code: "CONFLICT", message: "Já existe bloqueio operacional neste período." });
+      if (reservationConflicts.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade já possui reserva ativa neste período." });
       return tx.insert(unitMaintenanceBlocks).values({ unitId: input.unitId, startsAt, endsAt, reason: input.reason.trim(), createdByUserId: ctx.user.id }).$returningId();
     });
     await recordAudit(ctx.user.id, "unit_maintenance_block", created.id, "created", `Bloqueio de manutenção: ${input.reason}.`);
