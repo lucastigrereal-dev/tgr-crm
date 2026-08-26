@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { contracts, ownershipEntitlements, resorts, unitMaintenanceBlocks, units } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
@@ -59,8 +59,8 @@ export const ownershipRouter = router({
     const [created] = await db.transaction(async tx => {
       const unit = (await tx.select({ id: units.id }).from(units).where(eq(units.id, input.unitId)).limit(1).for("update"))[0];
       if (!unit) throw new TRPCError({ code: "NOT_FOUND", message: "Unidade não encontrada." });
-      const conflicts = await tx.select().from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lte(unitMaintenanceBlocks.startsAt, endsAt), gte(unitMaintenanceBlocks.endsAt, startsAt))).limit(1000);
-      if (conflicts.some(item => item.status !== "cancelled" && item.status !== "completed")) throw new TRPCError({ code: "CONFLICT", message: "Já existe bloqueio operacional neste período." });
+      const conflicts = await tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lte(unitMaintenanceBlocks.startsAt, endsAt), gte(unitMaintenanceBlocks.endsAt, startsAt), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
+      if (conflicts.length) throw new TRPCError({ code: "CONFLICT", message: "Já existe bloqueio operacional neste período." });
       return tx.insert(unitMaintenanceBlocks).values({ unitId: input.unitId, startsAt, endsAt, reason: input.reason.trim(), createdByUserId: ctx.user.id }).$returningId();
     });
     await recordAudit(ctx.user.id, "unit_maintenance_block", created.id, "created", `Bloqueio de manutenção: ${input.reason}.`);
