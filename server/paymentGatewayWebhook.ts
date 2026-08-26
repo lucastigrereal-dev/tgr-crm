@@ -55,9 +55,10 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       if (!billing) return;
 
       if (isAsaasPaymentConfirmed(event)) {
-        await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
+        if (["cancelled", "expired"].includes(billing.billing.status) || ["cancelled", "renegotiated"].includes(billing.installment.status)) return;
+        await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(and(eq(billingRecords.id, billing.billing.id), inArray(billingRecords.status, ["pending", "generated", "paid"])));
         const paidAt = new Date();
-        const installmentUpdate = await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(and(eq(installments.id, billing.installment.id), ne(installments.status, "paid")));
+        const installmentUpdate = await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
         const installmentWasSettled = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
         if (installmentWasSettled) {
           installmentPaid = true;

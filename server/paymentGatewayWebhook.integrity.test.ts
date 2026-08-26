@@ -51,6 +51,27 @@ describe("idempotência financeira do webhook Asaas", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: null, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 1, amount: "1000.00", source: "asaas", gatewayPaymentId: "pay-91", commissionBlocked: false } });
   });
 
+  it("ignora confirmação atrasada de cobrança cancelada sem gerar efeitos financeiros", async () => {
+    paymentMocks.isAsaasPaymentConfirmed.mockReturnValue(true);
+    paymentMocks.isAsaasPaymentOverdue.mockReturnValue(false);
+    const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
+    const txUpdate = vi.fn();
+    const tx = { insert: txInsert, update: txUpdate };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(query([]))
+        .mockReturnValueOnce(query([{ billing: { id: 302, type: "pix", status: "cancelled", gatewayPaymentId: "pay-92" }, installment: { id: 92, status: "cancelled", contractId: 62, sequence: 1, amount: "500.00", dueDate: new Date("2026-09-11T12:00:00Z") } }])),
+      transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+
+    await expect(processAsaasWebhook("secret", { id: "evt-92-cancelled", event: "PAYMENT_CONFIRMED", payment: { id: "pay-92", status: "CONFIRMED" } })).resolves.toMatchObject({ status: 200, billingRecordId: 302, installmentPaid: false });
+
+    expect(txUpdate).not.toHaveBeenCalled();
+    expect(txInsert).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("não cria segunda receita quando a parcela já foi liquidada por outro evento", async () => {
     const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
     const txUpdate = vi.fn(() => {
