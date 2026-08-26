@@ -14,7 +14,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
   let ledgerSelectCall = 0;
   let updateCall = 0;
   const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
-  const rows = (value: unknown[]) => Object.assign(value, { limit: () => Object.assign(Promise.resolve(value), { for: async () => value }) });
+  const rows = (value: unknown[]) => { const chain = Object.assign(Promise.resolve(value), { for: async () => value }); return Object.assign(chain, { limit: () => Object.assign(Promise.resolve(value), { for: async () => value }) }); };
   const ledgerRows = (value: unknown[]) => {
     const chain = {
       where: vi.fn(() => chain),
@@ -144,6 +144,10 @@ describe("eventos e auditoria de contratos", () => {
     expect(db.financialEntries).toEqual(expect.arrayContaining([expect.objectContaining({ type: "income", category: "Distrato · multa/retenção", amount: "120.00" }), expect.objectContaining({ type: "expense", category: "Distrato · reembolso", amount: "80.00" })]));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("parcelas canceladas: 2"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701, payload: expect.objectContaining({ status: "cancelled" }) }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 91, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 93, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 91, payload: { status: "cancelled", contractId: 701 } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 93, payload: { status: "cancelled", contractId: 701 } }));
   });
 
   it("bloqueia pedido não aprovado e não registra execução", async () => {
