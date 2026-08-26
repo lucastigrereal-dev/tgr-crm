@@ -49,7 +49,7 @@ describe("perfis internos", () => {
     const finance = appRouter.createCaller(contextFor("finance"));
     await expect(service.customers.list()).resolves.toBeInstanceOf(Array);
     await expect(service.operations.reservations()).resolves.toBeInstanceOf(Array);
-    await expect(seller.sales.pipeline()).resolves.toBeInstanceOf(Array);
+    await expect(seller.sales.pipeline()).resolves.toMatchObject({ rows: expect.any(Array), truncated: expect.any(Boolean), truncatedSources: expect.any(Array) });
     await expect(finance.contracts.list()).resolves.toBeInstanceOf(Array);
     await expect(finance.finance.entries()).resolves.toMatchObject({ rows: expect.any(Array), totals: { income: expect.any(Number), expense: expect.any(Number) }, truncated: expect.any(Boolean) });
     await expect(finance.dashboard.summary()).resolves.toMatchObject({ activeContracts: expect.any(Number) });

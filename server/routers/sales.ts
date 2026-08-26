@@ -89,14 +89,17 @@ export const salesRouter = router({
 
   pipeline: salesProcedure.input(z.object({ stage: z.enum(["new", "qualified", "proposal", "negotiation", "won", "lost"]).optional(), sellerId: z.number().int().positive().optional(), search: z.string().trim().max(120).optional(), limit: z.number().int().min(1).max(500).default(120) }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = input?.limit ?? 120;
     const term = input?.search ? `%${input.search}%` : null;
-    return db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name })
+    const rawRows = await db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name })
       .from(opportunities)
       .innerJoin(customers, eq(opportunities.customerId, customers.id))
       .leftJoin(users, eq(opportunities.sellerId, users.id))
       .where(and(input?.stage ? eq(opportunities.stage, input.stage) : undefined, input?.sellerId ? eq(opportunities.sellerId, input.sellerId) : undefined, term ? or(like(opportunities.title, term), like(customers.fullName, term), like(opportunities.source, term)) : undefined))
-      .orderBy(desc(opportunities.updatedAt)).limit(input?.limit ?? 120);
+      .orderBy(desc(opportunities.updatedAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["funil de oportunidades"] : [] };
   }),
 
   qualityRanking: salesProcedure.query(async () => {
