@@ -49,7 +49,16 @@ export const commissionsRouter = router({
     });
     const names = new Map(userRows.map(row => [row.id, row.name || row.email || `Usuário #${row.id}`]));
     const scorecards = buildProfessionalScorecards(facts, input?.minimumMaturedSales ?? 10).filter(card => ctx.user.role !== "seller" || card.userId === ctx.user.id).map(card => ({ ...card, userName: names.get(card.userId) || `Usuário #${card.userId}` }));
-    return { rolesCovered: ["promoter", "qualifier", "liner", "closer", "ftb", "room_manager"], scorecards };
+    const truncatedSources = [
+      contractRows.length >= 5_000 ? "contratos" : null,
+      proposalRows.length >= 5_000 ? "propostas" : null,
+      opportunityRows.length >= 5_000 ? "oportunidades" : null,
+      captureRows.length >= 10_000 ? "captações" : null,
+      installmentRows.length >= 20_000 ? "parcelas" : null,
+      cancellationRows.length >= 2_000 ? "distratos" : null,
+      userRows.length >= 1_000 ? "usuários" : null,
+    ].filter((source): source is string => Boolean(source));
+    return { rolesCovered: ["promoter", "qualifier", "liner", "closer", "ftb", "room_manager"], scorecards, truncated: truncatedSources.length > 0, truncatedSources };
   }),
 
   overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional(), closingMonth: closingMonth.optional() }).optional()).query(async ({ ctx, input }) => {
