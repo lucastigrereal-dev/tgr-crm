@@ -8,7 +8,7 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; statusUpdateAffectedRows?: number } = {}) {
+function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
   let selectCall = 0;
   let contractSelectCall = 0;
   let ledgerSelectCall = 0;
@@ -28,9 +28,9 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
     insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); return { $returningId: async () => table ? [{ id: 701 }] : [] }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
       const data = [
-        [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ penalty: 120, retained: 120, refund: 80 }) }],
+        [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80 }) }],
         [{ id: 701, status: "active" }],
-        [{ id: 71, status: "open" }, { id: 72, status: "paid" }, { id: 73, status: "overdue" }],
+        [{ id: 71, amount: "500.00", status: "open" }, { id: 72, amount: "1000.00", status: "paid" }, { id: 73, amount: "500.00", status: "overdue" }],
         [{ id: 91, status: "pending" }, { id: 92, status: "paid" }, { id: 93, status: "approved" }],
       ][selectCall++] ?? [];
       return rows(data);
@@ -118,6 +118,16 @@ describe("eventos e auditoria de contratos", () => {
     await expect(caller().uploadDocument({ contractId: 999, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(storageMocks.storagePut).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia execução quando o valor pago mudou desde a aprovação", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ snapshotPaidAmount: 0 }));
+
+    await expect(caller().executeCancellation({ requestId: 801 })).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar.",
+    });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
   });
 
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {

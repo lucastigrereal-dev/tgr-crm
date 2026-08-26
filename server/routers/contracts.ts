@@ -145,10 +145,12 @@ export const contractsRouter = router({
       const contract = (await tx.select().from(contracts).where(eq(contracts.id, request.contractId)).limit(1).for("update"))[0];
       if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
       if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
-      const schedule = await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id));
+      const schedule = await tx.select({ id: installments.id, amount: installments.amount, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id));
       const commissionRows = await tx.select({ id: salesCommissions.id, status: salesCommissions.status }).from(salesCommissions).where(eq(salesCommissions.contractId, contract.id));
       const impact = planCancellationExecution({ requestStatus: request.status, contractStatus: contract.status, installments: schedule, commissions: commissionRows });
-      const simulation = JSON.parse(request.simulationSnapshot) as { penalty?: number; retained?: number; refund?: number };
+      const simulation = JSON.parse(request.simulationSnapshot) as { paidAmount?: number; penalty?: number; retained?: number; refund?: number };
+      const currentPaidAmount = schedule.filter(item => item.status === "paid").reduce((sum, item) => sum + Number(item.amount), 0);
+      if (simulation.paidAmount !== undefined && Math.abs(currentPaidAmount - Number(simulation.paidAmount)) > 0.005) throw new TRPCError({ code: "CONFLICT", message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar." });
       const settlementDate = new Date();
       await tx.update(contracts).set({ status: "cancelled", cancelledAt: new Date(), cancellationReason: request.reason }).where(eq(contracts.id, contract.id));
       const cancelledInstallments = impact.cancelInstallmentIds.length ? await tx.update(installments).set({ status: "cancelled" }).where(inArray(installments.id, impact.cancelInstallmentIds)) : [{ affectedRows: 0 }];
