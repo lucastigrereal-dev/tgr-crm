@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { createHash } from "node:crypto";
 import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
 import { captureRecords, commercialPolicyVersions, contractCancellationRequests, contracts, installments, opportunities, proposals, revenueQualityLedger, salesCommissions } from "../drizzle/schema";
@@ -19,9 +20,9 @@ export function revenueQualitySyncIdempotencyKey(input: { contractId: number; po
  */
 export async function syncRevenueQualityForContract(input: { contractId: number; actorUserId: number | null; trigger: string }) {
   const db = await getDb();
-  if (!db) throw new Error("Banco indisponível para sincronização do ledger.");
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível sincronizar a qualidade de receita." });
   const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
-  if (!contract) throw new Error("Contrato não encontrado para sincronização do ledger.");
+  if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado para sincronização da qualidade de receita." });
   const policyContext = contract.proposalId ? (await db.select({ resortId: captureRecords.resortId }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, contract.id)).limit(1))[0] : null;
   const appliedPolicy = policyContext?.resortId ? (await db.select().from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, policyContext.resortId), eq(commercialPolicyVersions.policyType, "revenue_quality"), isNull(commercialPolicyVersions.retiredAt), lte(commercialPolicyVersions.effectiveAt, new Date()))).orderBy(desc(commercialPolicyVersions.effectiveAt)).limit(1))[0] : null;
   const policyVersion = appliedPolicy ? `revenue_quality/${appliedPolicy.version}` : POLICY_VERSION;
