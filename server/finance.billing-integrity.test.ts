@@ -35,6 +35,21 @@ function makeIdempotentDb(existing: { id: number; installmentId: number; type: "
   return db;
 }
 
+function makeCollisionDb(existing: { id: number; installmentId: number; type: "card" | "transfer"; amount: string; dueDate: Date; externalReference: string | null }) {
+  const duplicate = Object.assign(new Error("duplicate"), { code: "ER_DUP_ENTRY" });
+  const db = {
+    select: vi.fn()
+      .mockReturnValueOnce(query([]))
+      .mockReturnValueOnce(query([{ id: 91, status: "open" }]))
+      .mockReturnValueOnce(query([]))
+      .mockReturnValueOnce(query([]))
+      .mockReturnValueOnce(query([{ billing: existing }])),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => { throw duplicate; } })) })),
+    transaction: vi.fn(async (callback: (transaction: typeof db) => Promise<unknown>) => callback(db)),
+  };
+  return db;
+}
+
 describe("integridade de referências de cobrança", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -93,6 +108,27 @@ describe("integridade de referências de cobrança", () => {
     })).resolves.toEqual({ id: 702, reused: true });
 
     expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("reutiliza cobrança criada pela operação concorrente após colisão unique", async () => {
+    const db = makeCollisionDb({ id: 704, installmentId: 91, type: "card", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z"), externalReference: "MANUAL-CORRIDA-91" });
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.registerBilling({
+      idempotencyKey: "billing-race-key-91-abcdef",
+      installmentId: 91,
+      type: "card",
+      amount: 1000,
+      dueDate: "2026-09-10",
+      externalReference: "MANUAL-CORRIDA-91",
+      digitableLine: null,
+      pixCopyPaste: null,
+    })).resolves.toEqual({ id: 704, reused: true });
+
+    expect(db.insert).toHaveBeenCalledTimes(1);
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
