@@ -5,11 +5,11 @@ vi.mock("./db", () => dbMocks);
 
 import { salesRouter } from "./routers/sales";
 
-function makeDb(row: { status: "pending" | "approved" | "rejected"; requestedAmount?: string } | null, affectedRows = 1) {
+function makeDb(row: { proposalId?: number; status: "pending" | "approved" | "rejected"; requestedAmount?: string } | null, affectedRows = 1) {
   const select = vi.fn(() => ({
     from: vi.fn(() => ({
       where: vi.fn(() => ({
-        limit: vi.fn(async () => row ? [{ requestedAmount: "800.00", ...row }] : []),
+        limit: vi.fn(async () => row ? [{ proposalId: 300, requestedAmount: "800.00", ...row }] : []),
       })),
     })),
   }));
@@ -59,5 +59,6 @@ describe("integridade de decisão de desconto", () => {
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(db.set).toHaveBeenCalledWith(expect.objectContaining({ status: "approved", approvedAmount: "800.00" }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "proposal_discount", 901, "approved", "Pedido de desconto decidido pela administração.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "proposal.discount.decided", aggregateType: "proposal_discount", aggregateId: 901, actorUserId: 55, payload: { proposalId: 300, status: "approved", approvedAmount: 800 } });
   });
 });
