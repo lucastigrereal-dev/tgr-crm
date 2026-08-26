@@ -119,8 +119,9 @@ export const operationsRouter = router({
     }
     let entitlementScore = 0;
     if (input.contractId) {
-      const contract = (await db.select({ id: contracts.id, customerId: contracts.customerId }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
+      const contract = (await db.select({ id: contracts.id, customerId: contracts.customerId, status: contracts.status }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
       if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao associado." });
+      if (["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível entrar na fila com contrato cancelado ou encerrado." });
       const entitlements = await db.select().from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"))).limit(1000);
       const highestPriority = entitlements.reduce<number | null>((current, entitlement) => current === null || entitlement.priorityLevel < current ? entitlement.priorityLevel : current, null);
       entitlementScore = highestPriority === null ? 0 : entitlementPriorityScore(highestPriority);
@@ -155,8 +156,9 @@ export const operationsRouter = router({
       const maintenanceConflict = await tx.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(eq(unitMaintenanceBlocks.unitId, input.unitId), lt(unitMaintenanceBlocks.startsAt, item.desiredCheckOut), gt(unitMaintenanceBlocks.endsAt, item.desiredCheckIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]))).limit(1);
       if (maintenanceConflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade está bloqueada para manutenção neste período." });
       if (item.contractId) {
-        const contract = (await tx.select().from(contracts).where(and(eq(contracts.id, item.contractId), eq(contracts.customerId, item.customerId))).limit(1))[0];
+        const contract = (await tx.select({ id: contracts.id, status: contracts.status }).from(contracts).where(and(eq(contracts.id, item.contractId), eq(contracts.customerId, item.customerId))).limit(1))[0];
         if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato da fila não pertence ao associado." });
+        if (["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível converter a fila com contrato cancelado ou encerrado." });
       }
       const created = await tx.insert(reservations).values({ customerId: item.customerId, contractId: item.contractId, unitId: input.unitId, checkIn: item.desiredCheckIn, checkOut: item.desiredCheckOut, adults: item.partySize, children: 0, notes: input.notes || item.preferenceNotes || null, status: "confirmed", createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar a reserva da fila." });
