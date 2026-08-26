@@ -33,6 +33,29 @@ describe("idempotência concorrente de repasse", () => {
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
+  it("audita e emite evento quando o pagamento do repasse vence", async () => {
+    const updates: unknown[] = [];
+    const db = {
+      select: vi.fn(() => query({ id: 43, status: "pending", amount: "125.50", contractId: 77 })),
+      update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); return { affectedRows: 1 }; }) })) })),
+      transaction: vi.fn(async (callback: (tx: { select: typeof db.select; update: typeof db.update }) => Promise<unknown>) => callback({ select: db.select, update: db.update })),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "admin" } } as never);
+
+    await expect(caller.markTransferPaid({ id: 43 })).resolves.toEqual({ success: true, alreadyPaid: false });
+
+    expect(updates).toEqual([{ status: "paid", paidAt: expect.any(Date) }]);
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(71, "financial_transfer", 43, "paid", "Repasse baixado como pago.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({
+      eventName: "financial.transfer.paid",
+      aggregateType: "financial_transfer",
+      aggregateId: 43,
+      actorUserId: 71,
+      payload: { amount: "125.50", contractId: 77 },
+    });
+  });
+
   it("recusa pagar repasse cancelado e não audita", async () => {
     const updates: unknown[] = [];
     const db = {

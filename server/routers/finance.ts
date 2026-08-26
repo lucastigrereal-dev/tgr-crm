@@ -462,15 +462,18 @@ export const financeRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const outcome = await db.transaction(async tx => {
-      const transfer = (await tx.select({ status: financialTransfers.status }).from(financialTransfers).where(eq(financialTransfers.id, input.id)).limit(1).for("update"))[0];
+      const transfer = (await tx.select({ status: financialTransfers.status, amount: financialTransfers.amount, contractId: financialTransfers.contractId }).from(financialTransfers).where(eq(financialTransfers.id, input.id)).limit(1).for("update"))[0];
       if (!transfer) throw new TRPCError({ code: "NOT_FOUND", message: "Repasse não encontrado." });
-      if (transfer.status === "paid") return { success: true, alreadyPaid: true };
+      if (transfer.status === "paid") return { success: true, alreadyPaid: true, amount: transfer.amount, contractId: transfer.contractId };
       if (transfer.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Repasse cancelado não pode ser pago." });
       const updateResult = await tx.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(and(eq(financialTransfers.id, input.id), eq(financialTransfers.status, "pending")));
       if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadyPaid: true };
-      return { success: true, alreadyPaid: false };
+      return { success: true, alreadyPaid: false, amount: transfer.amount, contractId: transfer.contractId };
     });
-    if (!outcome.alreadyPaid) await recordAudit(ctx.user.id, "financial_transfer", input.id, "paid", "Repasse baixado como pago.");
-    return outcome;
+    if (!outcome.alreadyPaid) {
+      await recordAudit(ctx.user.id, "financial_transfer", input.id, "paid", "Repasse baixado como pago.");
+      await recordDomainEvent({ eventName: "financial.transfer.paid", aggregateType: "financial_transfer", aggregateId: input.id, actorUserId: ctx.user.id, payload: { amount: outcome.amount, contractId: outcome.contractId } });
+    }
+    return { success: outcome.success, alreadyPaid: outcome.alreadyPaid };
   }),
 });

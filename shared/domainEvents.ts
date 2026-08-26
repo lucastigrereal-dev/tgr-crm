@@ -29,6 +29,7 @@ export const domainEventCatalog = {
   "financial.entry.created": { aggregateType: "financial_transaction", description: "Lançamento financeiro criado." },
   "financial.entry.reconciled": { aggregateType: "financial_transaction", description: "Lançamento financeiro conciliado." },
   "financial.transfer.created": { aggregateType: "financial_transfer", description: "Repasse financeiro criado." },
+  "financial.transfer.paid": { aggregateType: "financial_transfer", description: "Repasse financeiro pago." },
   "ai.assistance.requested": { aggregateType: "customer", description: "Assistência de IA consultada com contexto permissionado." },
 } as const;
 
