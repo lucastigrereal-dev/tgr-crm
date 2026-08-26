@@ -16,6 +16,26 @@ function chain<T>(value: T) {
 describe("finance.revenueQuality", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("preserva erro de banco indisponível na sincronização manual", async () => {
+    dbMocks.getDb.mockResolvedValue(null);
+    const caller = financeRouter.createCaller({ user: { id: 9, role: "finance" } } as never);
+
+    await expect(caller.syncRevenueQualityLedger({ contractId: 77 })).rejects.toMatchObject({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Não foi possível sincronizar a qualidade de receita.",
+    });
+  });
+
+  it("preserva contrato ausente como NOT_FOUND na sincronização manual", async () => {
+    dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain([])) });
+    const caller = financeRouter.createCaller({ user: { id: 9, role: "finance" } } as never);
+
+    await expect(caller.syncRevenueQualityLedger({ contractId: 77 })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Contrato não encontrado para sincronização da qualidade de receita.",
+    });
+  });
+
   it("projeta contrato, parcelas, comissão e distrato em uma leitura econômica rastreável", async () => {
     const responses = [
       [{ id: 77, number: "TGR-077", totalAmount: "10000.00", status: "cancelled" }],

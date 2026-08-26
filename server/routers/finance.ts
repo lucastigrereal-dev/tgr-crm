@@ -110,7 +110,8 @@ export const financeRouter = router({
     try {
       return await syncRevenueQualityForContract({ contractId: input.contractId, actorUserId: ctx.user.id, trigger: "sincronização manual" });
     } catch (error) {
-      throw new TRPCError({ code: "NOT_FOUND", message: error instanceof Error ? error.message : "Não foi possível sincronizar o ledger." });
+      if (error instanceof TRPCError) throw error;
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível sincronizar o ledger." });
     }
   }),
 
