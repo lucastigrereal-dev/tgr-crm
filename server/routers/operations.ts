@@ -389,7 +389,7 @@ export const operationsRouter = router({
     const [customerRows, contractRows, assigneeRows] = await Promise.all([
       customerId ? db.select({ id: customers.id }).from(customers).where(eq(customers.id, customerId)).limit(1) : Promise.resolve([]),
       contractId ? db.select({ id: contracts.id, customerId: contracts.customerId, status: contracts.status }).from(contracts).where(eq(contracts.id, contractId)).limit(1) : Promise.resolve([]),
-      db.select({ id: users.id }).from(users).where(eq(users.id, assignedToUserId)).limit(1),
+      db.select({ id: users.id }).from(users).where(and(eq(users.id, assignedToUserId), inArray(users.role, ["admin", "seller", "finance", "service"]))).limit(1),
     ]);
     if (customerId && !customerRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
     const contract = contractRows[0];

@@ -59,6 +59,16 @@ describe("integridade referencial de tarefas", () => {
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
+  it("rejeita responsável fora da equipe interna antes do insert", async () => {
+    const fixture = makeDb({ assigneeRows: [] });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.createTask({ title: "Enviar atualização", assignedToUserId: 77 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("rejeita lembrete posterior ao vencimento antes do insert", async () => {
     const fixture = makeDb();
     dbMocks.getDb.mockResolvedValue(fixture.db);
