@@ -17,6 +17,7 @@ import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { internalProcedure } from "./access";
 import { buildRelationshipRadar } from "../relationshipRadar";
+import { decodeUpload } from "../uploadValidation";
 
 const customerInput = z.object({
   fullName: z.string().trim().min(3).max(255),
@@ -46,15 +47,6 @@ function isDuplicateKeyError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { code?: unknown; errno?: unknown };
   return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
-}
-
-function decodeUpload(base64: string) {
-  const payload = base64.includes(",") ? base64.split(",").at(-1)! : base64;
-  const buffer = Buffer.from(payload, "base64");
-  if (!buffer.length || buffer.length > 5 * 1024 * 1024) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "O anexo deve ter até 5 MB." });
-  }
-  return buffer;
 }
 
 export const customersRouter = router({

@@ -105,6 +105,14 @@ describe("eventos e auditoria de contratos", () => {
 
   });
 
+  it("rejeita base64 inválido antes de chamar o storage", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ contractId: 701, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,nao-e-base64-!!!!" })).rejects.toMatchObject({ code: "BAD_REQUEST", message: "O conteúdo do anexo não é um base64 válido." });
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("normaliza falha detalhada do storage sem auditar documento falso", async () => {
     storageMocks.storagePut.mockRejectedValueOnce(new Error("payload remoto secreto"));
     dbMocks.getDb.mockResolvedValue(makeDb());

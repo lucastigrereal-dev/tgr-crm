@@ -10,6 +10,7 @@ import { parseCancellationPolicy } from "../projectPolicy";
 import { simulateCancellation } from "../cancellationDomain";
 import { planCancellationExecution } from "../cancellationExecution";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
+import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 
@@ -208,9 +209,7 @@ export const contractsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do documento não encontrado." });
-    const payload = input.base64.includes(",") ? input.base64.split(",").at(-1)! : input.base64;
-    const buffer = Buffer.from(payload, "base64");
-    if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new TRPCError({ code: "BAD_REQUEST", message: "O anexo deve ter até 5 MB." });
+    const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     let upload: { key: string; url: string };
     try {
