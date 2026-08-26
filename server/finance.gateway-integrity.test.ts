@@ -35,7 +35,7 @@ function query(rows: unknown[]) {
   return chain;
 }
 
-function makeDb(existingBillingType?: "pix" | "boleto") {
+function makeDb(existingBillingType?: "pix" | "boleto", failBillingPersist = false) {
   const billingState: unknown[] = existingBillingType ? [{ billing: { id: 902, gatewayPaymentId: "pay-existing", type: existingBillingType, status: "generated" } }] : [];
   const gatewayCustomerState: unknown[] = [];
   const inserted: unknown[] = [];
@@ -52,7 +52,7 @@ function makeDb(existingBillingType?: "pix" | "boleto") {
       inserted.push(value);
       return {
         onDuplicateKeyUpdate: vi.fn(async () => { gatewayCustomerState.push({ gatewayCustomerId: "cus-7" }); }),
-        $returningId: async () => { billingState.push({ billing: { id: 901, gatewayPaymentId: "pay-91", type: "pix", status: "generated" } }); return [{ id: 901 }]; },
+        $returningId: async () => { if (failBillingPersist && typeof value === "object" && value !== null && "gatewayPaymentId" in value) throw new Error("database persist sentinel"); billingState.push({ billing: { id: 901, gatewayPaymentId: "pay-91", type: "pix", status: "generated" } }); return [{ id: 901 }]; },
       };
     }) })),
   };
@@ -95,6 +95,16 @@ describe("isolamento de erro do gateway", () => {
     });
     expect(gatewayMocks.createAsaasPayment).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("normaliza falha de persistência local sem classificá-la como gateway", async () => {
+    const fixture = makeDb(undefined, true);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.issueGatewayBilling({ installmentId: 91, type: "pix" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "A cobrança foi processada, mas não foi possível confirmar o estado no CRM." });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("não vaza payload remoto nem audita falha de emissão", async () => {
