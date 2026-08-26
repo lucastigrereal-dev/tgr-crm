@@ -16,18 +16,14 @@ import { billingRecords, installments, paymentGatewayWebhookEvents } from "../dr
 import { processAsaasWebhook } from "./paymentGatewayWebhook";
 
 function query(rows: unknown[]) {
-  const chain = {
-    from: vi.fn(),
-    innerJoin: vi.fn(),
-    leftJoin: vi.fn(),
-    where: vi.fn(),
-    limit: vi.fn(async () => rows),
-  };
-  chain.from.mockReturnValue(chain);
-  chain.innerJoin.mockReturnValue(chain);
-  chain.leftJoin.mockReturnValue(chain);
-  chain.where.mockReturnValue(chain);
-  return chain;
+  const promise = Promise.resolve(rows) as Promise<unknown[]> & Record<string, ReturnType<typeof vi.fn>>;
+  promise.from = vi.fn(() => promise);
+  promise.innerJoin = vi.fn(() => promise);
+  promise.leftJoin = vi.fn(() => promise);
+  promise.where = vi.fn(() => promise);
+  promise.limit = vi.fn(() => promise);
+  promise.for = vi.fn(() => promise);
+  return promise;
 }
 
 describe("idempotência financeira do webhook Asaas", () => {
@@ -36,7 +32,8 @@ describe("idempotência financeira do webhook Asaas", () => {
   it("emite payload completo quando o webhook liquida a parcela", async () => {
     const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
     const txUpdate = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) }));
-    const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => query([])) };
+    const lockedBillingQuery = query([{ billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }]);
+    const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => lockedBillingQuery) };
     const db = {
       select: vi.fn()
         .mockReturnValueOnce(query([]))
@@ -48,6 +45,7 @@ describe("idempotência financeira do webhook Asaas", () => {
     await expect(processAsaasWebhook("secret", { id: "evt-91", event: "PAYMENT_CONFIRMED", payment: { id: "pay-91", status: "CONFIRMED", billingType: "PIX" } })).resolves.toMatchObject({ status: 200, billingRecordId: 301, installmentPaid: true });
 
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: null, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 1, amount: "1000.00", source: "asaas", gatewayPaymentId: "pay-91", commissionBlocked: false } });
+    expect(lockedBillingQuery.for).toHaveBeenCalledWith("update");
   });
 
   it("ignora confirmação atrasada de cobrança cancelada sem gerar efeitos financeiros", async () => {
@@ -55,7 +53,7 @@ describe("idempotência financeira do webhook Asaas", () => {
     paymentMocks.isAsaasPaymentOverdue.mockReturnValue(false);
     const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
     const txUpdate = vi.fn();
-    const tx = { insert: txInsert, update: txUpdate };
+    const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => query([{ billing: { id: 302, type: "pix", status: "cancelled", gatewayPaymentId: "pay-92" }, installment: { id: 92, status: "cancelled", contractId: 62, sequence: 1, amount: "500.00", dueDate: new Date("2026-09-11T12:00:00Z") } }])) };
     const db = {
       select: vi.fn()
         .mockReturnValueOnce(query([]))
@@ -77,7 +75,7 @@ describe("idempotência financeira do webhook Asaas", () => {
       const affectedRows = txUpdate.mock.calls.length === 2 ? 0 : 1;
       return { set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows })) })) };
     });
-    const tx = { insert: txInsert, update: txUpdate };
+    const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => query([{ billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay_91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }])) };
     const db = {
       select: vi.fn()
         .mockReturnValueOnce(query([]))
@@ -117,7 +115,7 @@ describe("monotonicidade de estado do webhook", () => {
     const txUpdate = vi.fn(() => ({
       set: vi.fn((values: unknown) => ({ where: vi.fn(async () => { updated.push(values); return { affectedRows: 1 }; }) })),
     }));
-    const tx = { insert: txInsert, update: txUpdate };
+    const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => query([{ billing: { id: 301, type: "pix", status: "paid", gatewayPaymentId: "pay_91" }, installment: { id: 91, status: "paid", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }])) };
     const db = {
       select: vi.fn()
         .mockReturnValueOnce(query([]))

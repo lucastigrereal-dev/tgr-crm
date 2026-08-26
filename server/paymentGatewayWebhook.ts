@@ -46,7 +46,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   const existingEvent = (await db.select({ id: paymentGatewayWebhookEvents.id }).from(paymentGatewayWebhookEvents).where(and(eq(paymentGatewayWebhookEvents.gatewayProvider, "asaas"), eq(paymentGatewayWebhookEvents.gatewayEventId, eventId))).limit(1))[0];
   if (existingEvent) return { status: 200, duplicate: true, message: "Evento já processado." };
 
-  const billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
+  let billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
   let commissionBlocked = false;
   const createdCommissionFacts: Array<{ id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number }> = [];
@@ -55,6 +55,9 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
     await db.transaction(async tx => {
       await tx.insert(paymentGatewayWebhookEvents).values({ gatewayProvider: "asaas", gatewayEventId: eventId, eventType: event, billingRecordId: billing?.billing.id ?? null });
       if (!billing) return;
+      const lockedBilling = (await tx.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(eq(billingRecords.id, billing.billing.id)).limit(1).for("update"))[0];
+      if (!lockedBilling) return;
+      billing = lockedBilling;
 
       if (isAsaasPaymentConfirmed(event)) {
         if (["cancelled", "expired"].includes(billing.billing.status) || ["cancelled", "renegotiated"].includes(billing.installment.status)) return;
