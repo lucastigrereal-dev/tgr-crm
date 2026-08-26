@@ -315,10 +315,14 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    try {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: signedInAt,
+      });
+    } catch (error) {
+      logger.warn("Failed to update user sign-in timestamp", { error: error instanceof Error ? error.message : "unknown_error" });
+    }
 
     return user;
   }
