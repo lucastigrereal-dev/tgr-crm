@@ -83,7 +83,7 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await ownershipRouter.createCaller(adminContext).createEntitlement({ contractId: 61, entitlementType: "fixed_week", fixedWeek: 12, annualPoints: 0, priorityLevel: 2 });
     await ownershipRouter.createCaller(serviceContext).createMaintenanceBlock({ unitId: 51, startsAt: "2026-10-10", endsAt: "2026-10-12", reason: "Manutenção preventiva" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", actorUserId: 71, payload: { contractId: 61, entitlementType: "fixed_week" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", actorUserId: 71, payload: { contractId: 61, unitId: null, priorityLevel: 2, entitlementType: "fixed_week" } }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "unit.maintenance.blocked", aggregateType: "unit_maintenance_block", actorUserId: 72, payload: expect.objectContaining({ unitId: 51, reason: "Manutenção preventiva" }) }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(72, "unit_maintenance_block", expect.any(Number), "created", expect.stringContaining("Manutenção preventiva"));
   });

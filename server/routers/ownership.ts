@@ -48,7 +48,7 @@ export const ownershipRouter = router({
     const [created] = await db.insert(ownershipEntitlements).values({ contractId: input.contractId, resortId: input.resortId ?? null, unitId: input.unitId ?? null, entitlementType: input.entitlementType, fixedWeek: input.fixedWeek ?? null, annualPoints: input.annualPoints, priorityLevel: input.priorityLevel, validFrom, validUntil }).$returningId();
     if (!created?.id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o direito de uso." });
     await recordAudit(ctx.user.id, "ownership_entitlement", created.id, "created", `Direito ${input.entitlementType} criado.`);
-    await recordDomainEvent({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", aggregateId: created.id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, entitlementType: input.entitlementType } });
+    await recordDomainEvent({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", aggregateId: created.id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, unitId: input.unitId ?? null, priorityLevel: input.priorityLevel, entitlementType: input.entitlementType } });
     return created;
   }),
   createMaintenanceBlock: serviceProcedure.input(z.object({ unitId: z.number().int().positive(), startsAt: z.string().trim().min(1).refine(value => !Number.isNaN(new Date(value).getTime()), "Data inicial inválida."), endsAt: z.string().trim().min(1).refine(value => !Number.isNaN(new Date(value).getTime()), "Data final inválida."), reason: z.string().trim().min(3).max(255) })).mutation(async ({ ctx, input }) => {
