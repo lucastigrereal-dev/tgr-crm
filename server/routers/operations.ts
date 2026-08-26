@@ -314,7 +314,7 @@ export const operationsRouter = router({
     limit: z.number().int().min(1).max(500).default(200),
   }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const now = new Date();
     const reminderCutoff = new Date(now.getTime() + 7 * 86_400_000);
     const [dueInstallments, openPaymentTasks] = await Promise.all([
@@ -349,10 +349,13 @@ export const operationsRouter = router({
     if (input?.priority) taskFilters.push(eq(tasks.priority, input.priority));
     const search = input?.search?.trim();
     if (search) taskFilters.push(or(like(tasks.title, `%${search}%`), like(customers.fullName, `%${search}%`), like(contracts.number, `%${search}%`))!);
-    return db.select({ task: tasks, customerName: customers.fullName, contractNumber: contracts.number, assigneeName: users.name })
+    const limit = input?.limit ?? 200;
+    const rawRows = await db.select({ task: tasks, customerName: customers.fullName, contractNumber: contracts.number, assigneeName: users.name })
       .from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).leftJoin(contracts, eq(tasks.contractId, contracts.id)).leftJoin(users, eq(tasks.assignedToUserId, users.id))
       .where(taskFilters.length ? and(...taskFilters) : undefined)
-      .orderBy(tasks.dueAt).limit(input?.limit ?? 200);
+      .orderBy(tasks.dueAt).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["tarefas"] : [] };
   }),
 
   createTask: internalProcedure.input(z.object({

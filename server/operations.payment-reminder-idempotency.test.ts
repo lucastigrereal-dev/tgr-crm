@@ -41,7 +41,7 @@ describe("idempotência de lembrete automático de cobrança", () => {
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
 
-    await expect(caller.tasks()).resolves.toEqual([]);
+    await expect(caller.tasks()).resolves.toMatchObject({ rows: [], truncated: false, truncatedSources: [] });
 
     expect(inserted[0]).toMatchObject({ type: "payment", contractId: 61, customerId: 7, automationKey: expect.stringContaining("61:") });
     expect(inserted[0]).toMatchObject({ automationKey: expect.stringContaining("#1") });
