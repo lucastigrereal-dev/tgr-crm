@@ -36,12 +36,11 @@ describe("idempotência financeira do webhook Asaas", () => {
   it("emite payload completo quando o webhook liquida a parcela", async () => {
     const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
     const txUpdate = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) }));
-    const tx = { insert: txInsert, update: txUpdate };
+    const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => query([])) };
     const db = {
       select: vi.fn()
         .mockReturnValueOnce(query([]))
-        .mockReturnValueOnce(query([{ billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }]))
-        .mockReturnValueOnce(query([])),
+        .mockReturnValueOnce(query([{ billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }])),
       transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };
     dbMocks.getDb.mockResolvedValue(db);
