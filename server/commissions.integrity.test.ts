@@ -51,5 +51,28 @@ describe("integridade do status de comissão", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "approved", "Comissão marcada como approved.");
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: null } });
   });
+
+  it("torna retry do mesmo status um no-op sem repetir trilha", async () => {
+    const fixture = makeDb([{ contractId: null, status: "approved" }]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().setStatus({ id: 901, status: "approved" })).resolves.toEqual({ success: true });
+    expect(fixture.update).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { current: "paid" as const, next: "approved" as const },
+    { current: "cancelled" as const, next: "paid" as const },
+  ])("bloqueia reabertura de comissão $current para $next", async ({ current, next }) => {
+    const fixture = makeDb([{ contractId: null, status: current }]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().setStatus({ id: 901, status: next })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.update).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
 });
 
