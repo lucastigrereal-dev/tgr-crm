@@ -53,6 +53,14 @@ describe("captures reception router", () => {
     expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.checked_in", aggregateId: 91 }));
   });
 
+  it("rejeita salto de lifecycle de agendada para encerrada", async () => {
+    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture({ presentationStatus: "scheduled" })])), update: vi.fn() } as never);
+
+    await expect(caller("admin").captures.updateStatus({ id: 91, presentationStatus: "closed" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("não audita check-in que perdeu a corrida", async () => {
     const recorder = updateRecorder(0);
     mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture()])), ...recorder } as never);

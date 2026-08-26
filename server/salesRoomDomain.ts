@@ -12,6 +12,19 @@ type CaptureRoomState = {
 const terminalStatuses: PresentationStatus[] = ["no_tour", "closed"];
 export const activeRoomStatuses: PresentationStatus[] = ["scheduled", "checked_in", "presented"];
 
+const presentationTransitions: Record<PresentationStatus, readonly PresentationStatus[]> = {
+  captured: ["captured", "scheduled", "checked_in", "no_tour"],
+  scheduled: ["scheduled", "checked_in", "no_tour"],
+  checked_in: ["checked_in", "presented", "no_tour"],
+  presented: ["presented", "closed"],
+  no_tour: ["no_tour"],
+  closed: ["closed"],
+};
+
+export function canTransitionPresentationStatus(current: PresentationStatus, next: PresentationStatus) {
+  return presentationTransitions[current].includes(next);
+}
+
 type QueueCapture = {
   presentationStatus: PresentationStatus;
   scheduledAt: Date | null;
