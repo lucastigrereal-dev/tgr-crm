@@ -200,6 +200,12 @@ export const capturesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.transaction(async tx => {
+      const [campaignRows, resortRows] = await Promise.all([
+        input.campaignId ? tx.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1) : Promise.resolve([]),
+        input.resortId ? tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1) : Promise.resolve([]),
+      ]);
+      if (input.campaignId && !campaignRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da captação não encontrada." });
+      if (input.resortId && !resortRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento da captação não encontrado." });
       if (input.resortId) {
         const settings = (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0];
         const readiness = getProjectCaptureReadiness({ customerName: input.customer?.fullName, phone: input.customer?.phone, city: input.customer?.city, promoterId: input.promoterId, captureLocation: input.captureLocation, averageIncome: input.averageIncome, travelWeeksPerYear: input.travelWeeksPerYear, qualificationStatus: input.qualificationStatus, vehicle: input.vehicleBrand || input.vehicleModel, homeOwnership: input.ownsHome === true ? "sim" : null }, settings?.requiredCaptureFields);

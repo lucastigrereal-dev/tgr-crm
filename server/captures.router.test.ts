@@ -18,8 +18,20 @@ describe("captures.create", () => {
     expect(mockedDb).not.toHaveBeenCalled();
   });
 
+  it("rejeita campanha inexistente antes de criar qualquer entidade", async () => {
+    const select = vi.fn().mockReturnValueOnce(chain([]));
+    const insert = vi.fn();
+    mockedDb.mockResolvedValue({ transaction: (callback: (tx: unknown) => unknown) => callback({ select, insert }) } as never);
+
+    await expect(caller("seller").captures.create(baseInput)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(insert).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
   it("cria associado, oportunidade, ficha e tarefa quando existe agendamento", async () => {
-    const select = vi.fn(() => chain([]));
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([{ id: 12 }]))
+      .mockReturnValueOnce(chain([]));
     const insert = vi.fn()
       .mockImplementationOnce(() => returningId([{ id: 101 }]))
       .mockImplementationOnce(() => returningId([{ id: 202 }]))
@@ -36,7 +48,9 @@ describe("captures.create", () => {
   });
 
   it("reaproveita associado encontrado por telefone sem duplicar cadastro", async () => {
-    const select = vi.fn(() => chain([{ id: 55, fullName: "Rafael Existente" }]));
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([{ id: 12 }]))
+      .mockReturnValueOnce(chain([{ id: 55, fullName: "Rafael Existente" }]));
     const insert = vi.fn()
       .mockImplementationOnce(() => returningId([{ id: 66 }]))
       .mockImplementationOnce(() => returningId([{ id: 77 }]));
