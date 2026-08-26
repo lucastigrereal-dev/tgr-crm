@@ -13,10 +13,11 @@ function makeDb(rows: unknown[], affectedRows = 1) {
       return { where: vi.fn(() => ({ limit: vi.fn(async () => rows) })) };
     }),
   }));
+  const sets: unknown[] = [];
   const update = vi.fn(() => ({
-    set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows })) })),
+    set: vi.fn((value: unknown) => { sets.push(value); return { where: vi.fn(async () => ({ affectedRows })) }; }),
   }));
-  return { db: { select, update }, update };
+  return { db: { select, update }, update, sets };
 }
 
 function caller() {
@@ -50,6 +51,23 @@ describe("integridade do status de comissão", () => {
     await expect(caller().setStatus({ id: 901, status: "approved" })).resolves.toEqual({ success: true });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "approved", "Comissão marcada como approved.");
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: null } });
+  });
+
+  it("sincroniza lifecycle e datas quando a comissão é paga", async () => {
+    const fixture = makeDb([{ contractId: null, status: "approved" }]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().setStatus({ id: 901, status: "paid" })).resolves.toEqual({ success: true });
+    expect(fixture.sets[0]).toMatchObject({ status: "paid", lifecycleStatus: "paid", paidAt: expect.any(Date), receivedAt: expect.any(Date) });
+    expect((fixture.sets[0] as { paidAt: Date }).paidAt).toEqual((fixture.sets[0] as { receivedAt: Date }).receivedAt);
+  });
+
+  it("sincroniza lifecycle e data quando a comissão é cancelada", async () => {
+    const fixture = makeDb([{ contractId: null, status: "approved" }]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().setStatus({ id: 901, status: "cancelled" })).resolves.toEqual({ success: true });
+    expect(fixture.sets[0]).toMatchObject({ status: "cancelled", lifecycleStatus: "cancelled", cancelledAt: expect.any(Date) });
   });
 
   it("torna retry do mesmo status um no-op sem repetir trilha", async () => {
