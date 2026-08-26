@@ -80,7 +80,7 @@ export const contractsRouter = router({
       return contractId;
     });
     await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
-    await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
+    await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, usageModel: input.usageModel, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
     await syncRevenueQualityForContract({ contractId: result, actorUserId: ctx.user.id, trigger: "criação de contrato" });
     return { id: result };
   }),
