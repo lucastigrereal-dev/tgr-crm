@@ -125,8 +125,13 @@ export const dashboardRouter = router({
   commercialCharts: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], filters: { resorts: [], salesRooms: [] }, range: { start, end }, truncated: false, truncatedSources: [] };
+    const opportunityPeriodWhere = and(
+      or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end))),
+      input?.sellerId ? eq(opportunities.sellerId, input.sellerId) : undefined,
+      input?.campaignId ? eq(opportunities.campaignId, input.campaignId) : undefined,
+    );
     const [opportunityRows, captureRows, goalRows, sellerRows, campaignRows, resortRows] = await Promise.all([
-      db.select().from(opportunities).where(or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end)))).limit(MAX_ANALYTICS_ROWS),
+      db.select().from(opportunities).where(opportunityPeriodWhere).limit(MAX_ANALYTICS_ROWS),
       db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
       db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).limit(1000),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")).limit(1000),
@@ -155,8 +160,13 @@ export const dashboardRouter = router({
   funnelDetails: internalProcedure.input(funnelDetailsInput).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
     if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const opportunityPeriodWhere = and(
+      or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end))),
+      input.sellerId ? eq(opportunities.sellerId, input.sellerId) : undefined,
+      input.campaignId ? eq(opportunities.campaignId, input.campaignId) : undefined,
+    );
     const [rows, captureRows] = await Promise.all([
-      db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id)).where(or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end)))).limit(MAX_ANALYTICS_ROWS),
+      db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id)).where(opportunityPeriodWhere).limit(MAX_ANALYTICS_ROWS),
       db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
     ]);
     const truncatedSources = [
