@@ -124,7 +124,7 @@ export const dashboardRouter = router({
   }),
   commercialCharts: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
-    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], filters: { resorts: [], salesRooms: [] }, range: { start, end } };
+    if (!db) return { funnel: funnelStages.map(stage => ({ stage, count: 0, amount: 0 })), goals: [], sellers: [], campaigns: [], filters: { resorts: [], salesRooms: [] }, range: { start, end }, truncated: false, truncatedSources: [] };
     const [opportunityRows, captureRows, goalRows, sellerRows, campaignRows, resortRows] = await Promise.all([
       db.select().from(opportunities).where(or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end)))).limit(MAX_ANALYTICS_ROWS),
       db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
@@ -133,6 +133,14 @@ export const dashboardRouter = router({
       db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).where(eq(salesCampaigns.status, "active")).limit(1000),
       db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")).limit(1000),
     ]);
+    const truncatedSources = [
+      { label: "oportunidades", rows: opportunityRows, limit: MAX_ANALYTICS_ROWS },
+      { label: "captações", rows: captureRows, limit: MAX_ANALYTICS_ROWS },
+      { label: "metas", rows: goalRows, limit: 1000 },
+      { label: "vendedores", rows: sellerRows, limit: 1000 },
+      { label: "campanhas", rows: campaignRows, limit: 1000 },
+      { label: "empreendimentos", rows: resortRows, limit: 1000 },
+    ].filter(source => source.rows.length >= source.limit).map(source => source.label);
     const capturesByOpportunity = latestCaptureByOpportunity(captureRows);
     const needsOperationalContext = Boolean(input?.resortId || input?.salesRoom || input?.commercialRole || input?.operatorId || input?.presentationStatus);
     const filteredOpportunities = opportunityRows.filter(opportunity => {
@@ -142,19 +150,23 @@ export const dashboardRouter = router({
       const operatorId = input?.commercialRole === "promoter" ? capture.promoterId : input?.commercialRole === "liner" ? capture.linerId : input?.commercialRole === "closer" ? capture.closerId : null;
       return (!input?.resortId || capture.resortId === input.resortId) && (!input?.salesRoom || capture.salesRoom === input.salesRoom) && (!input?.presentationStatus || capture.presentationStatus === input.presentationStatus) && (!input?.operatorId || operatorId === input.operatorId);
     });
-    return { ...buildCommercialCharts(filteredOpportunities, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId, input?.campaignId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), campaigns: campaignRows, filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(item => item.salesRoom).filter((value): value is string => Boolean(value)))).sort() }, range: { start, end } };
+    return { ...buildCommercialCharts(filteredOpportunities, goalRows.map(({ goal, sellerName }) => ({ ...goal, sellerName })), start, end, input?.sellerId, input?.campaignId), sellers: sellerRows.map(item => ({ id: item.id, name: item.name || item.email || "Vendedor" })), campaigns: campaignRows, filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(item => item.salesRoom).filter((value): value is string => Boolean(value)))).sort() }, range: { start, end }, truncated: truncatedSources.length > 0, truncatedSources };
   }),
   funnelDetails: internalProcedure.input(funnelDetailsInput).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const [rows, captureRows] = await Promise.all([
       db.select({ opportunity: opportunities, customerName: customers.fullName, sellerName: users.name }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).leftJoin(users, eq(opportunities.sellerId, users.id)).where(or(and(isNotNull(opportunities.closedAt), gte(opportunities.closedAt, start), lt(opportunities.closedAt, end)), and(isNull(opportunities.closedAt), gte(opportunities.createdAt, start), lt(opportunities.createdAt, end)))).limit(MAX_ANALYTICS_ROWS),
       db.select().from(captureRecords).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
     ]);
+    const truncatedSources = [
+      { label: "oportunidades", rows, limit: MAX_ANALYTICS_ROWS },
+      { label: "captações", rows: captureRows, limit: MAX_ANALYTICS_ROWS },
+    ].filter(source => source.rows.length >= source.limit).map(source => source.label);
     const selectedIds = new Set(filterFunnelDetails(rows.map(({ opportunity }) => opportunity), input.stage, start, end, input.sellerId, input.campaignId).map(item => item.id));
     const capturesByOpportunity = latestCaptureByOpportunity(captureRows);
     const needsOperationalContext = Boolean(input.resortId || input.salesRoom || input.commercialRole || input.operatorId || input.presentationStatus);
-    return rows.filter(({ opportunity }) => {
+    const details = rows.filter(({ opportunity }) => {
       if (!selectedIds.has(opportunity.id)) return false;
       if (!needsOperationalContext) return true;
       const capture = capturesByOpportunity.get(opportunity.id);
@@ -162,6 +174,7 @@ export const dashboardRouter = router({
       const operatorId = input.commercialRole === "promoter" ? capture.promoterId : input.commercialRole === "liner" ? capture.linerId : input.commercialRole === "closer" ? capture.closerId : null;
       return (!input.resortId || capture.resortId === input.resortId) && (!input.salesRoom || capture.salesRoom === input.salesRoom) && (!input.presentationStatus || capture.presentationStatus === input.presentationStatus) && (!input.operatorId || operatorId === input.operatorId);
     }).map(({ opportunity, customerName, sellerName }) => ({ opportunity, customerName, sellerName: sellerName || "Sem vendedor" }));
+    return { rows: details, truncated: truncatedSources.length > 0, truncatedSources };
   }),
   salesRoomConversion: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);

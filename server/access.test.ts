@@ -54,7 +54,7 @@ describe("perfis internos", () => {
     await expect(finance.finance.entries()).resolves.toBeInstanceOf(Array);
     await expect(finance.dashboard.summary()).resolves.toMatchObject({ activeContracts: expect.any(Number) });
     await expect(finance.dashboard.commercialCharts()).resolves.toMatchObject({ funnel: expect.any(Array), goals: expect.any(Array) });
-    await expect(finance.dashboard.funnelDetails({ stage: "proposal" })).resolves.toBeInstanceOf(Array);
+    await expect(finance.dashboard.funnelDetails({ stage: "proposal" })).resolves.toMatchObject({ rows: expect.any(Array), truncated: expect.any(Boolean), truncatedSources: expect.any(Array) });
     await expect(finance.commissions.overview()).resolves.toMatchObject({ campaigns: expect.any(Array), ranking: expect.any(Array), entries: expect.any(Array) });
   });
 });

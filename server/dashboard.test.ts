@@ -51,9 +51,22 @@ describe("dashboard.funnelDetails", () => {
     const sellerOne = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", sellerId: 1 });
     const allSellers = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31" });
     const negotiation = await caller.dashboard.funnelDetails({ stage: "negotiation", startDate: "2026-08-01", endDate: "2026-08-31", sellerId: 1 });
-    expect(sellerOne.map(item => item.opportunity.id)).toEqual([1]);
-    expect(allSellers.map(item => item.opportunity.id)).toEqual([1, 2]);
-    expect(negotiation.map(item => item.opportunity.id)).toEqual([3]);
+    expect(sellerOne.rows.map(item => item.opportunity.id)).toEqual([1]);
+    expect(allSellers.rows.map(item => item.opportunity.id)).toEqual([1, 2]);
+    expect(negotiation.rows.map(item => item.opportunity.id)).toEqual([3]);
+    expect(sellerOne.truncated).toBe(false);
+  });
+
+  it("sinaliza amostra limitada no drill-down sem esconder as linhas retornadas", async () => {
+    const rows = Array.from({ length: 5000 }, (_, index) => ({ opportunity: { id: index + 1, stage: "proposal", sellerId: 1, campaignId: null, closedAt: null, createdAt: new Date("2026-08-05T12:00:00Z") }, customerName: `Cliente ${index + 1}`, sellerName: "Vendedor A" }));
+    mockedGetDb.mockResolvedValue(fakeDatabase(rows, []) as never);
+    const caller = appRouter.createCaller(financeContext());
+
+    const result = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31" });
+
+    expect(result.rows).toHaveLength(5000);
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedSources).toEqual(["oportunidades"]);
   });
 
   it("mantém funil e drill-down no mesmo recorte operacional da ficha mais recente", async () => {
@@ -69,9 +82,9 @@ describe("dashboard.funnelDetails", () => {
     const recorte = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", resortId: 11, salesRoom: "Sala Azul", presentationStatus: "presented" });
     const etapaAntiga = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", resortId: 11, presentationStatus: "scheduled" });
     const outraEquipe = await caller.dashboard.funnelDetails({ stage: "proposal", startDate: "2026-08-01", endDate: "2026-08-31", sellerId: 2, resortId: 11, salesRoom: "Sala Azul", presentationStatus: "presented" });
-    expect(recorte.map(item => item.opportunity.id)).toEqual([1]);
-    expect(etapaAntiga).toEqual([]);
-    expect(outraEquipe).toEqual([]);
+    expect(recorte.rows.map(item => item.opportunity.id)).toEqual([1]);
+    expect(etapaAntiga.rows).toEqual([]);
+    expect(outraEquipe.rows).toEqual([]);
   });
 
   it("mantém o dashboard restrito a perfis internos", async () => {

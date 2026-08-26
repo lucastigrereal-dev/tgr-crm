@@ -10,7 +10,7 @@ test.describe("exportações e reversão autenticadas", () => {
       query({ funnel: [{ stage: "new", count: 0, amount: 0 }, { stage: "qualified", count: 0, amount: 0 }, { stage: "proposal", count: 1, amount: 12500 }, { stage: "negotiation", count: 0, amount: 0 }, { stage: "won", count: 0, amount: 0 }, { stage: "lost", count: 0, amount: 0 }], goals: [], sellers: [], range: { start: "2026-08-01T00:00:00.000Z", end: "2026-08-31T00:00:00.000Z" } }),
       query({ exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 } }), query(admin),
     ]) }));
-    await page.route("**/api/trpc/dashboard.funnelDetails?**", route => route.fulfill({ contentType: "application/json", body: JSON.stringify([query([{ opportunity: { id: 9, title: "Cota Família", expectedAmount: 12500, probability: 70, createdAt: "2026-08-10T12:00:00.000Z" }, customerName: "Ana", sellerName: "Vendedor" }])]) }));
+    await page.route("**/api/trpc/dashboard.funnelDetails?**", route => route.fulfill({ contentType: "application/json", body: JSON.stringify([query({ rows: [{ opportunity: { id: 9, title: "Cota Família", expectedAmount: 12500, probability: 70, createdAt: "2026-08-10T12:00:00.000Z" }, customerName: "Ana", sellerName: "Vendedor" }], truncated: false, truncatedSources: [] })]) }));
     await page.goto("/");
     await page.locator(".recharts-bar-rectangle").nth(2).click();
     await expect(page.getByRole("button", { name: "Excel" })).toBeVisible();
