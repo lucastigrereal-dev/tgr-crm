@@ -46,7 +46,7 @@ export const contractsRouter = router({
     const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente do contrato não encontrado." });
     const sellerId = input.sellerId ?? ctx.user.id;
-    const seller = (await db.select({ id: users.id }).from(users).where(eq(users.id, sellerId)).limit(1))[0];
+    const seller = (await db.select({ id: users.id }).from(users).where(and(eq(users.id, sellerId), inArray(users.role, ["admin", "seller"]))).limit(1))[0];
     if (!seller) throw new TRPCError({ code: "NOT_FOUND", message: "Vendedor do contrato não encontrado." });
     if (input.proposalId) {
       const proposal = (await db.select({ id: proposals.id, opportunityId: proposals.opportunityId }).from(proposals).where(eq(proposals.id, input.proposalId)).limit(1))[0];

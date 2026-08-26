@@ -6,14 +6,14 @@ vi.mock("./db", () => dbMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb({ opportunityCustomerId = 99, opportunityMissing = false }: { opportunityCustomerId?: number; opportunityMissing?: boolean } = {}) {
+function makeDb({ opportunityCustomerId = 99, opportunityMissing = false, sellerEligible = true }: { opportunityCustomerId?: number; opportunityMissing?: boolean; sellerEligible?: boolean } = {}) {
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => ({
       where: vi.fn(() => ({
         limit: vi.fn(async () => {
           if (table === contracts) return [];
           if (table === customers) return [{ id: 10 }];
-          if (table === users) return [{ id: 20 }];
+          if (table === users) return sellerEligible ? [{ id: 20 }] : [];
           if (table === proposals) return [{ id: 5, opportunityId: 9 }];
           if (table === opportunities) return opportunityMissing ? [] : [{ customerId: opportunityCustomerId }];
           return [];
@@ -34,6 +34,16 @@ function caller() {
 
 describe("integridade da proposta ao criar contrato", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("rejeita vendedor fora da equipe comercial antes de criar contrato", async () => {
+    const fixture = makeDb({ opportunityCustomerId: 10, sellerEligible: false });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().create(input)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fixture.transaction).not.toHaveBeenCalled();
+    expect(fixture.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
 
   it("rejeita proposta vinculada a outro cliente antes de criar contrato", async () => {
     const fixture = makeDb();
