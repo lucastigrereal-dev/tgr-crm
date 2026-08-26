@@ -217,7 +217,7 @@ export const capturesRouter = router({
       if (input.resortId && !resortRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento da captação não encontrado." });
       const staffIds = [input.promoterId, input.qualifierId, input.linerId, input.closerId, input.roomManagerId].filter((id): id is number => id !== undefined && id !== null);
       if (staffIds.length) {
-        const staffRows = await tx.select({ id: users.id }).from(users).where(inArray(users.id, Array.from(new Set(staffIds))));
+        const staffRows = await tx.select({ id: users.id }).from(users).where(and(inArray(users.id, Array.from(new Set(staffIds))), inArray(users.role, ["admin", "seller"])));
         if (staffRows.length !== new Set(staffIds).size) throw new TRPCError({ code: "NOT_FOUND", message: "Membro da equipe da captação não encontrado." });
       }
       if (input.resortId) {
@@ -316,6 +316,12 @@ export const capturesRouter = router({
   assignRoom: receptionProcedure.input(z.object({ id: z.number().int().positive(), salesTable: z.string().trim().min(1).max(64), linerId: z.number().int().positive().optional().nullable(), closerId: z.number().int().positive().optional().nullable(), roomManagerId: z.number().int().positive().optional().nullable(), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "assign_table");
+    const staffIds = [input.linerId, input.closerId, input.roomManagerId].filter((id): id is number => id !== undefined && id !== null);
+    if (staffIds.length) {
+      const uniqueStaffIds = Array.from(new Set(staffIds));
+      const staffRows = await db.select({ id: users.id }).from(users).where(and(inArray(users.id, uniqueStaffIds), inArray(users.role, ["admin", "seller"])));
+      if (staffRows.length !== uniqueStaffIds.length) throw new TRPCError({ code: "NOT_FOUND", message: "Operador da sala não encontrado ou não pertence à equipe comercial." });
+    }
     const assignedAt = new Date();
     const updateResult = await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
     assertCaptureUpdateSucceeded(updateResult);
