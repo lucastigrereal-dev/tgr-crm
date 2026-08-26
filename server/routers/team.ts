@@ -9,9 +9,12 @@ import { adminProcedure } from "./access";
 export const teamRouter = router({
   list: adminProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ id: users.id, name: users.name, email: users.email, role: users.role, lastSignedIn: users.lastSignedIn, createdAt: users.createdAt })
-      .from(users).orderBy(asc(users.name)).limit(500);
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 500;
+    const rawRows = await db.select({ id: users.id, name: users.name, email: users.email, role: users.role, lastSignedIn: users.lastSignedIn, createdAt: users.createdAt })
+      .from(users).orderBy(asc(users.name)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["equipe"] : [] };
   }),
 
   updateRole: adminProcedure.input(z.object({ id: z.number().int().positive(), role: z.enum(["admin", "seller", "finance", "service", "user"]) }))
