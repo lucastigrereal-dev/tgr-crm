@@ -7,4 +7,12 @@ describe("contrato de integração v1", () => {
     expect(event).toMatchObject({ contractVersion: "tgr.events.v1", eventId: 2, aggregate: { type: "customer", id: "9" }, payload: { status: "active", city: "Olímpia" } });
     expect(event.payload).not.toHaveProperty("email");
   });
+
+  it("preserva contexto financeiro permitido em lançamentos e repasses", () => {
+    const entry = toIntegrationEvent({ id: 3, eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: "41", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ type: "income", category: "Taxa", amount: 125, contractId: 61, campaignId: 9, description: "privado" }) });
+    const transfer = toIntegrationEvent({ id: 4, eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: "42", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ recipient: "Parceiro", amount: 250, contractId: 61, description: "privado" }) });
+
+    expect(entry.payload).toEqual({ type: "income", category: "Taxa", amount: 125, contractId: 61, campaignId: 9 });
+    expect(transfer.payload).toEqual({ amount: 250, recipient: "Parceiro", contractId: 61 });
+  });
 });
