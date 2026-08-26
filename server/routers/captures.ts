@@ -213,6 +213,11 @@ export const capturesRouter = router({
       }
       let customerId = input.customerId;
       let customerName = "Associado";
+      if (customerId) {
+        const existingCustomer = (await tx.select({ id: customers.id, fullName: customers.fullName }).from(customers).where(eq(customers.id, customerId)).limit(1))[0];
+        if (!existingCustomer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado da captação não encontrado." });
+        customerName = existingCustomer.fullName;
+      }
       if (!customerId && input.customer) {
         const matches = [];
         if (nullIfBlank(input.customer.documentNumber)) matches.push(eq(customers.documentNumber, nullIfBlank(input.customer.documentNumber)!));

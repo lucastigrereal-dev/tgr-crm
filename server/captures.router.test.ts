@@ -28,6 +28,18 @@ describe("captures.create", () => {
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
+  it("rejeita associado inexistente antes de criar oportunidade ou ficha", async () => {
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([{ id: 12 }]))
+      .mockReturnValueOnce(chain([]));
+    const insert = vi.fn();
+    mockedDb.mockResolvedValue({ transaction: (callback: (tx: unknown) => unknown) => callback({ select, insert }) } as never);
+
+    await expect(caller("seller").captures.create({ ...baseInput, customerId: 999 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(insert).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
   it("cria associado, oportunidade, ficha e tarefa quando existe agendamento", async () => {
     const select = vi.fn()
       .mockReturnValueOnce(chain([{ id: 12 }]))
