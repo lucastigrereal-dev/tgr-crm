@@ -5,7 +5,7 @@ import { contracts, customers, installments, ownershipEntitlements, reservationG
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
-import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod, shouldCreatePaymentReminder } from "../domain";
+import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod } from "../domain";
 import { canTransitionReservationStatus, canTransitionWaitlistStatus } from "../../shared/reservationLifecycle";
 import { canTransitionTaskStatus } from "../../shared/taskLifecycle";
 
@@ -310,12 +310,13 @@ export const operationsRouter = router({
     const db = await getDb();
     if (!db) return [];
     const now = new Date();
+    const reminderCutoff = new Date(now.getTime() + 7 * 86_400_000);
     const [dueInstallments, openPaymentTasks] = await Promise.all([
-      db.select({ installment: installments, customerId: contracts.customerId }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(inArray(installments.status, ["open", "overdue"])).orderBy(installments.dueDate).limit(5000),
+      db.select({ installment: installments, customerId: contracts.customerId }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(and(inArray(installments.status, ["open", "overdue"]), lte(installments.dueDate, reminderCutoff))).orderBy(installments.dueDate).limit(5000),
       db.select().from(tasks).where(and(eq(tasks.type, "payment"), inArray(tasks.status, ["open", "in_progress"]))).limit(5000),
     ]);
     const existingPaymentTaskKeys = new Set(openPaymentTasks.map(task => `${task.contractId}:${task.title}`));
-    const reminders = dueInstallments.filter(({ installment }) => shouldCreatePaymentReminder(new Date(installment.dueDate), now));
+    const reminders = dueInstallments;
     for (const { installment, customerId } of reminders) {
       const stage = getCollectionStage(new Date(installment.dueDate), now);
       const title = `[${stage.label}] Cobrar parcela #${installment.sequence}`;
