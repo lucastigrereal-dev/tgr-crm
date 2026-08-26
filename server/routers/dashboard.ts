@@ -165,9 +165,19 @@ export const dashboardRouter = router({
   }),
   salesRoomConversion: internalProcedure.input(chartFilters).query(async ({ input }) => {
     const db = await getDb(); const { start, end } = resolveRange(input);
-    if (!db) return { metrics: calculateConversionMetrics([]), breakdowns: { campaigns: [], promoters: [], liners: [], closers: [] }, range: { start, end } };
+    if (!db) return { metrics: calculateConversionMetrics([]), breakdowns: { campaigns: [], promoters: [], liners: [], closers: [] }, filters: { resorts: [], salesRooms: [], operators: [] }, range: { start, end }, truncated: false };
+    const roleColumn = input?.commercialRole === "promoter" ? captureRecords.promoterId : input?.commercialRole === "liner" ? captureRecords.linerId : captureRecords.closerId;
+    const roleFilter = input?.commercialRole && input.operatorId ? eq(roleColumn, input.operatorId) : undefined;
+    const conversionCaptureWhere = and(
+      or(and(isNotNull(captureRecords.scheduledAt), gte(captureRecords.scheduledAt, start), lt(captureRecords.scheduledAt, end)), and(isNull(captureRecords.scheduledAt), gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))),
+      input?.campaignId ? eq(captureRecords.campaignId, input.campaignId) : undefined,
+      input?.resortId ? eq(captureRecords.resortId, input.resortId) : undefined,
+      input?.salesRoom ? eq(captureRecords.salesRoom, input.salesRoom) : undefined,
+      input?.presentationStatus ? eq(captureRecords.presentationStatus, input.presentationStatus) : undefined,
+      roleFilter,
+    );
     const [captureRows, campaignRows, userRows, resortRows] = await Promise.all([
-      db.select({ capture: captureRecords, opportunityStage: opportunities.stage }).from(captureRecords).leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id)).where(and(gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end))).limit(MAX_ANALYTICS_ROWS),
+      db.select({ capture: captureRecords, opportunityStage: opportunities.stage }).from(captureRecords).leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id)).where(conversionCaptureWhere).limit(MAX_ANALYTICS_ROWS),
       db.select({ id: salesCampaigns.id, name: salesCampaigns.name }).from(salesCampaigns).limit(1000),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
       db.select({ id: resorts.id, name: resorts.name }).from(resorts).where(eq(resorts.status, "active")).limit(1000),
@@ -182,7 +192,7 @@ export const dashboardRouter = router({
         liners: buildConversionBreakdown({ captures, dimension: "liner", names }),
         closers: buildConversionBreakdown({ captures, dimension: "closer", names }),
       },
-      filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(row => row.capture.salesRoom).filter((value): value is string => Boolean(value)))).sort(), operators: userRows.map(item => ({ id: item.id, name: item.name || item.email || `Usuário #${item.id}` })) }, range: { start, end },
+      filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(row => row.capture.salesRoom).filter((value): value is string => Boolean(value)))).sort(), operators: userRows.map(item => ({ id: item.id, name: item.name || item.email || `Usuário #${item.id}` })) }, range: { start, end }, truncated: captureRows.length >= MAX_ANALYTICS_ROWS,
     };
   }),
   operationalPulse: internalProcedure.query(async () => {
