@@ -6,7 +6,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
-import { buildCaptureProfileAnalytics, getProfileCompleteness, profileSearchText, type CaptureProfile } from "../captureSegmentation";
+import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfile } from "../captureSegmentation";
 import { getProjectCaptureReadiness } from "../projectPolicy";
 import { activeRoomStatuses, assertReceptionAction, canTransitionPresentationStatus, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 import { publishSalesRoomEvent } from "../realtime";
@@ -174,13 +174,14 @@ export const capturesRouter = router({
         like(captureRecords.nextFamilyTrip, searchLike), like(captureRecords.socialNetworks, searchLike), like(captureRecords.giftDescription, searchLike), like(captureRecords.qualificationReason, searchLike), like(captureRecords.notes, searchLike), like(captureRecords.salesRoom, searchLike), like(captureRecords.captureLocation, searchLike),
       ));
     }
+    const profileDatasetLimit = 20_000;
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns, resort: resorts, opportunity: opportunities }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
       .leftJoin(resorts, eq(captureRecords.resortId, resorts.id))
       .leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id))
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(captureRecords.createdAt)).limit(20_000);
+      .orderBy(desc(captureRecords.createdAt)).limit(profileDatasetLimit);
     const profiles: CaptureProfile[] = rows.map(row => ({
       id: row.capture.id, createdAt: row.capture.createdAt, customerName: row.customer.fullName, customerDocumentNumber: row.customer.documentNumber, customerEmail: row.customer.email, customerPhone: row.customer.phone,
       city: row.customer.city, state: row.customer.state, resortId: row.capture.resortId, resortName: row.resort?.name ?? null, promoterId: row.capture.promoterId, qualifierId: row.capture.qualifierId, linerId: row.capture.linerId, closerId: row.capture.closerId, roomManagerId: row.capture.roomManagerId,
@@ -191,13 +192,9 @@ export const capturesRouter = router({
       dreamTrips: row.capture.dreamTrips, lastTrip: row.capture.lastTrip, averageHotelSpend: row.capture.averageHotelSpend === null ? null : Number(row.capture.averageHotelSpend), nextFamilyTrip: row.capture.nextFamilyTrip, socialNetworks: row.capture.socialNetworks, giftDescription: row.capture.giftDescription, qualificationReason: row.capture.qualificationReason, notes: row.capture.notes,
       opportunityStage: row.opportunity?.stage ?? null, checkedInAt: row.capture.checkedInAt, presentationStartedAt: row.capture.presentationStartedAt,
     }));
-    const normalizedSearch = input.search?.toLocaleLowerCase("pt-BR");
-    const filtered = profiles.filter(profile => {
-      const income = profile.averageIncome ?? -1; const hotelSpend = profile.averageHotelSpend ?? -1; const travelWeeks = profile.travelWeeksPerYear ?? -1; const vehicleYear = profile.vehicleYear ?? -1;
-      return (!normalizedSearch || profileSearchText(profile).includes(normalizedSearch)) && (!input.city || profile.city?.toLocaleLowerCase("pt-BR") === input.city.toLocaleLowerCase("pt-BR")) && (!input.state || profile.state === input.state) && (!input.salesRoom || profile.salesRoom === input.salesRoom) && (!input.captureLocation || profile.captureLocation?.toLocaleLowerCase("pt-BR").includes(input.captureLocation.toLocaleLowerCase("pt-BR"))) && (!input.vehicleBrand || profile.vehicleBrand?.toLocaleLowerCase("pt-BR").includes(input.vehicleBrand.toLocaleLowerCase("pt-BR"))) && (!input.vehicleModel || profile.vehicleModel?.toLocaleLowerCase("pt-BR").includes(input.vehicleModel.toLocaleLowerCase("pt-BR"))) && (!input.relationshipStatus || profile.relationshipStatus === input.relationshipStatus) && (!input.travelSeason || profile.usualTravelSeason?.toLocaleLowerCase("pt-BR").includes(input.travelSeason.toLocaleLowerCase("pt-BR"))) && (!input.qualificationStatus || profile.qualificationStatus === input.qualificationStatus) && (input.vehicleYearMin === undefined || vehicleYear >= input.vehicleYearMin) && (input.vehicleYearMax === undefined || vehicleYear <= input.vehicleYearMax) && (input.childrenMin === undefined || profile.childrenCount >= input.childrenMin) && (input.childrenMax === undefined || profile.childrenCount <= input.childrenMax) && (input.incomeMin === undefined || income >= input.incomeMin) && (input.incomeMax === undefined || income <= input.incomeMax) && (input.hotelSpendMin === undefined || hotelSpend >= input.hotelSpendMin) && (input.hotelSpendMax === undefined || hotelSpend <= input.hotelSpendMax) && (input.travelWeeksMin === undefined || travelWeeks >= input.travelWeeksMin) && (input.travelWeeksMax === undefined || travelWeeks <= input.travelWeeksMax) && (input.hasCreditCard === undefined || profile.hasCreditCard === input.hasCreditCard) && (input.acceptsCheque === undefined || profile.acceptsCheque === input.acceptsCheque) && (input.ownsHome === undefined || profile.ownsHome === input.ownsHome) && (input.ownsPropertyInCity === undefined || profile.ownsPropertyInCity === input.ownsPropertyInCity) && (input.isPasserby === undefined || profile.isPasserby === input.isPasserby);
-    });
+    const filtered = profiles;
     const unique = (values: Array<string | null | undefined>) => Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim())))).sort((left, right) => left.localeCompare(right, "pt-BR"));
-    return { summary: buildCaptureProfileAnalytics(filtered), rows: filtered.slice(0, input.limit).map(profile => ({ ...profile, readiness: getProfileCompleteness(profile) })), totalMatches: filtered.length, truncated: filtered.length > input.limit, filters: { cities: unique(profiles.map(profile => profile.city)), states: unique(profiles.map(profile => profile.state)), salesRooms: unique(profiles.map(profile => profile.salesRoom)), vehicleBrands: unique(profiles.map(profile => profile.vehicleBrand)), vehicleModels: unique(profiles.map(profile => profile.vehicleModel)), travelSeasons: unique(profiles.map(profile => profile.usualTravelSeason)), relationshipStatuses: unique(profiles.map(profile => profile.relationshipStatus)) } };
+    return { summary: buildCaptureProfileAnalytics(filtered), rows: filtered.slice(0, input.limit).map(profile => ({ ...profile, readiness: getProfileCompleteness(profile) })), totalMatches: filtered.length, truncated: rows.length >= profileDatasetLimit || filtered.length > input.limit, filters: { cities: unique(profiles.map(profile => profile.city)), states: unique(profiles.map(profile => profile.state)), salesRooms: unique(profiles.map(profile => profile.salesRoom)), vehicleBrands: unique(profiles.map(profile => profile.vehicleBrand)), vehicleModels: unique(profiles.map(profile => profile.vehicleModel)), travelSeasons: unique(profiles.map(profile => profile.usualTravelSeason)), relationshipStatuses: unique(profiles.map(profile => profile.relationshipStatus)) } };
   }),
 
   create: salesProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
