@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql, SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql, SQL } from "drizzle-orm";
 import { z } from "zod";
 import { contracts, customers, installments, ownershipEntitlements, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -143,8 +143,8 @@ export const operationsRouter = router({
       const contract = (await db.select({ id: contracts.id, customerId: contracts.customerId, status: contracts.status }).from(contracts).where(and(eq(contracts.id, input.contractId), eq(contracts.customerId, input.customerId))).limit(1))[0];
       if (!contract) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato informado não pertence ao associado." });
       if (["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível entrar na fila com contrato cancelado ou encerrado." });
-      const entitlements = await db.select().from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"))).limit(1000);
-      const highestPriority = entitlements.reduce<number | null>((current, entitlement) => current === null || entitlement.priorityLevel < current ? entitlement.priorityLevel : current, null);
+      const highestPriorityRow = (await db.select({ priorityLevel: ownershipEntitlements.priorityLevel }).from(ownershipEntitlements).where(and(eq(ownershipEntitlements.contractId, input.contractId), eq(ownershipEntitlements.status, "active"))).orderBy(asc(ownershipEntitlements.priorityLevel)).limit(1))[0];
+      const highestPriority = highestPriorityRow?.priorityLevel ?? null;
       entitlementScore = highestPriority === null ? 0 : entitlementPriorityScore(highestPriority);
     }
     const effectivePriorityScore = Math.max(input.priorityScore, entitlementScore);

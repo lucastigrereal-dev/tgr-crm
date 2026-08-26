@@ -6,7 +6,7 @@ vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
 
-function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean; waitlistDuplicate?: boolean; waitlistInsertDuplicate?: boolean } = {}, updateAffectedRows?: number) {
+function makeDb(options: { entitlementPriority?: number; entitlementPriorities?: number[]; maintenance?: boolean; customerMissing?: boolean; contractMissing?: boolean; contractStatus?: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed"; resortMissing?: boolean; waitlistDuplicate?: boolean; waitlistInsertDuplicate?: boolean } = {}, updateAffectedRows?: number) {
   const inserted: unknown[] = [];
   const updates: unknown[] = [];
   let unitSelectCall = 0;
@@ -15,7 +15,7 @@ function makeDb(options: { entitlementPriority?: number; maintenance?: boolean; 
       if (table === customers) return { where: () => ({ limit: async () => options.customerMissing ? [] : [{ id: 3 }] }) };
       if (table === contracts) return { where: () => ({ limit: async () => options.contractMissing ? [] : [{ id: 8, customerId: 3, status: options.contractStatus ?? "active" }] }) };
       if (table === resorts) return { where: () => ({ limit: async () => options.resortMissing ? [] : [{ id: 5 }] }) };
-      if (table === ownershipEntitlements) return { where: () => ({ limit: async () => options.entitlementPriority ? [{ priorityLevel: options.entitlementPriority, status: "active" }] : [] }) };
+      if (table === ownershipEntitlements) return { where: () => ({ orderBy: () => ({ limit: async () => (options.entitlementPriorities ?? (options.entitlementPriority ? [options.entitlementPriority] : [])).map(priorityLevel => ({ priorityLevel, status: "active" })).sort((left, right) => left.priorityLevel - right.priorityLevel) }) }) };
       if (table === reservationWaitlist) return { where: () => ({ limit: async () => options.waitlistDuplicate ? [{ id: 700 }] : [] }) };
       if (table === units) return { where: () => ({ limit: () => { const rows = unitSelectCall++ === 0 ? [{ id: 18, resortId: 5, status: "active" }] : []; return { for: async () => rows, then: (resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(rows).then(resolve, reject) }; } }) };
       if (table === reservations) return { where: () => ({ limit: async () => [] }) };
@@ -41,6 +41,14 @@ describe("prioridade de direitos e bloqueio operacional", () => {
     await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14", priorityScore: 15 })).resolves.toEqual({ id: 501, priorityScore: 90, entitlementScore: 90 });
     expect(fixture.inserted[0]).toMatchObject({ contractId: 8, priorityScore: 90 });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(12, "reservation_waitlist", 501, "created", expect.stringContaining("90"));
+  });
+
+  it("usa o menor nível quando o contrato tem vários direitos ativos", async () => {
+    const fixture = makeDb({ entitlementPriorities: [7, 2, 4] });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.joinWaitlist({ customerId: 3, contractId: 8, desiredCheckIn: "2026-11-10", desiredCheckOut: "2026-11-14", priorityScore: 15 })).resolves.toMatchObject({ priorityScore: 90, entitlementScore: 90 });
   });
 
   it("bloqueia duplicata ativa na fila de espera", async () => {
