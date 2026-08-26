@@ -8,6 +8,13 @@ describe("contrato de integração v1", () => {
     expect(event.payload).not.toHaveProperty("email");
   });
 
+  it("preserva a origem da comissão automática bloqueada", () => {
+    const blocked = toIntegrationEvent({ id: 5, eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: "91", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ contractId: 61, reason: "incomplete_project_policy", source: "manual", notes: "privado" }) });
+
+    expect(blocked.payload).toEqual({ contractId: 61, reason: "incomplete_project_policy", source: "manual" });
+    expect(blocked.payload).not.toHaveProperty("notes");
+  });
+
   it("preserva contexto financeiro permitido em lançamentos e repasses", () => {
     const entry = toIntegrationEvent({ id: 3, eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: "41", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ type: "income", category: "Taxa", amount: 125, contractId: 61, campaignId: 9, description: "privado" }) });
     const transfer = toIntegrationEvent({ id: 4, eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: "42", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ recipient: "Parceiro", amount: 250, contractId: 61, description: "privado" }) });
