@@ -363,8 +363,11 @@ export const financeRouter = router({
   }),
 
   campaigns: financeProcedure.query(async () => {
-    const db = await getDb(); if (!db) return [];
-    return db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(salesCampaigns.name).limit(200);
+    const db = await getDb(); if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 200;
+    const rawRows = await db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(salesCampaigns.name).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["campanhas financeiras"] : [] };
   }),
 
   dreByCampaign: financeProcedure.input(z.object({ from: z.string().date().optional(), to: z.string().date().optional() }).optional()).query(async ({ input }) => {
