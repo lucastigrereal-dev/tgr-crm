@@ -112,24 +112,32 @@ function assertCaptureUpdateSucceeded(result: unknown) {
 export const capturesRouter = router({
   selectors: receptionProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return { campaigns: [], sellers: [], resorts: [] };
-    const [campaigns, sellers, resortRows] = await Promise.all([
-      db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)).limit(1000),
-      db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name).limit(1000),
-      db.select({ id: resorts.id, name: resorts.name }).from(resorts).orderBy(resorts.name).limit(1000),
+    if (!db) {
+      const empty = { rows: [], truncated: false, truncatedSources: [] as string[] };
+      return { campaigns: empty, sellers: empty, resorts: empty };
+    }
+    const limit = 1_000;
+    const [rawCampaigns, rawSellers, rawResorts] = await Promise.all([
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)).limit(limit + 1),
+      db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name).limit(limit + 1),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).orderBy(resorts.name).limit(limit + 1),
     ]);
-    return { campaigns, sellers, resorts: resortRows };
+    const envelope = <T,>(rows: T[], source: string) => ({ rows: rows.slice(0, limit), truncated: rows.length > limit, truncatedSources: rows.length > limit ? [source] : [] });
+    return { campaigns: envelope(rawCampaigns, "campanhas de captação"), sellers: envelope(rawSellers, "vendedores de captação"), resorts: envelope(rawResorts, "empreendimentos de captação") };
   }),
 
   list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
-    const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 120;
+    const rawRows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
       .where(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined)
-      .orderBy(desc(captureRecords.createdAt)).limit(120);
-    return rows.map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
+      .orderBy(desc(captureRecords.createdAt)).limit(limit + 1);
+    const rows = rawRows.slice(0, limit).map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
+    const truncated = rawRows.length > limit;
+    return { rows, truncated, truncatedSources: truncated ? ["fichas de captação"] : [] };
   }),
 
   profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ input }) => {
