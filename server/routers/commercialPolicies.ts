@@ -15,10 +15,10 @@ function isDuplicateKeyError(error: unknown) {
 }
 
 export const commercialPoliciesRouter = router({
-  list: financeProcedure.input(z.object({ resortId: z.number().int().positive(), policyType: policyType.optional(), includeRetired: z.boolean().optional() })).query(async ({ input }) => {
+  list: financeProcedure.input(z.object({ resortId: z.number().int().positive(), policyType: policyType.optional(), includeRetired: z.boolean().optional(), limit: z.number().int().min(1).max(500).default(100) })).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), input.policyType ? eq(commercialPolicyVersions.policyType, input.policyType) : undefined, input.includeRetired ? undefined : isNull(commercialPolicyVersions.retiredAt))).orderBy(desc(commercialPolicyVersions.effectiveAt));
+    return db.select().from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), input.policyType ? eq(commercialPolicyVersions.policyType, input.policyType) : undefined, input.includeRetired ? undefined : isNull(commercialPolicyVersions.retiredAt))).orderBy(desc(commercialPolicyVersions.effectiveAt)).limit(input.limit);
   }),
 
   create: adminProcedure.input(z.object({ resortId: z.number().int().positive(), policyType, version: z.string().trim().min(2).max(80), policy: z.record(z.string(), z.unknown()), effectiveAt: z.coerce.date().optional() })).mutation(async ({ ctx, input }) => {
