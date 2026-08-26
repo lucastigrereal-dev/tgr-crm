@@ -181,6 +181,7 @@ export const operationsRouter = router({
       if (!item || item.status !== "offered") throw new TRPCError({ code: "BAD_REQUEST", message: "A fila precisa estar com oferta ativa para virar reserva." });
       const unit = (await tx.select().from(units).where(and(eq(units.id, input.unitId), eq(units.status, "active"))).limit(1).for("update"))[0];
       if (!unit) throw new TRPCError({ code: "BAD_REQUEST", message: "Escolha uma unidade ativa para confirmar a reserva." });
+      if (item.partySize > unit.capacity) throw new TRPCError({ code: "BAD_REQUEST", message: `A reserva comporta no máximo ${unit.capacity} hóspedes nesta unidade.` });
       if (item.resortId && unit.resortId !== item.resortId) throw new TRPCError({ code: "BAD_REQUEST", message: "A unidade escolhida não pertence ao empreendimento solicitado." });
       const conflict = await tx.select({ id: reservations.id }).from(reservations).where(and(eq(reservations.unitId, input.unitId), lt(reservations.checkIn, item.desiredCheckOut), gt(reservations.checkOut, item.desiredCheckIn), ne(reservations.status, "cancelled"))).limit(1);
       if (conflict.length) throw new TRPCError({ code: "CONFLICT", message: "A unidade escolhida ficou indisponível neste período." });

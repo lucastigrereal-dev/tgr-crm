@@ -51,6 +51,24 @@ describe("conversão de lista de espera e saída integrada", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(4, "reservation_waitlist", 33, "converted_to_reservation", expect.stringContaining("901"));
   });
 
+  it("rejeita conversão quando o grupo excede a capacidade da unidade", async () => {
+    const inserts: unknown[] = []; const updates: unknown[] = [];
+    const waitlistItem = { id: 33, status: "offered", customerId: 7, contractId: null, resortId: 2, desiredCheckIn: new Date("2026-12-10T12:00:00Z"), desiredCheckOut: new Date("2026-12-14T12:00:00Z"), partySize: 3, preferenceNotes: null };
+    const transaction = {
+      select: vi.fn(() => ({ from: (table: unknown) => ({ where: () => ({ limit: () => ({ for: async () => table === reservationWaitlist ? [waitlistItem] : table === units ? [{ id: 19, resortId: 2, status: "active", capacity: 2 }] : [], then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(table === reservationWaitlist ? [waitlistItem] : table === units ? [{ id: 19, resortId: 2, status: "active", capacity: 2 }] : []).then(resolve, reject) }) }) }) })),
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 901 }] }; }) })),
+      update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })),
+    };
+    const db = { transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<unknown>) => callback(transaction)) };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
+
+    await expect(caller.convertWaitlistToReservation({ waitlistId: 33, unitId: 19 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(inserts).toEqual([]);
+    expect(updates).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("não audita uma transição perdida por concorrência", async () => {
     const select = querySequence([[{ status: "confirmed" }]]);
     const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 0 })) })) }));
