@@ -5,6 +5,7 @@ const syncMocks = vi.hoisted(() => ({ syncRevenueQualityForContract: vi.fn(async
 vi.mock("./db", () => dbMocks);
 vi.mock("./revenueQualitySync", () => syncMocks);
 
+import { billingRecords, installments } from "../drizzle/schema";
 import { financeRouter } from "./routers/finance";
 
 function query(rows: unknown[]) {
@@ -44,6 +45,9 @@ describe("idempotência concorrente de baixa de parcela", () => {
     await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).resolves.toEqual({ success: true, alreadyPaid: false, commissionBlocked: true });
 
     expect(captureQuery.orderBy).toHaveBeenCalledTimes(1);
+    expect(tx.update).toHaveBeenCalledTimes(2);
+    expect(tx.update).toHaveBeenNthCalledWith(1, installments);
+    expect(tx.update).toHaveBeenNthCalledWith(2, billingRecords);
     expect(syncMocks.syncRevenueQualityForContract).toHaveBeenCalledWith({ contractId: 61, actorUserId: 71, trigger: "baixa de parcela" });
   });
 
