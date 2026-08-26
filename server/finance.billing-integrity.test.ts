@@ -14,10 +14,10 @@ function query(rows: unknown[]) {
   return chain;
 }
 
-function makeDb(duplicate = false, activeDuplicate = false) {
+function makeDb(duplicate = false, activeDuplicate = false, installmentStatus: "open" | "overdue" | "paid" | "cancelled" | "renegotiated" = "open") {
   const db = {
     select: vi.fn()
-      .mockReturnValueOnce(query([{ id: 91, status: "open" }]))
+      .mockReturnValueOnce(query([{ id: 91, status: installmentStatus }]))
       .mockReturnValueOnce(query(duplicate ? [{ id: 700 }] : []))
       .mockReturnValueOnce(query(activeDuplicate ? [{ id: 701 }] : [])),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 701 }] })) })),
@@ -148,6 +148,26 @@ describe("integridade de referências de cobrança", () => {
       digitableLine: null,
       pixCopyPaste: null,
     })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia cobrança manual para parcela renegociada", async () => {
+    const db = makeDb(false, false, "renegotiated");
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.registerBilling({
+      installmentId: 91,
+      type: "card",
+      amount: 1000,
+      dueDate: "2026-09-10",
+      externalReference: "MANUAL-RENEG-91",
+      digitableLine: null,
+      pixCopyPaste: null,
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
 
     expect(db.insert).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();

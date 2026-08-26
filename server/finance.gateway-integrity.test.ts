@@ -35,11 +35,11 @@ function query(rows: unknown[]) {
   return chain;
 }
 
-function makeDb(existingBillingType?: "pix" | "boleto", failBillingPersist = false) {
+function makeDb(existingBillingType?: "pix" | "boleto", failBillingPersist = false, installmentStatus: "open" | "overdue" | "paid" | "cancelled" | "renegotiated" = "open") {
   const billingState: unknown[] = existingBillingType ? [{ billing: { id: 902, gatewayPaymentId: "pay-existing", type: existingBillingType, status: "generated" } }] : [];
   const gatewayCustomerState: unknown[] = [];
   const inserted: unknown[] = [];
-  const installment = { id: 91, contractId: 61, sequence: 1, status: "open", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") };
+  const installment = { id: 91, contractId: 61, sequence: 1, status: installmentStatus, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") };
   const tx = {
     select: vi.fn(() => ({ from: (table: unknown) => {
       if (table === installments) return query([{ installment, contract: { number: "CTR-61" }, customer: { id: 7, fullName: "Ana Tigre", documentNumber: "12345678901", email: null, phone: null } }]);
@@ -83,6 +83,19 @@ describe("idempotência de emissão Asaas", () => {
 
 describe("isolamento de erro do gateway", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("bloqueia emissão Asaas para parcela renegociada", async () => {
+    const fixture = makeDb(undefined, false, "renegotiated");
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.issueGatewayBilling({ installmentId: 91, type: "pix" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(gatewayMocks.createAsaasCustomer).not.toHaveBeenCalled();
+    expect(gatewayMocks.createAsaasPayment).not.toHaveBeenCalled();
+    expect(fixture.inserted).toHaveLength(0);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
 
   it("recusa trocar o tipo de uma cobrança Asaas já existente", async () => {
     const fixture = makeDb("pix");
