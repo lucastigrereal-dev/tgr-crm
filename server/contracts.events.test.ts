@@ -80,6 +80,14 @@ describe("eventos e auditoria de contratos", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, status: "active", totalAmount: 12000, installmentCount: 12 }) }));
   });
 
+  it("rejeita primeira data de vencimento impossível antes de persistir contrato", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+
+    await expect(caller().create({ number: "TS-2026-INVALID-DATE", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "draft", totalAmount: 12000, firstDueDate: "2026-02-30", installmentCount: 12 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("registra mudança de status e documento contratual com trilha de auditoria", async () => {
     await caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" });
     await caller().uploadDocument({ contractId: 701, category: "Contrato assinado", filename: "contrato.pdf", contentType: "application/pdf", signed: true, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" });
