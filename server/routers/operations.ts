@@ -325,10 +325,17 @@ export const operationsRouter = router({
     if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const now = new Date();
     const reminderCutoff = new Date(now.getTime() + 7 * 86_400_000);
-    const [dueInstallments, openPaymentTasks] = await Promise.all([
-      db.select({ installment: installments, customerId: contracts.customerId }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(and(inArray(installments.status, ["open", "overdue"]), lte(installments.dueDate, reminderCutoff))).orderBy(installments.dueDate).limit(5000),
-      db.select().from(tasks).where(and(eq(tasks.type, "payment"), inArray(tasks.status, ["open", "in_progress"]))).limit(5000),
+    const automationLimit = 5_000;
+    const [rawDueInstallments, rawOpenPaymentTasks] = await Promise.all([
+      db.select({ installment: installments, customerId: contracts.customerId }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(and(inArray(installments.status, ["open", "overdue"]), lte(installments.dueDate, reminderCutoff))).orderBy(installments.dueDate).limit(automationLimit + 1),
+      db.select().from(tasks).where(and(eq(tasks.type, "payment"), inArray(tasks.status, ["open", "in_progress"]))).limit(automationLimit + 1),
     ]);
+    const dueInstallments = rawDueInstallments.slice(0, automationLimit);
+    const openPaymentTasks = rawOpenPaymentTasks.slice(0, automationLimit);
+    const automationTruncatedSources = [
+      rawDueInstallments.length > automationLimit ? "parcelas da régua de cobrança" : null,
+      rawOpenPaymentTasks.length > automationLimit ? "tarefas de cobrança existentes" : null,
+    ].filter((source): source is string => Boolean(source));
     const existingPaymentTaskKeys = new Set(openPaymentTasks.map(task => `${task.contractId}:${task.title}`));
     const reminders = dueInstallments;
     for (const { installment, customerId } of reminders) {
@@ -363,7 +370,8 @@ export const operationsRouter = router({
       .where(taskFilters.length ? and(...taskFilters) : undefined)
       .orderBy(tasks.dueAt).limit(limit + 1);
     const truncated = rawRows.length > limit;
-    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["tarefas"] : [] };
+    const truncatedSources = [...automationTruncatedSources, ...(truncated ? ["tarefas"] : [])];
+    return { rows: rawRows.slice(0, limit), truncated: truncatedSources.length > 0, truncatedSources };
   }),
 
   createTask: internalProcedure.input(z.object({
