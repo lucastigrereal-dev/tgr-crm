@@ -23,6 +23,8 @@ export const domainEventCatalog = {
   "capture.no_tour": { aggregateType: "capture", description: "Captação encerrada sem apresentação." },
   "proposal.created": { aggregateType: "proposal", description: "Proposta comercial criada." },
   "proposal.accepted": { aggregateType: "proposal", description: "Proposta comercial aceita, ainda sem validação de venda." },
+  "proposal.discount.requested": { aggregateType: "proposal_discount", description: "Pedido de desconto comercial solicitado." },
+  "proposal.discount.decided": { aggregateType: "proposal_discount", description: "Pedido de desconto comercial decidido." },
   "sales.playbook.created": { aggregateType: "sales_playbook", description: "Playbook comercial publicado." },
   "installment.renegotiation.proposed": { aggregateType: "installment_renegotiation", description: "Renegociação proposta." },
   "installment.paid": { aggregateType: "installment", description: "Parcela baixada." },
