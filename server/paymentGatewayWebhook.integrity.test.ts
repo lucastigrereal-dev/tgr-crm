@@ -66,6 +66,42 @@ void installments;
 void paymentGatewayWebhookEvents;
 
 
+describe("monotonicidade de estado do webhook", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("não regride cobrança paga quando chega atraso fora de ordem", async () => {
+    const updated: unknown[] = [];
+    const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
+    const txUpdate = vi.fn(() => ({
+      set: vi.fn((values: unknown) => ({ where: vi.fn(async () => { updated.push(values); return { affectedRows: 1 }; }) })),
+    }));
+    const tx = { insert: txInsert, update: txUpdate };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(query([]))
+        .mockReturnValueOnce(query([{
+          billing: { id: 301, type: "pix", status: "paid", gatewayPaymentId: "pay_91" },
+          installment: { id: 91, status: "paid", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") },
+        }])),
+      transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+    paymentMocks.isAsaasPaymentConfirmed.mockReturnValue(false);
+    paymentMocks.isAsaasPaymentOverdue.mockReturnValue(true);
+
+    await expect(processAsaasWebhook("secret", { id: "evt-late-95", event: "PAYMENT_OVERDUE", payment: { id: "pay_91", status: "OVERDUE" } })).resolves.toMatchObject({
+      status: 200,
+      billingRecordId: 301,
+      installmentPaid: false,
+    });
+
+    expect(updated).toEqual([{ gatewayStatus: "OVERDUE" }]);
+    expect(updated).not.toContainEqual(expect.objectContaining({ status: "expired" }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledTimes(1);
+  });
+});
+
+
 
 describe("deduplicação concorrente de eventos", () => {
   beforeEach(() => vi.clearAllMocks());

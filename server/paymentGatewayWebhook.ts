@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
@@ -63,8 +63,8 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           installmentPaid = true;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
         }
-      } else if (isAsaasPaymentOverdue(event)) {
-        await tx.update(billingRecords).set({ status: "expired", gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
+      } else if (isAsaasPaymentOverdue(event) && ["pending", "generated"].includes(billing.billing.status)) {
+        await tx.update(billingRecords).set({ status: "expired", gatewayStatus: payload.payment?.status || event }).where(and(eq(billingRecords.id, billing.billing.id), inArray(billingRecords.status, ["pending", "generated"])));
       } else {
         await tx.update(billingRecords).set({ gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
       }
