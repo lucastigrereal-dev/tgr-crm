@@ -170,10 +170,13 @@ export const financeRouter = router({
 
   billing: financeProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ billing: billingRecords, installmentSequence: installments.sequence, contractNumber: contracts.number, customerName: customers.fullName })
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 300;
+    const rawRows = await db.select({ billing: billingRecords, installmentSequence: installments.sequence, contractNumber: contracts.number, customerName: customers.fullName })
       .from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
-      .orderBy(desc(billingRecords.createdAt)).limit(300);
+      .orderBy(desc(billingRecords.createdAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["cobranças"] : [] };
   }),
 
   gatewayStatus: financeProcedure.query(() => {
