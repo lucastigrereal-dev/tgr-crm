@@ -1,0 +1,2 @@
+ALTER TABLE `sales_commissions` ADD `idempotencyKey` varchar(128);--> statement-breakpoint
+ALTER TABLE `sales_commissions` ADD CONSTRAINT `sales_commissions_idempotency_unique` UNIQUE(`idempotencyKey`);

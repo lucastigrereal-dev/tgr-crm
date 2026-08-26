@@ -308,6 +308,7 @@ export const salesCommissions = mysqlTable(
   "sales_commissions",
   {
     id: int("id").autoincrement().primaryKey(),
+    idempotencyKey: varchar("idempotencyKey", { length: 128 }),
     sellerId: int("sellerId").notNull().references(() => users.id),
     campaignId: int("campaignId").references(() => salesCampaigns.id),
     opportunityId: int("opportunityId").references(() => opportunities.id),
@@ -332,7 +333,7 @@ export const salesCommissions = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
+  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
 );
 
 export const contracts = mysqlTable(

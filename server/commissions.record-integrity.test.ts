@@ -6,7 +6,7 @@ vi.mock("./db", () => dbMocks);
 
 import { commissionsRouter } from "./routers/commissions";
 
-function makeDb({ sellerExists = true, campaignExists = true, opportunityExists = true, contractExists = true } = {}) {
+function makeDb({ sellerExists = true, campaignExists = true, opportunityExists = true, contractExists = true, existingCommission, insertError }: { sellerExists?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
   const inserted: unknown[] = [];
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => ({
@@ -16,12 +16,13 @@ function makeDb({ sellerExists = true, campaignExists = true, opportunityExists 
           if (table === salesCampaigns) return campaignExists ? [{ id: 10 }] : [];
           if (table === opportunities) return opportunityExists ? [{ id: 20 }] : [];
           if (table === contracts) return contractExists ? [{ id: 30 }] : [];
+          if (table === salesCommissions) return existingCommission ? [existingCommission] : [];
           return [];
         }),
       })),
     })),
   }));
-  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => [{ id: 901 }] }; }) }));
+  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => { if (insertError) throw insertError; return [{ id: 901 }]; } }; }) }));
   return { db: { select, insert }, inserted, insert };
 }
 
@@ -60,6 +61,36 @@ describe("integridade do lançamento manual de comissão", () => {
     expect(fixture.inserted[0]).toMatchObject({ sellerId: 55, baseAmount: "1000.00", rate: "10.00", amount: "100.00" });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "created", "Comissão de 100.00 lançada.");
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { sellerId: 55, campaignId: null, opportunityId: null, contractId: null, amount: 100, rate: 10 } });
+  });
+
+  it("reutiliza comissão idempotente sem repetir efeitos", async () => {
+    const fixture = makeDb({ existingCommission: { id: 902, sellerId: 55, campaignId: null, opportunityId: null, contractId: null, baseAmount: "1000.00", rate: "10.00", amount: "100.00", notes: "Lançamento manual" } });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().record({ ...baseInput, idempotencyKey: "commission-key-902-unique" })).resolves.toEqual({ id: 902, amount: 100, reused: true });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("recusa chave idempotente com payload divergente", async () => {
+    const fixture = makeDb({ existingCommission: { id: 902, sellerId: 55, campaignId: null, opportunityId: null, contractId: null, baseAmount: "1000.00", rate: "10.00", amount: "100.00", notes: "Lançamento manual" } });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().record({ ...baseInput, idempotencyKey: "commission-key-902-unique", rate: 20 })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("trata colisão concorrente da chave como retry idempotente", async () => {
+    const duplicateError = { code: "ER_DUP_ENTRY" };
+    const fixture = makeDb({ insertError: duplicateError, existingCommission: { id: 903, sellerId: 55, campaignId: null, opportunityId: null, contractId: null, baseAmount: "1000.00", rate: "10.00", amount: "100.00", notes: "Lançamento manual" } });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(caller().record({ ...baseInput, idempotencyKey: "commission-key-903-unique" })).resolves.toEqual({ id: 903, amount: 100, reused: true });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 });
 
