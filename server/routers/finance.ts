@@ -314,6 +314,7 @@ export const financeRouter = router({
       const item = (await db.select().from(installments).where(eq(installments.id, input.id)).limit(1))[0];
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
       if (item.status === "paid") return { success: true, alreadyPaid: true, commissionBlocked: false };
+      if (!["open", "overdue"].includes(item.status)) throw new TRPCError({ code: "CONFLICT", message: "A parcela não está em estado elegível para baixa." });
       const contract = (await db.select().from(contracts).where(eq(contracts.id, item.contractId)).limit(1))[0] ?? null;
       const proposal = contract?.proposalId ? ((await db.select().from(proposals).where(eq(proposals.id, contract.proposalId)).limit(1))[0] ?? null) : null;
       const opportunity = proposal?.opportunityId ? ((await db.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
@@ -322,7 +323,11 @@ export const financeRouter = router({
       const policyRow = commissionContext?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, commissionContext.capture.resortId)).limit(1))[0] : null; const commissionPolicy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy); const commissionNeedsPolicy = Boolean(commissionContext?.proposal && commissionContext.capture && Number(commissionContext.proposal.downPaymentAmount) > 0); const commissionBlocked = commissionNeedsPolicy && !commissionPolicy;
       const createdCommissionFacts: Array<{ id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number }> = [];
       const settled = await db.transaction(async tx => {
-        const updateResult = await tx.update(installments).set({ status: "paid", paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(and(eq(installments.id, input.id), ne(installments.status, "paid")));
+        const lockedItem = (await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.id, input.id)).limit(1).for("update"))[0];
+        if (!lockedItem) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
+        if (lockedItem.status === "paid") return false;
+        if (!["open", "overdue"].includes(lockedItem.status)) throw new TRPCError({ code: "CONFLICT", message: "A parcela não está em estado elegível para baixa." });
+        const updateResult = await tx.update(installments).set({ status: "paid", paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(and(eq(installments.id, input.id), inArray(installments.status, ["open", "overdue"])));
         if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return false;
         await tx.update(billingRecords).set({ status: "paid" }).where(and(eq(billingRecords.installmentId, input.id), inArray(billingRecords.status, ["pending", "generated"])));
         await tx.insert(financialTransactions).values({ contractId: item.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: item.amount, dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });

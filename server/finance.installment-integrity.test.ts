@@ -14,6 +14,7 @@ function query(rows: unknown[]) {
   promise.where = vi.fn(() => promise);
   promise.orderBy = vi.fn(() => promise);
   promise.limit = vi.fn(() => promise);
+  promise.for = vi.fn(() => promise);
   return promise;
 }
 
@@ -26,6 +27,7 @@ describe("idempotência concorrente de baixa de parcela", () => {
       { id: 101, opportunityId: 51, resortId: 2, campaignId: 9, linerId: 12, closerId: 13 },
     ]);
     const tx = {
+      select: vi.fn(() => query([{ id: 91, status: "open" }])),
       update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
       insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
     };
@@ -57,7 +59,7 @@ describe("idempotência concorrente de baixa de parcela", () => {
       set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 0 })) })),
     }));
     const txInsert = vi.fn();
-    const tx = { update: txUpdate, insert: txInsert };
+    const tx = { select: vi.fn(() => query([{ id: 91, status: "open" }])), update: txUpdate, insert: txInsert };
     const db = {
       select: vi.fn()
         .mockReturnValueOnce(query([{ id: 91, contractId: 61, sequence: 2, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z"), status: "open" }]))
