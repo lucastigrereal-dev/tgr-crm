@@ -8,6 +8,16 @@ describe("contrato de integração v1", () => {
     expect(event.payload).not.toHaveProperty("email");
   });
 
+  it("preserva contexto comercial permitido em oportunidades", () => {
+    const created = toIntegrationEvent({ id: 6, eventName: "opportunity.created", aggregateType: "opportunity", aggregateId: "301", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ customerId: 10, sellerId: 71, stage: "qualified", expectedAmount: 12000, campaignId: 9, notes: "privado" }) });
+    const updated = toIntegrationEvent({ id: 7, eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: "301", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ sellerId: 72, previousStage: "qualified", stage: "won", expectedAmount: 15000, campaignId: 9, notes: "privado" }) });
+
+    expect(created.payload).toEqual({ customerId: 10, sellerId: 71, stage: "qualified", expectedAmount: 12000, campaignId: 9 });
+    expect(updated.payload).toEqual({ sellerId: 72, previousStage: "qualified", stage: "won", expectedAmount: 15000, campaignId: 9 });
+    expect(created.payload).not.toHaveProperty("notes");
+    expect(updated.payload).not.toHaveProperty("notes");
+  });
+
   it("preserva a origem da comissão automática bloqueada", () => {
     const blocked = toIntegrationEvent({ id: 5, eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: "91", actorUserId: 7, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ contractId: 61, reason: "incomplete_project_policy", source: "manual", notes: "privado" }) });
 
