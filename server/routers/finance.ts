@@ -284,9 +284,10 @@ export const financeRouter = router({
               return { id: existing.id, reused: true };
             }
           }
-          const installment = (await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
+          const installment = (await tx.select({ id: installments.id, status: installments.status, amount: installments.amount, dueDate: installments.dueDate }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
           if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela da cobrança não encontrada." });
           if (["paid", "cancelled", "renegotiated"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga, cancelada ou renegociada." });
+          if (installment.amount !== expectedAmount || installment.dueDate.getTime() !== expectedDueDate.getTime()) throw new TRPCError({ code: "BAD_REQUEST", message: "Valor e vencimento da cobrança devem coincidir com a parcela." });
           const duplicateReference = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
           if (duplicateReference) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
           const activeDuplicate = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.type, input.type), eq(billingRecords.gatewayProvider, "manual"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).limit(1))[0];

@@ -17,7 +17,7 @@ function query(rows: unknown[]) {
 function makeDb(duplicate = false, activeDuplicate = false, installmentStatus: "open" | "overdue" | "paid" | "cancelled" | "renegotiated" = "open") {
   const db = {
     select: vi.fn()
-      .mockReturnValueOnce(query([{ id: 91, status: installmentStatus }]))
+      .mockReturnValueOnce(query([{ id: 91, status: installmentStatus, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") }]))
       .mockReturnValueOnce(query(duplicate ? [{ id: 700 }] : []))
       .mockReturnValueOnce(query(activeDuplicate ? [{ id: 701 }] : [])),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 701 }] })) })),
@@ -40,7 +40,7 @@ function makeCollisionDb(existing: { id: number; installmentId: number; type: "c
   const db = {
     select: vi.fn()
       .mockReturnValueOnce(query([]))
-      .mockReturnValueOnce(query([{ id: 91, status: "open" }]))
+      .mockReturnValueOnce(query([{ id: 91, status: "open", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") }]))
       .mockReturnValueOnce(query([]))
       .mockReturnValueOnce(query([]))
       .mockReturnValueOnce(query([{ billing: existing }])),
@@ -52,6 +52,25 @@ function makeCollisionDb(existing: { id: number; installmentId: number; type: "c
 
 describe("integridade de referências de cobrança", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("rejeita cobrança com valor divergente da parcela antes do insert", async () => {
+    const db = makeDb();
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.registerBilling({
+      installmentId: 91,
+      type: "card",
+      amount: 1200,
+      dueDate: "2026-09-10",
+      externalReference: "MANUAL-DIVERGENTE-91",
+      digitableLine: null,
+      pixCopyPaste: null,
+    })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
 
   it("rejeita referência externa manual duplicada antes do insert", async () => {
     const db = makeDb(true);
