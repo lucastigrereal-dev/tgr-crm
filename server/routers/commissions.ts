@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, contractCancellationRequests, contracts, installments, opportunities, proposals, salesCampaigns, salesCommissions, salesGoals, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -12,6 +12,7 @@ import { buildProfessionalScorecards, type ProfessionalSaleFact } from "../profe
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 
 const campaignDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => { const parsed = new Date(`${value}T00:00:00Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value; }, "Data de campanha inválida.");
+const closingMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Mês de fechamento inválido.");
 const campaignInput = z.object({ name: z.string().min(3).max(180), code: z.string().min(2).max(64).transform(value => value.trim().toUpperCase().replace(/\s+/g, "-")), description: z.string().max(2000).optional(), startsAt: campaignDate.optional(), endsAt: campaignDate.optional(), commissionRate: z.coerce.number().min(0).max(100), targetAmount: z.coerce.number().min(0).default(0), status: z.enum(["draft", "active", "closed"]).default("draft") }).superRefine((value, refinement) => { if (value.startsAt && value.endsAt && value.endsAt < value.startsAt) refinement.addIssue({ code: "custom", path: ["endsAt"], message: "A data final da campanha precisa ser posterior ou igual à inicial." }); });
 
 export const commissionsRouter = router({
@@ -51,15 +52,18 @@ export const commissionsRouter = router({
     return { rolesCovered: ["promoter", "qualifier", "liner", "closer", "ftb", "room_manager"], scorecards };
   }),
 
-  overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional(), closingMonth: z.string().regex(/^\d{4}-\d{2}$/).optional() }).optional()).query(async ({ ctx, input }) => {
+  overview: commissionsProcedure.input(z.object({ campaignId: z.number().int().positive().optional(), sellerId: z.number().int().positive().optional(), closingMonth: closingMonth.optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) return { campaigns: [], ranking: [], entries: [] };
     const sellerId = ctx.user.role === "seller" ? ctx.user.id : input?.sellerId;
+    const monthStart = input?.closingMonth ? new Date(`${input.closingMonth}-01T00:00:00Z`) : null;
+    const monthEnd = input?.closingMonth ? new Date(Date.UTC(monthStart!.getUTCFullYear(), monthStart!.getUTCMonth() + 1, 1)) : null;
+    const closingAtOrCreatedAt = sql<Date>`coalesce(${salesCommissions.closingAt}, ${salesCommissions.createdAt})`;
     const [campaigns, opportunityRows, commissionRows, sellerRows, goalRows] = await Promise.all([
       db.select().from(salesCampaigns).limit(1000),
-      db.select({ opportunity: opportunities, sellerName: users.name, sellerEmail: users.email, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).leftJoin(salesCampaigns, eq(opportunities.campaignId, salesCampaigns.id)).limit(5000),
-      db.select({ commission: salesCommissions, sellerName: users.name, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(salesCampaigns, eq(salesCommissions.campaignId, salesCampaigns.id)).limit(5000),
+      db.select({ opportunity: opportunities, sellerName: users.name, sellerEmail: users.email, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).leftJoin(salesCampaigns, eq(opportunities.campaignId, salesCampaigns.id)).where(and(eq(opportunities.stage, "won"), input?.campaignId ? eq(opportunities.campaignId, input.campaignId) : undefined, sellerId ? eq(opportunities.sellerId, sellerId) : undefined)).limit(5000),
+      db.select({ commission: salesCommissions, sellerName: users.name, campaignName: salesCampaigns.name, campaignCode: salesCampaigns.code }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(salesCampaigns, eq(salesCommissions.campaignId, salesCampaigns.id)).where(and(input?.campaignId ? eq(salesCommissions.campaignId, input.campaignId) : undefined, sellerId ? eq(salesCommissions.sellerId, sellerId) : undefined, monthStart && monthEnd ? gte(closingAtOrCreatedAt, monthStart) : undefined, monthStart && monthEnd ? lt(closingAtOrCreatedAt, monthEnd) : undefined)).limit(5000),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.role, "seller")).limit(1000),
-      db.select().from(salesGoals).limit(1000),
+      db.select().from(salesGoals).where(sellerId ? eq(salesGoals.sellerId, sellerId) : undefined).limit(1000),
     ]);
     const selectedOpportunities = opportunityRows.filter(row => row.opportunity.stage === "won" && (!input?.campaignId || row.opportunity.campaignId === input.campaignId) && (!sellerId || row.opportunity.sellerId === sellerId));
     const selectedCommissions = commissionRows.filter(row => (!input?.campaignId || row.commission.campaignId === input.campaignId) && (!sellerId || row.commission.sellerId === sellerId) && (!input?.closingMonth || (row.commission.closingAt ?? row.commission.createdAt).toISOString().slice(0, 7) === input.closingMonth));
