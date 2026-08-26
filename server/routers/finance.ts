@@ -80,7 +80,7 @@ export const financeRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-    const owner = (await db.select({ id: users.id }).from(users).where(eq(users.id, input.ownerUserId)).limit(1))[0];
+    const owner = (await db.select({ id: users.id }).from(users).where(and(eq(users.id, input.ownerUserId), inArray(users.role, ["admin", "finance"]))).limit(1))[0];
     if (!owner) throw new TRPCError({ code: "NOT_FOUND", message: "Responsável financeiro não encontrado." });
     const now = new Date();
     const assignmentId = await db.transaction(async tx => {

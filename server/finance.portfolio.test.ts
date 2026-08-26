@@ -28,6 +28,18 @@ describe("carteira financeira", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.portfolio.assigned", aggregateId: 901, actorUserId: 3, payload: { contractId: 41, ownerUserId: 7 } }));
   });
 
+  it("rejeita responsável fora dos papéis financeiro/admin antes da transação", async () => {
+    const selects = [[{ id: 41 }], []];
+    const select = vi.fn(() => ({ from: () => ({ where: () => ({ limit: async () => selects.shift() ?? [] }) }) }));
+    const transaction = vi.fn();
+    dbMocks.getDb.mockResolvedValue({ select, transaction });
+    const caller = financeRouter.createCaller({ user: { id: 3, role: "finance" } } as never);
+
+    await expect(caller.assignPortfolioOwner({ contractId: 41, ownerUserId: 7 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(transaction).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("aborta se o contrato desaparecer antes do lock transacional", async () => {
     const select = vi.fn(() => ({ from: () => ({ where: () => ({ limit: async () => [{ id: 41 }] }) }) }));
     const updates: unknown[] = [];
