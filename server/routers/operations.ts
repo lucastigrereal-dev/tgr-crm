@@ -92,29 +92,35 @@ export const operationsRouter = router({
     limit: z.number().int().min(1).max(500).default(200),
   }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = input?.limit ?? 200;
     const filters: SQL[] = [];
     if (input?.status) filters.push(eq(reservations.status, input.status));
     if (input?.from) filters.push(gte(reservations.checkIn, dateValue(input.from)));
     if (input?.to) filters.push(lte(reservations.checkIn, dateValue(input.to)));
     const search = input?.search?.trim();
     if (search) filters.push(or(like(customers.fullName, `%${search}%`), like(units.code, `%${search}%`), like(contracts.number, `%${search}%`))!);
-    return db.select({ reservation: reservations, customerName: customers.fullName, contractNumber: contracts.number, unitCode: units.code, resortName: resorts.name })
+    const rawRows = await db.select({ reservation: reservations, customerName: customers.fullName, contractNumber: contracts.number, unitCode: units.code, resortName: resorts.name })
       .from(reservations)
       .innerJoin(customers, eq(reservations.customerId, customers.id))
       .leftJoin(contracts, eq(reservations.contractId, contracts.id))
       .innerJoin(units, eq(reservations.unitId, units.id))
       .innerJoin(resorts, eq(units.resortId, resorts.id))
       .where(filters.length ? and(...filters) : undefined)
-      .orderBy(desc(reservations.checkIn)).limit(input?.limit ?? 200);
+      .orderBy(desc(reservations.checkIn)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["reservas"] : [] };
   }),
 
   waitlist: serviceProcedure.input(z.object({ search: z.string().trim().max(120).optional(), status: z.enum(["waiting", "offered"]).optional(), limit: z.number().int().min(1).max(500).default(200) }).optional()).query(async ({ input }) => {
-    const db = await getDb(); if (!db) return [];
+    const db = await getDb(); if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = input?.limit ?? 200;
     const filters: SQL[] = [inArray(reservationWaitlist.status, ["waiting", "offered"] as const)];
     if (input?.status) filters.push(eq(reservationWaitlist.status, input.status));
     if (input?.search) filters.push(or(like(customers.fullName, `%${input.search}%`), like(resorts.name, `%${input.search}%`))!);
-    return db.select({ item: reservationWaitlist, customerName: customers.fullName, resortName: resorts.name }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).leftJoin(resorts, eq(reservationWaitlist.resortId, resorts.id)).where(and(...filters)).orderBy(desc(reservationWaitlist.priorityScore), reservationWaitlist.desiredCheckIn).limit(input?.limit ?? 200);
+    const rawRows = await db.select({ item: reservationWaitlist, customerName: customers.fullName, resortName: resorts.name }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).leftJoin(resorts, eq(reservationWaitlist.resortId, resorts.id)).where(and(...filters)).orderBy(desc(reservationWaitlist.priorityScore), reservationWaitlist.desiredCheckIn).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["fila de espera"] : [] };
   }),
 
   joinWaitlist: serviceProcedure.input(z.object({ customerId: z.number().int().positive(), contractId: z.number().int().positive().nullable().optional(), resortId: z.number().int().positive().nullable().optional(), desiredCheckIn: z.string().date(), desiredCheckOut: z.string().date(), partySize: z.number().int().min(1).max(30).default(1), priorityScore: z.number().int().min(0).max(999).default(0), preferenceNotes: z.string().trim().max(2000).nullable().optional() })).mutation(async ({ ctx, input }) => {
