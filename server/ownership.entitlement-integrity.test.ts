@@ -14,7 +14,7 @@ function makeDb(options: { contracts?: unknown[]; resorts?: unknown[]; units?: u
   const inserted: unknown[] = [];
   const db = {
     select: vi.fn(() => ({
-      from: vi.fn((table: unknown) => table === contracts ? query(options.contracts ?? [{ id: 61 }]).from() : table === resorts ? query(options.resorts ?? [{ id: 2 }]).from() : table === units ? query(options.units ?? [{ id: 51, resortId: 2 }]).from() : query([]).from()),
+      from: vi.fn((table: unknown) => table === contracts ? query(options.contracts ?? [{ id: 61, status: "active" }]).from() : table === resorts ? query(options.resorts ?? [{ id: 2 }]).from() : table === units ? query(options.units ?? [{ id: 51, resortId: 2 }]).from() : query([]).from()),
     })),
     insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => options.returningId === undefined ? [{ id: 901 }] : (options.returningId ? [{ id: options.returningId }] : []) }; }) })),
   };
@@ -31,6 +31,17 @@ describe("integridade de direitos de uso", () => {
 
     await expect(caller.createEntitlement({ contractId: 61, entitlementType: "points", annualPoints: 100, priorityLevel: 2 })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(fixture.inserted).toEqual([]);
+  });
+
+  it("rejeita direito para contrato cancelado ou encerrado", async () => {
+    for (const status of ["cancelled", "closed"] as const) {
+      const fixture = makeDb({ contracts: [{ id: 61, status }] });
+      dbMocks.getDb.mockResolvedValue(fixture.db);
+      const caller = ownershipRouter.createCaller({ user: { id: 72, role: "service" } } as never);
+
+      await expect(caller.createEntitlement({ contractId: 61, entitlementType: "points", annualPoints: 100, priorityLevel: 2 })).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(fixture.inserted).toEqual([]);
+    }
   });
 
   it("rejeita unidade de empreendimento diferente", async () => {

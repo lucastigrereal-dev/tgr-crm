@@ -34,8 +34,9 @@ export const ownershipRouter = router({
     const validUntil = input.validUntil ? new Date(input.validUntil) : null;
     if ((validFrom && Number.isNaN(validFrom.getTime())) || (validUntil && Number.isNaN(validUntil.getTime()))) throw new TRPCError({ code: "BAD_REQUEST", message: "Período de vigência inválido." });
     if (validFrom && validUntil && validUntil <= validFrom) throw new TRPCError({ code: "BAD_REQUEST", message: "O fim da vigência precisa ser posterior ao início." });
-    const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+    const contract = (await db.select({ id: contracts.id, status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do direito não encontrado." });
+    if (["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível criar direito para contrato cancelado ou encerrado." });
     if (input.resortId) {
       const resort = (await db.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1))[0];
       if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento do direito não encontrado." });
