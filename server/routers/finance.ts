@@ -207,7 +207,7 @@ export const financeRouter = router({
       return { id, sequence: installment.sequence, installmentId: installment.id, proposedAmount: input.proposedAmount };
     });
     await recordAudit(ctx.user.id, "installment_renegotiation", renegotiation.id, "created", `Acordo proposto para parcela ${renegotiation.sequence}.`);
-    await recordDomainEvent({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: renegotiation.id, actorUserId: ctx.user.id, payload: { installmentId: renegotiation.installmentId, proposedAmount: renegotiation.proposedAmount } });
+    await recordDomainEvent({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: renegotiation.id, actorUserId: ctx.user.id, payload: { installmentId: renegotiation.installmentId, proposalAmount: renegotiation.proposedAmount } });
     return { id: renegotiation.id };
   }),
 

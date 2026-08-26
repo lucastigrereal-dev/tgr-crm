@@ -73,7 +73,7 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await caller.createEntry({ type: "income", category: "Taxa", description: "Taxa operacional", amount: 125, status: "paid" });
     await caller.createTransfer({ beneficiaryName: "Parceiro Operacional", amount: 250, dueDate: "2026-09-20" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposedAmount: 900 } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposalAmount: 900 } }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: 71, payload: expect.objectContaining({ contractId: 61, sequence: 2 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", actorUserId: 71, payload: expect.objectContaining({ category: "Taxa", amount: 125 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ recipient: "Parceiro Operacional", amount: 250 }) }));
