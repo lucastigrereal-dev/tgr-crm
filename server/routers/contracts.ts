@@ -158,6 +158,7 @@ export const contractsRouter = router({
   executeCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), executionNotes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.execute");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const createdFinancialEntryFacts: Array<{ id: number; contractId: number; type: "income" | "expense"; category: string; amount: number }> = [];
     const outcome = await db.transaction(async tx => {
       const request = (await tx.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1).for("update"))[0];
       if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." });
@@ -182,13 +183,14 @@ export const contractsRouter = router({
       const financialImpact = [] as Array<{ contractId: number; type: "income" | "expense"; category: string; description: string; amount: string; dueDate: Date; status: "open"; createdByUserId: number }>;
       if (Number(simulation.penalty ?? 0) > 0 || Number(simulation.retained ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "income", category: "Distrato · multa/retenção", description: `Impacto previsto do distrato aprovado #${request.id}`, amount: Number(simulation.penalty ?? simulation.retained ?? 0).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
       if (Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
-      if (financialImpact.length) await tx.insert(financialTransactions).values(financialImpact);
+      if (financialImpact.length) { const insertedFinancialEntries = await tx.insert(financialTransactions).values(financialImpact).$returningId(); insertedFinancialEntries.forEach((inserted, index) => { const entry = financialImpact[index]; if (entry && inserted?.id) createdFinancialEntryFacts.push({ id: inserted.id, contractId: entry.contractId, type: entry.type, category: entry.category, amount: Number(entry.amount) }); }); }
       await tx.update(contractCancellationRequests).set({ status: "executed", executedAt: new Date(), decisionNotes: [request.decisionNotes, input.executionNotes?.trim()].filter(Boolean).join("\n") || null }).where(eq(contractCancellationRequests.id, request.id));
       return { contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length };
     });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId}; parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
     for (const commissionId of outcome.cancelledCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "cancelled", `Comissão cancelada pelo distrato do contrato ${outcome.contractId}.`); await recordDomainEvent({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { status: "cancelled", contractId: outcome.contractId } }); }
+    for (const entry of createdFinancialEntryFacts) { await recordAudit(ctx.user.id, "financial_transaction", entry.id, "created", `Lançamento ${entry.type} de ${entry.amount.toFixed(2)} criado pelo distrato.`); await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: entry.id, actorUserId: ctx.user.id, payload: { type: entry.type, category: entry.category, amount: entry.amount, contractId: entry.contractId, campaignId: null } }); }
     await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
     return { success: true, ...outcome };
   }),

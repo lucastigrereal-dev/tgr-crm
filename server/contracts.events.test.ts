@@ -25,7 +25,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
     return chain;
   };
   const tx = {
-    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); return { $returningId: async () => table ? [{ id: 701 }] : [] }; }) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); const insertedCount = Array.isArray(values) ? values.length : 1; return { $returningId: async () => table ? Array.from({ length: insertedCount }, (_, index) => ({ id: 701 + index })) : [] }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
       const data = [
         [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80 }) }],
@@ -148,6 +148,10 @@ describe("eventos e auditoria de contratos", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 93, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 91, payload: { status: "cancelled", contractId: 701 } }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 93, payload: { status: "cancelled", contractId: 701 } }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "financial_transaction", 701, "created", "Lançamento income de 120.00 criado pelo distrato.");
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "financial_transaction", 702, "created", "Lançamento expense de 80.00 criado pelo distrato.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: 701, payload: { type: "income", category: "Distrato · multa/retenção", amount: 120, contractId: 701, campaignId: null } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: 702, payload: { type: "expense", category: "Distrato · reembolso", amount: 80, contractId: 701, campaignId: null } }));
   });
 
   it("bloqueia pedido não aprovado e não registra execução", async () => {
