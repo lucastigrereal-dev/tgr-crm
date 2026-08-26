@@ -222,7 +222,7 @@ export const financeRouter = router({
         issued = await db.transaction(async tx => {
         const row = (await tx.select({ installment: installments, contract: contracts, customer: customers }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
         if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
-        if (["paid", "cancelled"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga ou cancelada." });
+        if (["paid", "cancelled", "renegotiated"].includes(row.installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível emitir cobrança para uma parcela paga, cancelada ou renegociada." });
         const existing = (await tx.select({ billing: billingRecords }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.gatewayProvider, "asaas"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).orderBy(desc(billingRecords.createdAt)).limit(1))[0];
         if (existing?.billing.gatewayPaymentId) {
           if (existing.billing.type !== input.type) throw new TRPCError({ code: "CONFLICT", message: `Já existe uma cobrança Asaas do tipo ${existing.billing.type} para esta parcela.` });
@@ -283,7 +283,7 @@ export const financeRouter = router({
           }
           const installment = (await tx.select({ id: installments.id, status: installments.status }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
           if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela da cobrança não encontrada." });
-          if (["paid", "cancelled"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga ou cancelada." });
+          if (["paid", "cancelled", "renegotiated"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga, cancelada ou renegociada." });
           const duplicateReference = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
           if (duplicateReference) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
           const activeDuplicate = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.type, input.type), eq(billingRecords.gatewayProvider, "manual"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).limit(1))[0];
