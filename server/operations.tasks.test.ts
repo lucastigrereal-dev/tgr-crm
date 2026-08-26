@@ -49,6 +49,16 @@ describe("integridade referencial de tarefas", () => {
     expect(mismatchedContract.inserted).toEqual([]);
   });
 
+  it("bloqueia tarefa de cobrança em contrato cancelado ou encerrado", async () => {
+    const fixture = makeDb({ contractRows: [{ id: 8, customerId: 3, status: "cancelled" }] });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
+
+    await expect(caller.createTask({ title: "Cobrar parcela", type: "payment", customerId: 3, contractId: 8 })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("rejeita lembrete posterior ao vencimento antes do insert", async () => {
     const fixture = makeDb();
     dbMocks.getDb.mockResolvedValue(fixture.db);
@@ -64,7 +74,7 @@ describe("integridade referencial de tarefas", () => {
     dbMocks.getDb.mockResolvedValue(fixture.db);
     const caller = operationsRouter.createCaller({ user: { id: 12, role: "service" } } as never);
 
-    await expect(caller.createTask({ title: "Retornar cliente", customerId: 3, contractId: 8 })).resolves.toEqual({ id: 901 });
+    await expect(caller.createTask({ title: "Retornar cliente", type: "follow_up", customerId: 3, contractId: 8 })).resolves.toEqual({ id: 901 });
     expect(fixture.inserted[0]).toMatchObject({ title: "Retornar cliente", customerId: 3, contractId: 8, assignedToUserId: 12, createdByUserId: 12 });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(12, "task", 901, "created", expect.stringContaining("Retornar cliente"));
   });

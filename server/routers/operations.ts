@@ -340,13 +340,14 @@ export const operationsRouter = router({
     const assignedToUserId = input.assignedToUserId ?? ctx.user.id;
     const [customerRows, contractRows, assigneeRows] = await Promise.all([
       customerId ? db.select({ id: customers.id }).from(customers).where(eq(customers.id, customerId)).limit(1) : Promise.resolve([]),
-      contractId ? db.select({ id: contracts.id, customerId: contracts.customerId }).from(contracts).where(eq(contracts.id, contractId)).limit(1) : Promise.resolve([]),
+      contractId ? db.select({ id: contracts.id, customerId: contracts.customerId, status: contracts.status }).from(contracts).where(eq(contracts.id, contractId)).limit(1) : Promise.resolve([]),
       db.select({ id: users.id }).from(users).where(eq(users.id, assignedToUserId)).limit(1),
     ]);
     if (customerId && !customerRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
     const contract = contractRows[0];
     if (contractId && !contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
     if (contract && customerId && contract.customerId !== customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "O contrato não pertence ao cliente informado." });
+    if (contract && input.type === "payment" && ["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "Não é possível criar tarefa de cobrança para contrato cancelado ou encerrado." });
     if (!assigneeRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Responsável não encontrado." });
     const dueAt = dateTimeValue(input.dueAt);
     const reminderAt = dateTimeValue(input.reminderAt);
