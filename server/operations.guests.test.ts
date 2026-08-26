@@ -51,7 +51,7 @@ describe("operação de fila e acompanhantes", () => {
   });
 
   it("registra acompanhante com dados estruturados e trilha de auditoria", async () => {
-    const fixture = makeDb([[{ id: 44, capacity: 4 }], []]); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const fixture = makeDb([[{ id: 44, capacity: 4, adults: 1, children: 0, status: "confirmed" }], []]); dbMocks.getDb.mockResolvedValue(fixture.db);
     const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
 
     await expect(caller.addReservationGuest({ reservationId: 44, fullName: "Maria Tigre", documentNumber: "12345678900", relationship: "Cônjuge", birthDate: "1990-04-10" })).resolves.toEqual({ id: 722 });
@@ -60,12 +60,24 @@ describe("operação de fila e acompanhantes", () => {
   });
 
   it("bloqueia novo acompanhante quando a contagem já atingiu a capacidade", async () => {
-    const fixture = makeDb([[{ id: 44, capacity: 4 }], [{ count: "4" }]]); dbMocks.getDb.mockResolvedValue(fixture.db);
+    const fixture = makeDb([[{ id: 44, capacity: 4, adults: 1, children: 0, status: "confirmed" }], [{ count: "3" }]]); dbMocks.getDb.mockResolvedValue(fixture.db);
     const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
 
     await expect(caller.addReservationGuest({ reservationId: 44, fullName: "João Tigre" })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(fixture.inserts).toEqual([]);
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia acompanhante em reserva concluída ou cancelada", async () => {
+    for (const status of ["completed", "cancelled"] as const) {
+      const fixture = makeDb([[{ id: 44, capacity: 4, adults: 1, children: 0, status }]]);
+      dbMocks.getDb.mockResolvedValue(fixture.db);
+      const caller = operationsRouter.createCaller({ user: { id: 9, role: "service" } } as never);
+
+      await expect(caller.addReservationGuest({ reservationId: 44, fullName: "João Tigre" })).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(fixture.inserts).toEqual([]);
+      expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    }
   });
 
   it("bloqueia presença fora de uma hospedagem ativa", async () => {
