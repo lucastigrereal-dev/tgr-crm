@@ -176,7 +176,7 @@ export const financeRouter = router({
   simulateRenegotiation: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), proposedAmount: z.coerce.number().positive(), proposedDueDate: z.string().date() })).query(async ({ input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const installment = (await db.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1))[0]; if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
-    if (installment.status === "paid" || installment.status === "cancelled") throw new TRPCError({ code: "BAD_REQUEST", message: "Esta parcela não pode ser renegociada." });
+    if (["paid", "cancelled", "renegotiated"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta parcela não pode ser renegociada." });
     const originalAmount = Number(installment.amount); if (input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "O acordo não pode aumentar a parcela original." });
     return { contractId: installment.contractId, originalAmount, proposedAmount: input.proposedAmount, discountAmount: Number((originalAmount - input.proposedAmount).toFixed(2)), proposedDueDate: input.proposedDueDate };
   }),
@@ -187,8 +187,8 @@ export const financeRouter = router({
       const installment = (await tx.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
       if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
       const originalAmount = Number(installment.amount);
-      if (["paid", "cancelled"].includes(installment.status) || input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "Acordo inválido para esta parcela." });
-      const active = (await tx.select({ id: installmentRenegotiations.id }).from(installmentRenegotiations).where(and(eq(installmentRenegotiations.originalInstallmentId, input.installmentId), inArray(installmentRenegotiations.status, ["draft", "approved"]))).limit(1))[0];
+      if (["paid", "cancelled", "renegotiated"].includes(installment.status) || input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "Acordo inválido para esta parcela." });
+      const active = (await tx.select({ id: installmentRenegotiations.id }).from(installmentRenegotiations).where(and(eq(installmentRenegotiations.originalInstallmentId, input.installmentId), inArray(installmentRenegotiations.status, ["draft", "approved", "applied"]))).limit(1))[0];
       if (active) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma renegociação ativa para esta parcela." });
       const created = await tx.insert(installmentRenegotiations).values({ contractId: installment.contractId, originalInstallmentId: installment.id, originalAmount: originalAmount.toFixed(2), proposedAmount: input.proposedAmount.toFixed(2), proposedDueDate: dateValue(input.proposedDueDate), discountAmount: (originalAmount - input.proposedAmount).toFixed(2), notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id;

@@ -5,7 +5,7 @@ vi.mock("./db", () => dbMocks);
 
 import { financeRouter } from "./routers/finance";
 
-function makeDb(status: "open" | "paid" | "cancelled") {
+function makeDb(status: "open" | "paid" | "cancelled" | "renegotiated") {
   const rows = [{ id: 91, contractId: 61, sequence: 2, amount: "1000.00", status }];
   const query = () => {
     const chain = {
@@ -29,6 +29,17 @@ function makeDb(status: "open" | "paid" | "cancelled") {
 
 describe("integridade de renegociação", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("rejeita renegociação de parcela já renegociada sem inserir nem auditar", async () => {
+    const db = makeDb("renegotiated");
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 71, role: "finance" } } as never);
+
+    await expect(caller.createRenegotiation({ installmentId: 91, proposedAmount: 800, proposedDueDate: "2026-10-10", notes: "Tentativa duplicada" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
 
   it("rejeita renegociação de parcela cancelada sem inserir nem auditar", async () => {
     const db = makeDb("cancelled");
