@@ -17,11 +17,14 @@ import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select({ contract: contracts, customerName: customers.fullName, sellerName: users.name })
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = input?.limit ?? 100;
+    const rawRows = await db.select({ contract: contracts, customerName: customers.fullName, sellerName: users.name })
       .from(contracts).innerJoin(customers, eq(contracts.customerId, customers.id)).leftJoin(users, eq(contracts.sellerId, users.id))
       .where(input?.status ? eq(contracts.status, input.status) : undefined)
-      .orderBy(desc(contracts.updatedAt)).limit(input?.limit ?? 100);
+      .orderBy(desc(contracts.updatedAt)).limit(limit + 1);
+    const truncated = rawRows.length > limit;
+    return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["contratos"] : [] };
   }),
 
   create: salesProcedure.input(z.object({
