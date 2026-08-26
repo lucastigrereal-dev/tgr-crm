@@ -222,12 +222,13 @@ export const salesRouter = router({
       .orderBy(desc(proposals.updatedAt)).limit(100);
   }),
 
-  goals: salesProcedure.query(async () => {
+  goals: salesProcedure.query(async ({ ctx }) => {
     const db = await getDb();
-    if (!db) return [];
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const sellerId = ctx.user.role === "seller" ? ctx.user.id : undefined;
     const [goalRows, wonOpportunities] = await Promise.all([
-      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).orderBy(desc(salesGoals.monthReference)).limit(1000),
-      db.select().from(opportunities).where(eq(opportunities.stage, "won")).limit(5000),
+      db.select({ goal: salesGoals, sellerName: users.name }).from(salesGoals).innerJoin(users, eq(salesGoals.sellerId, users.id)).where(sellerId ? eq(salesGoals.sellerId, sellerId) : undefined).orderBy(desc(salesGoals.monthReference)).limit(1000),
+      db.select().from(opportunities).where(and(eq(opportunities.stage, "won"), sellerId ? eq(opportunities.sellerId, sellerId) : undefined)).limit(5000),
     ]);
     const progressBySellerMonth = new Map<string, { currentAmount: number; currentContracts: number }>();
     for (const opportunity of wonOpportunities) {
@@ -239,12 +240,17 @@ export const salesRouter = router({
       progress.currentContracts += 1;
       progressBySellerMonth.set(key, progress);
     }
-    return goalRows.map(row => {
+    const truncatedSources = [
+      goalRows.length >= 1_000 ? "metas" : null,
+      wonOpportunities.length >= 5_000 ? "oportunidades ganhas" : null,
+    ].filter((source): source is string => Boolean(source));
+    const rows = goalRows.map(row => {
       const reference = new Date(row.goal.monthReference);
       const key = `${row.goal.sellerId}:${reference.getUTCFullYear()}-${reference.getUTCMonth()}`;
       const progress = progressBySellerMonth.get(key) ?? { currentAmount: 0, currentContracts: 0 };
       return { ...row, ...progress };
     });
+    return { rows, truncated: truncatedSources.length > 0, truncatedSources };
   }),
 
   createGoal: salesProcedure.input(z.object({

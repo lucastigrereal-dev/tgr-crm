@@ -50,11 +50,15 @@ describe("progresso de metas comerciais", () => {
     dbMocks.getDb.mockResolvedValue(db);
     const caller = salesRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
 
-    await expect(caller.goals()).resolves.toMatchObject([{
-      sellerName: "Ana",
-      currentAmount: 2000,
-      currentContracts: 2,
-    }]);
+    await expect(caller.goals()).resolves.toMatchObject({
+      rows: [{
+        sellerName: "Ana",
+        currentAmount: 2000,
+        currentContracts: 2,
+      }],
+      truncated: false,
+      truncatedSources: [],
+    });
   });
 });
 
