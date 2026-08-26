@@ -5,18 +5,17 @@ vi.mock("./db", () => dbMocks);
 
 import { salesRouter } from "./routers/sales";
 
-function makeDb(row: { status: "pending" | "approved" | "rejected" } | null, affectedRows = 1) {
+function makeDb(row: { status: "pending" | "approved" | "rejected"; requestedAmount?: string } | null, affectedRows = 1) {
   const select = vi.fn(() => ({
     from: vi.fn(() => ({
       where: vi.fn(() => ({
-        limit: vi.fn(async () => row ? [row] : []),
+        limit: vi.fn(async () => row ? [{ requestedAmount: "800.00", ...row }] : []),
       })),
     })),
   }));
-  const update = vi.fn(() => ({
-    set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows })) })),
-  }));
-  return { select, update };
+  const set = vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows })) }));
+  const update = vi.fn(() => ({ set }));
+  return { select, update, set };
 }
 
 function caller() {
@@ -58,6 +57,7 @@ describe("integridade de decisão de desconto", () => {
 
     await expect(caller().decideDiscount({ id: 901, approve: true, decisionNotes: "Validado" })).resolves.toEqual({ success: true });
     expect(db.update).toHaveBeenCalledTimes(1);
+    expect(db.set).toHaveBeenCalledWith(expect.objectContaining({ status: "approved", approvedAmount: "800.00" }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "proposal_discount", 901, "approved", "Pedido de desconto decidido pela administração.");
   });
 });

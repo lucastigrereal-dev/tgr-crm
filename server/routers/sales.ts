@@ -75,10 +75,10 @@ export const salesRouter = router({
   decideDiscount: adminProcedure.input(z.object({ id: z.number().int().positive(), approve: z.boolean(), decisionNotes: z.string().trim().max(3000).optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const existing = (await db.select({ status: proposalDiscountApprovals.status }).from(proposalDiscountApprovals).where(eq(proposalDiscountApprovals.id, input.id)).limit(1))[0];
+    const existing = (await db.select({ status: proposalDiscountApprovals.status, requestedAmount: proposalDiscountApprovals.requestedAmount }).from(proposalDiscountApprovals).where(eq(proposalDiscountApprovals.id, input.id)).limit(1))[0];
     if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido de desconto não encontrado." });
     if (existing.status !== "pending") throw new TRPCError({ code: "CONFLICT", message: "Este pedido de desconto já foi decidido." });
-    const updateResult = await db.update(proposalDiscountApprovals).set({ status: input.approve ? "approved" : "rejected", decidedByUserId: ctx.user.id, decisionNotes: input.decisionNotes || null, decidedAt: new Date() }).where(and(eq(proposalDiscountApprovals.id, input.id), eq(proposalDiscountApprovals.status, "pending")));
+    const updateResult = await db.update(proposalDiscountApprovals).set({ status: input.approve ? "approved" : "rejected", approvedAmount: input.approve ? existing.requestedAmount : null, decidedByUserId: ctx.user.id, decisionNotes: input.decisionNotes || null, decidedAt: new Date() }).where(and(eq(proposalDiscountApprovals.id, input.id), eq(proposalDiscountApprovals.status, "pending")));
     if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O pedido de desconto foi alterado por outra operação." });
     await recordAudit(ctx.user.id, "proposal_discount", input.id, input.approve ? "approved" : "rejected", "Pedido de desconto decidido pela administração.");
     return { success: true };
