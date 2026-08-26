@@ -241,6 +241,7 @@ export const capturesRouter = router({
       if (input.createOpportunity) {
         const opportunity = await tx.insert(opportunities).values({ customerId, sellerId: clean(input.closerId) ?? clean(input.linerId), campaignId: clean(input.campaignId), title: `Captação · ${customerName}`, stage: input.qualificationStatus === "qualified" ? "qualified" : "new", source: nullIfBlank(input.captureLocation) ?? "captação", expectedAmount: "0.00", probability: input.qualificationStatus === "qualified" ? 30 : 10 }).$returningId();
         opportunityId = opportunity[0]?.id ?? null;
+        if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a oportunidade da captação." });
       }
       const appointmentPlan = getCaptureAppointmentPlan({ customerName, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, salesRoom: input.salesRoom });
       const inserted = await tx.insert(captureRecords).values({
@@ -251,6 +252,7 @@ export const capturesRouter = router({
       if (appointmentPlan.task) {
         const scheduledTask = await tx.insert(tasks).values({ title: appointmentPlan.task.title, description: appointmentPlan.task.description, type: "follow_up", priority: input.qualificationStatus === "qualified" ? "high" : "normal", customerId, assignedToUserId: clean(input.linerId) ?? clean(input.closerId) ?? ctx.user.id, dueAt: appointmentPlan.task.dueAt, reminderAt: appointmentPlan.task.reminderAt, createdByUserId: ctx.user.id }).$returningId();
         taskId = scheduledTask[0]?.id ?? null;
+        if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o acompanhamento da captação." });
       }
       return { captureId, customerId, opportunityId, taskId };
     });

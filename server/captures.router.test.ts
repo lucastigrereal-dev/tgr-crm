@@ -40,6 +40,38 @@ describe("captures.create", () => {
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
+  it("aborta captação quando a oportunidade não devolve ID persistido", async () => {
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([{ id: 12 }]))
+      .mockReturnValueOnce(chain([]));
+    const insert = vi.fn()
+      .mockImplementationOnce(() => returningId([{ id: 101 }]))
+      .mockImplementationOnce(() => returningId([]));
+    mockedDb.mockResolvedValue({ transaction: (callback: (tx: unknown) => unknown) => callback({ select, insert }) } as never);
+
+    await expect(caller("seller").captures.create(baseInput)).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(insert).toHaveBeenCalledTimes(2);
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("aborta captação quando o follow-up não devolve ID persistido", async () => {
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([{ id: 12 }]))
+      .mockReturnValueOnce(chain([]));
+    const insert = vi.fn()
+      .mockImplementationOnce(() => returningId([{ id: 101 }]))
+      .mockImplementationOnce(() => returningId([{ id: 202 }]))
+      .mockImplementationOnce(() => returningId([{ id: 303 }]))
+      .mockImplementationOnce(() => returningId([]));
+    mockedDb.mockResolvedValue({ transaction: (callback: (tx: unknown) => unknown) => callback({ select, insert }) } as never);
+
+    await expect(caller("seller").captures.create({ ...baseInput, scheduledAt: "2026-08-25T14:30:00.000Z" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(insert).toHaveBeenCalledTimes(4);
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("cria associado, oportunidade, ficha e tarefa quando existe agendamento", async () => {
     const select = vi.fn()
       .mockReturnValueOnce(chain([{ id: 12 }]))
