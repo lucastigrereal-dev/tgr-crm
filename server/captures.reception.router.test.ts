@@ -29,8 +29,8 @@ function capture(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function updateRecorder() {
-  const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue({ affectedRows: 1 }) }));
+function updateRecorder(affectedRows = 1) {
+  const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue({ affectedRows }) }));
   return { update: vi.fn(() => ({ set })), set };
 }
 
@@ -51,6 +51,16 @@ describe("captures reception router", () => {
     expect(recorder.set).toHaveBeenCalledWith(expect.objectContaining({ presentationStatus: "checked_in", receptionNotes: "Casal chegou no horário", checkedInAt: expect.any(Date) }));
     expect(recordAudit).toHaveBeenCalledWith(17, "capture", 91, "checked_in", expect.any(String));
     expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.checked_in", aggregateId: 91 }));
+  });
+
+  it("não audita atualização de status que perdeu a corrida", async () => {
+    const recorder = updateRecorder(0);
+    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture()])), ...recorder } as never);
+
+    await expect(caller("admin").captures.updateStatus({ id: 91, presentationStatus: "checked_in" })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("atribui mesa, liner e fechador depois do check-in", async () => {
