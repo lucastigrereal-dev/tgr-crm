@@ -60,6 +60,32 @@ describe("integridade das listas operacionais", () => {
     expect(result.truncatedSources).toEqual(["fila de espera"]);
     expect(chain.limit).toHaveBeenCalledWith(201);
   });
+
+  it("marca catálogo de resorts quando supera mil empreendimentos", async () => {
+    const rows = Array.from({ length: 1001 }, (_, id) => ({ id, name: `Resort ${id}` }));
+    const chain = queryChain(rows);
+    dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain) });
+    const caller = operationsRouter.createCaller({ user: { id: 1, role: "service" } } as never);
+
+    const result = await caller.resorts();
+    expect(result.rows).toHaveLength(1000);
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedSources).toEqual(["resorts"]);
+    expect(chain.limit).toHaveBeenCalledWith(1001);
+  });
+
+  it("respeita o limite solicitado de unidades e marca truncamento", async () => {
+    const rows = Array.from({ length: 3 }, (_, id) => ({ unit: { id }, resortName: "Resort" }));
+    const chain = queryChain(rows);
+    dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain) });
+    const caller = operationsRouter.createCaller({ user: { id: 1, role: "service" } } as never);
+
+    const result = await caller.units({ limit: 2 });
+    expect(result.rows).toHaveLength(2);
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedSources).toEqual(["units"]);
+    expect(chain.limit).toHaveBeenCalledWith(3);
+  });
 });
 
 export {};
