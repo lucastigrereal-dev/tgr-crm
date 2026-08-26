@@ -205,7 +205,7 @@ export const operationsRouter = router({
   availableUnits: serviceProcedure.input(z.object({ checkIn: z.string().date(), checkOut: z.string().date(), resortId: z.number().int().positive().optional() }))
     .query(async ({ input }) => {
       const db = await getDb();
-      if (!db) return [];
+      if (!db) return { rows: [], truncated: false, truncatedSources: [] };
       const checkIn = dateValue(input.checkIn); const checkOut = dateValue(input.checkOut);
       if (!isValidReservationPeriod(checkIn, checkOut)) throw new TRPCError({ code: "BAD_REQUEST", message: "A saída precisa ser posterior ao check-in." });
       const reservationConflict = db.select({ id: reservations.id }).from(reservations).where(and(
@@ -214,9 +214,12 @@ export const operationsRouter = router({
       const maintenanceConflict = db.select({ id: unitMaintenanceBlocks.id }).from(unitMaintenanceBlocks).where(and(
         eq(unitMaintenanceBlocks.unitId, units.id), lt(unitMaintenanceBlocks.startsAt, checkOut), gt(unitMaintenanceBlocks.endsAt, checkIn), inArray(unitMaintenanceBlocks.status, ["planned", "active"]),
       ));
-      return db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
+      const limit = 5_000;
+      const rawRows = await db.select({ unit: units, resortName: resorts.name }).from(units).innerJoin(resorts, eq(units.resortId, resorts.id))
         .where(and(eq(units.status, "active"), input.resortId ? eq(units.resortId, input.resortId) : undefined, notExists(reservationConflict), notExists(maintenanceConflict)))
-        .orderBy(resorts.name, units.code).limit(5000);
+        .orderBy(resorts.name, units.code).limit(limit + 1);
+      const truncated = rawRows.length > limit;
+      return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["unidades disponíveis"] : [] };
     }),
 
   createReservation: serviceProcedure.input(z.object({
