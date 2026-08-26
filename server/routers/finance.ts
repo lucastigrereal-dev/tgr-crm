@@ -24,6 +24,8 @@ async function runAsaas<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+const isDuplicateKeyError = (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY");
+
 export const financeRouter = router({
   portfolioScorecards: financeProcedure.query(async () => {
     const db = await getDb();
@@ -345,7 +347,7 @@ export const financeRouter = router({
     return { rows: buildCampaignDre(transactions.slice(0, limit).map(row => ({ campaignId: row.campaignId, campaignName: row.campaignName, type: row.type, amount: row.amount }))), truncated, truncatedSources: truncated ? ["grupos do DRE"] : [] };
   }),
 
-  createEntry: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional().nullable(), campaignId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))
+  createEntry: financeProcedure.input(z.object({ idempotencyKey: z.string().trim().min(16).max(128).optional(), contractId: z.number().int().positive().optional().nullable(), campaignId: z.number().int().positive().optional().nullable(), type: z.enum(["income", "expense"]), category: z.string().trim().min(2).max(120), description: z.string().trim().min(2).max(2000), amount: z.coerce.number().positive(), dueDate: z.string().date().optional().nullable(), status: z.enum(["open", "paid"]).default("open") }))
     .mutation(async ({ ctx, input }) => {
       assertCapability(ctx.user.role, "finance.entry.create");
       const db = await getDb();
@@ -358,12 +360,33 @@ export const financeRouter = router({
         const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1))[0];
         if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha do lançamento não encontrada." });
       }
-      const created = await db.insert(financialTransactions).values({ ...input, contractId: input.contractId ?? null, campaignId: input.campaignId ?? null, amount: input.amount.toFixed(2), dueDate: input.dueDate ? dateValue(input.dueDate) : null, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
+      const expectedContractId = input.contractId ?? null;
+      const expectedCampaignId = input.campaignId ?? null;
+      const expectedAmount = input.amount.toFixed(2);
+      const expectedDueDate = input.dueDate ? dateValue(input.dueDate) : null;
+      const matchesExisting = (existing: { contractId: number | null; campaignId: number | null; type: "income" | "expense"; category: string; description: string; amount: string; dueDate: Date | null; status: "open" | "paid" | "cancelled" }) => existing.contractId === expectedContractId && existing.campaignId === expectedCampaignId && existing.type === input.type && existing.category === input.category && existing.description === input.description && existing.amount === expectedAmount && (existing.dueDate?.getTime() ?? null) === (expectedDueDate?.getTime() ?? null) && existing.status === input.status;
+      if (input.idempotencyKey) {
+        const existing = (await db.select({ id: financialTransactions.id, contractId: financialTransactions.contractId, campaignId: financialTransactions.campaignId, type: financialTransactions.type, category: financialTransactions.category, description: financialTransactions.description, amount: financialTransactions.amount, dueDate: financialTransactions.dueDate, status: financialTransactions.status }).from(financialTransactions).where(eq(financialTransactions.idempotencyKey, input.idempotencyKey)).limit(1))[0];
+        if (existing) {
+          if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outro lançamento." });
+          return { id: existing.id, reused: true };
+        }
+      }
+      let created;
+      try {
+        created = await db.insert(financialTransactions).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: expectedContractId, campaignId: expectedCampaignId, type: input.type, category: input.category, description: input.description, amount: expectedAmount, dueDate: expectedDueDate, status: input.status, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
+      } catch (error) {
+        if (!input.idempotencyKey || !isDuplicateKeyError(error)) throw error;
+        const existing = (await db.select({ id: financialTransactions.id, contractId: financialTransactions.contractId, campaignId: financialTransactions.campaignId, type: financialTransactions.type, category: financialTransactions.category, description: financialTransactions.description, amount: financialTransactions.amount, dueDate: financialTransactions.dueDate, status: financialTransactions.status }).from(financialTransactions).where(eq(financialTransactions.idempotencyKey, input.idempotencyKey)).limit(1))[0];
+        if (!existing) throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi criado por outra operação. Recarregue a tela." });
+        if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outro lançamento." });
+        return { id: existing.id, reused: true };
+      }
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o lançamento." });
       await recordAudit(ctx.user.id, "financial_transaction", id, "created", `Lançamento ${input.type} criado.`);
-      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: id, actorUserId: ctx.user.id, payload: { type: input.type, category: input.category, amount: input.amount, contractId: input.contractId ?? null, campaignId: input.campaignId ?? null } });
-      return { id };
+      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: id, actorUserId: ctx.user.id, payload: { type: input.type, category: input.category, amount: input.amount, contractId: expectedContractId, campaignId: expectedCampaignId } });
+      return { id, reused: false };
     }),
 
   reconcileEntry: financeProcedure.input(z.object({ id: z.number().int().positive(), reconciliationReference: z.string().trim().min(3).max(255) })).mutation(async ({ ctx, input }) => {

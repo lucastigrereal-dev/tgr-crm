@@ -461,6 +461,7 @@ export const financialTransactions = mysqlTable(
   "financial_transactions",
   {
     id: int("id").autoincrement().primaryKey(),
+    idempotencyKey: varchar("idempotencyKey", { length: 128 }),
     contractId: int("contractId").references(() => contracts.id),
     campaignId: int("campaignId").references(() => salesCampaigns.id),
     type: mysqlEnum("type", ["income", "expense"]).notNull(),
@@ -476,7 +477,7 @@ export const financialTransactions = mysqlTable(
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status), index("financial_transactions_paid_idx").on(table.status, table.paidAt, table.type)],
+  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status), index("financial_transactions_paid_idx").on(table.status, table.paidAt, table.type), uniqueIndex("financial_transactions_idempotency_unique").on(table.idempotencyKey)],
 );
 
 export const financialPortfolioAssignments = mysqlTable("financial_portfolio_assignments", {
