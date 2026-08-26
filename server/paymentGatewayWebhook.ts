@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
@@ -68,7 +68,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         if (installmentWasSettled) {
           installmentPaid = true;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
-          const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).limit(1))[0];
+          const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
           const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
           const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
           const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);

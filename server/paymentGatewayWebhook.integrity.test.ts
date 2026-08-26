@@ -21,6 +21,7 @@ function query(rows: unknown[]) {
   promise.innerJoin = vi.fn(() => promise);
   promise.leftJoin = vi.fn(() => promise);
   promise.where = vi.fn(() => promise);
+  promise.orderBy = vi.fn(() => promise);
   promise.limit = vi.fn(() => promise);
   promise.for = vi.fn(() => promise);
   return promise;
@@ -46,6 +47,7 @@ describe("idempotência financeira do webhook Asaas", () => {
 
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: null, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 1, amount: "1000.00", source: "asaas", gatewayPaymentId: "pay-91", commissionBlocked: false } });
     expect(lockedBillingQuery.for).toHaveBeenCalledWith("update");
+    expect(lockedBillingQuery.orderBy).toHaveBeenCalled();
   });
 
   it("ignora confirmação atrasada de cobrança cancelada sem gerar efeitos financeiros", async () => {
