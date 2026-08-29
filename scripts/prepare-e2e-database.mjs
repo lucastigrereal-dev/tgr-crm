@@ -10,7 +10,10 @@ try {
   await db.query(
     `CREATE DATABASE IF NOT EXISTS ${fixture.quotedDatabaseName} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
   );
-  const [created] = await db.execute("SHOW DATABASES LIKE ?", [fixture.databaseName]);
+  const [created] = await db.execute(
+    "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?",
+    [fixture.databaseName],
+  );
   if (created.length !== 1) {
     throw new Error(`Falha ao criar o banco descartável ${fixture.databaseName}.`);
   }
