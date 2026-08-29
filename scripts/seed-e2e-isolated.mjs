@@ -1,11 +1,10 @@
 import mysql from "mysql2/promise";
+import { assertIsolatedE2EEnvironment } from "./e2e-isolation-lib.mjs";
 
-const url = process.env.E2E_DATABASE_URL;
-if (!url) throw new Error("E2E_DATABASE_URL é obrigatória.");
-if (!/(?:_e2e|_test|_staging)(?:\?|$)/i.test(new URL(url).pathname + new URL(url).search)) throw new Error("Banco não parece isolado.");
+const isolation = assertIsolatedE2EEnvironment();
 const openId = process.env.OWNER_OPEN_ID;
 if (!openId) throw new Error("OWNER_OPEN_ID é obrigatório.");
-const db = await mysql.createConnection(url);
+const db = await mysql.createConnection(isolation.url);
 await db.execute("INSERT INTO users (openId, name, email, loginMethod, role) VALUES (?, ?, ?, 'e2e', 'admin') ON DUPLICATE KEY UPDATE role='admin', name=VALUES(name)", [openId, "TSE E2E Owner", "e2e-owner@tse.local"]);
 const [[owner]] = await db.execute("SELECT id FROM users WHERE openId = ?", [openId]);
 const ownerId = owner.id;
