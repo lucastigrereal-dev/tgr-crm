@@ -6,13 +6,13 @@
 - Delivery branch: `audit-delivery-2026-08-29`
 - Remote base: `wave1-security-performance-2026-08-25`
 - Base SHA: `97eb948bc5311c065e68912e343d8b77dc524c5a`
-- Audited head SHA: `3cad31adbb02a11ee2f6514569f8ce20711589a6`
 - Draft PR: `#1`
-- Workflow: `TGR CRM CI`
-- Run ID: `33263813145`
-- Quality job ID: `99130173909`
 
-## Result
+## Run 1 — failing infrastructure baseline
+
+- Head SHA: `3cad31adbb02a11ee2f6514569f8ce20711589a6`
+- Workflow run ID: `33263813145`
+- Quality job ID: `99130173909`
 
 | Gate | Result | Evidence |
 |---|---|---|
@@ -24,32 +24,48 @@
 | Unit/integration tests | NOT_TESTED | Skipped after setup failure |
 | Production build | NOT_TESTED | Skipped after setup failure |
 | Bundle budget | NOT_TESTED | Skipped after setup failure |
-| Authenticated E2E | BLOCKED | Job remains opt-in and was skipped |
+| Authenticated E2E | BLOCKED | Job remained opt-in and was skipped |
 
-## Root cause
+### Root cause
 
-The workflow config passes `version: 10.4.1` to `pnpm/action-setup@v4`, while `package.json` declares:
+The workflow passed `version: 10.4.1` to `pnpm/action-setup@v4`, while `package.json` declared:
 
 ```json
 "packageManager": "pnpm@10.26.2"
 ```
 
-The setup action fails closed when two different pnpm versions are specified:
+The setup action correctly failed closed because two different versions were specified.
 
-```text
-Error: Multiple versions of pnpm specified:
-- version 10.4.1 in the GitHub Action config
-- version pnpm@10.26.2 in package.json
-```
+### Correction
 
-This is a CI configuration defect, not a TypeScript, test or application failure. No application gate was reached.
+Removed the duplicated workflow pin and made the repository's `packageManager` declaration authoritative for both quality and E2E jobs.
 
-## Minimal correction hypothesis
+## Run 2 — corrected remote quality baseline
 
-Remove the duplicated hard-coded pnpm version from both workflow jobs and let `pnpm/action-setup@v4` use the repository-authoritative `packageManager` declaration.
+- Head SHA: `4db53ca82fe24625143fb659ee537441a4fd37ff`
+- Workflow run ID: `33263897632`
+- Quality job ID: `99130395642`
+- Duration: 2026-08-29 16:47:03Z to 16:48:23Z
 
-This is preferable to changing `package.json`, because the lockfile and local tooling already identify `pnpm@10.26.2` as the project version.
+| Gate | Result | Evidence |
+|---|---|---|
+| Checkout | PASS | Pull-request merge ref checked out |
+| pnpm setup | PASS | Repository version resolved without conflict |
+| Node setup | PASS | Node 22 configured |
+| Frozen dependency install | PASS | Lockfile accepted |
+| Configuration doctor | PASS | CI-safe JWT shape accepted |
+| TypeScript | PASS | `pnpm check` |
+| Unit/integration tests | PASS | Full configured Vitest suite |
+| Production build | PASS | Client and server build |
+| Bundle budget | PASS | Budget script completed |
+| Authenticated E2E | BLOCKED | Conditional E2E job skipped because isolated environment is not enabled |
+
+## Baseline verdict
+
+**CODE-TESTED: PASS** on the remotely available branch after one CI configuration correction.
+
+**DEMO/PILOT E2E: BLOCKED**, because authenticated Playwright validation has not yet run against a disposable database and controlled identity environment.
 
 ## Secondary observation
 
-The runner reports that actions targeting Node.js 20 are being forced to Node.js 24. This is a warning, not the cause of the failure. It will be addressed separately only after the baseline reaches the application gates.
+The runner warns that some GitHub actions targeting Node.js 20 are being forced to Node.js 24. This warning did not fail the job and is not an application defect. Action-version modernization can be handled separately after the E2E safety work.
