@@ -12,7 +12,10 @@ const db = await mysql.createConnection(fixture.serverUrl);
 
 try {
   await db.query(`DROP DATABASE IF EXISTS ${fixture.quotedDatabaseName}`);
-  const [remaining] = await db.execute("SHOW DATABASES LIKE ?", [fixture.databaseName]);
+  const [remaining] = await db.execute(
+    "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?",
+    [fixture.databaseName],
+  );
   if (remaining.length !== 0) {
     throw new Error(`Falha ao remover o banco descartável ${fixture.databaseName}.`);
   }
