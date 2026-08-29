@@ -52,10 +52,33 @@ jobs:
         run: node scripts/check-bundle-budget.mjs
 
   e2e:
-    name: E2E autenticado (quando ambiente estiver habilitado)
-    if: ${{ vars.TGR_E2E_ENABLED == 'true' }}
+    name: E2E autenticado em MySQL descartável
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: tgr-e2e-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptgr-e2e-root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      E2E_RUN_ID: ci_${{ github.run_id }}
+      E2E_DATABASE_URL: mysql://root:tgr-e2e-root@127.0.0.1:3306/tgr_crm_ci_${{ github.run_id }}_e2e
+      DATABASE_URL: mysql://root:tgr-e2e-root@127.0.0.1:3306/tgr_crm_ci_${{ github.run_id }}_e2e
+      E2E_CONFIRM_ISOLATED: I_CONFIRM_ISOLATED_E2E
+      E2E_STRICT: "1"
+      E2E_BASE_URL: http://127.0.0.1:3000
+      E2E_RECEIPT_PATH: e2e/.runtime/receipt-ci_${{ github.run_id }}.json
+      JWT_SECRET: ci-only-e2e-secret-with-at-least-32-characters
+      VITE_APP_ID: tgr-e2e
+      OAUTH_SERVER_URL: http://127.0.0.1:65535
+      OWNER_OPEN_ID: E2E-TGR-ci_${{ github.run_id }}-OWNER
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,36 +95,54 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install Playwright browsers
+      - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Validate E2E configuration
+      - name: Validate strict E2E configuration
         run: pnpm config:doctor:e2e
-        env:
-          DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
-          E2E_DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
-          JWT_SECRET: ${{ secrets.TGR_E2E_JWT_SECRET }}
-          VITE_APP_ID: ${{ secrets.TGR_E2E_APP_ID }}
-          OAUTH_SERVER_URL: ${{ secrets.TGR_E2E_OAUTH_SERVER_URL }}
-          OWNER_OPEN_ID: ${{ secrets.TGR_E2E_OWNER_OPEN_ID }}
 
-      - name: Run browser tests
-        run: pnpm test:browser
+      - name: Prove isolation before database creation
+        run: node scripts/check-e2e-isolation.mjs
         env:
-          DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
-          E2E_DATABASE_URL: ${{ secrets.TGR_E2E_DATABASE_URL }}
-          JWT_SECRET: ${{ secrets.TGR_E2E_JWT_SECRET }}
-          VITE_APP_ID: ${{ secrets.TGR_E2E_APP_ID }}
-          OAUTH_SERVER_URL: ${{ secrets.TGR_E2E_OAUTH_SERVER_URL }}
-          OWNER_OPEN_ID: ${{ secrets.TGR_E2E_OWNER_OPEN_ID }}
-          E2E_STRICT: "1"
+          DATABASE_URL: ""
 
-      - name: Upload Playwright report
+      - name: Create the run-owned disposable database
+        run: node scripts/prepare-e2e-database.mjs
+        env:
+          DATABASE_URL: ""
+
+      - name: Apply reviewed migrations
+        run: pnpm exec drizzle-kit migrate
+
+      - name: Seed deterministic TGR fixtures
+        run: node scripts/seed-e2e-isolated.mjs
+        env:
+          DATABASE_URL: ""
+
+      - name: Export disposable contract id
+        run: >-
+          node --input-type=module -e "import { appendFileSync, readFileSync } from 'node:fs';
+          const receipt = JSON.parse(readFileSync(process.env.E2E_RECEIPT_PATH, 'utf8'));
+          const contractId = Number(receipt.contractId);
+          if (!Number.isInteger(contractId) || contractId <= 0) throw new Error('Receipt sem contractId válido.');
+          appendFileSync(process.env.GITHUB_ENV, 'E2E_CANCELLATION_CONTRACT_ID=' + contractId + '\n');"
+
+      - name: Run strict authenticated browser journeys
+        run: pnpm exec playwright test e2e/strict-isolated.spec.ts --reporter=line,html
+
+      - name: Drop only this run-owned database
+        if: always()
+        run: node scripts/cleanup-e2e-isolated.mjs
+        env:
+          DATABASE_URL: ""
+
+      - name: Upload E2E evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: tgr-e2e-${{ github.run_id }}
           path: |
             playwright-report
             test-results
-          if-no-files-found: ignore
+            e2e/.runtime
+          if-no-files-found: warn
