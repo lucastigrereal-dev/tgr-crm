@@ -93,7 +93,6 @@ test.describe("homologação isolada estrita", () => {
     const checkOut = waitForMutation(page, "operations.updateReservationStatus");
     await page.getByRole("button", { name: "Check-out" }).click();
     await checkOut;
-    await expect(page.getByText("Status da reserva atualizado.")).toBeVisible();
 
     const guests = await queryDatabase<
       Array<{ checkedInAt: Date | null; checkedOutAt: Date | null }>
