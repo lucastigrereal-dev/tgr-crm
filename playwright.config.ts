@@ -21,6 +21,7 @@ export default defineConfig({
   webServer: useExternalServer ? undefined : {
     command: "pnpm dev",
     url: baseURL,
+    env: { PORT: new URL(baseURL).port || "3000" },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

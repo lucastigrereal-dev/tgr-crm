@@ -18,7 +18,7 @@ describe("Playwright server lifecycle", () => {
 
   test("starts the local server when E2E_BASE_URL selects the target URL", async () => {
     vi.stubEnv("E2E_BASE_URL", "http://127.0.0.1:4173");
-    vi.stubEnv("E2E_EXTERNAL_SERVER", undefined);
+    vi.stubEnv("E2E_EXTERNAL_SERVER", "0");
 
     const config = await loadPlaywrightConfig();
 
@@ -26,6 +26,7 @@ describe("Playwright server lifecycle", () => {
     expect(config.webServer).toMatchObject({
       command: "pnpm dev",
       url: "http://127.0.0.1:4173",
+      env: { PORT: "4173" },
     });
   });
 
