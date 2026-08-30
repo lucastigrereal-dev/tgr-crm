@@ -17,6 +17,15 @@ async function queryDatabase<T>(sql: string, params: unknown[] = []) {
   }
 }
 
+function waitForMutation(page: import("@playwright/test").Page, procedure: string) {
+  return page.waitForResponse(
+    response =>
+      response.request().method() === "POST" &&
+      response.ok() &&
+      response.url().includes(`/api/trpc/${procedure}`),
+  );
+}
+
 test.describe("homologação isolada estrita", () => {
   test("importa e reverte CSV no backend real", async ({ page }) => {
     const fx = fixture!;
@@ -61,11 +70,15 @@ test.describe("homologação isolada estrita", () => {
   test("converte oferta, registra acompanhante e encerra reserva real", async ({ page }) => {
     const fx = fixture!;
     await page.goto("/reservas");
+    const checkIn = waitForMutation(page, "operations.updateReservationStatus");
     await page.getByRole("button", { name: "Check-in" }).click();
+    await checkIn;
     await expect(page.getByText("Status da reserva atualizado.")).toBeVisible();
     await page.getByRole("button", { name: "Acompanhantes" }).click();
     await expect(page.getByText(fx.guestName)).toBeVisible();
+    const guestCheckIn = waitForMutation(page, "operations.updateGuestPresence");
     await page.getByRole("button", { name: "Chegou" }).click();
+    await guestCheckIn;
     await expect(page.getByText("Presença do acompanhante atualizada.")).toBeVisible();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Ofertar vaga" }).click();
@@ -77,7 +90,9 @@ test.describe("homologação isolada estrita", () => {
       .click();
     await page.getByRole("button", { name: "Criar reserva confirmada" }).click();
     await expect(page.getByText("Oferta convertida em reserva confirmada.")).toBeVisible();
+    const checkOut = waitForMutation(page, "operations.updateReservationStatus");
     await page.getByRole("button", { name: "Check-out" }).click();
+    await checkOut;
     await expect(page.getByText("Status da reserva atualizado.")).toBeVisible();
 
     const guests = await queryDatabase<
@@ -101,9 +116,9 @@ test.describe("homologação isolada estrita", () => {
     await expect(tourCard.getByLabel("Mesa")).toBeVisible();
     await tourCard.getByLabel("Mesa").fill(fx.salesTable);
     await tourCard.getByRole("combobox").nth(0).click();
-    await tourCard.getByText(fx.ownerName).click();
+    await page.getByRole("option", { name: fx.ownerName }).click();
     await tourCard.getByRole("combobox").nth(1).click();
-    await tourCard.getByText(fx.ownerName).click();
+    await page.getByRole("option", { name: fx.ownerName }).click();
     await tourCard.getByRole("button", { name: "Salvar mesa" }).click();
     await tourCard.getByRole("button", { name: "Iniciar tour" }).click();
     await expect(
