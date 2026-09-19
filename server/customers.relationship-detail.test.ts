@@ -14,6 +14,8 @@ function chain<T>(value: T) {
 
 describe("contrato da central de relacionamento", () => {
   it("entrega radar, onboarding e tarefas abertas junto com a ficha do associado", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T12:00:00Z"));
     const results = [
       [{ id: 9, fullName: "Ana", email: "ana@exemplo.com", phone: "11999999999", status: "active" }],
       [{ id: 1, occurredAt: new Date("2026-08-16T12:00:00Z") }],
@@ -28,8 +30,12 @@ describe("contrato da central de relacionamento", () => {
     dbMocks.getDb.mockResolvedValue(db);
     const caller = customersRouter.createCaller({ user: { id: 2, role: "service" } } as never);
 
-    const detail = await caller.detail({ id: 9 });
-    expect(detail).toMatchObject({ customer: { id: 9 }, radar: { label: "saudável", score: 100 }, relationshipTasks: [{ id: 7, title: "Ligar para confirmar reserva" }] });
-    expect(detail?.radar.onboarding.every(item => item.complete)).toBe(true);
+    try {
+      const detail = await caller.detail({ id: 9 });
+      expect(detail).toMatchObject({ customer: { id: 9 }, radar: { label: "saudável", score: 100 }, relationshipTasks: [{ id: 7, title: "Ligar para confirmar reserva" }] });
+      expect(detail?.radar.onboarding.every(item => item.complete)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
