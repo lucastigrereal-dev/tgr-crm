@@ -1,16 +1,18 @@
 # TGR CRM — Matriz E2E
 
-Execução de referência: GitHub Actions `33291030111`, job `99202568403`, SHA `081ddc0b9f1cb3b2460011f025e0fae3d74fb43a`.
+Referências: GitHub Actions `33291030111` (Linux, auditoria anterior) e run local Windows `win_20260919_g` em 19/09/2026.
 
-| Jornada | Resultado | Prova |
-| --- | --- | --- |
-| CSV: prévia, importação e undo protegido | PASS | Playwright estrito e leitura MySQL sem registro importado após undo. |
-| Funil: download XLSX e PDF | PASS | Playwright estrito confirmou downloads reais. |
-| Reserva: check-in, acompanhante, fila e check-out | PASS | Mutação tRPC concluída e `reservation_guests.checkedInAt/checkedOutAt` persistidos. |
-| Sala: chegada, mesa, liner, fechador, tour e sem-tour | PASS | Playwright estrito e leitura MySQL dos estados finais. |
-| Contrato: solicitação, aprovação e execução única de distrato | PASS | Cenário autenticado estrito passou. |
-| Banco descartável exclusivo do run | PASS | `E2E_RUN_ID`, confirmação explícita e nome de banco de propriedade do run validados antes da criação. |
-| Limpeza sem resíduo | PASS | CI executou `Drop only this run-owned database` com sucesso. |
-| Gateway real | BLOCKED | Nenhuma credencial ou cobrança real foi usada. |
+| Jornada | Linux CI | Windows local | Prova |
+| --- | --- | --- | --- |
+| CSV: prévia, importação e undo | PASS | PASS | UI real + MySQL sem registro após undo |
+| Funil: download XLSX e PDF | PASS | PASS | downloads reais validados |
+| Reserva: check-in, acompanhante, fila e check-out | PASS | PASS | mutações tRPC + persistência MySQL |
+| Sala: chegada, mesa, time, tour e sem-tour | PASS | PASS | UI real + estados finais persistidos |
+| Distrato: solicitar, aprovar e executar uma vez | PASS | PASS | cenário autenticado estrito |
+| Banco exclusivo do run | PASS | PASS | `E2E_RUN_ID`, confirmação explícita e nome `_e2e` |
+| Cleanup do banco | PASS | PASS | `CLEANUP_EXIT=0` |
+| Encerramento do servidor | n/a | PASS | porta 43337 livre após o run |
+| Reutilização de servidor antigo | n/a | BLOQUEADA | `reuseExistingServer: false` + preflight de porta |
+| Gateway real | BLOCKED | BLOCKED | sem credencial/autorização de cobrança |
 
-Os fixtures usam o prefixo `E2E-TGR-`; a infraestrutura foi MySQL 8.4 descartável do GitHub Actions.
+Infra Windows validada: Node 22.23.2, MySQL 8.4 descartável e Chromium Playwright v1234.

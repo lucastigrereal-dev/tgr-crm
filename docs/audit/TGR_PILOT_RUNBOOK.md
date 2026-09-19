@@ -19,3 +19,11 @@
 - PASS: todos os gates acima e cleanup concluído.
 - BLOCKED: segredo, infraestrutura ou regra de negócio ausente. Não substituir por dado fictício fora do banco isolado.
 - Nunca executar esse roteiro contra produção ou banco compartilhado.
+
+## Homologação local Windows
+
+Use `scripts/run-e2e-windows-local.ps1` com um `RunId` único.
+
+Exemplo: `pwsh ./scripts/run-e2e-windows-local.ps1 -RunId win_YYYYMMDD_a`.
+
+O runner recusa porta de aplicação já ocupada, usa MySQL 8.4 descartável, executa migrations + seed + 5 jornadas Chromium e remove apenas o banco pertencente ao run. O critério de sucesso exige `WINDOWS_E2E=PASS` e `CLEANUP_EXIT=0`.
