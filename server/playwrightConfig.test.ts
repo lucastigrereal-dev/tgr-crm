@@ -19,14 +19,26 @@ describe("Playwright server lifecycle", () => {
   test("starts the local server when E2E_BASE_URL selects the target URL", async () => {
     vi.stubEnv("E2E_BASE_URL", "http://127.0.0.1:4173");
     vi.stubEnv("E2E_EXTERNAL_SERVER", "0");
+    vi.stubEnv("DATABASE_URL", "mysql://root@127.0.0.1:43336/tgr_crm_test_e2e");
+    vi.stubEnv("JWT_SECRET", "synthetic-test-secret-with-at-least-32-characters");
+    vi.stubEnv("VITE_APP_ID", "tgr-e2e");
+    vi.stubEnv("OWNER_OPEN_ID", "E2E-TGR-test-OWNER");
 
     const config = await loadPlaywrightConfig();
 
     expect(config.use.baseURL).toBe("http://127.0.0.1:4173");
     expect(config.webServer).toMatchObject({
-      command: "pnpm dev",
+      command: "node --import tsx server/_core/index.ts",
       url: "http://127.0.0.1:4173",
-      env: { PORT: "4173" },
+      reuseExistingServer: false,
+      env: {
+        NODE_ENV: "development",
+        PORT: "4173",
+        DATABASE_URL: "mysql://root@127.0.0.1:43336/tgr_crm_test_e2e",
+        JWT_SECRET: "synthetic-test-secret-with-at-least-32-characters",
+        VITE_APP_ID: "tgr-e2e",
+        OWNER_OPEN_ID: "E2E-TGR-test-OWNER",
+      },
     });
   });
 

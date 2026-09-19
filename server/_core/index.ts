@@ -106,7 +106,11 @@ async function startServer() {
   });
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  const strictE2EPort = process.env.E2E_STRICT === "1";
+  if (strictE2EPort && !(await isPortAvailable(preferredPort))) {
+    throw new Error(`Preferred port ${preferredPort} unavailable in strict E2E mode`);
+  }
+  const port = strictE2EPort ? preferredPort : await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
     logger.warn("Preferred port unavailable; using fallback port", { preferredPort, port });

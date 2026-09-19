@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.E2E_BASE_URL || "http://127.0.0.1:3000";
 const useExternalServer = process.env.E2E_EXTERNAL_SERVER === "1";
+const inheritedEnv = Object.fromEntries(
+  Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+);
 
 export default defineConfig({
   testDir: "./e2e",
@@ -19,10 +22,14 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: useExternalServer ? undefined : {
-    command: "pnpm dev",
+    command: "node --import tsx server/_core/index.ts",
     url: baseURL,
-    env: { PORT: new URL(baseURL).port || "3000" },
-    reuseExistingServer: !process.env.CI,
+    env: {
+      ...inheritedEnv,
+      NODE_ENV: "development",
+      PORT: new URL(baseURL).port || "3000",
+    },
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
