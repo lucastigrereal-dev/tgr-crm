@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "./integrationReliability";
+
 export type GatewayBillingType = "pix" | "boleto";
 export type AsaasConfig = { apiKey: string; baseUrl: string; webhookToken: string };
 
@@ -50,7 +52,7 @@ export function billingExternalReference(installmentId: number) {
 }
 
 async function asaasRequest<T>(config: AsaasConfig, path: string, init: RequestInit = {}) {
-  const response = await fetch(`${config.baseUrl}${path}`, {
+  const response = await fetchWithTimeout(`${config.baseUrl}${path}`, {
     ...init,
     headers: {
       accept: "application/json",

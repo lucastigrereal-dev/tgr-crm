@@ -1,0 +1,1 @@
+ALTER TABLE `billing_records` ADD CONSTRAINT `billing_gateway_reference_unique` UNIQUE(`gatewayProvider`,`externalReference`);

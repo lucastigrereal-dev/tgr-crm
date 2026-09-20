@@ -29,8 +29,8 @@ function capture(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function updateRecorder() {
-  const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue({ affectedRows: 1 }) }));
+function updateRecorder(affectedRows = 1) {
+  const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue({ affectedRows }) }));
   return { update: vi.fn(() => ({ set })), set };
 }
 
@@ -53,14 +53,58 @@ describe("captures reception router", () => {
     expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.checked_in", aggregateId: 91 }));
   });
 
+  it("rejeita salto de lifecycle de agendada para encerrada", async () => {
+    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture({ presentationStatus: "scheduled" })])), update: vi.fn() } as never);
+
+    await expect(caller("admin").captures.updateStatus({ id: 91, presentationStatus: "closed" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("não audita check-in que perdeu a corrida", async () => {
+    const recorder = updateRecorder(0);
+    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture()])), ...recorder } as never);
+
+    await expect(caller("service").captures.checkIn({ id: 91 })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("não audita atualização de status que perdeu a corrida", async () => {
+    const recorder = updateRecorder(0);
+    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture()])), ...recorder } as never);
+
+    await expect(caller("admin").captures.updateStatus({ id: 91, presentationStatus: "checked_in" })).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("atribui mesa, liner e fechador depois do check-in", async () => {
     const recorder = updateRecorder();
-    mockedDb.mockResolvedValue({ select: vi.fn(() => chain([capture({ presentationStatus: "checked_in" })])), ...recorder } as never);
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([capture({ presentationStatus: "checked_in" })]))
+      .mockReturnValueOnce(chain([{ id: 31 }, { id: 32 }]));
+    mockedDb.mockResolvedValue({ select, ...recorder } as never);
 
     await caller("seller").captures.assignRoom({ id: 91, salesTable: "M-08", linerId: 31, closerId: 32 });
 
     expect(recorder.set).toHaveBeenCalledWith(expect.objectContaining({ salesTable: "M-08", linerId: 31, closerId: 32, assignedAt: expect.any(Date) }));
     expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.room.assigned", payload: expect.objectContaining({ salesTable: "M-08" }) }));
+  });
+
+  it("rejeita operador inexistente ou fora da equipe comercial antes de atualizar a mesa", async () => {
+    const recorder = updateRecorder();
+    const select = vi.fn()
+      .mockReturnValueOnce(chain([capture({ presentationStatus: "checked_in" })]))
+      .mockReturnValueOnce(chain([]));
+    mockedDb.mockResolvedValue({ select, ...recorder } as never);
+
+    await expect(caller("service").captures.assignRoom({ id: 91, salesTable: "M-08", linerId: 31 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(recorder.set).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("só inicia tour após mesa e encerra a apresentação em estado fechado", async () => {
@@ -116,6 +160,7 @@ describe("captures reception router", () => {
     const responses = [
       () => [tour],
       () => [tour],
+      () => [{ id: 31 }, { id: 32 }],
       () => [tour],
       () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
       () => [tour],
@@ -130,7 +175,7 @@ describe("captures reception router", () => {
     mockedDb.mockResolvedValue({
       select: vi.fn(() => {
         const rows = responses.shift()?.() ?? [];
-        if (rows[0] && !("capture" in (rows[0] as object))) selected = rows[0] as Record<string, unknown>;
+        if (rows[0] && !("capture" in (rows[0] as object)) && "presentationStatus" in (rows[0] as object)) selected = rows[0] as Record<string, unknown>;
         return chain(rows);
       }),
       update: vi.fn(() => ({ set })),

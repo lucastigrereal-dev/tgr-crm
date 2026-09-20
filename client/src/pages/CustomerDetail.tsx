@@ -135,7 +135,7 @@ export default function CustomerDetail() {
     return <EmptyState title="Cliente não encontrado" body="Essa ficha não existe mais ou o endereço foi digitado errado." action={<Button asChild className="bg-[#1d2b2a]"><Link href="/clientes">Voltar para clientes</Link></Button>} />;
   }
 
-  const { customer, interactions, documents, contracts, opportunities, reservations, relationshipTasks, radar } = detail.data;
+  const { customer, interactions, documents, contracts, opportunities, reservations, relationshipTasks, radar, truncated, truncatedSources } = detail.data;
   const description = [customer.email, customer.phone, [customer.city, customer.state].filter(Boolean).join(" · ")].filter(Boolean).join("  •  ") || "Cadastre os contatos para qualificar o atendimento.";
 
   return <div className="space-y-8">
@@ -192,6 +192,7 @@ export default function CustomerDetail() {
         </DialogContent>
       </Dialog>
     </div>} />
+    {truncated ? <div className="rounded-xl border border-[#ead8ad] bg-[#fff9e9] p-3 text-xs text-[#71531a]"><p className="font-semibold">Atenção: esta ficha usa histórico limitado.</p><p className="mt-1">Fontes no limite: {truncatedSources.join(", ")}. O radar e os contadores refletem apenas o recorte carregado.</p></div> : null}
     <div className="grid gap-5 xl:grid-cols-[1.1fr_1.9fr]">
       <div className="space-y-5">
         <Card className="overflow-hidden rounded-[1.35rem] border-[#e9e4da]"><CardHeader className="border-b border-[#eee9df] bg-[#faf8f3]"><div className="flex items-start justify-between gap-3"><div><CardTitle className="font-serif text-xl text-[#1d2b2a]">Radar de relacionamento</CardTitle><p className="mt-1 text-xs text-muted-foreground">Dados, cadência, vínculo, uso e financeiro numa leitura só.</p></div><Radar className="h-5 w-5 text-[#b18f4b]" /></div></CardHeader><CardContent className="space-y-4 p-5"><div className="flex items-end justify-between"><div><p className="text-3xl font-semibold text-[#1d2b2a]">{radar.score}<span className="text-base text-muted-foreground">/100</span></p><p className={`mt-1 text-xs font-bold uppercase tracking-[.12em] ${radar.label === "saudável" ? "text-[#2d675f]" : radar.label === "atenção" ? "text-[#8a6b2d]" : "text-[#a93b33]"}`}>{radar.label}</p></div><div className="h-2 w-24 overflow-hidden rounded-full bg-[#eee9df]"><div className="h-full bg-[#b18f4b]" style={{ width: `${radar.score}%` }} /></div></div><div className="space-y-2 border-t border-[#eee9df] pt-4">{radar.signals.map(signal => <p key={signal} className="text-xs leading-5 text-[#4f615e]">{signal}</p>)}</div><div className="space-y-2 border-t border-[#eee9df] pt-4">{radar.onboarding.map(item => <div key={item.label} className="flex items-center gap-2 text-xs"><CheckCircle2 className={`h-4 w-4 ${item.complete ? "text-[#2d675f]" : "text-[#c9c1b2]"}`} /><span className={item.complete ? "text-[#1d2b2a]" : "text-muted-foreground"}>{item.label}</span></div>)}</div></CardContent></Card>

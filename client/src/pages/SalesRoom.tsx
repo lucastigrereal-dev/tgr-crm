@@ -43,7 +43,8 @@ export default function SalesRoom() {
   const [noTourReason, setNoTourReason] = useState("");
   const queue = trpc.captures.receptionQueue.useQuery({ date }, { refetchInterval: 5_000 });
   const selectors = trpc.captures.selectors.useQuery();
-  const operators = selectors.data?.sellers ?? [];
+  const operators = selectors.data?.sellers.rows ?? [];
+  const operatorTruncatedSources = selectors.data?.sellers.truncatedSources ?? [];
 
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(timer); }, []);
   useEffect(() => {
@@ -72,6 +73,7 @@ export default function SalesRoom() {
 
   return <div className="space-y-6">
     <PageHeader eyebrow="Fila viva · operação do dia" title="Sala de vendas" description="Chegada, mesa, time e tour em uma fila só. Cada casal tem estado, relógio e próximo responsável — sem grito atravessado no salão." />
+    {operatorTruncatedSources.length ? <p className="rounded-xl border border-[#ead8ad] bg-[#fff9e9] p-3 text-xs text-[#71531a]">Atenção: operadores limitados por {operatorTruncatedSources.join(", ")}. Os seletores de sala usam apenas o recorte carregado.</p> : null}
     <div className="grid gap-4 lg:grid-cols-[1.2fr_repeat(3,minmax(0,1fr))]">
       <MetricCard dark icon={<DoorOpen className="h-5 w-5 text-[#e8d092]" />} label="Fila do dia" value={queue.data?.length ?? 0} detail="casais em operação" />
       <MetricCard icon={<CalendarDays className="h-5 w-5 text-[#b18f4b]" />} label="Aguardando" value={stages.scheduled.length} detail="ainda na fila" />

@@ -77,7 +77,7 @@ export const customers = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("customers_name_idx").on(table.fullName), index("customers_document_idx").on(table.documentNumber), index("customers_location_idx").on(table.state, table.city)],
+  table => [index("customers_name_idx").on(table.fullName), index("customers_document_idx").on(table.documentNumber), uniqueIndex("customers_document_unique").on(table.documentNumber), index("customers_location_idx").on(table.state, table.city)],
 );
 
 export const customerDocuments = mysqlTable("customer_documents", {
@@ -112,7 +112,7 @@ export const resorts = mysqlTable("resorts", {
   state: varchar("state", { length: 2 }),
   status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("resorts_name_unique").on(table.name)]);
 
 export const commercialProjectSettings = mysqlTable("commercial_project_settings", {
   id: int("id").autoincrement().primaryKey(),
@@ -154,7 +154,7 @@ export const units = mysqlTable(
     status: mysqlEnum("status", ["active", "maintenance", "inactive"]).default("active").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("units_resort_code_idx").on(table.resortId, table.code)],
+  table => [uniqueIndex("units_resort_code_unique").on(table.resortId, table.code)],
 );
 
 export const opportunities = mysqlTable(
@@ -175,7 +175,7 @@ export const opportunities = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("opportunities_stage_idx").on(table.stage), index("opportunities_seller_idx").on(table.sellerId)],
+  table => [index("opportunities_stage_idx").on(table.stage), index("opportunities_seller_idx").on(table.sellerId), index("opportunities_period_idx").on(table.stage, table.closedAt, table.createdAt), index("opportunities_campaign_period_idx").on(table.campaignId, table.stage, table.closedAt)],
 );
 
 export const captureRecords = mysqlTable(
@@ -246,6 +246,7 @@ export const captureRecords = mysqlTable(
     index("captures_campaign_status_idx").on(table.campaignId, table.presentationStatus),
     index("captures_room_status_idx").on(table.salesRoom, table.presentationStatus, table.scheduledAt),
     index("captures_opportunity_idx").on(table.opportunityId),
+    index("captures_created_idx").on(table.createdAt),
     index("captures_vehicle_idx").on(table.vehicleBrand, table.vehicleModel, table.createdAt),
     index("captures_profile_numeric_idx").on(table.childrenCount, table.averageIncome, table.createdAt),
     index("captures_travel_idx").on(table.usualTravelSeason, table.travelWeeksPerYear, table.createdAt),
@@ -264,7 +265,7 @@ export const proposals = mysqlTable("proposals", {
   expiresAt: date("expiresAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
+}, table => [uniqueIndex("proposals_reference_unique").on(table.reference)]);
 
 export const salesPlaybooks = mysqlTable("sales_playbooks", {
   id: int("id").autoincrement().primaryKey(),
@@ -301,12 +302,13 @@ export const salesGoals = mysqlTable("sales_goals", {
   targetAmount: decimal("targetAmount", { precision: 14, scale: 2 }).notNull(),
   targetContracts: int("targetContracts").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("sales_goals_seller_month_unique").on(table.sellerId, table.monthReference)]);
 
 export const salesCommissions = mysqlTable(
   "sales_commissions",
   {
     id: int("id").autoincrement().primaryKey(),
+    idempotencyKey: varchar("idempotencyKey", { length: 128 }),
     sellerId: int("sellerId").notNull().references(() => users.id),
     campaignId: int("campaignId").references(() => salesCampaigns.id),
     opportunityId: int("opportunityId").references(() => opportunities.id),
@@ -331,7 +333,7 @@ export const salesCommissions = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId)],
+  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
 );
 
 export const contracts = mysqlTable(
@@ -353,7 +355,7 @@ export const contracts = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("contracts_status_idx").on(table.status), index("contracts_customer_idx").on(table.customerId)],
+  table => [index("contracts_status_idx").on(table.status), index("contracts_customer_idx").on(table.customerId), index("contracts_proposal_status_idx").on(table.proposalId, table.status)],
 );
 
 export const contractDocuments = mysqlTable("contract_documents", {
@@ -407,6 +409,7 @@ export const billingRecords = mysqlTable("billing_records", {
   gatewayProvider: mysqlEnum("gatewayProvider", ["manual", "asaas"]).default("manual").notNull(),
   gatewayPaymentId: varchar("gatewayPaymentId", { length: 128 }),
   gatewayStatus: varchar("gatewayStatus", { length: 64 }),
+  idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   dueDate: date("dueDate").notNull(),
   externalReference: varchar("externalReference", { length: 255 }),
@@ -418,7 +421,7 @@ export const billingRecords = mysqlTable("billing_records", {
   generatedAt: timestamp("generatedAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status)]);
+}, table => [index("billing_gateway_payment_idx").on(table.gatewayProvider, table.gatewayPaymentId), index("billing_installment_status_idx").on(table.installmentId, table.status), uniqueIndex("billing_gateway_reference_unique").on(table.gatewayProvider, table.externalReference), uniqueIndex("billing_idempotency_unique").on(table.idempotencyKey)]);
 
 export const paymentGatewayCustomers = mysqlTable("payment_gateway_customers", {
   id: int("id").autoincrement().primaryKey(),
@@ -460,6 +463,7 @@ export const financialTransactions = mysqlTable(
   "financial_transactions",
   {
     id: int("id").autoincrement().primaryKey(),
+    idempotencyKey: varchar("idempotencyKey", { length: 128 }),
     contractId: int("contractId").references(() => contracts.id),
     campaignId: int("campaignId").references(() => salesCampaigns.id),
     type: mysqlEnum("type", ["income", "expense"]).notNull(),
@@ -475,7 +479,7 @@ export const financialTransactions = mysqlTable(
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status)],
+  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status), index("financial_transactions_paid_idx").on(table.status, table.paidAt, table.type), uniqueIndex("financial_transactions_idempotency_unique").on(table.idempotencyKey)],
 );
 
 export const financialPortfolioAssignments = mysqlTable("financial_portfolio_assignments", {
@@ -494,6 +498,7 @@ export const financialPortfolioAssignments = mysqlTable("financial_portfolio_ass
 
 export const financialTransfers = mysqlTable("financial_transfers", {
   id: int("id").autoincrement().primaryKey(),
+  idempotencyKey: varchar("idempotencyKey", { length: 128 }),
   contractId: int("contractId").references(() => contracts.id),
   beneficiaryName: varchar("beneficiaryName", { length: 255 }).notNull(),
   description: text("description"),
@@ -502,7 +507,7 @@ export const financialTransfers = mysqlTable("financial_transfers", {
   status: mysqlEnum("status", ["pending", "paid", "cancelled"]).default("pending").notNull(),
   paidAt: timestamp("paidAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("financial_transfers_idempotency_unique").on(table.idempotencyKey)]);
 
 export const reservations = mysqlTable(
   "reservations",
@@ -523,7 +528,7 @@ export const reservations = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("reservations_unit_dates_idx").on(table.unitId, table.checkIn, table.checkOut), index("reservations_customer_idx").on(table.customerId)],
+  table => [index("reservations_unit_dates_idx").on(table.unitId, table.checkIn, table.checkOut), index("reservations_unit_status_dates_idx").on(table.unitId, table.status, table.checkIn, table.checkOut), index("reservations_customer_idx").on(table.customerId)],
 );
 
 export const reservationGuests = mysqlTable(
@@ -580,12 +585,13 @@ export const reservationWaitlist = mysqlTable("reservation_waitlist", {
   priorityScore: int("priorityScore").default(0).notNull(),
   preferenceNotes: text("preferenceNotes"),
   status: mysqlEnum("status", ["waiting", "offered", "confirmed", "expired", "cancelled"]).default("waiting").notNull(),
+  activeKey: varchar("activeKey", { length: 255 }),
   offeredAt: timestamp("offeredAt"),
   expiresAt: timestamp("expiresAt"),
   createdByUserId: int("createdByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, table => [index("waitlist_resort_window_idx").on(table.resortId, table.desiredCheckIn, table.desiredCheckOut, table.status), index("waitlist_customer_idx").on(table.customerId, table.status)]);
+}, table => [index("waitlist_resort_window_idx").on(table.resortId, table.desiredCheckIn, table.desiredCheckOut, table.status), index("waitlist_customer_idx").on(table.customerId, table.status), uniqueIndex("waitlist_active_key_unique").on(table.activeKey)]);
 
 export const tasks = mysqlTable(
   "tasks",
@@ -601,12 +607,13 @@ export const tasks = mysqlTable(
     assignedToUserId: int("assignedToUserId").references(() => users.id),
     dueAt: timestamp("dueAt"),
     reminderAt: timestamp("reminderAt"),
+    automationKey: varchar("automationKey", { length: 255 }),
     completedAt: timestamp("completedAt"),
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("tasks_status_due_idx").on(table.status, table.dueAt), index("tasks_assigned_idx").on(table.assignedToUserId)],
+  table => [index("tasks_status_due_idx").on(table.status, table.dueAt), index("tasks_assigned_idx").on(table.assignedToUserId), uniqueIndex("tasks_automation_key_unique").on(table.automationKey)],
 );
 
 export const auditLogs = mysqlTable("audit_logs", {
@@ -616,8 +623,9 @@ export const auditLogs = mysqlTable("audit_logs", {
   entityId: varchar("entityId", { length: 80 }).notNull(),
   action: varchar("action", { length: 80 }).notNull(),
   summary: text("summary"),
+  idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [uniqueIndex("audit_logs_idempotency_unique").on(table.idempotencyKey)]);
 
 export const domainEvents = mysqlTable("domain_events", {
   id: int("id").autoincrement().primaryKey(),
@@ -626,8 +634,9 @@ export const domainEvents = mysqlTable("domain_events", {
   aggregateId: varchar("aggregateId", { length: 80 }).notNull(),
   actorUserId: int("actorUserId").references(() => users.id),
   payload: text("payload"),
+  idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   occurredAt: timestamp("occurredAt").defaultNow().notNull(),
-}, table => [index("domain_events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.occurredAt), index("domain_events_name_idx").on(table.eventName, table.occurredAt)]);
+}, table => [index("domain_events_aggregate_idx").on(table.aggregateType, table.aggregateId, table.occurredAt), index("domain_events_name_idx").on(table.eventName, table.occurredAt), uniqueIndex("domain_events_idempotency_unique").on(table.idempotencyKey)]);
 
 export const revenueQualityLedger = mysqlTable("revenue_quality_ledger", {
   id: int("id").autoincrement().primaryKey(),

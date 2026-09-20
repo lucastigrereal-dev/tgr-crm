@@ -9,11 +9,28 @@ function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, () => unknown>;
   promise.from = () => promise;
   promise.where = () => promise;
+  promise.limit = () => promise;
   return promise;
 }
 
 describe("commissions.scorecards", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("marca amostra limitada quando a fonte de contratos atinge o teto operacional", async () => {
+    const responses = [
+      Array.from({ length: 5_000 }, (_, id) => ({ id, proposalId: null })),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+    ];
+    dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain(responses.shift() ?? [])) });
+    const caller = commissionsRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+
+    await expect(caller.scorecards({ minimumMaturedSales: 1 })).resolves.toMatchObject({ truncated: true, truncatedSources: ["contratos"] });
+  });
 
   it("atribui FTB uma vez e reconhece entrada confirmada a partir das fontes transacionais", async () => {
     const responses = [

@@ -1,10 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { reservationWaitlist, reservations, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { reservationWaitlist, reservations, reservationGuests, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
 
 import { operationsRouter } from "./routers/operations";
+
+function querySequence(responses: unknown[][]) {
+  return vi.fn(() => {
+    const result = Promise.resolve(responses.shift() ?? []);
+    const chain: Record<string, () => unknown> = {};
+    chain.from = () => chain;
+    chain.innerJoin = () => chain;
+    chain.leftJoin = () => chain;
+    chain.where = () => chain;
+    const limitChain = { for: async () => result, then: result.then.bind(result) };
+    chain.limit = () => limitChain;
+    return chain;
+  });
+}
 
 describe("conversão de lista de espera e saída integrada", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -12,7 +26,12 @@ describe("conversão de lista de espera e saída integrada", () => {
   it("converte uma oferta em reserva real e encerra a posição da fila na mesma transação", async () => {
     const inserts: unknown[] = []; const updates: unknown[] = [];
     const waitlistItem = { id: 33, status: "offered", customerId: 7, contractId: null, resortId: 2, desiredCheckIn: new Date("2026-12-10T12:00:00Z"), desiredCheckOut: new Date("2026-12-14T12:00:00Z"), partySize: 3, preferenceNotes: "Andar alto" };
-    const transaction = { insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 901 }] }; }) })), update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const txRows = (table: unknown) => table === reservationWaitlist ? [waitlistItem] : table === units ? [{ id: 19, resortId: 2, status: "active" }] : [];
+    const transaction = {
+      select: vi.fn(() => ({ from: (table: unknown) => ({ where: () => ({ limit: () => ({ for: async () => txRows(table), then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(txRows(table)).then(resolve, reject) }) }) }) })),
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 901 }] }; }) })),
+      update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })),
+    };
     const db = {
       select: vi.fn(() => ({ from: (table: unknown) => {
         if (table === reservationWaitlist) return { where: () => ({ limit: async () => [waitlistItem] }) };
@@ -32,9 +51,40 @@ describe("conversão de lista de espera e saída integrada", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(4, "reservation_waitlist", 33, "converted_to_reservation", expect.stringContaining("901"));
   });
 
+  it("rejeita conversão quando o grupo excede a capacidade da unidade", async () => {
+    const inserts: unknown[] = []; const updates: unknown[] = [];
+    const waitlistItem = { id: 33, status: "offered", customerId: 7, contractId: null, resortId: 2, desiredCheckIn: new Date("2026-12-10T12:00:00Z"), desiredCheckOut: new Date("2026-12-14T12:00:00Z"), partySize: 3, preferenceNotes: null };
+    const transaction = {
+      select: vi.fn(() => ({ from: (table: unknown) => ({ where: () => ({ limit: () => ({ for: async () => table === reservationWaitlist ? [waitlistItem] : table === units ? [{ id: 19, resortId: 2, status: "active", capacity: 2 }] : [], then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(table === reservationWaitlist ? [waitlistItem] : table === units ? [{ id: 19, resortId: 2, status: "active", capacity: 2 }] : []).then(resolve, reject) }) }) }) })),
+      insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserts.push(value); return { $returningId: async () => [{ id: 901 }] }; }) })),
+      update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })),
+    };
+    const db = { transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<unknown>) => callback(transaction)) };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
+
+    await expect(caller.convertWaitlistToReservation({ waitlistId: 33, unitId: 19 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(inserts).toEqual([]);
+    expect(updates).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("não audita uma transição perdida por concorrência", async () => {
+    const select = querySequence([[{ status: "confirmed" }]]);
+    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 0 })) })) }));
+    const db = { select, update, transaction: vi.fn(async (callback: (tx: { select: typeof select; update: typeof update }) => Promise<unknown>) => callback({ select, update })) };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
+
+    await expect(caller.updateReservationStatus({ id: 901, status: "checked_in" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
   it("encerra automaticamente os acompanhantes presentes quando a reserva faz checkout", async () => {
     const updates: unknown[] = [];
-    const db = { update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const select = querySequence([[{ status: "checked_in" }]]);
+    const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) }));
+    const db = { select, update, transaction: vi.fn(async (callback: (tx: { select: typeof select; update: typeof update }) => Promise<unknown>) => callback({ select, update })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 
@@ -47,7 +97,9 @@ describe("conversão de lista de espera e saída integrada", () => {
 
   it("mantém a jornada completa de chegada e saída coerente para reserva e acompanhante", async () => {
     const updates: unknown[] = [];
-    const db = { update: vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) })) };
+    const select = querySequence([[{ status: "confirmed" }], [{ checkedInAt: null, checkedOutAt: null, reservationStatus: "checked_in" }], [{ status: "checked_in" }]]);
+    const update = vi.fn(() => ({ set: vi.fn((value: unknown) => ({ where: vi.fn(async () => { updates.push(value); }) })) }));
+    const db = { select, update, transaction: vi.fn(async (callback: (tx: { select: typeof select; update: typeof update }) => Promise<unknown>) => callback({ select, update })) };
     dbMocks.getDb.mockResolvedValue(db);
     const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
 
@@ -63,5 +115,33 @@ describe("conversão de lista de espera e saída integrada", () => {
     expect(dbMocks.recordAudit).toHaveBeenNthCalledWith(1, 4, "reservation", 901, "status_updated", expect.stringContaining("checked_in"));
     expect(dbMocks.recordAudit).toHaveBeenNthCalledWith(2, 4, "reservation_guest", 722, "check_in", expect.stringContaining("check_in"));
     expect(dbMocks.recordAudit).toHaveBeenNthCalledWith(3, 4, "reservation", 901, "status_updated", expect.stringContaining("completed"));
+  });
+});
+
+
+describe("idempotência da conversão de fila", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("rejeita oferta já confirmada sem criar uma segunda reserva", async () => {
+    const transaction = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => ({ for: vi.fn(async () => [{ id: 33, status: "confirmed" }]) })),
+          })),
+        })),
+      })),
+      insert: vi.fn(),
+      update: vi.fn(),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<unknown>) => callback(transaction)),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = operationsRouter.createCaller({ user: { id: 4, role: "service" } } as never);
+
+    await expect(caller.convertWaitlistToReservation({ waitlistId: 33, unitId: 19 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(transaction.insert).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });

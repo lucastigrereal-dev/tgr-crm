@@ -14,8 +14,11 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
     select: vi.fn(() => ({
-      from: (table: unknown) => ({
+      from: (table: unknown) => {
+        if (table === csvImportBatches) return { orderBy: () => ({ limit: () => Object.assign(Promise.resolve([batch]), { for: async () => [batch] }) }) };
+        return {
         where: () => {
+          if (table === csvImportItems) return items;
           if (table === contracts) return contractDependencies;
           if (table === installments) return options.installments ?? [];
           if (table === contractDocuments) return options.documents ?? [];
@@ -29,7 +32,8 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
           if (table === units) return options.units ?? [];
           return [];
         },
-      }),
+      };
+      },
     })),
     delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { deletes.push(table); return Promise.resolve(); }) })),
     update: vi.fn((table: unknown) => ({ set: vi.fn((values: unknown) => ({ where: vi.fn(() => { updates.push({ table, values }); return Promise.resolve(); }) })) })),
@@ -113,6 +117,19 @@ describe("imports.undoLast", () => {
     expect(fixture.updates).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: csvImportBatches, values: expect.objectContaining({ status: "reverted", revertedByUserId: 9 }) }),
     ]));
+  });
+
+  it("bloqueia undo de contrato importado com direito de uso vinculado", async () => {
+    const fixture = makeDb(
+      { id: 86, kind: "contracts", status: "completed" },
+      [{ entityType: "contract", entityId: 703, action: "created", beforeSnapshot: null }],
+      [],
+      { entitlements: [{ id: 9004 }] },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(fixture.deletes).toEqual([]);
   });
 
   it("bloqueia contrato importado quando já existe qualquer dependência operacional", async () => {

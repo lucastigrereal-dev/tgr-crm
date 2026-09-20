@@ -10,15 +10,29 @@ function context(): TrpcContext {
 }
 function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, () => unknown>;
-  promise.from = () => promise; promise.where = () => promise; promise.orderBy = () => promise;
+  promise.from = () => promise; promise.where = () => promise; promise.orderBy = () => promise; promise.limit = () => promise;
   return promise;
 }
 
 describe("commercial policies router", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  function createDb(selectRows: unknown[][], insertError?: unknown) {
+    const select = vi.fn();
+    for (const rows of selectRows) select.mockImplementationOnce(() => chain(rows));
+    const returning = vi.fn(async () => {
+      if (insertError) throw insertError;
+      return [{ id: 12 }];
+    });
+    const values = vi.fn(() => ({ $returningId: returning }));
+    return { db: { select, insert: vi.fn(() => ({ values })) }, values };
+  }
+
   it("lista política vigente e cria versão com auditoria", async () => {
-    const select = vi.fn(() => chain([{ id: 4, resortId: 2, policyType: "commission", version: "2026.08", policyJson: "{}", effectiveAt: new Date(), retiredAt: null }]));
+    const select = vi.fn()
+      .mockImplementationOnce(() => chain([{ id: 4, resortId: 2, policyType: "commission", version: "2026.08", policyJson: "{}", effectiveAt: new Date(), retiredAt: null }]))
+      .mockImplementationOnce(() => chain([{ id: 2 }]))
+      .mockImplementationOnce(() => chain([]));
     const returning = vi.fn().mockResolvedValue([{ id: 12 }]);
     const values = vi.fn(() => ({ $returningId: returning }));
     dbMocks.getDb.mockResolvedValue({ select, insert: vi.fn(() => ({ values })) });
@@ -29,6 +43,29 @@ describe("commercial policies router", () => {
     expect(created).toEqual({ id: 12 });
     expect(values).toHaveBeenCalledWith(expect.objectContaining({ approvedByUserId: 9, version: "v1" }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(9, "commercial_policy_version", 12, "created", expect.stringContaining("revenue_quality"));
+  });
+
+  it("rejeita empreendimento inexistente antes do insert", async () => {
+    const fixture = createDb([[]]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 404, policyType: "commission", version: "v1", policy: {} })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(fixture.values).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita versão duplicada antes do insert", async () => {
+    const fixture = createDb([[{ id: 2 }], [{ id: 15 }]]);
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: {} })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(fixture.values).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("normaliza corrida da unique key da versão como conflito", async () => {
+    const fixture = createDb([[{ id: 2 }], []], { code: "ER_DUP_ENTRY", errno: 1062 });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: {} })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("aposenta versão sem apagá-la", async () => {

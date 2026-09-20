@@ -30,7 +30,7 @@ ALTER TABLE `billing_records` ADD `invoiceUrl` text;--> statement-breakpoint
 ALTER TABLE `billing_records` ADD `bankSlipUrl` text;--> statement-breakpoint
 ALTER TABLE `billing_records` ADD `updatedAt` timestamp DEFAULT (now()) NOT NULL ON UPDATE CURRENT_TIMESTAMP;--> statement-breakpoint
 ALTER TABLE `payment_gateway_customers` ADD CONSTRAINT `payment_gateway_customers_customerId_customers_id_fk` FOREIGN KEY (`customerId`) REFERENCES `customers`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `payment_gateway_webhook_events` ADD CONSTRAINT `payment_gateway_webhook_events_billingRecordId_billing_records_id_fk` FOREIGN KEY (`billingRecordId`) REFERENCES `billing_records`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `payment_gateway_webhook_events` ADD CONSTRAINT `pg_webhook_billing_fk` FOREIGN KEY (`billingRecordId`) REFERENCES `billing_records`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX `payment_gateway_webhook_billing_idx` ON `payment_gateway_webhook_events` (`billingRecordId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `billing_gateway_payment_idx` ON `billing_records` (`gatewayProvider`,`gatewayPaymentId`);--> statement-breakpoint
 CREATE INDEX `billing_installment_status_idx` ON `billing_records` (`installmentId`,`status`);

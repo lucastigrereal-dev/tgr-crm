@@ -1,3 +1,5 @@
+import { TRPCError } from "@trpc/server";
+import { createHash } from "node:crypto";
 import { and, desc, eq, isNull, lte, sql } from "drizzle-orm";
 import { captureRecords, commercialPolicyVersions, contractCancellationRequests, contracts, installments, opportunities, proposals, revenueQualityLedger, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
@@ -6,15 +8,21 @@ import { buildPersistableRevenueProjection } from "./revenueQualityProjection";
 
 const POLICY_VERSION = "tgr-derived-ledger/v1";
 
+export function revenueQualitySyncIdempotencyKey(input: { contractId: number; policyVersion: string; sourceFingerprints: string[] }) {
+  const stateFingerprint = [...input.sourceFingerprints].sort().join("|");
+  const digest = createHash("sha256").update(`${input.contractId}|${input.policyVersion}|${stateFingerprint}`).digest("hex");
+  return `revenue_quality_sync:${input.contractId}:${digest}`;
+}
+
 /**
  * Recalcula a projeção derivada de um contrato depois que a fonte transacional
  * foi persistida. O índice único de fingerprint torna novas execuções seguras.
  */
 export async function syncRevenueQualityForContract(input: { contractId: number; actorUserId: number | null; trigger: string }) {
   const db = await getDb();
-  if (!db) throw new Error("Banco indisponível para sincronização do ledger.");
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível sincronizar a qualidade de receita." });
   const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
-  if (!contract) throw new Error("Contrato não encontrado para sincronização do ledger.");
+  if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado para sincronização da qualidade de receita." });
   const policyContext = contract.proposalId ? (await db.select({ resortId: captureRecords.resortId }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, contract.id)).limit(1))[0] : null;
   const appliedPolicy = policyContext?.resortId ? (await db.select().from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, policyContext.resortId), eq(commercialPolicyVersions.policyType, "revenue_quality"), isNull(commercialPolicyVersions.retiredAt), lte(commercialPolicyVersions.effectiveAt, new Date()))).orderBy(desc(commercialPolicyVersions.effectiveAt)).limit(1))[0] : null;
   const policyVersion = appliedPolicy ? `revenue_quality/${appliedPolicy.version}` : POLICY_VERSION;
@@ -32,6 +40,11 @@ export async function syncRevenueQualityForContract(input: { contractId: number;
     cancellation: cancellation ? { status: cancellation.status } : null,
     policyVersion,
   });
+  const idempotencyKey = revenueQualitySyncIdempotencyKey({
+    contractId: contract.id,
+    policyVersion,
+    sourceFingerprints: projection.map(fact => fact.sourceFingerprint),
+  });
   if (projection.length) {
     await db.insert(revenueQualityLedger).values(projection.map(fact => ({
       contractId: fact.contractId,
@@ -46,13 +59,14 @@ export async function syncRevenueQualityForContract(input: { contractId: number;
       occurredAt: new Date(),
     }))).onDuplicateKeyUpdate({ set: { sourceFingerprint: sql`sourceFingerprint` } });
   }
-  await recordAudit(input.actorUserId, "revenue_quality_ledger", contract.id, "synced", `${projection.length} fato(s) econômicos projetados por ${input.trigger}.`);
+  await recordAudit(input.actorUserId, "revenue_quality_ledger", contract.id, "synced", `${projection.length} fato(s) econômicos projetados por ${input.trigger}.`, { idempotencyKey });
   await recordDomainEvent({
     eventName: "revenue_quality_ledger.synced",
     aggregateType: "contract",
     aggregateId: contract.id,
     actorUserId: input.actorUserId,
     payload: { factCount: projection.length, policyVersion },
+    idempotencyKey,
   });
   return { contractId: contract.id, factCount: projection.length, policyVersion, policyVersionId: appliedPolicy?.id ?? null, summary: summarizeRevenueQualityLedger(projection) };
 }

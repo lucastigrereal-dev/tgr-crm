@@ -6,9 +6,9 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
-import { buildCaptureProfileAnalytics, getProfileCompleteness, profileSearchText, type CaptureProfile } from "../captureSegmentation";
+import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfile } from "../captureSegmentation";
 import { getProjectCaptureReadiness } from "../projectPolicy";
-import { activeRoomStatuses, assertReceptionAction, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
+import { activeRoomStatuses, assertReceptionAction, canTransitionPresentationStatus, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 import { publishSalesRoomEvent } from "../realtime";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
@@ -105,27 +105,39 @@ function assertAction(state: Parameters<typeof assertReceptionAction>[0], action
   }
 }
 
+function assertCaptureUpdateSucceeded(result: unknown) {
+  if (result && typeof result === "object" && "affectedRows" in result && Number(result.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A ficha de captação foi alterada por outra operação. Recarregue e tente novamente." });
+}
+
 export const capturesRouter = router({
   selectors: receptionProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return { campaigns: [], sellers: [], resorts: [] };
-    const [campaigns, sellers, resortRows] = await Promise.all([
-      db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)),
-      db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name),
-      db.select({ id: resorts.id, name: resorts.name }).from(resorts),
+    if (!db) {
+      const empty = { rows: [], truncated: false, truncatedSources: [] as string[] };
+      return { campaigns: empty, sellers: empty, resorts: empty };
+    }
+    const limit = 1_000;
+    const [rawCampaigns, rawSellers, rawResorts] = await Promise.all([
+      db.select({ id: salesCampaigns.id, name: salesCampaigns.name, code: salesCampaigns.code, status: salesCampaigns.status }).from(salesCampaigns).orderBy(desc(salesCampaigns.createdAt)).limit(limit + 1),
+      db.select({ id: users.id, name: users.name, role: users.role }).from(users).where(or(eq(users.role, "admin"), eq(users.role, "seller"))).orderBy(users.name).limit(limit + 1),
+      db.select({ id: resorts.id, name: resorts.name }).from(resorts).orderBy(resorts.name).limit(limit + 1),
     ]);
-    return { campaigns, sellers, resorts: resortRows };
+    const envelope = <T,>(rows: T[], source: string) => ({ rows: rows.slice(0, limit), truncated: rows.length > limit, truncatedSources: rows.length > limit ? [source] : [] });
+    return { campaigns: envelope(rawCampaigns, "campanhas de captação"), sellers: envelope(rawSellers, "vendedores de captação"), resorts: envelope(rawResorts, "empreendimentos de captação") };
   }),
 
   list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ input }) => {
     const db = await getDb();
-    if (!db) return [];
-    const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
+    if (!db) return { rows: [], truncated: false, truncatedSources: [] };
+    const limit = 120;
+    const rawRows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
       .where(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined)
-      .orderBy(desc(captureRecords.createdAt)).limit(120);
-    return rows.map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
+      .orderBy(desc(captureRecords.createdAt)).limit(limit + 1);
+    const rows = rawRows.slice(0, limit).map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
+    const truncated = rawRows.length > limit;
+    return { rows, truncated, truncatedSources: truncated ? ["fichas de captação"] : [] };
   }),
 
   profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ input }) => {
@@ -170,13 +182,14 @@ export const capturesRouter = router({
         like(captureRecords.nextFamilyTrip, searchLike), like(captureRecords.socialNetworks, searchLike), like(captureRecords.giftDescription, searchLike), like(captureRecords.qualificationReason, searchLike), like(captureRecords.notes, searchLike), like(captureRecords.salesRoom, searchLike), like(captureRecords.captureLocation, searchLike),
       ));
     }
+    const profileDatasetLimit = 20_000;
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns, resort: resorts, opportunity: opportunities }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
       .leftJoin(resorts, eq(captureRecords.resortId, resorts.id))
       .leftJoin(opportunities, eq(captureRecords.opportunityId, opportunities.id))
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(captureRecords.createdAt));
+      .orderBy(desc(captureRecords.createdAt)).limit(profileDatasetLimit);
     const profiles: CaptureProfile[] = rows.map(row => ({
       id: row.capture.id, createdAt: row.capture.createdAt, customerName: row.customer.fullName, customerDocumentNumber: row.customer.documentNumber, customerEmail: row.customer.email, customerPhone: row.customer.phone,
       city: row.customer.city, state: row.customer.state, resortId: row.capture.resortId, resortName: row.resort?.name ?? null, promoterId: row.capture.promoterId, qualifierId: row.capture.qualifierId, linerId: row.capture.linerId, closerId: row.capture.closerId, roomManagerId: row.capture.roomManagerId,
@@ -187,19 +200,26 @@ export const capturesRouter = router({
       dreamTrips: row.capture.dreamTrips, lastTrip: row.capture.lastTrip, averageHotelSpend: row.capture.averageHotelSpend === null ? null : Number(row.capture.averageHotelSpend), nextFamilyTrip: row.capture.nextFamilyTrip, socialNetworks: row.capture.socialNetworks, giftDescription: row.capture.giftDescription, qualificationReason: row.capture.qualificationReason, notes: row.capture.notes,
       opportunityStage: row.opportunity?.stage ?? null, checkedInAt: row.capture.checkedInAt, presentationStartedAt: row.capture.presentationStartedAt,
     }));
-    const normalizedSearch = input.search?.toLocaleLowerCase("pt-BR");
-    const filtered = profiles.filter(profile => {
-      const income = profile.averageIncome ?? -1; const hotelSpend = profile.averageHotelSpend ?? -1; const travelWeeks = profile.travelWeeksPerYear ?? -1; const vehicleYear = profile.vehicleYear ?? -1;
-      return (!normalizedSearch || profileSearchText(profile).includes(normalizedSearch)) && (!input.city || profile.city?.toLocaleLowerCase("pt-BR") === input.city.toLocaleLowerCase("pt-BR")) && (!input.state || profile.state === input.state) && (!input.salesRoom || profile.salesRoom === input.salesRoom) && (!input.captureLocation || profile.captureLocation?.toLocaleLowerCase("pt-BR").includes(input.captureLocation.toLocaleLowerCase("pt-BR"))) && (!input.vehicleBrand || profile.vehicleBrand?.toLocaleLowerCase("pt-BR").includes(input.vehicleBrand.toLocaleLowerCase("pt-BR"))) && (!input.vehicleModel || profile.vehicleModel?.toLocaleLowerCase("pt-BR").includes(input.vehicleModel.toLocaleLowerCase("pt-BR"))) && (!input.relationshipStatus || profile.relationshipStatus === input.relationshipStatus) && (!input.travelSeason || profile.usualTravelSeason?.toLocaleLowerCase("pt-BR").includes(input.travelSeason.toLocaleLowerCase("pt-BR"))) && (!input.qualificationStatus || profile.qualificationStatus === input.qualificationStatus) && (input.vehicleYearMin === undefined || vehicleYear >= input.vehicleYearMin) && (input.vehicleYearMax === undefined || vehicleYear <= input.vehicleYearMax) && (input.childrenMin === undefined || profile.childrenCount >= input.childrenMin) && (input.childrenMax === undefined || profile.childrenCount <= input.childrenMax) && (input.incomeMin === undefined || income >= input.incomeMin) && (input.incomeMax === undefined || income <= input.incomeMax) && (input.hotelSpendMin === undefined || hotelSpend >= input.hotelSpendMin) && (input.hotelSpendMax === undefined || hotelSpend <= input.hotelSpendMax) && (input.travelWeeksMin === undefined || travelWeeks >= input.travelWeeksMin) && (input.travelWeeksMax === undefined || travelWeeks <= input.travelWeeksMax) && (input.hasCreditCard === undefined || profile.hasCreditCard === input.hasCreditCard) && (input.acceptsCheque === undefined || profile.acceptsCheque === input.acceptsCheque) && (input.ownsHome === undefined || profile.ownsHome === input.ownsHome) && (input.ownsPropertyInCity === undefined || profile.ownsPropertyInCity === input.ownsPropertyInCity) && (input.isPasserby === undefined || profile.isPasserby === input.isPasserby);
-    });
+    const filtered = profiles;
     const unique = (values: Array<string | null | undefined>) => Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim())))).sort((left, right) => left.localeCompare(right, "pt-BR"));
-    return { summary: buildCaptureProfileAnalytics(filtered), rows: filtered.slice(0, input.limit).map(profile => ({ ...profile, readiness: getProfileCompleteness(profile) })), totalMatches: filtered.length, truncated: filtered.length > input.limit, filters: { cities: unique(profiles.map(profile => profile.city)), states: unique(profiles.map(profile => profile.state)), salesRooms: unique(profiles.map(profile => profile.salesRoom)), vehicleBrands: unique(profiles.map(profile => profile.vehicleBrand)), vehicleModels: unique(profiles.map(profile => profile.vehicleModel)), travelSeasons: unique(profiles.map(profile => profile.usualTravelSeason)), relationshipStatuses: unique(profiles.map(profile => profile.relationshipStatus)) } };
+    return { summary: buildCaptureProfileAnalytics(filtered), rows: filtered.slice(0, input.limit).map(profile => ({ ...profile, readiness: getProfileCompleteness(profile) })), totalMatches: filtered.length, truncated: rows.length >= profileDatasetLimit || filtered.length > input.limit, filters: { cities: unique(profiles.map(profile => profile.city)), states: unique(profiles.map(profile => profile.state)), salesRooms: unique(profiles.map(profile => profile.salesRoom)), vehicleBrands: unique(profiles.map(profile => profile.vehicleBrand)), vehicleModels: unique(profiles.map(profile => profile.vehicleModel)), travelSeasons: unique(profiles.map(profile => profile.usualTravelSeason)), relationshipStatuses: unique(profiles.map(profile => profile.relationshipStatus)) } };
   }),
 
   create: salesProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.transaction(async tx => {
+      const [campaignRows, resortRows] = await Promise.all([
+        input.campaignId ? tx.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1) : Promise.resolve([]),
+        input.resortId ? tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1) : Promise.resolve([]),
+      ]);
+      if (input.campaignId && !campaignRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da captação não encontrada." });
+      if (input.resortId && !resortRows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento da captação não encontrado." });
+      const staffIds = [input.promoterId, input.qualifierId, input.linerId, input.closerId, input.roomManagerId].filter((id): id is number => id !== undefined && id !== null);
+      if (staffIds.length) {
+        const staffRows = await tx.select({ id: users.id }).from(users).where(and(inArray(users.id, Array.from(new Set(staffIds))), inArray(users.role, ["admin", "seller"])));
+        if (staffRows.length !== new Set(staffIds).size) throw new TRPCError({ code: "NOT_FOUND", message: "Membro da equipe da captação não encontrado." });
+      }
       if (input.resortId) {
         const settings = (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0];
         const readiness = getProjectCaptureReadiness({ customerName: input.customer?.fullName, phone: input.customer?.phone, city: input.customer?.city, promoterId: input.promoterId, captureLocation: input.captureLocation, averageIncome: input.averageIncome, travelWeeksPerYear: input.travelWeeksPerYear, qualificationStatus: input.qualificationStatus, vehicle: input.vehicleBrand || input.vehicleModel, homeOwnership: input.ownsHome === true ? "sim" : null }, settings?.requiredCaptureFields);
@@ -207,6 +227,11 @@ export const capturesRouter = router({
       }
       let customerId = input.customerId;
       let customerName = "Associado";
+      if (customerId) {
+        const existingCustomer = (await tx.select({ id: customers.id, fullName: customers.fullName }).from(customers).where(eq(customers.id, customerId)).limit(1))[0];
+        if (!existingCustomer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado da captação não encontrado." });
+        customerName = existingCustomer.fullName;
+      }
       if (!customerId && input.customer) {
         const matches = [];
         if (nullIfBlank(input.customer.documentNumber)) matches.push(eq(customers.documentNumber, nullIfBlank(input.customer.documentNumber)!));
@@ -226,6 +251,7 @@ export const capturesRouter = router({
       if (input.createOpportunity) {
         const opportunity = await tx.insert(opportunities).values({ customerId, sellerId: clean(input.closerId) ?? clean(input.linerId), campaignId: clean(input.campaignId), title: `Captação · ${customerName}`, stage: input.qualificationStatus === "qualified" ? "qualified" : "new", source: nullIfBlank(input.captureLocation) ?? "captação", expectedAmount: "0.00", probability: input.qualificationStatus === "qualified" ? 30 : 10 }).$returningId();
         opportunityId = opportunity[0]?.id ?? null;
+        if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a oportunidade da captação." });
       }
       const appointmentPlan = getCaptureAppointmentPlan({ customerName, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, salesRoom: input.salesRoom });
       const inserted = await tx.insert(captureRecords).values({
@@ -236,6 +262,7 @@ export const capturesRouter = router({
       if (appointmentPlan.task) {
         const scheduledTask = await tx.insert(tasks).values({ title: appointmentPlan.task.title, description: appointmentPlan.task.description, type: "follow_up", priority: input.qualificationStatus === "qualified" ? "high" : "normal", customerId, assignedToUserId: clean(input.linerId) ?? clean(input.closerId) ?? ctx.user.id, dueAt: appointmentPlan.task.dueAt, reminderAt: appointmentPlan.task.reminderAt, createdByUserId: ctx.user.id }).$returningId();
         taskId = scheduledTask[0]?.id ?? null;
+        if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o acompanhamento da captação." });
       }
       return { captureId, customerId, opportunityId, taskId };
     });
@@ -248,9 +275,10 @@ export const capturesRouter = router({
   }),
 
   updateStatus: salesProcedure.input(z.object({ id: z.number().int().positive(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]), qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).optional(), qualificationReason: optionalText, noTourReason: optionalText })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    await db.update(captureRecords).set({ presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), noTourReason: nullIfBlank(input.noTourReason), checkedInAt: input.presentationStatus === "checked_in" ? new Date() : undefined }).where(eq(captureRecords.id, input.id));
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    if (!canTransitionPresentationStatus(capture.presentationStatus, input.presentationStatus)) throw new TRPCError({ code: "BAD_REQUEST", message: `Transição inválida: ${capture.presentationStatus} → ${input.presentationStatus}.` });
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), noTourReason: nullIfBlank(input.noTourReason), checkedInAt: input.presentationStatus === "checked_in" ? new Date() : undefined }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A ficha de captação foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "capture", input.id, "status_updated", `Captação atualizada para ${input.presentationStatus}.`);
     await recordDomainEvent({ eventName: "capture.status.updated", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus ?? null } });
     publishSalesRoomEvent({ type: "capture.status.updated", captureId: input.id });
@@ -277,7 +305,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "check_in");
     const checkedInAt = new Date();
-    await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "checked_in", "Chegada confirmada pela recepção.");
     await recordDomainEvent({ eventName: "capture.checked_in", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom } });
     publishSalesRoomEvent({ type: "capture.checked_in", captureId: input.id, salesRoom: capture.salesRoom });
@@ -287,8 +316,15 @@ export const capturesRouter = router({
   assignRoom: receptionProcedure.input(z.object({ id: z.number().int().positive(), salesTable: z.string().trim().min(1).max(64), linerId: z.number().int().positive().optional().nullable(), closerId: z.number().int().positive().optional().nullable(), roomManagerId: z.number().int().positive().optional().nullable(), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "assign_table");
+    const staffIds = [input.linerId, input.closerId, input.roomManagerId].filter((id): id is number => id !== undefined && id !== null);
+    if (staffIds.length) {
+      const uniqueStaffIds = Array.from(new Set(staffIds));
+      const staffRows = await db.select({ id: users.id }).from(users).where(and(inArray(users.id, uniqueStaffIds), inArray(users.role, ["admin", "seller"])));
+      if (staffRows.length !== uniqueStaffIds.length) throw new TRPCError({ code: "NOT_FOUND", message: "Operador da sala não encontrado ou não pertence à equipe comercial." });
+    }
     const assignedAt = new Date();
-    await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ salesTable: input.salesTable, linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), assignedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "room_assigned", `Mesa ${input.salesTable} e equipe da sala atribuídas.`);
     await recordDomainEvent({ eventName: "capture.room.assigned", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: input.salesTable, linerId: input.linerId ?? null, closerId: input.closerId ?? null, roomManagerId: input.roomManagerId ?? null } });
     publishSalesRoomEvent({ type: "capture.room.assigned", captureId: input.id, salesRoom: capture.salesRoom });
@@ -299,7 +335,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "start_presentation");
     const presentationStartedAt = new Date();
-    await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_started", `Apresentação iniciada na mesa ${capture.salesTable}.`);
     await recordDomainEvent({ eventName: "capture.presentation.started", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable } });
     publishSalesRoomEvent({ type: "capture.presentation.started", captureId: input.id, salesRoom: capture.salesRoom });
@@ -311,7 +348,8 @@ export const capturesRouter = router({
     assertAction(capture, "end_presentation");
     const presentationEndedAt = new Date();
     const durationMinutes = tourDurationMinutes(capture.presentationStartedAt, presentationEndedAt);
-    await db.update(captureRecords).set({ presentationStatus: "closed", presentationEndedAt }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "closed", presentationEndedAt }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_ended", `Apresentação concluída e encerrada após ${durationMinutes} minutos.`);
     await recordDomainEvent({ eventName: "capture.presentation.ended", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable, durationMinutes } });
     publishSalesRoomEvent({ type: "capture.presentation.ended", captureId: input.id, salesRoom: capture.salesRoom });
@@ -322,7 +360,8 @@ export const capturesRouter = router({
     const { db, capture } = await findCaptureOrThrow(input.id);
     assertAction(capture, "mark_no_tour");
     const endedAt = new Date();
-    await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(eq(captureRecords.id, input.id));
+    const updateResult = await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
     await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: input.reason } });
     publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.id, salesRoom: capture.salesRoom });

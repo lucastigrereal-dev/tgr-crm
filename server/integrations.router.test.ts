@@ -13,7 +13,7 @@ describe("integrations.eventFeed", () => {
   it("entrega somente envelope allowlistado para administrador", async () => {
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain([{ id: 7, eventName: "customer.updated", aggregateType: "customer", aggregateId: "8", actorUserId: 3, occurredAt: new Date("2026-08-20T12:00:00Z"), payload: JSON.stringify({ status: "active", email: "privado@example.com" }) }])) } as never);
     const result = await caller("admin").integrations.eventFeed({ limit: 10 });
-    expect(result).toMatchObject({ contractVersion: "tse.events.v1", events: [{ eventId: 7, eventName: "customer.updated", payload: { status: "active" } }] });
+    expect(result).toMatchObject({ contractVersion: "tgr.events.v1", events: [{ eventId: 7, eventName: "customer.updated", payload: { status: "active" } }] });
     expect(result.events[0]?.payload).not.toHaveProperty("email");
   });
   it("bloqueia o feed para perfil operacional sem privilégio administrativo", async () => {

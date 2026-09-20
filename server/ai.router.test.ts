@@ -17,6 +17,19 @@ describe("ai.analyzeCustomer", () => {
     expect(mockedDb).not.toHaveBeenCalled();
   });
 
+  it("normaliza falha do modelo sem registrar sucesso falso", async () => {
+    const select = vi.fn()
+      .mockImplementationOnce(() => chain([{ id: 1, fullName: "Ana", status: "active" }]))
+      .mockImplementationOnce(() => chain([])).mockImplementationOnce(() => chain([])).mockImplementationOnce(() => chain([])).mockImplementationOnce(() => chain([])).mockImplementationOnce(() => chain([])).mockImplementationOnce(() => chain([]));
+    mockedDb.mockResolvedValue({ select } as never);
+    mockedModels.mockResolvedValue({ object: "list", data: [{ id: "gpt-5-mini", object: "model", created: 0, owned_by: "openai" }] });
+    mockedInvoke.mockRejectedValue(new Error("timeout"));
+
+    await expect(caller("admin").ai.analyzeCustomer({ customerId: 1, question: "Qual o próximo contato?" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível concluir a análise de IA agora." });
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("entrega resposta estruturada, com evidência permitida e trilha auditável", async () => {
     const select = vi.fn()
       .mockImplementationOnce(() => chain([{ id: 1, fullName: "Ana", status: "active" }]))

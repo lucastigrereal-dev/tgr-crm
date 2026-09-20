@@ -17,6 +17,7 @@
  */
 import { storagePut } from "server/storage";
 import { ENV } from "./env";
+import { fetchWithTimeout } from "../integrationReliability";
 
 // Default model for generated sites. "MODEL_GPT_IMAGE_2" is the forge images.v1
 // enum for GPT Image 2 (id: gpt-image-2). If omitted, forge falls back to Gemini 2.5 Flash.
@@ -63,7 +64,7 @@ export async function generateImage(
   const quality =
     options.quality ?? (model === DEFAULT_IMAGE_MODEL ? DEFAULT_IMAGE_QUALITY : undefined);
 
-  const response = await fetch(fullUrl, {
+  const response = await fetchWithTimeout(fullUrl, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -137,7 +138,7 @@ export async function listImageModels(): Promise<ListImageModelsResponse> {
     baseUrl
   ).toString();
 
-  const response = await fetch(fullUrl, {
+  const response = await fetchWithTimeout(fullUrl, {
     method: "POST",
     headers: {
       accept: "application/json",

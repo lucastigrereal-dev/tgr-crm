@@ -33,7 +33,7 @@ export function buildFunnelExportRows(stage: FunnelExportStage, records: FunnelE
 }
 
 export function buildFunnelExportFilename(stage: FunnelExportStage, startDate: string, endDate: string, format: "xlsx" | "pdf") {
-  return `tse-propostas-${stage}-${startDate}-${endDate}.${format}`;
+  return `tgr-propostas-${stage}-${startDate}-${endDate}.${format}`;
 }
 
 type ExcelJsWriter = {
@@ -79,7 +79,7 @@ export function writeFunnelExportPdf(rows: ReturnType<typeof buildFunnelExportRo
   doc.rect(0, 0, 297, 26, "F");
   doc.setTextColor(232, 208, 146);
   doc.setFontSize(18);
-  doc.text("TSE Exclusive · Propostas do funil", 15, 16);
+  doc.text("TGR-CRM · Propostas do funil", 15, 16);
   doc.setTextColor(29, 43, 42);
   doc.setFontSize(10);
   doc.text(`${funnelExportStageLabels[stage]} · ${dateLabel(startDate)} a ${dateLabel(endDate)}`, 15, 38);

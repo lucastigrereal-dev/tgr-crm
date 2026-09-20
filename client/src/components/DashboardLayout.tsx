@@ -21,19 +21,25 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, DoorOpen, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, ShieldCheck, TrendingUp, Trophy, Upload, Users, UsersRound } from "lucide-react";
+import { BrainCircuit, CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, DoorOpen, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, Settings, ShieldCheck, TrendingUp, Trophy, Upload, UsersRound } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
 const menuGroups = [
-  { label: "Central", items: [{ icon: LayoutDashboard, label: "Visão geral", path: "/" }, { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" }, { icon: ClipboardList, label: "Captação", path: "/captacao" }] },
-  { label: "Receita", items: [{ icon: ChartNoAxesCombined, label: "Comercial", path: "/vendas" }, { icon: TrendingUp, label: "Análise de vendas", path: "/analise-de-vendas" }, { icon: Trophy, label: "Comissões", path: "/comissoes" }, { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" }] },
-  { label: "Relacionamento", items: [{ icon: UsersRound, label: "Clientes", path: "/clientes" }, { icon: FileSignature, label: "Contratos", path: "/contratos" }, { icon: CalendarDays, label: "Reservas", path: "/reservas" }, { icon: CalendarDays, label: "Agenda", path: "/agenda" }] },
-  { label: "Governança", items: [{ icon: Megaphone, label: "Campanhas", path: "/campanhas" }, { icon: ShieldCheck, label: "Equipe", path: "/equipe" }, { icon: Upload, label: "Importar", path: "/importar" }] },
+  { label: "Hoje", items: [{ icon: LayoutDashboard, label: "Visão geral", path: "/" }, { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" }] },
+  { label: "Comercial", items: [{ icon: ClipboardList, label: "Captação", path: "/captacao" }, { icon: ChartNoAxesCombined, label: "Vendas", path: "/vendas" }, { icon: TrendingUp, label: "Análise de vendas", path: "/analise-de-vendas" }, { icon: Megaphone, label: "Campanhas", path: "/campanhas" }] },
+  { label: "Receita", items: [{ icon: Trophy, label: "Comissões", path: "/comissoes" }, { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" }, { icon: FileSignature, label: "Contratos", path: "/contratos" }] },
+  { label: "Proprietário", items: [{ icon: UsersRound, label: "Clientes", path: "/clientes" }, { icon: CalendarDays, label: "Reservas", path: "/reservas" }, { icon: CalendarDays, label: "Agenda", path: "/agenda" }] },
+  { label: "Gestão", items: [{ icon: BrainCircuit, label: "Saúde da carteira", path: "/inteligencia" }, { icon: ShieldCheck, label: "Equipe", path: "/equipe" }] },
+  { label: "Admin", items: [{ icon: Settings, label: "Configurações", path: "/configuracoes-projeto" }, { icon: Upload, label: "Importar", path: "/importar" }] },
 ];
 const menuItems = menuGroups.flatMap(group => group.items);
+
+function matchesMenuPath(location: string, path: string) {
+  return path === "/" ? location === "/" : location === path || location.startsWith(`${path}/`);
+}
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
 const DEFAULT_WIDTH = 280;
@@ -63,13 +69,13 @@ export default function DashboardLayout({
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f2efe8] p-5">
         <div className="relative flex w-full max-w-4xl overflow-hidden rounded-[2rem] bg-[#1d2b2a] shadow-2xl">
-          <div className="hidden w-1/2 bg-cover bg-center lg:block" style={{ backgroundImage: "linear-gradient(120deg, rgba(25,40,38,.42), rgba(25,40,38,.75)), url('/manus-storage/tse-lobby-unsplash_1650f5f7.jpg')" }} />
+          <div className="hidden w-1/2 bg-cover bg-center lg:block" style={{ backgroundImage: "linear-gradient(120deg, rgba(25,40,38,.42), rgba(25,40,38,.75))" }} />
           <div className="flex min-h-[520px] w-full flex-col items-center justify-center gap-8 p-10 lg:w-1/2">
           <div className="flex flex-col items-center gap-6">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#c7a35a] font-serif text-2xl text-[#1d2b2a]">T</div>
             <p className="text-[10px] font-bold uppercase tracking-[.24em] text-[#d7bf82]">TGR-CRM</p>
             <h1 className="font-serif text-4xl tracking-tight text-center text-white">Sua operação em ordem.</h1>
-            <p className="max-w-sm text-center text-sm leading-6 text-white/65">Entre para cuidar de relacionamento, contratos, reservas e financeiro em um só lugar.</p>
+            <p className="max-w-sm text-center text-sm leading-6 text-white/65">Gerencie a jornada comercial, contratos, recebimentos e relacionamento em uma única operação.</p>
           </div>
           <Button
             onClick={() => startLogin()}
@@ -114,7 +120,7 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find(item => item.path === location);
+  const activeMenuItem = menuItems.find(item => matchesMenuPath(location, item.path));
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -175,7 +181,7 @@ function DashboardLayoutContent({
               </button>
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#d7bf82]/50 bg-[#29433d] font-serif text-xs font-bold tracking-[.08em] text-[#e8d092]">T</span><div><span className="font-serif text-lg tracking-tight truncate">TGR-<b className="text-[#d7bf82]">CRM</b></span><p className="mt-0.5 text-[9px] font-bold uppercase tracking-[.16em] text-white/45">Operação & relacionamento</p></div></div>
+                  <div className="flex items-center gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#d7bf82]/50 bg-[#29433d] font-serif text-xs font-bold tracking-[.08em] text-[#e8d092]">T</span><div><span className="font-serif text-lg tracking-tight truncate">TGR-<b className="text-[#d7bf82]">CRM</b></span><p className="mt-0.5 text-[9px] font-bold uppercase tracking-[.16em] text-white/45">Operação de multipropriedade</p></div></div>
                 </div>
               ) : null}
             </div>
@@ -186,11 +192,11 @@ function DashboardLayoutContent({
               <div key={group.label} className="px-3 pt-4 first:pt-2">
                 {!isCollapsed ? <p className="px-2 pb-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-white/35">{group.label}</p> : null}
                 <SidebarMenu className="gap-0">
-                  {group.items.filter(item => item.path !== "/importar" || user?.role === "admin").map(item => {
-                    const isActive = location === item.path;
+                  {group.items.filter(item => !["/importar", "/configuracoes-projeto"].includes(item.path) || user?.role === "admin").map(item => {
+                    const isActive = matchesMenuPath(location, item.path);
                     return (
                       <SidebarMenuItem key={item.path}>
-                        <SidebarMenuButton isActive={isActive} onClick={() => setLocation(item.path)} tooltip={item.label} className="h-9 rounded-lg text-white/70 transition-all hover:bg-white/10 hover:text-white data-[active=true]:bg-[#c7a35a] data-[active=true]:font-semibold data-[active=true]:text-[#1d2b2a]">
+                        <SidebarMenuButton isActive={isActive} onClick={() => setLocation(item.path)} aria-current={isActive ? "page" : undefined} tooltip={item.label} className="h-9 rounded-lg text-white/70 transition-all hover:bg-white/10 hover:text-white data-[active=true]:bg-[#c7a35a] data-[active=true]:font-semibold data-[active=true]:text-[#1d2b2a]">
                           <item.icon className={`h-4 w-4 ${isActive ? "text-[#1d2b2a]" : ""}`} />
                           <span>{item.label}</span>
                         </SidebarMenuButton>
@@ -227,7 +233,7 @@ function DashboardLayoutContent({
                   className="cursor-pointer text-destructive focus:text-destructive"
                 >
                   <LogOut className="mr-2 h-4 w-4" />
-                  <span>Sign out</span>
+                  <span>Sair</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -239,6 +245,7 @@ function DashboardLayoutContent({
             if (isCollapsed) return;
             setIsResizing(true);
           }}
+          aria-hidden="true"
           style={{ zIndex: 50 }}
         />
       </div>

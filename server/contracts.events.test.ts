@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { contractCancellationRequests, contracts, customers, installments, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks, users } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -7,12 +8,13 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number } = {}) {
+function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
   let selectCall = 0;
+  let contractSelectCall = 0;
   let ledgerSelectCall = 0;
   let updateCall = 0;
   const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
-  const rows = (value: unknown[]) => Object.assign(value, { limit: async () => value });
+  const rows = (value: unknown[]) => { const chain = Object.assign(Promise.resolve(value), { for: async () => value }); return Object.assign(chain, { limit: () => Object.assign(Promise.resolve(value), { for: async () => value }) }); };
   const ledgerRows = (value: unknown[]) => {
     const chain = {
       where: vi.fn(() => chain),
@@ -23,12 +25,12 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
     return chain;
   };
   const tx = {
-    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); return { $returningId: async () => table ? [{ id: 701 }] : [] }; }) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); const insertedCount = Array.isArray(values) ? values.length : 1; return { $returningId: async () => table ? Array.from({ length: insertedCount }, (_, index) => ({ id: 701 + index })) : [] }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
       const data = [
-        [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ penalty: 120, retained: 120, refund: 80 }) }],
+        [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80 }) }],
         [{ id: 701, status: "active" }],
-        [{ id: 71, status: "open" }, { id: 72, status: "paid" }, { id: 73, status: "overdue" }],
+        [{ id: 71, amount: "500.00", status: "open" }, { id: 72, amount: "1000.00", status: "paid" }, { id: 73, amount: "500.00", status: "overdue" }],
         [{ id: 91, status: "pending" }, { id: 92, status: "paid" }, { id: 93, status: "approved" }],
       ][selectCall++] ?? [];
       return rows(data);
@@ -37,8 +39,15 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
   };
   return {
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
-    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
-    select: vi.fn(() => ({ from: vi.fn(() => {
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => options.statusUpdateAffectedRows === undefined ? undefined : { affectedRows: options.statusUpdateAffectedRows }) })) })),
+    select: vi.fn(() => ({ from: vi.fn((table: unknown) => {
+      if (table === contracts) {
+        const exists = contractSelectCall++ === 0 ? options.contractExists !== false : true;
+        return ledgerRows(exists ? [{ id: 701, totalAmount: "12000.00", status: "active" }] : []);
+      }
+      if (table === customers) return ledgerRows([{ id: 11 }]);
+      if (table === users) return ledgerRows([{ id: 55 }]);
+      if (table === proposals) return ledgerRows([]);
       const data = [
         [{ id: 701, totalAmount: "12000.00", status: "cancelled" }],
         [{ id: 71, sequence: 1, amount: "1000.00", status: "paid" }],
@@ -64,19 +73,70 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("registra criação contratual com valor, parcelas e ator", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
     await expect(caller().create({ number: "TS-2026-701", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "active", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 })).resolves.toEqual({ id: 701 });
 
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract", 701, "created", expect.stringContaining("TS-2026-701"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, status: "active", totalAmount: 12000, installmentCount: 12 }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "active", totalAmount: 12000, installmentCount: 12 }) }));
+  });
+
+  it("rejeita primeira data de vencimento impossível antes de persistir contrato", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+
+    await expect(caller().create({ number: "TS-2026-INVALID-DATE", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "draft", totalAmount: 12000, firstDueDate: "2026-02-30", installmentCount: 12 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("registra mudança de status e documento contratual com trilha de auditoria", async () => {
-    await caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" });
+    await caller().updateStatus({ id: 701, status: "closed" });
     await caller().uploadDocument({ contractId: 701, category: "Contrato assinado", filename: "contrato.pdf", contentType: "application/pdf", signed: true, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "cancelled", cancellationReason: "Solicitação documentada" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "closed", cancellationReason: null } }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_document", 702, "uploaded", expect.stringContaining("contrato.pdf"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: true, filename: "contrato.pdf" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: false, filename: "contrato.pdf" } }));
+  });
+
+  it("bloqueia cancelamento direto fora do workflow de distrato", async () => {
+    const db = makeDb();
+    dbMocks.getDb.mockResolvedValue(db);
+    await expect(caller().updateStatus({ id: 701, status: "cancelled", cancellationReason: "Solicitação documentada" })).rejects.toMatchObject({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
+    expect(db.update).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejeita base64 inválido antes de chamar o storage", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ contractId: 701, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,nao-e-base64-!!!!" })).rejects.toMatchObject({ code: "BAD_REQUEST", message: "O conteúdo do anexo não é um base64 válido." });
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("normaliza falha detalhada do storage sem auditar documento falso", async () => {
+    storageMocks.storagePut.mockRejectedValueOnce(new Error("payload remoto secreto"));
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ contractId: 701, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do contrato." });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejeita upload de documento quando o contrato não existe antes do storage", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+    await expect(caller().uploadDocument({ contractId: 999, category: "Contrato", filename: "contrato.pdf", contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia execução quando o valor pago mudou desde a aprovação", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ snapshotPaidAmount: 0 }));
+
+    await expect(caller().executeCancellation({ requestId: 801 })).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar.",
+    });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
   });
 
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {
@@ -85,6 +145,15 @@ describe("eventos e auditoria de contratos", () => {
     expect(db.financialEntries).toEqual(expect.arrayContaining([expect.objectContaining({ type: "income", category: "Distrato · multa/retenção", amount: "120.00" }), expect.objectContaining({ type: "expense", category: "Distrato · reembolso", amount: "80.00" })]));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("parcelas canceladas: 2"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701, payload: expect.objectContaining({ status: "cancelled" }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: 801, actorUserId: 55, payload: { contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 } });
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 91, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 93, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 91, payload: { status: "cancelled", contractId: 701 } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 93, payload: { status: "cancelled", contractId: 701 } }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "financial_transaction", 701, "created", "Lançamento income de 120.00 criado pelo distrato.");
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "financial_transaction", 702, "created", "Lançamento expense de 80.00 criado pelo distrato.");
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: 701, payload: { type: "income", category: "Distrato · multa/retenção", amount: 120, contractId: 701, campaignId: null } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: 702, payload: { type: "expense", category: "Distrato · reembolso", amount: 80, contractId: 701, campaignId: null } }));
   });
 
   it("bloqueia pedido não aprovado e não registra execução", async () => {

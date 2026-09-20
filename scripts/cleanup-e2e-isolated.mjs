@@ -1,9 +1,31 @@
 import mysql from "mysql2/promise";
-const url = process.env.E2E_DATABASE_URL;
-if (!url) throw new Error("E2E_DATABASE_URL é obrigatória.");
-const db = await mysql.createConnection(url);
-await db.query("SET FOREIGN_KEY_CHECKS=0");
-for (const table of ["domain_events", "audit_logs", "csv_import_items", "csv_import_batches", "reservation_guests", "reservation_waitlist", "reservations", "installments", "contracts", "opportunities", "units", "resorts", "customers", "users"]) await db.query(`DELETE FROM ${table}`);
-await db.query("SET FOREIGN_KEY_CHECKS=1");
-await db.end();
-console.log("Seed E2E isolado removido.");
+import { assertIsolatedE2EEnvironment } from "./e2e-isolation-lib.mjs";
+import { getE2EFixtureContext } from "./e2e-fixture-lib.mjs";
+
+if (!process.env.E2E_RUN_ID) {
+  throw new Error("E2E_RUN_ID é obrigatório para remover somente o banco deste run.");
+}
+
+const isolation = assertIsolatedE2EEnvironment();
+const fixture = getE2EFixtureContext(process.env, isolation);
+const db = await mysql.createConnection(fixture.serverUrl);
+
+try {
+  await db.query(`DROP DATABASE IF EXISTS ${fixture.quotedDatabaseName}`);
+  const [remaining] = await db.execute(
+    "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?",
+    [fixture.databaseName],
+  );
+  if (remaining.length !== 0) {
+    throw new Error(`Falha ao remover o banco descartável ${fixture.databaseName}.`);
+  }
+  console.log(
+    JSON.stringify({
+      event: "e2e.cleanup.completed",
+      runId: fixture.runId,
+      database: fixture.databaseName,
+    }),
+  );
+} finally {
+  await db.end().catch(() => undefined);
+}

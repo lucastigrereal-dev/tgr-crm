@@ -1,34 +1,235 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import mysql from "mysql2/promise";
+import { assertIsolatedE2EEnvironment } from "./e2e-isolation-lib.mjs";
+import { getE2EFixtureContext } from "./e2e-fixture-lib.mjs";
 
-const url = process.env.E2E_DATABASE_URL;
-if (!url) throw new Error("E2E_DATABASE_URL é obrigatória.");
-if (!/(?:_e2e|_test|_staging)(?:\?|$)/i.test(new URL(url).pathname + new URL(url).search)) throw new Error("Banco não parece isolado.");
-const openId = process.env.OWNER_OPEN_ID;
-if (!openId) throw new Error("OWNER_OPEN_ID é obrigatório.");
-const db = await mysql.createConnection(url);
-await db.execute("INSERT INTO users (openId, name, email, loginMethod, role) VALUES (?, ?, ?, 'e2e', 'admin') ON DUPLICATE KEY UPDATE role='admin', name=VALUES(name)", [openId, "TSE E2E Owner", "e2e-owner@tse.local"]);
-const [[owner]] = await db.execute("SELECT id FROM users WHERE openId = ?", [openId]);
-const ownerId = owner.id;
+const FIXTURE_FAMILY = "E2E-TGR-";
+const isolation = assertIsolatedE2EEnvironment();
+const fixture = getE2EFixtureContext(process.env, isolation);
+if (!fixture.prefix.startsWith(FIXTURE_FAMILY)) {
+  throw new Error("Família de fixture E2E inválida.");
+}
 
-await db.execute("INSERT INTO resorts (name, city, state, status) VALUES ('E2E Resort', 'Olímpia', 'SP', 'active')");
-const [[resort]] = await db.execute("SELECT id FROM resorts WHERE name='E2E Resort' ORDER BY id DESC LIMIT 1");
-await db.execute("INSERT INTO units (resortId, code, category, capacity, beds, status) VALUES (?, 'E2E-101', 'Suite', 4, 2, 'active'), (?, 'E2E-102', 'Suite', 4, 2, 'active')", [resort.id, resort.id]);
-const [unitRows] = await db.execute("SELECT id, code FROM units WHERE resortId = ? ORDER BY id", [resort.id]);
-const unitForGuest = unitRows[0].id; const unitForWaitlist = unitRows[1].id;
-await db.execute("INSERT INTO customers (fullName, documentNumber, email, phone, city, state, status) VALUES ('E2E Reserva Associado', '99100100100', 'reserva@e2e.local', '11999990001', 'Olímpia', 'SP', 'active'), ('E2E Comercial Associado', '99100100101', 'comercial@e2e.local', '11999990002', 'Olímpia', 'SP', 'active')");
-const [customerRows] = await db.execute("SELECT id, fullName FROM customers WHERE documentNumber IN ('99100100100', '99100100101') ORDER BY id");
-const reservationCustomerId = customerRows[0].id; const commercialCustomerId = customerRows[1].id;
-await db.execute("INSERT INTO customers (fullName, documentNumber, email, phone, city, state, status) VALUES ('E2E Sala Tour', '99100100102', 'sala-tour@e2e.local', '11999990003', 'Olímpia', 'SP', 'prospect'), ('E2E Sala Sem Tour', '99100100103', 'sala-sem-tour@e2e.local', '11999990004', 'Olímpia', 'SP', 'prospect')");
-const [roomCustomerRows] = await db.execute("SELECT id, documentNumber FROM customers WHERE documentNumber IN ('99100100102', '99100100103')");
-const roomTourCustomerId = roomCustomerRows.find(row => row.documentNumber === '99100100102').id;
-const roomNoTourCustomerId = roomCustomerRows.find(row => row.documentNumber === '99100100103').id;
-await db.execute("INSERT INTO capture_records (customerId, promoterId, salesRoom, captureLocation, scheduledAt, presentationStatus, qualificationStatus) VALUES (?, ?, 'Sala E2E', 'E2E', CONCAT(CURDATE(), ' 10:00:00'), 'scheduled', 'qualified'), (?, ?, 'Sala E2E', 'E2E', CONCAT(CURDATE(), ' 10:15:00'), 'scheduled', 'qualified')", [roomTourCustomerId, ownerId, roomNoTourCustomerId, ownerId]);
-await db.execute("INSERT INTO contracts (number, customerId, sellerId, usageModel, status, totalAmount, activatedAt) VALUES ('E2E-CTR-001', ?, ?, 'flexible_week', 'active', 12000, NOW())", [reservationCustomerId, ownerId]);
-const [[contract]] = await db.execute("SELECT id FROM contracts WHERE number='E2E-CTR-001'");
-await db.execute("INSERT INTO reservations (customerId, contractId, unitId, checkIn, checkOut, adults, status, createdByUserId) VALUES (?, ?, ?, '2026-08-20', '2026-08-23', 2, 'confirmed', ?)", [reservationCustomerId, contract.id, unitForGuest, ownerId]);
-const [[reservation]] = await db.execute("SELECT id FROM reservations WHERE contractId = ? ORDER BY id DESC LIMIT 1", [contract.id]);
-await db.execute("INSERT INTO reservation_guests (reservationId, fullName, relationship) VALUES (?, 'E2E Acompanhante', 'Cônjuge')", [reservation.id]);
-await db.execute("INSERT INTO reservation_waitlist (customerId, contractId, resortId, desiredCheckIn, desiredCheckOut, partySize, priorityScore, status, createdByUserId) VALUES (?, ?, ?, '2026-09-10', '2026-09-14', 2, 10, 'waiting', ?)", [reservationCustomerId, contract.id, resort.id, ownerId]);
-await db.execute("INSERT INTO opportunities (customerId, sellerId, title, stage, source, expectedAmount, probability) VALUES (?, ?, 'E2E Proposta Filtrada', 'proposal', 'e2e', 15000, 70)", [commercialCustomerId, ownerId]);
-await db.end();
-console.log("Seed E2E isolado criado.");
+function dateFromToday(offsetDays) {
+  const date = new Date();
+  date.setUTCHours(12, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+const receiptPath =
+  process.env.E2E_RECEIPT_PATH ||
+  path.join("e2e", ".runtime", `receipt-${fixture.normalizedRunId}.json`);
+const db = await mysql.createConnection(isolation.url);
+
+try {
+  const [existingRows] = await db.execute(
+    "SELECT id FROM contracts WHERE number = ? LIMIT 1",
+    [fixture.contractNumber],
+  );
+  const existingContract = existingRows[0];
+  if (existingContract) {
+    const receipt = {
+      runId: fixture.runId,
+      database: fixture.databaseName,
+      contractId: existingContract.id,
+      ownerOpenId: fixture.ownerOpenId,
+      reused: true,
+    };
+    await mkdir(path.dirname(receiptPath), { recursive: true });
+    await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+    console.log(JSON.stringify({ event: "e2e.seed.reused", ...receipt }));
+    await db.end();
+    process.exit(0);
+  }
+
+  await db.beginTransaction();
+  await db.execute(
+    "INSERT INTO users (openId, name, email, loginMethod, role) VALUES (?, ?, ?, 'e2e', 'admin') ON DUPLICATE KEY UPDATE role='admin', name=VALUES(name), email=VALUES(email)",
+    [fixture.ownerOpenId, fixture.ownerName, fixture.ownerEmail],
+  );
+  const [ownerRows] = await db.execute(
+    "SELECT id FROM users WHERE openId = ? LIMIT 1",
+    [fixture.ownerOpenId],
+  );
+  const ownerId = ownerRows[0]?.id;
+  if (!ownerId) throw new Error("Owner E2E não foi persistido.");
+
+  await db.execute(
+    "INSERT INTO resorts (name, city, state, status) VALUES (?, 'Natal', 'RN', 'active')",
+    [fixture.resortName],
+  );
+  const [resortRows] = await db.execute(
+    "SELECT id FROM resorts WHERE name = ? ORDER BY id DESC LIMIT 1",
+    [fixture.resortName],
+  );
+  const resortId = resortRows[0]?.id;
+  if (!resortId) throw new Error("Empreendimento E2E não foi persistido.");
+
+  await db.execute(
+    "INSERT INTO units (resortId, code, category, capacity, beds, status) VALUES (?, ?, 'Suite', 4, 2, 'active'), (?, ?, 'Suite', 4, 2, 'active')",
+    [resortId, fixture.unitGuestCode, resortId, fixture.unitWaitlistCode],
+  );
+  const [unitRows] = await db.execute(
+    "SELECT id, code FROM units WHERE resortId = ? AND code IN (?, ?) ORDER BY id",
+    [resortId, fixture.unitGuestCode, fixture.unitWaitlistCode],
+  );
+  const unitForGuest = unitRows.find(row => row.code === fixture.unitGuestCode)?.id;
+  const unitForWaitlist = unitRows.find(row => row.code === fixture.unitWaitlistCode)?.id;
+  if (!unitForGuest || !unitForWaitlist) {
+    throw new Error("Unidades E2E não foram persistidas.");
+  }
+
+  const customers = [
+    {
+      name: fixture.reservationCustomerName,
+      document: fixture.documents.reservation,
+      email: `${fixture.normalizedRunId}.reserva@e2e.invalid`,
+      phone: fixture.phones.reservation,
+      status: "active",
+    },
+    {
+      name: fixture.commercialCustomerName,
+      document: fixture.documents.commercial,
+      email: `${fixture.normalizedRunId}.comercial@e2e.invalid`,
+      phone: fixture.phones.commercial,
+      status: "active",
+    },
+    {
+      name: fixture.roomTourCustomerName,
+      document: fixture.documents.roomTour,
+      email: `${fixture.normalizedRunId}.tour@e2e.invalid`,
+      phone: fixture.phones.roomTour,
+      status: "prospect",
+    },
+    {
+      name: fixture.roomNoTourCustomerName,
+      document: fixture.documents.roomNoTour,
+      email: `${fixture.normalizedRunId}.sem-tour@e2e.invalid`,
+      phone: fixture.phones.roomNoTour,
+      status: "prospect",
+    },
+  ];
+
+  for (const customer of customers) {
+    await db.execute(
+      "INSERT INTO customers (fullName, documentNumber, email, phone, city, state, status) VALUES (?, ?, ?, ?, 'Natal', 'RN', ?)",
+      [
+        customer.name,
+        customer.document,
+        customer.email,
+        customer.phone,
+        customer.status,
+      ],
+    );
+  }
+
+  const [customerRows] = await db.execute(
+    "SELECT id, documentNumber FROM customers WHERE documentNumber IN (?, ?, ?, ?)",
+    [
+      fixture.documents.reservation,
+      fixture.documents.commercial,
+      fixture.documents.roomTour,
+      fixture.documents.roomNoTour,
+    ],
+  );
+  const customerId = document =>
+    customerRows.find(row => row.documentNumber === document)?.id;
+  const reservationCustomerId = customerId(fixture.documents.reservation);
+  const commercialCustomerId = customerId(fixture.documents.commercial);
+  const roomTourCustomerId = customerId(fixture.documents.roomTour);
+  const roomNoTourCustomerId = customerId(fixture.documents.roomNoTour);
+  if (
+    !reservationCustomerId ||
+    !commercialCustomerId ||
+    !roomTourCustomerId ||
+    !roomNoTourCustomerId
+  ) {
+    throw new Error("Clientes E2E não foram persistidos.");
+  }
+
+  const today = dateFromToday(0);
+  await db.execute(
+    "INSERT INTO capture_records (customerId, promoterId, salesRoom, captureLocation, scheduledAt, presentationStatus, qualificationStatus) VALUES (?, ?, ?, 'E2E-TGR', CONCAT(?, ' 10:00:00'), 'scheduled', 'qualified'), (?, ?, ?, 'E2E-TGR', CONCAT(?, ' 10:15:00'), 'scheduled', 'qualified')",
+    [
+      roomTourCustomerId,
+      ownerId,
+      fixture.salesRoom,
+      today,
+      roomNoTourCustomerId,
+      ownerId,
+      fixture.salesRoom,
+      today,
+    ],
+  );
+
+  await db.execute(
+    "INSERT INTO contracts (number, customerId, sellerId, usageModel, status, totalAmount, activatedAt) VALUES (?, ?, ?, 'flexible_week', 'active', 12000, NOW())",
+    [fixture.contractNumber, reservationCustomerId, ownerId],
+  );
+  const [contractRows] = await db.execute(
+    "SELECT id FROM contracts WHERE number = ? LIMIT 1",
+    [fixture.contractNumber],
+  );
+  const contractId = contractRows[0]?.id;
+  if (!contractId) throw new Error("Contrato E2E não foi persistido.");
+
+  await db.execute(
+    "INSERT INTO reservations (customerId, contractId, unitId, checkIn, checkOut, adults, status, createdByUserId) VALUES (?, ?, ?, ?, ?, 2, 'confirmed', ?)",
+    [
+      reservationCustomerId,
+      contractId,
+      unitForGuest,
+      dateFromToday(0),
+      dateFromToday(3),
+      ownerId,
+    ],
+  );
+  const [reservationRows] = await db.execute(
+    "SELECT id FROM reservations WHERE contractId = ? ORDER BY id DESC LIMIT 1",
+    [contractId],
+  );
+  const reservationId = reservationRows[0]?.id;
+  if (!reservationId) throw new Error("Reserva E2E não foi persistida.");
+
+  await db.execute(
+    "INSERT INTO reservation_guests (reservationId, fullName, relationship) VALUES (?, ?, 'Cônjuge')",
+    [reservationId, fixture.guestName],
+  );
+  await db.execute(
+    "INSERT INTO reservation_waitlist (customerId, contractId, resortId, desiredCheckIn, desiredCheckOut, partySize, priorityScore, status, createdByUserId) VALUES (?, ?, ?, ?, ?, 2, 10, 'waiting', ?)",
+    [
+      reservationCustomerId,
+      contractId,
+      resortId,
+      dateFromToday(10),
+      dateFromToday(14),
+      ownerId,
+    ],
+  );
+  await db.execute(
+    "INSERT INTO opportunities (customerId, sellerId, title, stage, source, expectedAmount, probability) VALUES (?, ?, ?, 'proposal', 'e2e-tgr', 15000, 70)",
+    [commercialCustomerId, ownerId, fixture.opportunityTitle],
+  );
+
+  await db.commit();
+
+  const receipt = {
+    runId: fixture.runId,
+    database: fixture.databaseName,
+    contractId,
+    ownerOpenId: fixture.ownerOpenId,
+    resortId,
+    unitForWaitlist,
+    reused: false,
+  };
+  await mkdir(path.dirname(receiptPath), { recursive: true });
+  await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
+  console.log(JSON.stringify({ event: "e2e.seed.created", ...receipt }));
+} catch (error) {
+  await db.rollback().catch(() => undefined);
+  throw error;
+} finally {
+  await db.end().catch(() => undefined);
+}

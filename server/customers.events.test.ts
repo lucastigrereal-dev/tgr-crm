@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { customers } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -7,9 +8,21 @@ vi.mock("./storage", () => storageMocks);
 
 import { customersRouter } from "./routers/customers";
 
-function makeDb() {
+function makeDb(options: { existingId?: number | null; duplicateDocumentId?: number; insertDuplicate?: boolean } = {}) {
+  let customerSelectCall = 0;
   return {
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 121 }] })) })),
+    select: vi.fn(() => ({
+      from: (table: unknown) => {
+        if (table !== customers) throw new Error("Tabela não prevista neste teste");
+        return { where: () => ({ limit: async () => {
+          if (options.existingId === null) return [];
+          if (options.duplicateDocumentId && customerSelectCall++ > 0) return [{ id: options.duplicateDocumentId }];
+          customerSelectCall += 1;
+          return [{ id: options.existingId ?? 121 }];
+        } }) };
+      },
+    })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => { if (options.insertDuplicate) throw { code: "ER_DUP_ENTRY", errno: 1062 }; return [{ id: 121 }]; } })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
 }
@@ -33,6 +46,53 @@ describe("eventos e auditoria de associados", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "customer.created", aggregateType: "customer", aggregateId: 121, actorUserId: 44, payload: expect.objectContaining({ status: "active", acquisitionSource: "tour" }) }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(44, "customer", 121, "updated", expect.stringContaining("Ana da Silva"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "customer.updated", aggregateType: "customer", aggregateId: 121, actorUserId: 44, payload: expect.objectContaining({ status: "inactive", city: "Olímpia", state: "SP" }) }));
+  });
+
+  it("bloqueia documento duplicado e cliente inexistente antes da escrita", async () => {
+    const duplicate = makeDb();
+    dbMocks.getDb.mockResolvedValue(duplicate);
+    await expect(caller().create({ fullName: "Cliente Duplicado", documentNumber: "CPF-123", status: "prospect" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(duplicate.insert).not.toHaveBeenCalled();
+
+    const missing = makeDb({ existingId: null });
+    dbMocks.getDb.mockResolvedValue(missing);
+    await expect(caller().update({ id: 999, data: { fullName: "Cliente Ausente", status: "prospect" } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(missing.update).not.toHaveBeenCalled();
+
+    const updateDuplicate = makeDb({ duplicateDocumentId: 122 });
+    dbMocks.getDb.mockResolvedValue(updateDuplicate);
+    await expect(caller().update({ id: 121, data: { fullName: "Ana da Silva", documentNumber: "CPF-999", status: "active" } })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(updateDuplicate.update).not.toHaveBeenCalled();
+
+    const raced = makeDb({ insertDuplicate: true });
+    dbMocks.getDb.mockResolvedValue(raced);
+    await expect(caller().create({ fullName: "Cliente Concorrente", documentNumber: "CPF-RACE", status: "prospect" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia interação e upload quando o cliente não existe", async () => {
+    const missing = makeDb({ existingId: null });
+    dbMocks.getDb.mockResolvedValue(missing);
+    await expect(caller().addInteraction({ customerId: 999, type: "note", content: "Não deve gravar." })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller().uploadDocument({ customerId: 999, category: "Identidade", filename: "rg.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(missing.insert).not.toHaveBeenCalled();
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
+  });
+
+  it("rejeita base64 inválido antes de chamar o storage", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ customerId: 88, category: "Identidade", filename: "rg.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,nao-e-base64-!!!!" })).rejects.toMatchObject({ code: "BAD_REQUEST", message: "O conteúdo do anexo não é um base64 válido." });
+    expect(storageMocks.storagePut).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("normaliza falha detalhada do storage sem auditar upload falso", async () => {
+    storageMocks.storagePut.mockRejectedValueOnce(new Error("payload remoto secreto"));
+    dbMocks.getDb.mockResolvedValue(makeDb());
+
+    await expect(caller().uploadDocument({ customerId: 88, category: "Identidade", filename: "rg.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do cliente." });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("registra evento de interação e de documento com o associado e ator corretos", async () => {

@@ -26,6 +26,7 @@
  * ```
  */
 import { ENV } from "./env";
+import { fetchWithTimeout } from "../integrationReliability";
 
 export type TranscribeOptions = {
   audioUrl: string; // URL to the audio file (e.g., S3 URL)
@@ -94,7 +95,7 @@ export async function transcribeAudio(
     let audioBuffer: Buffer;
     let mimeType: string;
     try {
-      const response = await fetch(options.audioUrl);
+      const response = await fetchWithTimeout(options.audioUrl, {}, 30_000);
       if (!response.ok) {
         return {
           error: "Failed to download audio file",
@@ -152,7 +153,7 @@ export async function transcribeAudio(
       baseUrl
     ).toString();
 
-    const response = await fetch(fullUrl, {
+    const response = await fetchWithTimeout(fullUrl, {
       method: "POST",
       headers: {
         authorization: `Bearer ${ENV.forgeApiKey}`,

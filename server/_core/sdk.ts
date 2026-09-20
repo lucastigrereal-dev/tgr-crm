@@ -6,6 +6,7 @@ import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
+import { logger } from "../logger";
 import { ENV } from "./env";
 import type {
   ExchangeTokenRequest,
@@ -28,13 +29,14 @@ const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
 const GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
 const GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfoWithJwt`;
 
+type ProviderUserInfo = GetUserInfoResponse & { platforms?: unknown };
+type ProviderUserInfoWithJwt = GetUserInfoWithJwtResponse & { platforms?: unknown };
+
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
-    console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
+    logger.info("OAuth SDK initialized", { baseUrlConfigured: Boolean(ENV.oAuthServerUrl) });
     if (!ENV.oAuthServerUrl) {
-      console.error(
-        "[OAuth] ERROR: OAUTH_SERVER_URL is not configured! Set OAUTH_SERVER_URL environment variable."
-      );
+      logger.error("OAuth server URL is not configured");
     }
   }
 
@@ -133,15 +135,16 @@ class SDKServer {
     const data = await this.oauthService.getUserInfoByToken({
       accessToken,
     } as ExchangeTokenResponse);
+    const providerData = data as ProviderUserInfo;
     const loginMethod = this.deriveLoginMethod(
-      (data as any)?.platforms,
-      (data as any)?.platform ?? data.platform ?? null
+      providerData.platforms,
+      providerData.platform ?? null
     );
     return {
-      ...(data as any),
+      ...providerData,
       platform: loginMethod,
       loginMethod,
-    } as GetUserInfoResponse;
+    };
   }
 
   private parseCookies(cookieHeader: string | undefined) {
@@ -200,7 +203,7 @@ class SDKServer {
     cookieValue: string | undefined | null
   ): Promise<{ openId: string; appId: string; name: string } | null> {
     if (!cookieValue) {
-      console.warn("[Auth] Missing session cookie");
+      logger.warn("Session cookie missing");
       return null;
     }
 
@@ -216,7 +219,7 @@ class SDKServer {
         !isNonEmptyString(appId) ||
         !isNonEmptyString(name)
       ) {
-        console.warn("[Auth] Session payload missing required fields");
+        logger.warn("Session payload missing required fields");
         return null;
       }
 
@@ -226,7 +229,7 @@ class SDKServer {
         name,
       };
     } catch (error) {
-      console.warn("[Auth] Session verification failed", String(error));
+      logger.warn("Session verification failed", { error: error instanceof Error ? error.message : "unknown_error" });
       return null;
     }
   }
@@ -244,15 +247,16 @@ class SDKServer {
       payload
     );
 
+    const providerData = data as ProviderUserInfoWithJwt;
     const loginMethod = this.deriveLoginMethod(
-      (data as any)?.platforms,
-      (data as any)?.platform ?? data.platform ?? null
+      providerData.platforms,
+      providerData.platform ?? null
     );
     return {
-      ...(data as any),
+      ...providerData,
       platform: loginMethod,
       loginMethod,
-    } as GetUserInfoWithJwtResponse;
+    };
   }
 
   async authenticateRequest(req: Request): Promise<AuthenticatedUser> {
@@ -302,7 +306,7 @@ class SDKServer {
         });
         user = await db.getUserByOpenId(userInfo.openId);
       } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
+        logger.error("Failed to sync user from OAuth", { error: error instanceof Error ? error.message : "unknown_error" });
         throw ForbiddenError("Failed to sync user info");
       }
     }
@@ -311,10 +315,14 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    try {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: signedInAt,
+      });
+    } catch (error) {
+      logger.warn("Failed to update user sign-in timestamp", { error: error instanceof Error ? error.message : "unknown_error" });
+    }
 
     return user;
   }

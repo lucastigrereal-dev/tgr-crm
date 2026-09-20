@@ -8,7 +8,10 @@ import { financeRouter } from "./routers/finance";
 function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, () => unknown>;
   promise.from = () => promise;
+  promise.leftJoin = () => promise;
   promise.where = () => promise;
+  promise.groupBy = () => promise;
+  promise.limit = () => promise;
   return promise;
 }
 
@@ -17,8 +20,7 @@ describe("finance.portfolioScorecards", () => {
 
   it("agrega carteira ativa, saldo, atraso e recuperação posterior à posse", async () => {
     const responses = [
-      [{ contractId: 10, ownerUserId: 4, startsAt: new Date("2026-08-10T12:00:00Z") }],
-      [{ contractId: 10, amount: "100.00", status: "paid", paidAt: new Date("2026-08-09T12:00:00Z") }, { contractId: 10, amount: "200.00", status: "paid", paidAt: new Date("2026-08-12T12:00:00Z") }, { contractId: 10, amount: "300.00", status: "overdue", paidAt: null }],
+      [{ ownerUserId: 4, assignedContracts: 1, openAmount: "300.00", overdueAmount: "300.00", recoveredAfterAssignment: "200.00", assignedSince: new Date("2026-08-10T12:00:00Z") }],
       [{ id: 4, name: "Fábio Financeiro", email: "fabio@tgr.local" }],
     ];
     dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain(responses.shift() ?? [])) });

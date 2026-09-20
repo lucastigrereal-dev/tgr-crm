@@ -20,6 +20,18 @@ function chain<T>(value: T) {
 describe("dashboard.operationalPulse", () => {
   beforeEach(() => vi.resetAllMocks());
 
+  it("sinaliza quando uma fonte operacional atingiu o limite da amostra", async () => {
+    const eventRows = Array.from({ length: 5000 }, (_, index) => ({ actorUserId: index % 2 ? 9 : 11 }));
+    const sourceRows = [[], [], [], [], eventRows, [], [], [], [], [], [], [], [], [], [], [], [], []];
+    mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sourceRows.shift() ?? [])) } as never);
+
+    const pulse = await appRouter.createCaller(context()).dashboard.operationalPulse();
+
+    expect(pulse.truncated).toBe(true);
+    expect(pulse.truncatedSources).toEqual(["eventos"]);
+    expect(pulse.adoption).toEqual({ eventsLast30Days: 5000, activeOperators: 2, interactionsLast30Days: 0 });
+  });
+
   it("materializa exceções e adoção a partir de todas as fontes do data mart operacional", async () => {
     const sourceRows = [
       [{ installment: { id: 1, dueDate: new Date("2020-01-01T12:00:00Z"), status: "overdue", amount: "120.00" }, customerName: "Ana", contractNumber: "CTR-1" }],

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { contractCancellationRequests, contracts, installments, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
+import { contractCancellationRequests, contracts, installmentRenegotiations, installments, opportunities, proposals, reservations, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -13,14 +13,16 @@ function makeDb() {
   const queryRows = (value: unknown[]) => {
     const chain = {
       where: () => chain,
-      limit: async () => value,
-      orderBy: async () => value,
+      limit: () => chain,
+      orderBy: () => chain,
+      for: async () => value,
       then: (resolve: (rows: unknown[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve(value).then(resolve, reject),
     };
     return chain;
   };
   const tx = {
-    insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+    select: vi.fn(() => ({ from: (table: unknown) => table === unitMaintenanceBlocks || table === installmentRenegotiations || table === proposals || table === reservations ? queryRows([]) : table === opportunities ? queryRows([{ id: 301, stage: "qualified" }]) : table === installments ? queryRows([installment]) : queryRows([{ id: 51 }]) })),
+    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 901 }] })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
   let id = 300;
@@ -32,9 +34,11 @@ function makeDb() {
       from: (table: unknown) => {
         if (table === unitMaintenanceBlocks) return queryRows([]);
         if (table === contracts) return queryRows([{ id: 61, totalAmount: "1000.00", status: "active" }]);
+        if (table === opportunities) return queryRows([{ id: 301, stage: "qualified" }]);
+        if (table === proposals) return queryRows([]);
         if (table === installments) return queryRows([installment]);
         if (table === salesCommissions || table === contractCancellationRequests) return queryRows([]);
-        if (table === revenueQualityLedger) return queryRows([]);
+        if (table === revenueQualityLedger || table === reservations) return queryRows([]);
         return queryRows([installment]);
       },
     })),
@@ -56,8 +60,8 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await caller.createOpportunity({ customerId: 10, title: "Tour família", expectedAmount: 12000, stage: "qualified" });
     await caller.createProposal({ opportunityId: 301, reference: "PROP-301", productDescription: "Cota anual", totalAmount: 12000, downPaymentAmount: 0, installmentCount: 1, status: "sent" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", actorUserId: 71, payload: { stage: "qualified", name: "Qualificação do tour" } }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "opportunity.created", aggregateType: "opportunity", actorUserId: 71, payload: expect.objectContaining({ sellerId: 71, stage: "qualified", expectedAmount: 12000 }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "sales.playbook.created", aggregateType: "sales_playbook", actorUserId: 71, payload: { stage: "qualified", title: "Qualificação do tour" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "opportunity.created", aggregateType: "opportunity", actorUserId: 71, payload: expect.objectContaining({ customerId: 10, sellerId: 71, stage: "qualified", expectedAmount: 12000 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "proposal.created", aggregateType: "proposal", actorUserId: 71, payload: expect.objectContaining({ opportunityId: 301, status: "sent", totalAmount: 12000 }) }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(71, "proposal", expect.any(Number), "created", expect.stringContaining("PROP-301"));
   });
@@ -69,17 +73,17 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await caller.createEntry({ type: "income", category: "Taxa", description: "Taxa operacional", amount: 125, status: "paid" });
     await caller.createTransfer({ beneficiaryName: "Parceiro Operacional", amount: 250, dueDate: "2026-09-20" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposedAmount: 900 } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposalAmount: 900 } }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: 71, payload: expect.objectContaining({ contractId: 61, sequence: 2 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", actorUserId: 71, payload: expect.objectContaining({ category: "Taxa", amount: 125 }) }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ beneficiaryName: "Parceiro Operacional", amount: 250 }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ recipient: "Parceiro Operacional", amount: 250 }) }));
   });
 
   it("emite e audita direito de uso e bloqueio operacional de unidade", async () => {
     await ownershipRouter.createCaller(adminContext).createEntitlement({ contractId: 61, entitlementType: "fixed_week", fixedWeek: 12, annualPoints: 0, priorityLevel: 2 });
     await ownershipRouter.createCaller(serviceContext).createMaintenanceBlock({ unitId: 51, startsAt: "2026-10-10", endsAt: "2026-10-12", reason: "Manutenção preventiva" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", actorUserId: 71, payload: { contractId: 61, entitlementType: "fixed_week" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "ownership.entitlement.created", aggregateType: "ownership_entitlement", actorUserId: 71, payload: { contractId: 61, unitId: null, priorityLevel: 2, entitlementType: "fixed_week" } }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "unit.maintenance.blocked", aggregateType: "unit_maintenance_block", actorUserId: 72, payload: expect.objectContaining({ unitId: 51, reason: "Manutenção preventiva" }) }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(72, "unit_maintenance_block", expect.any(Number), "created", expect.stringContaining("Manutenção preventiva"));
   });

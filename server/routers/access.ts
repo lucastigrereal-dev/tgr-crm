@@ -1,7 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure } from "../_core/trpc";
+import { canCapability, type Capability, type InternalPermissionRole } from "../permissions";
 
-type InternalRole = "admin" | "seller" | "finance" | "service";
+type InternalRole = InternalPermissionRole | "user";
+
+export function assertCapability(role: InternalRole, capability: Capability, message = "Ação não autorizada para este perfil.") {
+  if (!canCapability(role, capability)) throw new TRPCError({ code: "FORBIDDEN", message });
+}
 
 function roleProcedure(allowedRoles: InternalRole[], message: string) {
   return protectedProcedure.use(({ ctx, next }) => {

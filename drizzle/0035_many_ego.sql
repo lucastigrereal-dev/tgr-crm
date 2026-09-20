@@ -1,0 +1,2 @@
+ALTER TABLE `financial_transactions` ADD `idempotencyKey` varchar(128);--> statement-breakpoint
+ALTER TABLE `financial_transactions` ADD CONSTRAINT `financial_transactions_idempotency_unique` UNIQUE(`idempotencyKey`);

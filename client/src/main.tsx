@@ -8,6 +8,24 @@ import App from "./App";
 import { startLogin } from "./const";
 import "./index.css";
 
+const analyticsEndpoint = import.meta.env.VITE_ANALYTICS_ENDPOINT as string | undefined;
+const analyticsWebsiteId = import.meta.env.VITE_ANALYTICS_WEBSITE_ID as string | undefined;
+if (analyticsEndpoint && analyticsWebsiteId && typeof document !== "undefined" && !document.querySelector("script[data-tgr-analytics]")) {
+  try {
+    const baseUrl = new URL(analyticsEndpoint);
+    if (["https:", "http:"].includes(baseUrl.protocol)) {
+      const script = document.createElement("script");
+      script.defer = true;
+      script.src = new URL("umami", `${baseUrl.toString().replace(/\/$/, "")}/`).toString();
+      script.dataset.websiteId = analyticsWebsiteId;
+      script.dataset.tgrAnalytics = "true";
+      document.head.appendChild(script);
+    }
+  } catch {
+    // Analytics is optional; an invalid endpoint must not break the application.
+  }
+}
+
 const queryClient = new QueryClient();
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {

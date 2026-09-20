@@ -1,0 +1,1 @@
+ALTER TABLE `sales_goals` ADD CONSTRAINT `sales_goals_seller_month_unique` UNIQUE(`sellerId`,`monthReference`);
