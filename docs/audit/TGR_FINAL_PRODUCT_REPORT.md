@@ -38,3 +38,29 @@ O PARTIAL histórico do Windows era causado por processos antigos do próprio TG
 - Os commits de 19/09 estão locais e testados; push/merge depende de GO explícito.
 
 Consulte `TGR_E2E_MATRIX.md`, `TGR_KNOWN_ISSUES.md`, `TGR_PILOT_RUNBOOK.md` e `TGR_FINALIZATION_RECEIPT_2026-09-19.md`.
+---
+## Finalização de runtime — 20/09/2026
+
+- Suíte final: **132/132 arquivos, 427/427 testes PASS**.
+- Build produção e bundle budget: PASS.
+- E2E estrito final: **5/5 PASS**, cleanup 0.
+- Runtime persistente no KRATOS: MySQL 8.4 + app Docker + documentos em volume privado.
+- Login local scrypt: PASS.
+- Navegação HTTPS pública: **16/16 módulos PASS**.
+- Fluxo vivo: cliente + interação + documento + tarefa + auditoria PASS.
+- Restart completo com persistência: PASS.
+- Backup/restore com dados: **40/40 tabelas PASS**.
+- Base final recriada e limpa: 1 admin, zero registros operacionais.
+- Backup/restore da base limpa: **40/40 PASS**.
+
+### Dependências eliminadas no piloto
+
+- OAuth externo deixou de ser obrigatório para o piloto.
+- Forge Storage deixou de ser obrigatório para documentos do piloto.
+- Ambos continuam suportados como opções quando configurados.
+
+### Veredito atualizado
+
+**Pronto para piloto operacional controlado.** O que resta fora do CRM é integração com fornecedores reais e infraestrutura de produção estável.
+
+Recibo detalhado: `docs/audit/TGR_PILOT_RUNTIME_RECEIPT_2026-09-20.md`.

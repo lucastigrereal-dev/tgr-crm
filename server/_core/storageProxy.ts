@@ -5,6 +5,7 @@ import { logger } from "../logger";
 import { createContext } from "./context";
 import { ENV } from "./env";
 import { fetchWithTimeout } from "../integrationReliability";
+import { getLocalStorageRoot, readLocalStorageFile } from "../localStorage";
 
 export function registerStorageProxy(app: Express) {
   app.get("/manus-storage/*splat", async (req, res) => {
@@ -31,6 +32,41 @@ export function registerStorageProxy(app: Express) {
           ? "Storage authorization unavailable"
           : "Storage access denied",
       );
+      return;
+    }
+
+    if (getLocalStorageRoot()) {
+      try {
+        const file = await readLocalStorageFile(key);
+        try {
+          await recordAudit(
+            context.user!.id,
+            `${authorization.scope}_document`,
+            authorization.resourceId,
+            "read",
+            "Documento local acessado por usuário autenticado.",
+          );
+        } catch (error) {
+          logger.warn("Local storage read audit failed", {
+            error: error instanceof Error ? error.message : "unknown_error",
+          });
+        }
+        res.set("Cache-Control", "no-store");
+        res.status(200).send(file);
+      } catch (error) {
+        const code =
+          typeof error === "object" && error !== null && "code" in error
+            ? String((error as { code?: unknown }).code)
+            : "";
+        if (code === "ENOENT") {
+          res.status(404).send("Storage object not found");
+          return;
+        }
+        logger.error("Local storage proxy failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).send("Storage proxy error");
+      }
       return;
     }
 

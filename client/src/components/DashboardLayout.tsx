@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -22,10 +23,12 @@ import {
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import { BrainCircuit, CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, DoorOpen, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, Settings, ShieldCheck, TrendingUp, Trophy, Upload, UsersRound } from "lucide-react";
-import { CSSProperties, useEffect, useRef, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 
 const menuGroups = [
   { label: "Hoje", items: [{ icon: LayoutDashboard, label: "Visão geral", path: "/" }, { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" }] },
@@ -56,12 +59,31 @@ export default function DashboardLayout({
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
   const { loading, user } = useAuth();
+  const authUtils = trpc.useUtils();
+  const localStatus = trpc.auth.localStatus.useQuery(undefined, {
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  const [localUsername, setLocalUsername] = useState("");
+  const [localPassword, setLocalPassword] = useState("");
+  const localLogin = trpc.auth.localLogin.useMutation({
+    onSuccess: async data => {
+      authUtils.auth.me.setData(undefined, data.user);
+      setLocalPassword("");
+      await authUtils.auth.me.invalidate();
+    },
+  });
+
+  const submitLocalLogin = (event: FormEvent) => {
+    event.preventDefault();
+    localLogin.mutate({ username: localUsername, password: localPassword });
+  };
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
   }, [sidebarWidth]);
 
-  if (loading) {
+  if (loading || (!user && localStatus.isLoading)) {
     return <DashboardLayoutSkeleton />
   }
 
@@ -77,13 +99,54 @@ export default function DashboardLayout({
             <h1 className="font-serif text-4xl tracking-tight text-center text-white">Sua operação em ordem.</h1>
             <p className="max-w-sm text-center text-sm leading-6 text-white/65">Gerencie a jornada comercial, contratos, recebimentos e relacionamento em uma única operação.</p>
           </div>
-          <Button
-            onClick={() => startLogin()}
-            size="lg"
-            className="w-full bg-[#c7a35a] text-[#1d2b2a] shadow-lg hover:bg-[#d6b774]"
-          >
-            Acessar o CRM
-          </Button>
+          {localStatus.data?.enabled ? (
+            <form className="w-full space-y-4" onSubmit={submitLocalLogin}>
+              <div className="space-y-2">
+                <Label htmlFor="local-username" className="text-white/80">Usuário</Label>
+                <Input
+                  id="local-username"
+                  autoComplete="username"
+                  value={localUsername}
+                  onChange={event => setLocalUsername(event.target.value)}
+                  className="border-white/15 bg-white/10 text-white placeholder:text-white/35"
+                  placeholder="Seu usuário"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="local-password" className="text-white/80">Senha</Label>
+                <Input
+                  id="local-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={localPassword}
+                  onChange={event => setLocalPassword(event.target.value)}
+                  className="border-white/15 bg-white/10 text-white placeholder:text-white/35"
+                  placeholder="Sua senha"
+                  required
+                />
+              </div>
+              {localLogin.error ? (
+                <p role="alert" className="text-sm text-red-200">{localLogin.error.message}</p>
+              ) : null}
+              <Button
+                type="submit"
+                size="lg"
+                disabled={localLogin.isPending}
+                className="w-full bg-[#c7a35a] text-[#1d2b2a] shadow-lg hover:bg-[#d6b774]"
+              >
+                {localLogin.isPending ? "Entrando…" : "Entrar no CRM"}
+              </Button>
+            </form>
+          ) : (
+            <Button
+              onClick={() => startLogin()}
+              size="lg"
+              className="w-full bg-[#c7a35a] text-[#1d2b2a] shadow-lg hover:bg-[#d6b774]"
+            >
+              Acessar o CRM
+            </Button>
+          )}
         </div>
         </div>
       </div>
