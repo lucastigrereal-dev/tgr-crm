@@ -19,9 +19,16 @@ const isUrl = name => {
   }
 };
 
+const localAuth = env.LOCAL_AUTH_ENABLED === "1";
+const localStorage = isNonEmpty("LOCAL_STORAGE_DIRECTORY");
+
 const required = profile === "local"
   ? ["JWT_SECRET"]
-  : ["DATABASE_URL", "JWT_SECRET", "VITE_APP_ID", "OAUTH_SERVER_URL", "OWNER_OPEN_ID"];
+  : profile === "e2e"
+    ? ["DATABASE_URL", "JWT_SECRET", "VITE_APP_ID", "OAUTH_SERVER_URL", "OWNER_OPEN_ID"]
+    : localAuth
+      ? ["DATABASE_URL", "JWT_SECRET", "VITE_APP_ID", "LOCAL_AUTH_USERNAME", "LOCAL_AUTH_PASSWORD_HASH"]
+      : ["DATABASE_URL", "JWT_SECRET", "VITE_APP_ID", "OAUTH_SERVER_URL", "OWNER_OPEN_ID"];
 
 if (profile === "e2e") required.push("E2E_DATABASE_URL");
 if (profile === "e2e" && env.E2E_STRICT === "1") {
@@ -34,6 +41,14 @@ for (const name of required) {
 
 if (isNonEmpty("JWT_SECRET") && env.JWT_SECRET.trim().length < 32) {
   errors.push("JWT_SECRET precisa ter pelo menos 32 caracteres");
+}
+
+if (
+  localAuth &&
+  isNonEmpty("LOCAL_AUTH_PASSWORD_HASH") &&
+  !env.LOCAL_AUTH_PASSWORD_HASH.startsWith("scrypt:")
+) {
+  errors.push("LOCAL_AUTH_PASSWORD_HASH precisa usar o formato scrypt seguro para runtime");
 }
 
 for (const name of [
@@ -55,8 +70,8 @@ if (
   errors.push("E2E_CONFIRM_ISOLATED não contém a confirmação exata exigida");
 }
 
-if (strict && !isNonEmpty("BUILT_IN_FORGE_API_URL")) warnings.push("BUILT_IN_FORGE_API_URL ausente; IA, storage e integrações Manus podem não funcionar");
-if (strict && !isNonEmpty("BUILT_IN_FORGE_API_KEY")) warnings.push("BUILT_IN_FORGE_API_KEY ausente; chamadas server-side do Forge podem falhar");
+if (strict && !localStorage && !isNonEmpty("BUILT_IN_FORGE_API_URL")) warnings.push("BUILT_IN_FORGE_API_URL ausente; IA, storage e integrações Manus podem não funcionar");
+if (strict && !localStorage && !isNonEmpty("BUILT_IN_FORGE_API_KEY")) warnings.push("BUILT_IN_FORGE_API_KEY ausente; chamadas server-side do Forge podem falhar");
 if (strict && !isNonEmpty("ASAAS_API_KEY")) warnings.push("ASAAS_API_KEY ausente; cobrança Asaas ficará indisponível");
 if (strict && !isNonEmpty("ASAAS_WEBHOOK_TOKEN")) warnings.push("ASAAS_WEBHOOK_TOKEN ausente; webhook Asaas não deve ser habilitado");
 if (env.NODE_ENV === "production" && env.JWT_SECRET?.trim() === "troque-por-um-segredo-forte") errors.push("JWT_SECRET ainda usa o placeholder do exemplo");

@@ -1,5 +1,9 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { sdk } from "./_core/sdk";
+import { LocalAuthError, authenticateLocalUser, localAuthStatus } from "./localAuth";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { contractsRouter } from "./routers/contracts";
@@ -25,6 +29,33 @@ export const appRouter = router({
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
+    localStatus: publicProcedure.query(() => localAuthStatus()),
+    localLogin: publicProcedure
+      .input(z.object({
+        username: z.string().trim().min(1).max(64),
+        password: z.string().min(1).max(256),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const clientKey = ctx.req.ip || ctx.req.socket?.remoteAddress || "unknown";
+        try {
+          const user = await authenticateLocalUser(input, clientKey);
+          const sessionToken = await sdk.createSessionToken(user.openId, {
+            name: user.name || user.openId,
+            expiresInMs: ONE_YEAR_MS,
+          });
+          const cookieOptions = getSessionCookieOptions(ctx.req);
+          ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+          return { success: true, user };
+        } catch (error) {
+          if (error instanceof LocalAuthError) {
+            throw new TRPCError({
+              code: error.code === "LOCKED" ? "TOO_MANY_REQUESTS" : "UNAUTHORIZED",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

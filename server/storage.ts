@@ -4,6 +4,7 @@
 
 import { ENV } from "./_core/env";
 import { fetchWithTimeout } from "./integrationReliability";
+import { getLocalStorageRoot, putLocalStorageFile } from "./localStorage";
 
 const MAX_STORAGE_UPLOAD_BYTES = 50 * 1024 * 1024;
 
@@ -41,12 +42,18 @@ export async function storagePut(
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
   const inputBytes = typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
   if (inputBytes > MAX_STORAGE_UPLOAD_BYTES) {
     throw new Error(`Arquivo excede o limite de ${MAX_STORAGE_UPLOAD_BYTES} bytes.`);
   }
   const key = appendHashSuffix(normalizeKey(relKey));
+
+  if (getLocalStorageRoot()) {
+    await putLocalStorageFile(key, data);
+    return { key, url: `/manus-storage/${key}` };
+  }
+
+  const { forgeUrl, forgeKey } = getForgeConfig();
 
   // 1. Get presigned PUT URL from Forge
   const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
@@ -89,8 +96,10 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
   const key = normalizeKey(relKey);
+  if (getLocalStorageRoot()) return `/manus-storage/${key}`;
+
+  const { forgeUrl, forgeKey } = getForgeConfig();
 
   const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
   getUrl.searchParams.set("path", key);

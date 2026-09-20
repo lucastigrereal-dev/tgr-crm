@@ -36,7 +36,11 @@ class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
     logger.info("OAuth SDK initialized", { baseUrlConfigured: Boolean(ENV.oAuthServerUrl) });
     if (!ENV.oAuthServerUrl) {
-      logger.error("OAuth server URL is not configured");
+      if (process.env.LOCAL_AUTH_ENABLED === "1") {
+        logger.info("OAuth provider disabled; local authentication enabled");
+      } else {
+        logger.error("OAuth server URL is not configured");
+      }
     }
   }
 
