@@ -1,0 +1,11 @@
+.git
+node_modules
+dist
+test-results
+playwright-report
+e2e/.auth
+e2e/.runtime
+docs/audit/*.log
+infra/pilot/.env.pilot.local
+infra/pilot/.pilot-credentials.local.txt
+infra/pilot/.pilot-url.local.txt

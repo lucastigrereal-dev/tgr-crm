@@ -113,6 +113,13 @@ temp/
 test-results/
 playwright-report/
 e2e/.auth/
+e2e/.runtime/
+
+# Pilot runtime local secrets/state
+infra/pilot/.env.pilot.local
+infra/pilot/.pilot-credentials.local.txt
+infra/pilot/.pilot-url.local.txt
+infra/pilot/backups/
 
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json

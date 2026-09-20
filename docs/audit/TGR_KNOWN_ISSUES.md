@@ -2,11 +2,14 @@
 
 | Item | Resultado | Evidência e encaminhamento |
 | --- | --- | --- |
-| Gateway de pagamento real | BLOCKED | Não há credenciais reais nem autorização para cobrar. Manter sandbox/simulação até aprovação operacional. |
-| Integrações externas Forge/Manus | BLOCKED | `BUILT_IN_FORGE_API_URL` e `BUILT_IN_FORGE_API_KEY` não estão configuradas no laboratório local. O núcleo do CRM e os E2Es canônicos não dependem delas. |
-| Playwright webServer no Windows local | CLOSED / PASS | Corrigido em 19/09/2026. Causa raiz: processos antigos do CRM ocupavam a porta e `reuseExistingServer` permitia reutilização indevida. Run `win_20260919_g`: 5/5 PASS, cleanup 0 e porta 43337 livre ao final. |
-| Aviso de chunk >500 kB do Vite | ACCEPTED | O aviso bruto permanece em `exceljs`, mas os módulos pesados estão lazy. Budget gzip aprovado: app 148.2 KB/450 KB; Excel 264.4 KB/300 KB; PDF 123.4 KB/150 KB. |
-| Aviso de build script de `core-js` | ACCEPTED | Instalação congelada, testes e build passam. Não foi liberada execução extra de script de dependência sem necessidade. |
-| Commit local `f3a1011` mencionado no histórico | BLOCKED / NON-BLOCKING | Não estava disponível e não foi reconstruído. Não impede o release candidate auditado. |
+| Gateway/cobrança Asaas real | BLOCKED | Núcleo e webhooks têm cobertura, mas cobrança real exige credenciais, webhook e autorização operacional. |
+| IA/serviços Forge/Manus | BLOCKED PARCIAL | Funções dependentes do provedor externo permanecem indisponíveis sem credenciais. O CRM core, login e documentos do piloto não dependem mais deles. |
+| Storage de documentos no piloto | PASS | Storage local privado em volume persistente, leitura autenticada/autorizada e backup do volume validados. Forge/S3 permanece fallback opcional. |
+| Login de piloto | PASS | Login local scrypt, cookie HTTP-only e rate limit validados. OAuth externo permanece opcional. |
+| E2E Windows | PASS | Run final `runtime_20260920_final`: 5/5 Chromium, cleanup 0. |
+| Agenda/tarefas | PASS | Bug de `open → done` encontrado no uso real e corrigido para `open → in_progress → done`, com teste de regressão. |
+| Quick Tunnel | PILOT ONLY | Recuperação automática via `refresh-tunnel.ps1`. Não oferece SLA; produção requer hostname/túnel permanente. |
+| Aviso de chunk >500 kB | ACCEPTED | Budget gzip verde: app ~149.3 KB/450 KB, Excel ~264.4/300 KB, PDF ~123.4/150 KB. |
+| Produção 24/7 | BLOCKED | Requer infraestrutura estável, domínio/HTTPS gerenciado, backup externo e observabilidade central. |
 
-Última verificação local: 19/09/2026, branch `audit-delivery-2026-08-29`, head `a352ade`.
+Última verificação: 20/09/2026. Consulte `TGR_PILOT_RUNTIME_RECEIPT_2026-09-20.md`.

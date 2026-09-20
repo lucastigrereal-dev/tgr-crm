@@ -1,0 +1,79 @@
+name: tgr-crm-pilot
+
+x-app-image: &app-image
+  image: tgr-crm-pilot:local
+  build:
+    context: ../..
+    dockerfile: infra/pilot/Dockerfile
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: tgr_crm_pilot
+      MYSQL_USER: tgr_app
+      MYSQL_PASSWORD: "${MYSQL_APP_PASSWORD}"
+    ports:
+      - "127.0.0.1:44326:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: ["--skip-log-bin"]
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -uroot --host=127.0.0.1 --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  migrate:
+    <<: *app-image
+    profiles: ["admin"]
+    environment:
+      DATABASE_URL: "mysql://tgr_app:${MYSQL_APP_PASSWORD}@mysql:3306/tgr_crm_pilot"
+    command: ["sh", "-lc", "corepack pnpm exec drizzle-kit migrate"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *app-image
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "mysql://tgr_app:${MYSQL_APP_PASSWORD}@mysql:3306/tgr_crm_pilot"
+      JWT_SECRET: "${JWT_SECRET}"
+      VITE_APP_ID: "tgr-crm-pilot"
+      LOCAL_AUTH_ENABLED: "1"
+      LOCAL_AUTH_USERNAME: "${LOCAL_AUTH_USERNAME}"
+      LOCAL_AUTH_PASSWORD_HASH: "${LOCAL_AUTH_PASSWORD_HASH}"
+      LOCAL_AUTH_DISPLAY_NAME: "${LOCAL_AUTH_DISPLAY_NAME}"
+      LOCAL_STORAGE_DIRECTORY: "/data/documents"
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:44100:3000"
+    volumes:
+      - documents_data:/data/documents
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--url", "http://app:3000"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  documents_data:
