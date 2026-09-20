@@ -51,6 +51,19 @@ jobs:
       - name: Bundle budget
         run: node scripts/check-bundle-budget.mjs
 
+      - name: Validate pilot Docker Compose
+        run: docker compose -f infra/pilot/docker-compose.yml config --quiet
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-placeholder
+          MYSQL_APP_PASSWORD: ci-app-placeholder
+          JWT_SECRET: ci-runtime-secret-with-at-least-32-characters
+          LOCAL_AUTH_USERNAME: ci.admin
+          LOCAL_AUTH_PASSWORD_HASH: scrypt:ci-placeholder
+          LOCAL_AUTH_DISPLAY_NAME: CI Admin
+
+      - name: Build pilot Docker image
+        run: docker build -f infra/pilot/Dockerfile -t tgr-crm-pilot:ci .
+
   e2e:
     name: E2E autenticado em MySQL descartável
     runs-on: ubuntu-latest
