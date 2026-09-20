@@ -11,3 +11,14 @@ export function canTransitionTaskStatus(from: TaskStatus, to: TaskStatus): boole
   return from === to || taskTransitions[from].includes(to);
 }
 
+export type TaskPrimaryAction =
+  | { label: "Iniciar"; status: "in_progress" }
+  | { label: "Concluir"; status: "done" }
+  | null;
+
+export function taskPrimaryAction(status: TaskStatus): TaskPrimaryAction {
+  if (status === "open") return { label: "Iniciar", status: "in_progress" };
+  if (status === "in_progress") return { label: "Concluir", status: "done" };
+  return null;
+}
+
