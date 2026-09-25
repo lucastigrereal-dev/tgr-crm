@@ -14,6 +14,8 @@ import { subscribeSalesRoom } from "../realtime";
 import { processAsaasWebhook } from "../paymentGatewayWebhook";
 import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
+import { registerSalesCommandBridge } from "../salesCommandBridge";
+import { ENV } from "./env";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -43,6 +45,7 @@ async function startServer() {
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
+  registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
