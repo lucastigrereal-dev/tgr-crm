@@ -92,6 +92,7 @@ jobs:
       VITE_APP_ID: tgr-e2e
       OAUTH_SERVER_URL: http://127.0.0.1:65535
       OWNER_OPEN_ID: E2E-TGR-ci_${{ github.run_id }}-OWNER
+      SALES_COMMAND_INTEGRATION_KEY: ci-sales-command-integration-key
     steps:
       - name: Checkout
         uses: actions/checkout@v4
