@@ -73,17 +73,17 @@ export async function findSinglePendingSalesIntakeForCustomer(customerId: number
   const db = await getDb();
   if (!db) return null;
   const [received, linked] = await Promise.all([
-    db.select({ payload: domainEvents.payload }).from(domainEvents)
-      .where(eq(domainEvents.eventName, "sales.intake.received"))
-      .orderBy(desc(domainEvents.id)).limit(500),
-    db.select({ payload: domainEvents.payload }).from(domainEvents)
-      .where(eq(domainEvents.eventName, "sales.intake.linked"))
-      .orderBy(desc(domainEvents.id)).limit(500),
+    db.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents)
+      .where(eq(domainEvents.eventName, "sales.intake.received")),
+    db.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents)
+      .where(eq(domainEvents.eventName, "sales.intake.linked")),
   ]);
   const linkedSales = new Set(
     linked.map(row => parsePayload(row.payload)?.saleId).filter((value): value is string => typeof value === "string"),
   );
   const pending = received
+    .sort((left, right) => Number(right.id) - Number(left.id))
+    .slice(0, 500)
     .map(row => parseSalesIntake(row.payload))
     .filter((row): row is SalesCommandIntake => Boolean(row))
     .filter(row => row.crmCustomerId === customerId && !linkedSales.has(row.saleId));
@@ -119,16 +119,16 @@ export async function linkSalesIntakeToContract(
 async function linkedSalesIntakeForContract(contractId: number): Promise<SalesCommandIntake | null> {
   const db = await getDb();
   if (!db) return null;
-  const [link] = await db.select({ payload: domainEvents.payload }).from(domainEvents)
-    .where(and(eq(domainEvents.eventName, "sales.intake.linked"), eq(domainEvents.aggregateId, String(contractId))))
-    .orderBy(desc(domainEvents.id)).limit(1);
+  const links = await db.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents)
+    .where(and(eq(domainEvents.eventName, "sales.intake.linked"), eq(domainEvents.aggregateId, String(contractId))));
+  const [link] = links.sort((left, right) => Number(right.id) - Number(left.id)).slice(0, 1);
   const linkPayload = parsePayload(link?.payload ?? null);
   const saleId = typeof linkPayload?.saleId === "string" ? linkPayload.saleId : null;
   if (!saleId) return null;
-  const received = await db.select({ payload: domainEvents.payload }).from(domainEvents)
-    .where(and(eq(domainEvents.eventName, "sales.intake.received"), eq(domainEvents.aggregateId, saleId)))
-    .orderBy(desc(domainEvents.id)).limit(1);
-  return parseSalesIntake(received[0]?.payload ?? null);
+  const received = await db.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents)
+    .where(and(eq(domainEvents.eventName, "sales.intake.received"), eq(domainEvents.aggregateId, saleId)));
+  const latest = received.sort((left, right) => Number(right.id) - Number(left.id))[0];
+  return parseSalesIntake(latest?.payload ?? null);
 }
 
 export async function queueRelationshipLifecycle(
