@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import mysql from "mysql2/promise";
 import { getE2EFixture } from "../shared/e2eFixture";
 
@@ -27,6 +28,99 @@ function waitForMutation(page: import("@playwright/test").Page, procedure: strin
 }
 
 test.describe("homologação isolada estrita", () => {
+  test("recebe venda canônica do Sales e vincula o contrato ativo ao Relationship", async ({ page, request }) => {
+    const run = fixture!.normalizedRunId;
+    const saleId = randomUUID();
+    const eventId = randomUUID();
+    const customerName = `Bridge Sales ${run}`;
+    const phone = `849${String(Date.now()).slice(-8)}`;
+    const contractNumber = `BRIDGE-${run.slice(0, 18)}`;
+
+    const envelope = {
+      eventId,
+      eventName: "sale.ready_for_contract.v1",
+      source: "sales-command",
+      correlationId: `corr-${eventId}`,
+      occurredAt: new Date().toISOString(),
+      project: { externalKey: "project-e2e-natal", name: "Natal E2E", timezone: "America/Recife" },
+      saleId,
+      encounterId: randomUUID(),
+      customer: { name: customerName, phone },
+      commercial: {
+        quotasCount: 1,
+        vgvCents: 2_890_000,
+        entryContractedCents: 360_000,
+        entryReceivedCents: 360_000,
+        entryInstallmentCount: 1,
+        firstBalanceDueInDays: 120,
+        paymentMethods: ["PIX"],
+      },
+    };
+
+    const first = await request.post("/api/integration/sales-events", {
+      headers: { Authorization: "Bearer ci-sales-command-integration-key" },
+      data: envelope,
+    });
+    expect(first.status()).toBe(201);
+    const accepted = await first.json() as { crmCustomerId: number; replay: boolean };
+    expect(accepted.replay).toBe(false);
+    expect(accepted.crmCustomerId).toBeGreaterThan(0);
+
+    const replay = await request.post("/api/integration/sales-events", {
+      headers: { Authorization: "Bearer ci-sales-command-integration-key" },
+      data: envelope,
+    });
+    expect(replay.status()).toBe(200);
+    expect((await replay.json() as { crmCustomerId: number }).crmCustomerId).toBe(accepted.crmCustomerId);
+
+    await page.goto("/contratos");
+    await page.getByRole("button", { name: "Novo contrato" }).click();
+    await page.getByLabel("Número *").fill(contractNumber);
+    await page.getByText("Selecione").first().click();
+    await page.getByRole("option", { name: customerName }).click();
+    await page.getByText("Rascunho").click();
+    await page.getByRole("option", { name: "Ativo" }).click();
+    await page.getByLabel("Valor total *").fill("28900");
+    await page.getByLabel("Parcelas *").fill("84");
+    await page.getByLabel("1º vencimento *").fill("2026-12-15");
+    await page.getByRole("button", { name: "Criar contrato" }).click();
+    await expect(page.getByText("Contrato e cronograma financeiro criados.")).toBeVisible();
+
+    const contracts = await queryDatabase<Array<{ id: number; customerId: number; status: string }>>(
+      "SELECT id, customerId, status FROM contracts WHERE number = ?",
+      [contractNumber],
+    );
+    expect(contracts).toHaveLength(1);
+    expect(contracts[0]).toMatchObject({ customerId: accepted.crmCustomerId, status: "active" });
+
+    const linked = await queryDatabase<Array<{ payload: string }>>(
+      "SELECT payload FROM domain_events WHERE eventName = 'sales.intake.linked' AND aggregateId = ? ORDER BY id DESC LIMIT 1",
+      [String(contracts[0]!.id)],
+    );
+    expect(linked).toHaveLength(1);
+    expect(JSON.parse(linked[0]!.payload)).toMatchObject({
+      saleId,
+      crmCustomerId: accepted.crmCustomerId,
+      crmContractId: contracts[0]!.id,
+      project: { externalKey: "project-e2e-natal" },
+    });
+
+    const pending = await queryDatabase<Array<{ payload: string }>>(
+      "SELECT payload FROM domain_events WHERE eventName = 'relationship.delivery.pending' AND aggregateId = ? ORDER BY id DESC LIMIT 1",
+      [String(contracts[0]!.id)],
+    );
+    expect(pending).toHaveLength(1);
+    const delivery = JSON.parse(pending[0]!.payload) as { body: Record<string, unknown> };
+    expect(delivery.body).toMatchObject({
+      eventName: "crm.contract.activated.v1",
+      source: "crm",
+      saleId,
+      customerId: String(accepted.crmCustomerId),
+      contractId: String(contracts[0]!.id),
+      project: { externalKey: "project-e2e-natal", name: "Natal E2E", timezone: "America/Recife" },
+    });
+  });
+
   test("importa e reverte CSV no backend real", async ({ page }) => {
     const fx = fixture!;
     const csv = [
