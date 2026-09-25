@@ -39,6 +39,7 @@ export const domainEventCatalog = {
   "financial.transfer.created": { aggregateType: "financial_transfer", description: "Repasse financeiro criado." },
   "financial.transfer.paid": { aggregateType: "financial_transfer", description: "Repasse financeiro pago." },
   "ai.assistance.requested": { aggregateType: "customer", description: "Assistência de IA consultada com contexto permissionado." },
+  "sales.command.sale.ingested": { aggregateType: "opportunity", description: "Venda confirmada no Sales Command recebida para formalização no CRM." },
 } as const;
 
 export type DomainEventName = keyof typeof domainEventCatalog;
