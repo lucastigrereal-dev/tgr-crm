@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { auditLogs, customers, domainEvents, opportunities } from "../drizzle/schema";
 import { getDb } from "./db";
@@ -76,7 +76,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
     let customerId: number | undefined;
     if (event.customer.phone) {
       const [matched] = await tx.select({ id: customers.id }).from(customers)
-        .where(eq(customers.phone, event.customer.phone)).limit(1);
+        .where(and(eq(customers.phone, event.customer.phone), eq(customers.fullName, event.customer.name))).limit(1);
       customerId = matched?.id;
     }
     if (!customerId) {
