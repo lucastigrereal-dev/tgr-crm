@@ -59,9 +59,10 @@ function parsePayload(value: string | null): Record<string, unknown> | null {
 function parseSalesIntake(value: string | null): SalesCommandIntake | null {
   const parsed = parsePayload(value);
   if (!parsed || typeof parsed.crmCustomerId !== "number" || typeof parsed.sourceEventId !== "string") return null;
-  const validated = salesEventSchema.safeParse(parsed);
+  const { crmCustomerId, sourceEventId, ...eventPayload } = parsed;
+  const validated = salesEventSchema.safeParse(eventPayload);
   if (!validated.success) return null;
-  return { ...validated.data, crmCustomerId: parsed.crmCustomerId, sourceEventId: parsed.sourceEventId };
+  return { ...validated.data, crmCustomerId, sourceEventId };
 }
 
 export class AmbiguousSalesIntakeError extends Error {
@@ -306,7 +307,7 @@ export function createRelationshipDeliveryPump(
       if (!db) return 0;
       const pending = await db.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents)
         .where(eq(domainEvents.eventName, "relationship.delivery.pending"))
-        .orderBy(domainEvents.id).limit(100);
+        .orderBy(desc(domainEvents.id)).limit(500);
       for (const item of pending) {
         const payload = parsePayload(item.payload);
         const externalEventId = typeof payload?.externalEventId === "string" ? payload.externalEventId : null;
