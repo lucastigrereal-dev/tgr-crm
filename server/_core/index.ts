@@ -14,6 +14,7 @@ import { subscribeSalesRoom } from "../realtime";
 import { processAsaasWebhook } from "../paymentGatewayWebhook";
 import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
+import { createRelationshipDeliveryPump, registerSalesCommandIntegration } from "../tgrEcosystemBridge";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -42,6 +43,7 @@ async function startServer() {
   app.use(applySecurityHeaders);
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
+  registerSalesCommandIntegration(app);
   registerHealthRoutes(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
@@ -116,8 +118,16 @@ async function startServer() {
     logger.warn("Preferred port unavailable; using fallback port", { preferredPort, port });
   }
 
+  const relationshipEndpoint = process.env.RELATIONSHIP_ENDPOINT?.trim();
+  const relationshipKey = process.env.RELATIONSHIP_CRM_INTEGRATION_KEY?.trim();
+  if (Boolean(relationshipEndpoint) !== Boolean(relationshipKey)) {
+    throw new Error("Relationship CRM integration configuration incomplete");
+  }
+  let relationshipPump: ReturnType<typeof createRelationshipDeliveryPump> | undefined;
+
   const shutdown = (signal: string) => {
     logger.info("Graceful shutdown requested", { signal });
+    relationshipPump?.stop();
     server.close(error => {
       if (error) {
         logger.error("Graceful shutdown failed", { signal, error: error.message });
@@ -129,6 +139,13 @@ async function startServer() {
   process.once("SIGINT", () => shutdown("SIGINT"));
 
   server.listen(port, () => {
+    if (relationshipEndpoint && relationshipKey) {
+      relationshipPump = createRelationshipDeliveryPump({
+        endpoint: relationshipEndpoint,
+        integrationKey: relationshipKey,
+        onError: () => logger.warn("Relationship delivery retry scheduled"),
+      });
+    }
     logger.info("Server running", { port });
   });
 }
