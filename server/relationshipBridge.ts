@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
@@ -44,9 +44,12 @@ async function lineageForContract(contractId: number) {
     .leftJoin(proposals, eq(proposals.id, contracts.proposalId))
     .where(eq(contracts.id, contractId)).limit(1);
   if (!row?.opportunityId) return null;
-  const candidates = await db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents)
-    .where(eq(domainEvents.eventName, "sales.command.sale.ingested")).orderBy(asc(domainEvents.id)).limit(500);
-  const matched = candidates.find(item => item.aggregateId === String(row.opportunityId));
+  const [matched] = await db.select({ payload: domainEvents.payload }).from(domainEvents)
+    .where(and(
+      eq(domainEvents.eventName, "sales.command.sale.ingested"),
+      eq(domainEvents.aggregateType, "opportunity"),
+      eq(domainEvents.aggregateId, String(row.opportunityId)),
+    )).orderBy(asc(domainEvents.id)).limit(1);
   if (!matched) return null;
   const lineage = objectPayload(matched.payload);
   const saleId = requiredText(lineage, "saleId");
