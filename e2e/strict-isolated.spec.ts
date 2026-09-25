@@ -75,15 +75,16 @@ test.describe("homologação isolada estrita", () => {
 
     await page.goto("/contratos");
     await page.getByRole("button", { name: "Novo contrato" }).click();
-    await page.getByLabel("Número *").fill(contractNumber);
-    await page.getByText("Selecione").first().click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator('input[name="number"]').fill(contractNumber);
+    await dialog.getByRole("combobox").nth(0).click();
     await page.getByRole("option", { name: customerName }).click();
-    await page.getByText("Rascunho").click();
+    await dialog.getByRole("combobox").nth(2).click();
     await page.getByRole("option", { name: "Ativo" }).click();
-    await page.getByLabel("Valor total *").fill("28900");
-    await page.getByLabel("Parcelas *").fill("84");
-    await page.getByLabel("1º vencimento *").fill("2026-12-15");
-    await page.getByRole("button", { name: "Criar contrato" }).click();
+    await dialog.locator('input[name="total"]').fill("28900");
+    await dialog.locator('input[name="installments"]').fill("84");
+    await dialog.locator('input[name="firstDueDate"]').fill("2026-12-15");
+    await dialog.getByRole("button", { name: "Criar contrato" }).click();
     await expect(page.getByText("Contrato e cronograma financeiro criados.")).toBeVisible();
 
     const contracts = await queryDatabase<Array<{ id: number; customerId: number; status: string }>>(
