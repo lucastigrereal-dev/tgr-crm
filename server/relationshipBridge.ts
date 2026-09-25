@@ -1,5 +1,5 @@
 import { asc, eq, inArray } from "drizzle-orm";
-import { auditLogs, contracts, customers, domainEvents, opportunities, proposals } from "../drizzle/schema";
+import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
 
