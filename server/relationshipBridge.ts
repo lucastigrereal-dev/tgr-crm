@@ -44,10 +44,6 @@ async function lineageForContract(contractId: number) {
     .leftJoin(proposals, eq(proposals.id, contracts.proposalId))
     .where(eq(contracts.id, contractId)).limit(1);
   if (!row?.opportunityId) return null;
-  const [source] = await db.select({ payload: domainEvents.payload }).from(domainEvents)
-    .where(eq(domainEvents.eventName, "sales.command.sale.ingested"))
-    .orderBy(asc(domainEvents.id)).limit(500);
-  if (!source) return null;
   const candidates = await db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents)
     .where(eq(domainEvents.eventName, "sales.command.sale.ingested")).orderBy(asc(domainEvents.id)).limit(500);
   const matched = candidates.find(item => item.aggregateId === String(row.opportunityId));
