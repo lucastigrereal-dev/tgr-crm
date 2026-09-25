@@ -13,6 +13,7 @@ import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
+import { AmbiguousSalesIntakeError, findSinglePendingSalesIntakeForCustomer, linkSalesIntakeToContract, queueRelationshipLifecycle } from "../tgrEcosystemBridge";
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -55,6 +56,15 @@ export const contractsRouter = router({
       if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
       if (opportunity.customerId !== input.customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "A proposta informada não pertence ao cliente do contrato." });
     }
+    let salesIntake = null;
+    try {
+      salesIntake = await findSinglePendingSalesIntakeForCustomer(input.customerId);
+    } catch (error) {
+      if (error instanceof AmbiguousSalesIntakeError) {
+        throw new TRPCError({ code: "CONFLICT", message: error.message });
+      }
+      throw error;
+    }
     const schedule = buildInstallmentSchedule(input.totalAmount, input.installmentCount, input.firstDueDate);
     const result = await db.transaction(async tx => {
       const created = await tx.insert(contracts).values({
@@ -81,6 +91,10 @@ export const contractsRouter = router({
     });
     await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
     await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, usageModel: input.usageModel, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
+    if (salesIntake) {
+      await linkSalesIntakeToContract(result, input.customerId, salesIntake, ctx.user.id);
+      if (input.status === "active") await queueRelationshipLifecycle(result, "activated", ctx.user.id);
+    }
     await syncRevenueQualityForContract({ contractId: result, actorUserId: ctx.user.id, trigger: "criação de contrato" });
     return { id: result };
   }),
@@ -189,6 +203,7 @@ export const contractsRouter = router({
     });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId}; parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
+    await queueRelationshipLifecycle(outcome.contractId, "cancelled", ctx.user.id, "Distrato aprovado executado");
     await recordDomainEvent({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, cancelledInstallments: outcome.cancelledInstallments, cancelledCommissions: outcome.cancelledCommissions, financialEntries: outcome.financialEntries } });
     for (const commissionId of outcome.cancelledCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "cancelled", `Comissão cancelada pelo distrato do contrato ${outcome.contractId}.`); await recordDomainEvent({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { status: "cancelled", contractId: outcome.contractId } }); }
     for (const entry of createdFinancialEntryFacts) { await recordAudit(ctx.user.id, "financial_transaction", entry.id, "created", `Lançamento ${entry.type} de ${entry.amount.toFixed(2)} criado pelo distrato.`); await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: entry.id, actorUserId: ctx.user.id, payload: { type: entry.type, category: entry.category, amount: entry.amount, contractId: entry.contractId, campaignId: null } }); }
@@ -216,6 +231,7 @@ export const contractsRouter = router({
     if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
+    if (input.status === "active") await queueRelationshipLifecycle(input.id, "activated", ctx.user.id);
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
     return { success: true };
   }),
