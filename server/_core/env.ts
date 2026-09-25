@@ -7,4 +7,7 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
+  salesCommandIntegrationKey: process.env.SALES_COMMAND_INTEGRATION_KEY ?? "",
+  relationshipEndpoint: process.env.RELATIONSHIP_ENDPOINT ?? "",
+  relationshipCrmIntegrationKey: process.env.RELATIONSHIP_CRM_INTEGRATION_KEY ?? "",
 };
