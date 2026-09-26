@@ -508,7 +508,8 @@ export const contractSignatureEnvelopes = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     contractId: int("contractId").notNull(),
     provider: varchar("provider", { length: 32 }).default("clicksign").notNull(),
-    externalEnvelopeId: varchar("externalEnvelopeId", { length: 128 }).notNull(),
+    externalEnvelopeId: varchar("externalEnvelopeId", { length: 128 }),
+    activeKey: varchar("activeKey", { length: 160 }),
     name: varchar("name", { length: 255 }).notNull(),
     status: mysqlEnum("status", ["draft", "running", "closed", "canceled", "error"]).default("draft").notNull(),
     lastEventName: varchar("lastEventName", { length: 120 }),
@@ -522,6 +523,7 @@ export const contractSignatureEnvelopes = mysqlTable(
   },
   table => [
     uniqueIndex("signature_envelope_provider_external_unique").on(table.provider, table.externalEnvelopeId),
+    uniqueIndex("signature_envelope_active_key_unique").on(table.activeKey),
     index("signature_envelope_contract_status_idx").on(table.contractId, table.status),
     foreignKey({ name: "cse_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
     foreignKey({ name: "cse_user_fk", columns: [table.createdByUserId], foreignColumns: [users.id] }),
