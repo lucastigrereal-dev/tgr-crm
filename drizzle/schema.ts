@@ -384,6 +384,74 @@ export const contractCancellationRequests = mysqlTable("contract_cancellation_re
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [index("cancellation_requests_contract_status_idx").on(table.contractId, table.status), index("cancellation_requests_status_idx").on(table.status, table.createdAt)]);
 
+export const commercialFractions = mysqlTable(
+  "commercial_fractions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    resortId: int("resortId").notNull().references(() => resorts.id),
+    unitId: int("unitId").notNull().references(() => units.id),
+    code: varchar("code", { length: 96 }).notNull(),
+    sequence: int("sequence").notNull(),
+    status: mysqlEnum("status", ["available", "held", "sold", "blocked"]).default("available").notNull(),
+    currentProposalId: int("currentProposalId").references(() => proposals.id),
+    currentContractId: int("currentContractId").references(() => contracts.id),
+    listPrice: decimal("listPrice", { precision: 14, scale: 2 }),
+    priceTableVersion: varchar("priceTableVersion", { length: 80 }),
+    heldUntil: timestamp("heldUntil"),
+    blockedReason: text("blockedReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("commercial_fractions_resort_code_unique").on(table.resortId, table.code),
+    uniqueIndex("commercial_fractions_unit_sequence_unique").on(table.unitId, table.sequence),
+    index("commercial_fractions_resort_status_idx").on(table.resortId, table.status),
+    index("commercial_fractions_proposal_status_idx").on(table.currentProposalId, table.status),
+    index("commercial_fractions_contract_status_idx").on(table.currentContractId, table.status),
+  ],
+);
+
+export const commercialFractionHolds = mysqlTable(
+  "commercial_fraction_holds",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    fractionId: int("fractionId").notNull().references(() => commercialFractions.id),
+    proposalId: int("proposalId").references(() => proposals.id),
+    heldByUserId: int("heldByUserId").notNull().references(() => users.id),
+    activeKey: varchar("activeKey", { length: 128 }),
+    status: mysqlEnum("status", ["active", "released", "expired", "consumed"]).default("active").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    releasedAt: timestamp("releasedAt"),
+    releaseReason: varchar("releaseReason", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("commercial_fraction_holds_active_key_unique").on(table.activeKey),
+    index("commercial_fraction_holds_fraction_status_idx").on(table.fractionId, table.status, table.expiresAt),
+    index("commercial_fraction_holds_proposal_status_idx").on(table.proposalId, table.status),
+  ],
+);
+
+export const commercialFractionHistory = mysqlTable(
+  "commercial_fraction_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    fractionId: int("fractionId").notNull().references(() => commercialFractions.id),
+    fromStatus: varchar("fromStatus", { length: 32 }),
+    toStatus: varchar("toStatus", { length: 32 }).notNull(),
+    proposalId: int("proposalId").references(() => proposals.id),
+    contractId: int("contractId").references(() => contracts.id),
+    actorUserId: int("actorUserId").references(() => users.id),
+    reason: varchar("reason", { length: 255 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [
+    index("commercial_fraction_history_fraction_idx").on(table.fractionId, table.createdAt),
+    index("commercial_fraction_history_contract_idx").on(table.contractId, table.createdAt),
+  ],
+);
+
 export const installments = mysqlTable(
   "installments",
   {
