@@ -6872,7 +6872,7 @@
           "name": "externalEnvelopeId",
           "type": "varchar(128)",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "name": {
@@ -6948,6 +6948,13 @@
           "autoincrement": false,
           "onUpdate": true,
           "default": "(now())"
+        },
+        "activeKey": {
+          "name": "activeKey",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -6966,6 +6973,13 @@
             "status"
           ],
           "isUnique": false
+        },
+        "signature_envelope_active_key_unique": {
+          "name": "signature_envelope_active_key_unique",
+          "columns": [
+            "activeKey"
+          ],
+          "isUnique": true
         }
       },
       "foreignKeys": {
