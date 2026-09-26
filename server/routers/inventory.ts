@@ -218,7 +218,7 @@ export const inventoryRouter = router({
         .for("update");
       if (!expired.length) return { holds: 0, fractions: [] as number[] };
       const holdIds = expired.map(item => item.id);
-      const fractionIds = [...new Set(expired.map(item => item.fractionId))];
+      const fractionIds = Array.from(new Set(expired.map(item => item.fractionId)));
       await tx.update(commercialFractionHolds).set({ status: "expired", activeKey: null, releasedAt: now, releaseReason: "TTL expirado" }).where(inArray(commercialFractionHolds.id, holdIds));
       const lockedFractions = await tx.select().from(commercialFractions).where(inArray(commercialFractions.id, fractionIds)).for("update");
       const released = lockedFractions.filter(item => item.status === "held").map(item => item.id);
