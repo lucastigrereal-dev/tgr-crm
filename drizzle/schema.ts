@@ -2,6 +2,7 @@ import {
   boolean,
   date,
   decimal,
+  foreignKey,
   index,
   int,
   mysqlEnum,
@@ -151,12 +152,13 @@ export const monetaryIndexValues = mysqlTable(
     variationPercent: decimal("variationPercent", { precision: 9, scale: 6 }).notNull(),
     source: varchar("source", { length: 255 }).notNull(),
     sourceReference: varchar("sourceReference", { length: 500 }),
-    importedByUserId: int("importedByUserId").references(() => users.id),
+    importedByUserId: int("importedByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   table => [
     uniqueIndex("monetary_index_values_code_date_unique").on(table.indexCode, table.referenceDate),
     index("monetary_index_values_code_date_idx").on(table.indexCode, table.referenceDate),
+    foreignKey({ name: "miv_user_fk", columns: [table.importedByUserId], foreignColumns: [users.id] }),
   ],
 );
 
@@ -378,7 +380,7 @@ export const contracts = mysqlTable(
 
 export const contractDocuments = mysqlTable("contract_documents", {
   id: int("id").autoincrement().primaryKey(),
-  contractId: int("contractId").notNull().references(() => contracts.id),
+  contractId: int("contractId").notNull(),
   category: varchar("category", { length: 80 }).notNull(),
   filename: varchar("filename", { length: 255 }).notNull(),
   storageKey: text("storageKey").notNull(),
@@ -475,7 +477,7 @@ export const contractMonetaryAdjustments = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     contractId: int("contractId").notNull().references(() => contracts.id),
-    policyVersionId: int("policyVersionId").notNull().references(() => commercialPolicyVersions.id),
+    policyVersionId: int("policyVersionId").notNull(),
     indexCode: varchar("indexCode", { length: 40 }).notNull(),
     baseDate: date("baseDate").notNull(),
     throughDate: date("throughDate").notNull(),
@@ -487,13 +489,16 @@ export const contractMonetaryAdjustments = mysqlTable(
     beforeTotal: decimal("beforeTotal", { precision: 14, scale: 2 }).notNull(),
     afterTotal: decimal("afterTotal", { precision: 14, scale: 2 }).notNull(),
     calculationJson: text("calculationJson").notNull(),
-    appliedByUserId: int("appliedByUserId").notNull().references(() => users.id),
+    appliedByUserId: int("appliedByUserId").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   table => [
     uniqueIndex("contract_adjustment_contract_through_unique").on(table.contractId, table.throughDate),
     index("contract_adjustment_contract_created_idx").on(table.contractId, table.createdAt),
     index("contract_adjustment_policy_idx").on(table.policyVersionId, table.createdAt),
+    foreignKey({ name: "cma_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+    foreignKey({ name: "cma_policy_fk", columns: [table.policyVersionId], foreignColumns: [commercialPolicyVersions.id] }),
+    foreignKey({ name: "cma_user_fk", columns: [table.appliedByUserId], foreignColumns: [users.id] }),
   ],
 );
 
