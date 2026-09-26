@@ -15,7 +15,7 @@ CREATE TABLE `monetary_index_values` (
 --> statement-breakpoint
 CREATE INDEX `monetary_index_values_code_date_idx` ON `monetary_index_values` (`indexCode`,`referenceDate`);
 --> statement-breakpoint
-ALTER TABLE `monetary_index_values` ADD CONSTRAINT `monetary_index_values_importedByUserId_users_id_fk` FOREIGN KEY (`importedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `monetary_index_values` ADD CONSTRAINT `miv_user_fk` FOREIGN KEY (`importedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 CREATE TABLE `contract_monetary_adjustments` (
   `id` int AUTO_INCREMENT NOT NULL,
@@ -42,8 +42,8 @@ CREATE INDEX `contract_adjustment_contract_created_idx` ON `contract_monetary_ad
 --> statement-breakpoint
 CREATE INDEX `contract_adjustment_policy_idx` ON `contract_monetary_adjustments` (`policyVersionId`,`createdAt`);
 --> statement-breakpoint
-ALTER TABLE `contract_monetary_adjustments` ADD CONSTRAINT `contract_monetary_adjustments_contractId_contracts_id_fk` FOREIGN KEY (`contractId`) REFERENCES `contracts`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `contract_monetary_adjustments` ADD CONSTRAINT `cma_contract_fk` FOREIGN KEY (`contractId`) REFERENCES `contracts`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `contract_monetary_adjustments` ADD CONSTRAINT `contract_monetary_adjustments_policyVersionId_commercial_policy_versions_id_fk` FOREIGN KEY (`policyVersionId`) REFERENCES `commercial_policy_versions`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `contract_monetary_adjustments` ADD CONSTRAINT `cma_policy_fk` FOREIGN KEY (`policyVersionId`) REFERENCES `commercial_policy_versions`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `contract_monetary_adjustments` ADD CONSTRAINT `contract_monetary_adjustments_appliedByUserId_users_id_fk` FOREIGN KEY (`appliedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `contract_monetary_adjustments` ADD CONSTRAINT `cma_user_fk` FOREIGN KEY (`appliedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
