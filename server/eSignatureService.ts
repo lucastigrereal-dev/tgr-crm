@@ -86,40 +86,44 @@ export async function startContractElectronicSignature(input: {
   if (source.contract.status === "cancelled" || source.contract.status === "closed") throw new TRPCError({ code: "CONFLICT", message: "Contrato encerrado não pode iniciar assinatura." });
   if (source.document.signed) throw new TRPCError({ code: "CONFLICT", message: "Este documento já está marcado como assinado." });
 
-  const active = (await db.select({
-    envelope: contractSignatureEnvelopes,
-    signatureDocument: contractSignatureDocuments,
-  }).from(contractSignatureDocuments)
-    .innerJoin(contractSignatureEnvelopes, eq(contractSignatureDocuments.envelopeId, contractSignatureEnvelopes.id))
-    .where(and(
-      eq(contractSignatureDocuments.contractDocumentId, input.contractDocumentId),
-      inArray(contractSignatureEnvelopes.status, ["draft", "running"]),
-    ))
+  const activeKey = `contract-document:${input.contractDocumentId}`;
+  const active = (await db.select().from(contractSignatureEnvelopes)
+    .where(and(eq(contractSignatureEnvelopes.activeKey, activeKey), inArray(contractSignatureEnvelopes.status, ["draft", "running"])))
     .orderBy(desc(contractSignatureEnvelopes.createdAt)).limit(1))[0];
 
   if (active) return {
-    envelopeId: active.envelope.id,
-    externalEnvelopeId: active.envelope.externalEnvelopeId,
-    status: active.envelope.status,
+    envelopeId: active.id,
+    externalEnvelopeId: active.externalEnvelopeId,
+    status: active.status,
     reused: true,
   };
 
   const bytes = await storageReadBytes(source.document.storageKey);
   const envelopeName = `Contrato ${source.contract.number} · ${source.customer.fullName}`;
-  const remoteEnvelope = await createClicksignEnvelope(config, envelopeName);
-
-  const localCreated = await db.insert(contractSignatureEnvelopes).values({
-    contractId: input.contractId,
-    provider: "clicksign",
-    externalEnvelopeId: remoteEnvelope.id,
-    name: envelopeName,
-    status: "draft",
-    createdByUserId: input.actorUserId,
-  }).$returningId();
-  const envelopeId = localCreated[0]?.id;
-  if (!envelopeId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Envelope remoto criado, mas não foi possível registrar a assinatura localmente." });
+  let envelopeId: number;
+  try {
+    const localCreated = await db.insert(contractSignatureEnvelopes).values({
+      contractId: input.contractId,
+      provider: "clicksign",
+      externalEnvelopeId: null,
+      activeKey,
+      name: envelopeName,
+      status: "draft",
+      createdByUserId: input.actorUserId,
+    }).$returningId();
+    const createdId = localCreated[0]?.id;
+    if (!createdId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível iniciar o processo local de assinatura." });
+    envelopeId = createdId;
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error;
+    const existing = (await db.select().from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.activeKey, activeKey)).limit(1))[0];
+    if (!existing) throw error;
+    return { envelopeId: existing.id, externalEnvelopeId: existing.externalEnvelopeId, status: existing.status, reused: true };
+  }
 
   try {
+    const remoteEnvelope = await createClicksignEnvelope(config, envelopeName);
+    await db.update(contractSignatureEnvelopes).set({ externalEnvelopeId: remoteEnvelope.id }).where(eq(contractSignatureEnvelopes.id, envelopeId));
     const remoteDocument = await addClicksignDocument(config, remoteEnvelope.id, {
       filename: source.document.filename,
       bytes,
@@ -163,7 +167,7 @@ export async function startContractElectronicSignature(input: {
     await recordDomainEvent({ eventName: "contract.signature.started", aggregateType: "contract", aggregateId: input.contractId, actorUserId: input.actorUserId, payload: { contractId: input.contractId, contractDocumentId: input.contractDocumentId, provider: "clicksign", externalEnvelopeId: remoteEnvelope.id } });
     return { envelopeId, externalEnvelopeId: remoteEnvelope.id, status: "running" as const, reused: false };
   } catch (error) {
-    await db.update(contractSignatureEnvelopes).set({ status: "error", lastEventName: "setup_failed", lastEventAt: new Date() }).where(eq(contractSignatureEnvelopes.id, envelopeId));
+    await db.update(contractSignatureEnvelopes).set({ status: "error", activeKey: null, lastEventName: "setup_failed", lastEventAt: new Date() }).where(eq(contractSignatureEnvelopes.id, envelopeId));
     await recordAudit(input.actorUserId, "contract_signature_envelope", envelopeId, "setup_failed", error instanceof Error ? error.message.slice(0, 1000) : "Falha desconhecida na integração Clicksign.");
     throw error;
   }
@@ -177,6 +181,7 @@ export async function reconcileContractSignature(input: { actorUserId: number; e
   const envelope = (await db.select().from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.id, input.envelopeId)).limit(1))[0];
   if (!envelope) throw new TRPCError({ code: "NOT_FOUND", message: "Envelope não encontrado." });
   if (envelope.provider !== "clicksign") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Provider de assinatura não suportado por este reconciliador." });
+  if (!envelope.externalEnvelopeId) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Envelope ainda não possui identificador remoto. Refaça o fluxo de assinatura." });
   const remote = await getClicksignEnvelope(config, envelope.externalEnvelopeId);
   const mapped = remote.status && ["draft", "running", "closed", "canceled"].includes(remote.status) ? remote.status as "draft" | "running" | "closed" | "canceled" : envelope.status;
   await db.update(contractSignatureEnvelopes).set({
@@ -185,6 +190,7 @@ export async function reconcileContractSignature(input: { actorUserId: number; e
     lastEventAt: new Date(),
     closedAt: mapped === "closed" ? new Date() : envelope.closedAt,
     canceledAt: mapped === "canceled" ? new Date() : envelope.canceledAt,
+    activeKey: mapped === "closed" || mapped === "canceled" ? null : envelope.activeKey,
   }).where(eq(contractSignatureEnvelopes.id, envelope.id));
   await recordAudit(input.actorUserId, "contract_signature_envelope", envelope.id, "reconciled", `Status remoto Clicksign: ${remote.status ?? "desconhecido"}.`);
   return { envelopeId: envelope.id, status: mapped, remoteStatus: remote.status };
@@ -278,10 +284,7 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
         else if (closedEvents.has(eventName)) {
           const docs = await tx.select({ status: contractSignatureDocuments.status }).from(contractSignatureDocuments)
             .where(eq(contractSignatureDocuments.envelopeId, envelope.id)).for("update");
-          if (docs.length && docs.every(item => item.status === "closed" || (signatureDocument && item.status === "pending" && item === docs[0]))) {
-            // Current TGR flow creates one document per envelope; the all-closed check remains safe when expanded.
-            nextStatus = docs.length === 1 ? "closed" : nextStatus;
-          }
+          if (docs.length && docs.every(item => item.status === "closed")) nextStatus = "closed";
         }
         await tx.update(contractSignatureEnvelopes).set({
           status: nextStatus,
@@ -289,6 +292,7 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
           lastEventAt: now,
           closedAt: nextStatus === "closed" ? now : envelope.closedAt,
           canceledAt: nextStatus === "canceled" ? now : envelope.canceledAt,
+          activeKey: nextStatus === "closed" || nextStatus === "canceled" ? null : envelope.activeKey,
         }).where(eq(contractSignatureEnvelopes.id, envelope.id));
 
         if (nextStatus === "closed") {
