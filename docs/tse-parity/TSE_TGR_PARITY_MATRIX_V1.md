@@ -33,11 +33,11 @@ Nenhuma capacidade é considerada substituída apenas porque existe uma tabela o
 ## Resumo
 
 - Capacidades auditadas: **58**
-- SUPERIOR: **36**
+- SUPERIOR: **35**
 - PARIDADE: **1**
-- PARCIAL: **13**
+- PARCIAL: **14**
 - AUSENTE: **8**
-- Gaps P0 ainda abertos: **10**
+- Gaps P0 ainda abertos: **11**
 
 ## Matriz canônica
 
@@ -48,7 +48,7 @@ Nenhuma capacidade é considerada substituída apenas porque existe uma tabela o
 | Dados mestres | Profissões, UF, cidade, bandeira, veículo, locais | TGR CRM | CRM / Sales Command | PARCIAL | O TSE tinha lookups controlados. O TGR captura grande parte dos dados, mas vários são texto livre. | client/src/pages/Capture.tsx; drizzle/schema.ts captureRecords | Criar dicionários/versionamento para campos que precisam análise e padronização, sem engessar UX. | P1 |
 | Captação | Ficha de casal e qualificação | TGR CRM | Sales Command -> CRM | SUPERIOR | Ficha atual inclui casal, renda, veículo, cartão, moradia, viagens, hotel, origem, campanha, brinde e qualificação. | drizzle/schema.ts captureRecords; client/src/pages/Capture.tsx | Fechar paridade campo a campo contra a matriz histórica de 103 campos. | P0 |
 | Captação | Captação offline | Sales Command | Sales Command -> CRM | SUPERIOR | Fila local, estados pendente/sincronizando/conflito e revisão estão implementados. | client/src/lib/captureOfflineQueue.ts; CAPTURE_OFFLINE_VALIDATION.md; Sales Command offline survey/scan | Provar sincronização em aparelho real no piloto. | P1 |
-| Captação | Agendamento de tour | TGR CRM | CRM / Sales Command | SUPERIOR | scheduledAt, tarefa automática, recepção e check-in fazem parte do fluxo atual. | drizzle/schema.ts captureRecords; server/routers/captures.ts | Executar E2E estrito contra banco isolado, já pendente no todo. | P0 |
+| Captação | Agendamento de tour | TGR CRM | CRM / Sales Command | SUPERIOR | scheduledAt, tarefa automática, recepção e check-in fazem parte do fluxo atual; a jornada estrita da sala foi executada em MySQL descartável. | drizzle/schema.ts captureRecords; server/routers/captures.ts; e2e/strict-isolated.spec.ts; CI main run 36176066398 (success) | Prova E2E registrada; manter no gate de regressão contínua. | P0 |
 | Captação | Ranking e desempenho de captador | Sales Command | Sales Command / CRM Analytics | SUPERIOR | Há self-performance, leader metrics, scorecards e análise por origem/captador. | apps/sales-command/client/src/features/metrics/*; client/src/pages/SalesAnalytics.tsx | Validar regras finais de reconhecimento sem premiar volume ruim. | P1 |
 | Captação | SMS / mensageria utilitária | Relationship | Relationship / Online Recovery | AUSENTE | O TSE expunha envio SMS; os módulos TGR ainda não têm provider de comunicação automatizada homologado. | apps/relationship/README.md; apps/online-recovery/README.md | Conectar provedor WhatsApp/SMS/e-mail com consentimento, opt-out, idempotência e auditoria. | P1 |
 | Sala | Check-in e chegada | Sales Command | Sales Command -> CRM | SUPERIOR | Recepção, QR, check-in e estados de jornada existem no Sales Command; CRM também registra checkedInAt. | apps/sales-command/client/src/features/reception/ReceptionPage.tsx; drizzle/schema.ts captureRecords | Executar o E2E de recepção contra banco isolado. | P0 |
@@ -56,7 +56,7 @@ Nenhuma capacidade é considerada substituída apenas porque existe uma tabela o
 | Sala | Cronômetro de tour / apresentação | Sales Command | Sales Command -> CRM | SUPERIOR | Estados de início/fim, duração e scanner/tour-time estão no Sales Command e CRM captura timestamps. | apps/sales-command/client/src/features/scanner/tour-time.ts; drizzle/schema.ts captureRecords | Piloto físico. | P1 |
 | Sala | NT / no-tour | Sales Command | Sales Command -> CRM / Recovery | SUPERIOR | Há fluxo NT antes/depois de scan, responsabilidade e testes E2E; no-sale alimenta Recovery. | apps/sales-command/e2e/nt.spec.ts; apps/online-recovery/README.md | Validar taxonomia final de motivos. | P1 |
 | Comercial | Oportunidade e funil | TGR CRM | CRM | SUPERIOR | Oportunidades têm lifecycle explícito, campanha, seller, valor esperado, won/lost e eventos. | drizzle/schema.ts opportunities; shared/opportunityLifecycle.ts | Nenhum gap TSE crítico identificado. | P2 |
-| Comercial | Proposta, entrada e parcelamento | TGR CRM | Sales Command -> CRM | SUPERIOR | Proposta separada de venda, entrada e número de parcelas; Sales Command só oficializa após SALE_CONFIRMED. | drizzle/schema.ts proposals; apps/sales-command/client/src/features/closing/SaleForm.tsx | Homologar seam em piloto integrado. | P0 |
+| Comercial | Formalização após SALE_CONFIRMED | TGR CRM | Sales Command -> CRM | PARCIAL | O Sales Command produz SALE_CONFIRMED e o bridge atual cria/resolve cliente e oportunidade no CRM, preservando os valores no evento; porém ainda não formaliza automaticamente proposta, contrato e parcelas no CRM. | server/salesCommandBridge.ts; shared/integrationContract.ts; tgr-commercial-suite/apps/sales-command/server/src/modules/integration/crm-http-adapter.ts | Completar formalização idempotente: saleId -> proposta aceita -> contrato -> cronograma de parcelas, sem duplicar em retry. | P0 |
 | Comercial | Aprovação de desconto | TGR CRM | CRM | SUPERIOR | Há proposalDiscountApprovals e trilha auditável. | drizzle/schema.ts proposalDiscountApprovals; server/routers/sales.ts | Configurar alçadas reais por projeto. | P1 |
 | Comercial | Metas por operação/equipe | TGR CRM | CRM / Sales Command | SUPERIOR | salesGoals, progresso de campanhas e painéis de performance existem. | drizzle/schema.ts salesGoals; client/src/pages/Campaigns.tsx | Amarrar regras finais de meta ao projeto Natal. | P1 |
 | Contratos | Lifecycle contratual | TGR CRM | CRM | SUPERIOR | Estados explícitos, transições protegidas e eventos; venda, contrato e caixa são fatos distintos. | drizzle/schema.ts contracts; shared/contractLifecycle.ts; architecture.md | Executar E2E completo com dados preenchidos. | P0 |
@@ -99,7 +99,7 @@ Nenhuma capacidade é considerada substituída apenas porque existe uma tabela o
 | Segurança | RBAC, auditoria e PII | TGR CRM | Todos | SUPERIOR | Autorização server-side, audit logs, storage protegido, event allowlists e testes de acesso são explícitos. | architecture.md; server/access.test.ts; server/storageAccess.ts | Revisão LGPD e perfis finais antes de produção. | P0 |
 | Dados | Importação/migração | TGR CRM | CRM | PARCIAL | Há CSV import e infraestrutura de migração, mas o universo histórico do TSE não está reconciliado integralmente. | client/src/pages/ImportCsv.tsx; csvImportBatches/items; PROVA_TSE_2025_CONTROLE_SALA | Localizar/exportar fonte principal, mapear 103 campos, reconciliar totais e preservar lineage. | P0 |
 | Dados | Paridade dos 103 campos do Controle de Sala | TGR CRM | CRM + Sales Command | PARCIAL | A Biblioteca confirma 103 campos mapeados no artefato histórico; o TGR tem ficha rica, mas a lista fonte dos 103 não está materializada neste repositório para confronto 1:1. | PROVA_TSE_2025_CONTROLE_SALA; drizzle/schema.ts captureRecords | Obrigatório anexar/recuperar a matriz fonte e fechar cada campo como MAPEADO/TRANSFORMADO/DESCARTADO COM JUSTIFICATIVA. | P0 |
-| Operação | Backup/restore de piloto | TGR CRM | CRM / Suite | SUPERIOR | Runtime de piloto possui MySQL persistente e scripts de backup/restore; Sales Command também tem drill validado. | infra/pilot/*; docs/PILOT_RUNTIME_RECEIPT.md no suite | Produção exige backup externo, RPO/RTO e restore drill operacional. | P1 |
+| Operação | Backup/restore de piloto | TGR CRM | CRM / Suite | SUPERIOR | Runtime do CRM possui MySQL persistente e evidência local; o Sales Command possui receipt próprio de drill de backup/restore. | infra/pilot/*; docs/audit/TGR_PILOT_RUNTIME_RECEIPT_2026-09-20.md; lucastigrereal-dev/tgr-commercial-suite@7a892cc:docs/PILOT_RUNTIME_RECEIPT.md | Produção exige backup externo, RPO/RTO e restore drill operacional. | P1 |
 | Experiência | Web/mobile responsivo | Commercial Suite | CRM + Sales Command + Portal | SUPERIOR | CRM é responsivo; Sales Command tem interfaces operacionais e offline para campo. | client/src/hooks/useMobile.tsx; Sales Command client/* | Validar aparelhos físicos e legibilidade em campo. | P1 |
 
 ## Bloqueadores P0 derivados da matriz
