@@ -502,6 +502,96 @@ export const contractMonetaryAdjustments = mysqlTable(
   ],
 );
 
+export const contractSignatureEnvelopes = mysqlTable(
+  "contract_signature_envelopes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    contractId: int("contractId").notNull(),
+    provider: varchar("provider", { length: 32 }).default("clicksign").notNull(),
+    externalEnvelopeId: varchar("externalEnvelopeId", { length: 128 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    status: mysqlEnum("status", ["draft", "running", "closed", "canceled", "error"]).default("draft").notNull(),
+    lastEventName: varchar("lastEventName", { length: 120 }),
+    lastEventAt: timestamp("lastEventAt"),
+    activatedAt: timestamp("activatedAt"),
+    closedAt: timestamp("closedAt"),
+    canceledAt: timestamp("canceledAt"),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_envelope_provider_external_unique").on(table.provider, table.externalEnvelopeId),
+    index("signature_envelope_contract_status_idx").on(table.contractId, table.status),
+    foreignKey({ name: "cse_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+    foreignKey({ name: "cse_user_fk", columns: [table.createdByUserId], foreignColumns: [users.id] }),
+  ],
+);
+
+export const contractSignatureDocuments = mysqlTable(
+  "contract_signature_documents",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    envelopeId: int("envelopeId").notNull(),
+    contractDocumentId: int("contractDocumentId").notNull(),
+    externalDocumentId: varchar("externalDocumentId", { length: 128 }).notNull(),
+    status: mysqlEnum("status", ["pending", "signed", "closed", "canceled"]).default("pending").notNull(),
+    signedAt: timestamp("signedAt"),
+    closedAt: timestamp("closedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_document_envelope_contractdoc_unique").on(table.envelopeId, table.contractDocumentId),
+    uniqueIndex("signature_document_external_unique").on(table.externalDocumentId),
+    foreignKey({ name: "csd_envelope_fk", columns: [table.envelopeId], foreignColumns: [contractSignatureEnvelopes.id] }),
+    foreignKey({ name: "csd_contractdoc_fk", columns: [table.contractDocumentId], foreignColumns: [contractDocuments.id] }),
+  ],
+);
+
+export const contractSignatureSigners = mysqlTable(
+  "contract_signature_signers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    envelopeId: int("envelopeId").notNull(),
+    customerId: int("customerId"),
+    externalSignerId: varchar("externalSignerId", { length: 128 }).notNull(),
+    name: varchar("name", { length: 180 }).notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    documentation: varchar("documentation", { length: 32 }),
+    status: mysqlEnum("status", ["pending", "signed", "refused", "canceled"]).default("pending").notNull(),
+    signedAt: timestamp("signedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_signer_envelope_external_unique").on(table.envelopeId, table.externalSignerId),
+    index("signature_signer_customer_status_idx").on(table.customerId, table.status),
+    foreignKey({ name: "css_envelope_fk", columns: [table.envelopeId], foreignColumns: [contractSignatureEnvelopes.id] }),
+    foreignKey({ name: "css_customer_fk", columns: [table.customerId], foreignColumns: [customers.id] }),
+  ],
+);
+
+export const signatureWebhookEvents = mysqlTable(
+  "signature_webhook_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    eventKey: varchar("eventKey", { length: 160 }).notNull(),
+    eventName: varchar("eventName", { length: 120 }).notNull(),
+    externalEnvelopeId: varchar("externalEnvelopeId", { length: 128 }),
+    externalDocumentId: varchar("externalDocumentId", { length: 128 }),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    occurredAt: timestamp("occurredAt"),
+    processedAt: timestamp("processedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_webhook_provider_event_unique").on(table.provider, table.eventKey),
+    index("signature_webhook_envelope_created_idx").on(table.externalEnvelopeId, table.createdAt),
+  ],
+);
+
 export const installments = mysqlTable(
   "installments",
   {
