@@ -17,6 +17,7 @@ import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, type RelationshipBridgePump } from "../relationshipBridge";
+import { processClicksignWebhook } from "../eSignatureService";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -49,6 +50,12 @@ async function startServer() {
   app.disable("x-powered-by");
   app.use(attachRequestId);
   app.use(applySecurityHeaders);
+  app.post("/api/webhooks/clicksign", express.raw({ type: "*/*", limit: "2mb" }), async (req, res) => {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? "");
+    const signature = req.get("x-clicksign-signature") || req.get("content-hmac") || undefined;
+    const result = await processClicksignWebhook(signature, rawBody);
+    res.status(result.status).json(result);
+  });
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
