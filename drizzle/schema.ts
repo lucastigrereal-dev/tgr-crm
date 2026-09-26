@@ -130,7 +130,7 @@ export const commercialProjectSettings = mysqlTable("commercial_project_settings
 export const commercialPolicyVersions = mysqlTable("commercial_policy_versions", {
   id: int("id").autoincrement().primaryKey(),
   resortId: int("resortId").notNull().references(() => resorts.id),
-  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality"]).notNull(),
+  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality", "monetary_adjustment"]).notNull(),
   version: varchar("version", { length: 80 }).notNull(),
   policyJson: text("policyJson").notNull(),
   effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
@@ -141,6 +141,24 @@ export const commercialPolicyVersions = mysqlTable("commercial_policy_versions",
   uniqueIndex("commercial_policy_version_unique").on(table.resortId, table.policyType, table.version),
   index("commercial_policy_effective_idx").on(table.resortId, table.policyType, table.effectiveAt),
 ]);
+
+export const monetaryIndexValues = mysqlTable(
+  "monetary_index_values",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    indexCode: varchar("indexCode", { length: 40 }).notNull(),
+    referenceDate: date("referenceDate").notNull(),
+    variationPercent: decimal("variationPercent", { precision: 9, scale: 6 }).notNull(),
+    source: varchar("source", { length: 255 }).notNull(),
+    sourceReference: varchar("sourceReference", { length: 500 }),
+    importedByUserId: int("importedByUserId").references(() => users.id),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex("monetary_index_values_code_date_unique").on(table.indexCode, table.referenceDate),
+    index("monetary_index_values_code_date_idx").on(table.indexCode, table.referenceDate),
+  ],
+);
 
 export const units = mysqlTable(
   "units",
@@ -449,6 +467,33 @@ export const commercialFractionHistory = mysqlTable(
   table => [
     index("commercial_fraction_history_fraction_idx").on(table.fractionId, table.createdAt),
     index("commercial_fraction_history_contract_idx").on(table.contractId, table.createdAt),
+  ],
+);
+
+export const contractMonetaryAdjustments = mysqlTable(
+  "contract_monetary_adjustments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    contractId: int("contractId").notNull().references(() => contracts.id),
+    policyVersionId: int("policyVersionId").notNull().references(() => commercialPolicyVersions.id),
+    indexCode: varchar("indexCode", { length: 40 }).notNull(),
+    baseDate: date("baseDate").notNull(),
+    throughDate: date("throughDate").notNull(),
+    periodicityMonths: int("periodicityMonths").notNull(),
+    spreadMonthlyPercent: decimal("spreadMonthlyPercent", { precision: 7, scale: 4 }).default("0.0000").notNull(),
+    indexFactor: decimal("indexFactor", { precision: 18, scale: 10 }).notNull(),
+    spreadFactor: decimal("spreadFactor", { precision: 18, scale: 10 }).notNull(),
+    totalFactor: decimal("totalFactor", { precision: 18, scale: 10 }).notNull(),
+    beforeTotal: decimal("beforeTotal", { precision: 14, scale: 2 }).notNull(),
+    afterTotal: decimal("afterTotal", { precision: 14, scale: 2 }).notNull(),
+    calculationJson: text("calculationJson").notNull(),
+    appliedByUserId: int("appliedByUserId").notNull().references(() => users.id),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex("contract_adjustment_contract_through_unique").on(table.contractId, table.throughDate),
+    index("contract_adjustment_contract_created_idx").on(table.contractId, table.createdAt),
+    index("contract_adjustment_policy_idx").on(table.policyVersionId, table.createdAt),
   ],
 );
 
