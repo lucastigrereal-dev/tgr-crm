@@ -19,6 +19,7 @@ Este backlog existe para fechar o **cutover do TSE**, não para inflar feature l
 | P0-08 | #14 | CRM + Suite | Integração Financial | Finalizar PRs pareados somente quando Financial Layer estiver verde. | Eventos financeiros chegam uma vez, project key é canônico e reconciliação fecha. |
 | P0-09 | #15 | Portal | Portal do Proprietário | App externo separado consumindo CRM/Relationship com escopo do proprietário. | Contrato, documentos, parcelas/2ª via, direitos, reservas e solicitações funcionam sem acesso administrativo. |
 | P0-10 | #16 | Dados | Migração e 103 campos | Recuperar matriz fonte, mapear campo a campo e reconciliar histórico. | 100% dos 103 campos têm decisão e totais financeiros/operacionais conciliam. |
+| P0-11 | #19 | CRM + Sales Command | Formalização após SALE_CONFIRMED | Converter o fato confirmado em proposta/contrato/parcelas canônicos, idempotentemente. | Repetir o mesmo saleId não duplica cliente, proposta, contrato, parcela nem fração; valores reconciliam com o Sales Command. |
 | P1-01 | — | CRM | Contatos e endereços N:N | Normalizar telefones/e-mails/endereços com preferencial, validade e histórico. | Cobrança e relacionamento escolhem canal/endereço correto sem sobrescrever histórico. |
 | P1-02 | — | CRM | Dicionários de referência | Profissão, veículo, hotel, local de captação, forma de pagamento e outros campos analíticos controlados. | Alias e versionamento evitam fragmentação sem bloquear captação. |
 | P1-03 | — | CRM + Relationship | Ledger de pontos | Movimentos append-only: crédito, consumo, estorno, expiração e rollover. | Saldo é sempre derivável dos movimentos e reserva referencia o débito. |
@@ -33,7 +34,7 @@ Este backlog existe para fechar o **cutover do TSE**, não para inflar feature l
 ## Ordem recomendada
 
 ### Wave A - corte do legado comercial
-P0-01 -> P0-02 -> P0-06 -> P0-07 -> P0-10
+P0-01 -> P0-02 -> P0-11 -> P0-06 -> P0-07 -> P0-10
 
 ### Wave B - contrato e caixa
 P0-03 -> P0-04 -> P0-05 -> P0-08
