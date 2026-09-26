@@ -49,6 +49,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   let billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
   let commissionBlocked = false;
+  let settledCustomerId: number | null = null;
   const createdCommissionFacts: Array<{ id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number }> = [];
 
   try {
@@ -69,6 +70,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           installmentPaid = true;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
           const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
+          settledCustomerId = context?.contract?.customerId ?? null;
           const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
           const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
           const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);
@@ -103,7 +105,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       await recordAudit(null, "installment", billing.installment.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada.");
       await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, reason: "incomplete_project_policy", source: "asaas" } });
     }
-    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: billing.installment.amount, contractId: billing.installment.contractId, sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked } });
+    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: billing.installment.amount, contractId: billing.installment.contractId, ...(settledCustomerId ? { customerId: settledCustomerId } : {}), sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked } });
     for (const commission of createdCommissionFacts) { await recordAudit(null, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: null, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }
     await syncRevenueQualityForContract({ contractId: billing.installment.contractId, actorUserId: null, trigger: "webhook Asaas" });
   }

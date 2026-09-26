@@ -17,6 +17,7 @@ import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, type RelationshipBridgePump } from "../relationshipBridge";
+import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -44,6 +45,20 @@ async function startServer() {
     throw new Error("Relationship bridge configuration incomplete");
   }
   let relationshipPump: RelationshipBridgePump | undefined;
+  const financialEndpoint = ENV.financialEndpoint.trim();
+  const financialKey = ENV.financialCrmIntegrationKey.trim();
+  const financialProject = {
+    externalKey: ENV.financialProjectExternalKey.trim(),
+    name: ENV.financialProjectName.trim(),
+    timezone: ENV.financialProjectTimezone.trim(),
+  };
+  if (Boolean(financialEndpoint) !== Boolean(financialKey)) {
+    throw new Error("Financial bridge configuration incomplete");
+  }
+  if (financialEndpoint && (!financialProject.externalKey || !financialProject.name || !financialProject.timezone)) {
+    throw new Error("Financial project identity incomplete");
+  }
+  let financialPump: FinancialBridgePump | undefined;
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
@@ -128,6 +143,7 @@ async function startServer() {
 
   const shutdown = (signal: string) => {
     relationshipPump?.stop();
+    financialPump?.stop();
     logger.info("Graceful shutdown requested", { signal });
     server.close(error => {
       if (error) {
@@ -143,6 +159,11 @@ async function startServer() {
     if (relationshipEndpoint && relationshipKey) {
       relationshipPump = startRelationshipBridgePump(relationshipEndpoint, relationshipKey, {
         onError: error => logger.error("Relationship bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+      });
+    }
+    if (financialEndpoint && financialKey) {
+      financialPump = startFinancialBridgePump(financialEndpoint, financialKey, financialProject, {
+        onError: error => logger.error("Financial bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }
     logger.info("Server running", { port });

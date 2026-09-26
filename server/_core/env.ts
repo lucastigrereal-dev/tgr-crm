@@ -10,4 +10,9 @@ export const ENV = {
   salesCommandIntegrationKey: process.env.SALES_COMMAND_INTEGRATION_KEY ?? "",
   relationshipEndpoint: process.env.RELATIONSHIP_ENDPOINT ?? "",
   relationshipCrmIntegrationKey: process.env.RELATIONSHIP_CRM_INTEGRATION_KEY ?? "",
+  financialEndpoint: process.env.FINANCIAL_ENDPOINT ?? "",
+  financialCrmIntegrationKey: process.env.FINANCIAL_CRM_INTEGRATION_KEY ?? "",
+  financialProjectExternalKey: process.env.FINANCIAL_PROJECT_EXTERNAL_KEY ?? "",
+  financialProjectName: process.env.FINANCIAL_PROJECT_NAME ?? "",
+  financialProjectTimezone: process.env.FINANCIAL_PROJECT_TIMEZONE ?? "America/Recife",
 };
