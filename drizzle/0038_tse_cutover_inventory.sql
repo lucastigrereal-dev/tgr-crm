@@ -24,13 +24,13 @@ CREATE INDEX `commercial_fractions_proposal_status_idx` ON `commercial_fractions
 --> statement-breakpoint
 CREATE INDEX `commercial_fractions_contract_status_idx` ON `commercial_fractions` (`currentContractId`,`status`);
 --> statement-breakpoint
-ALTER TABLE `commercial_fractions` ADD CONSTRAINT `commercial_fractions_resortId_resorts_id_fk` FOREIGN KEY (`resortId`) REFERENCES `resorts`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fractions` ADD CONSTRAINT `cf_resort_fk` FOREIGN KEY (`resortId`) REFERENCES `resorts`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fractions` ADD CONSTRAINT `commercial_fractions_unitId_units_id_fk` FOREIGN KEY (`unitId`) REFERENCES `units`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fractions` ADD CONSTRAINT `cf_unit_fk` FOREIGN KEY (`unitId`) REFERENCES `units`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fractions` ADD CONSTRAINT `commercial_fractions_currentProposalId_proposals_id_fk` FOREIGN KEY (`currentProposalId`) REFERENCES `proposals`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fractions` ADD CONSTRAINT `cf_proposal_fk` FOREIGN KEY (`currentProposalId`) REFERENCES `proposals`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fractions` ADD CONSTRAINT `commercial_fractions_currentContractId_contracts_id_fk` FOREIGN KEY (`currentContractId`) REFERENCES `contracts`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fractions` ADD CONSTRAINT `cf_contract_fk` FOREIGN KEY (`currentContractId`) REFERENCES `contracts`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 CREATE TABLE `commercial_fraction_holds` (
   `id` int AUTO_INCREMENT NOT NULL,
@@ -52,11 +52,11 @@ CREATE INDEX `commercial_fraction_holds_fraction_status_idx` ON `commercial_frac
 --> statement-breakpoint
 CREATE INDEX `commercial_fraction_holds_proposal_status_idx` ON `commercial_fraction_holds` (`proposalId`,`status`);
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_holds` ADD CONSTRAINT `commercial_fraction_holds_fractionId_commercial_fractions_id_fk` FOREIGN KEY (`fractionId`) REFERENCES `commercial_fractions`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_holds` ADD CONSTRAINT `cfh_fraction_fk` FOREIGN KEY (`fractionId`) REFERENCES `commercial_fractions`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_holds` ADD CONSTRAINT `commercial_fraction_holds_proposalId_proposals_id_fk` FOREIGN KEY (`proposalId`) REFERENCES `proposals`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_holds` ADD CONSTRAINT `cfh_proposal_fk` FOREIGN KEY (`proposalId`) REFERENCES `proposals`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_holds` ADD CONSTRAINT `commercial_fraction_holds_heldByUserId_users_id_fk` FOREIGN KEY (`heldByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_holds` ADD CONSTRAINT `cfh_user_fk` FOREIGN KEY (`heldByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 CREATE TABLE `commercial_fraction_history` (
   `id` int AUTO_INCREMENT NOT NULL,
@@ -75,10 +75,10 @@ CREATE INDEX `commercial_fraction_history_fraction_idx` ON `commercial_fraction_
 --> statement-breakpoint
 CREATE INDEX `commercial_fraction_history_contract_idx` ON `commercial_fraction_history` (`contractId`,`createdAt`);
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `commercial_fraction_history_fractionId_commercial_fractions_id_fk` FOREIGN KEY (`fractionId`) REFERENCES `commercial_fractions`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `cfhist_fraction_fk` FOREIGN KEY (`fractionId`) REFERENCES `commercial_fractions`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `commercial_fraction_history_proposalId_proposals_id_fk` FOREIGN KEY (`proposalId`) REFERENCES `proposals`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `cfhist_proposal_fk` FOREIGN KEY (`proposalId`) REFERENCES `proposals`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `commercial_fraction_history_contractId_contracts_id_fk` FOREIGN KEY (`contractId`) REFERENCES `contracts`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `cfhist_contract_fk` FOREIGN KEY (`contractId`) REFERENCES `contracts`(`id`) ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `commercial_fraction_history_actorUserId_users_id_fk` FOREIGN KEY (`actorUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
+ALTER TABLE `commercial_fraction_history` ADD CONSTRAINT `cfhist_user_fk` FOREIGN KEY (`actorUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
