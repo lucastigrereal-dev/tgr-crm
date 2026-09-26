@@ -24,6 +24,7 @@ const SalesRoom = lazy(() => import("./pages/SalesRoom"));
 const SalesAnalytics = lazy(() => import("./pages/SalesAnalytics"));
 const ProjectSettings = lazy(() => import("./pages/ProjectSettings"));
 const Intelligence = lazy(() => import("./pages/Intelligence"));
+const CommercialInventory = lazy(() => import("./pages/CommercialInventory"));
 
 function PageFallback() {
   return <div className="flex min-h-[40vh] items-center justify-center p-8 text-sm text-muted-foreground">Carregando área do TGR CRM…</div>;
@@ -49,6 +50,7 @@ function Router() {
     <Route path="/importar" component={ImportCsv} />
     <Route path="/configuracoes-projeto" component={ProjectSettings} />
     <Route path="/inteligencia" component={Intelligence} />
+    <Route path="/estoque-comercial" component={CommercialInventory} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
   </Switch></Suspense></DashboardLayout>;
