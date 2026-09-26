@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { auditLogs, domainEvents } from "../drizzle/schema";
+import { auditLogs, contracts, domainEvents } from "../drizzle/schema";
 import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents";
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
@@ -97,6 +97,17 @@ export function startFinancialBridgePump(
         if (await alreadyHandled(db, event.id)) continue;
         try {
           const body = financialBridgeEnvelope(event, project);
+          const contractIdRaw = body.event.payload.contractId;
+          const contractId = typeof contractIdRaw === "number"
+            ? contractIdRaw
+            : typeof contractIdRaw === "string" && /^\d+$/.test(contractIdRaw)
+              ? Number(contractIdRaw)
+              : null;
+          if (contractId && body.event.payload.customerId == null) {
+            const [contract] = await db.select({ customerId: contracts.customerId }).from(contracts)
+              .where(eq(contracts.id, contractId)).limit(1);
+            if (contract?.customerId) body.event.payload.customerId = contract.customerId;
+          }
           const response = await fetchWithTimeout(target, {
             method: "POST",
             headers: {
