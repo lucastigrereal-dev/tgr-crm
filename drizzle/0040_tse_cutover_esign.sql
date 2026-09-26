@@ -2,7 +2,8 @@ CREATE TABLE `contract_signature_envelopes` (
   `id` int AUTO_INCREMENT NOT NULL,
   `contractId` int NOT NULL,
   `provider` varchar(32) NOT NULL DEFAULT 'clicksign',
-  `externalEnvelopeId` varchar(128) NOT NULL,
+  `externalEnvelopeId` varchar(128),
+  `activeKey` varchar(160),
   `name` varchar(255) NOT NULL,
   `status` enum('draft','running','closed','canceled','error') NOT NULL DEFAULT 'draft',
   `lastEventName` varchar(120),
@@ -14,7 +15,8 @@ CREATE TABLE `contract_signature_envelopes` (
   `createdAt` timestamp NOT NULL DEFAULT (now()),
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `contract_signature_envelopes_id` PRIMARY KEY(`id`),
-  CONSTRAINT `signature_envelope_provider_external_unique` UNIQUE(`provider`,`externalEnvelopeId`)
+  CONSTRAINT `signature_envelope_provider_external_unique` UNIQUE(`provider`,`externalEnvelopeId`),
+  CONSTRAINT `signature_envelope_active_key_unique` UNIQUE(`activeKey`)
 );
 --> statement-breakpoint
 CREATE INDEX `signature_envelope_contract_status_idx` ON `contract_signature_envelopes` (`contractId`,`status`);
