@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { contractCancellationRequests, contracts, customers, installments, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks, users } from "../drizzle/schema";
+import { commercialFractions, contractCancellationRequests, contracts, customers, installments, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks, users } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -8,7 +8,7 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
+function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; inventoryExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
   let selectCall = 0;
   let contractSelectCall = 0;
   let ledgerSelectCall = 0;
@@ -48,6 +48,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
       if (table === customers) return ledgerRows([{ id: 11 }]);
       if (table === users) return ledgerRows([{ id: 55 }]);
       if (table === proposals) return ledgerRows([]);
+      if (table === commercialFractions) return ledgerRows(options.inventoryExists ? [{ id: 401 }] : []);
       const data = [
         [{ id: 701, totalAmount: "12000.00", status: "cancelled" }],
         [{ id: 71, sequence: 1, amount: "1000.00", status: "paid" }],
@@ -78,6 +79,17 @@ describe("eventos e auditoria de contratos", () => {
 
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract", 701, "created", expect.stringContaining("TS-2026-701"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "active", totalAmount: 12000, installmentCount: 12 }) }));
+  });
+
+  it("exige cota quando o estoque comercial está materializado", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false, inventoryExists: true }));
+
+    await expect(caller().create({ number: "TS-2026-WITH-INVENTORY", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "draft", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "O estoque comercial está ativo. Selecione uma cota/fração antes de criar o contrato.",
+    });
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("rejeita primeira data de vencimento impossível antes de persistir contrato", async () => {
