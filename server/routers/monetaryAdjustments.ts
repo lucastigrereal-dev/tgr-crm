@@ -44,8 +44,8 @@ async function loadSimulation(db: any, input: { contractId: number; policyVersio
   const indexRows = await db.select().from(monetaryIndexValues)
     .where(and(
       eq(monetaryIndexValues.indexCode, parsedPolicy.indexCode),
-      gt(monetaryIndexValues.referenceDate, day(baseDate)),
-      lte(monetaryIndexValues.referenceDate, day(throughDate)),
+      gt(monetaryIndexValues.referenceDate, baseDate),
+      lte(monetaryIndexValues.referenceDate, throughDate),
     )).orderBy(monetaryIndexValues.referenceDate).limit(120);
 
   const installmentQuery = db.select({ id: installments.id, amount: installments.amount, sequence: installments.sequence, status: installments.status })
@@ -76,8 +76,8 @@ export const monetaryAdjustmentsRouter = router({
     if (!db) return [];
     return db.select().from(monetaryIndexValues).where(and(
       eq(monetaryIndexValues.indexCode, input.indexCode),
-      input.from ? gt(monetaryIndexValues.referenceDate, input.from) : undefined,
-      input.to ? lte(monetaryIndexValues.referenceDate, input.to) : undefined,
+      input.from ? gt(monetaryIndexValues.referenceDate, atNoon(input.from)) : undefined,
+      input.to ? lte(monetaryIndexValues.referenceDate, atNoon(input.to)) : undefined,
     )).orderBy(desc(monetaryIndexValues.referenceDate)).limit(input.limit);
   }),
 
@@ -92,7 +92,7 @@ export const monetaryAdjustmentsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     await db.insert(monetaryIndexValues).values({
       indexCode: input.indexCode.toUpperCase(),
-      referenceDate: input.referenceDate,
+      referenceDate: atNoon(input.referenceDate),
       variationPercent: input.variationPercent.toFixed(6),
       source: input.source,
       sourceReference: input.sourceReference?.trim() || null,
@@ -152,8 +152,8 @@ export const monetaryAdjustmentsRouter = router({
           contractId: input.contractId,
           policyVersionId: input.policyVersionId,
           indexCode: prepared.parsedPolicy.indexCode,
-          baseDate: day(prepared.baseDate),
-          throughDate: input.throughDate,
+          baseDate: prepared.baseDate,
+          throughDate: prepared.throughDate,
           periodicityMonths: prepared.parsedPolicy.periodicityMonths,
           spreadMonthlyPercent: prepared.parsedPolicy.spreadMonthlyPercent.toFixed(4),
           indexFactor: calculation.indexFactor.toFixed(10),
