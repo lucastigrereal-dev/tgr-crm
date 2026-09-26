@@ -281,6 +281,13 @@
       "when": 1790441000000,
       "tag": "0039_tse_cutover_indexation",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1790442000000,
+      "tag": "0040_tse_cutover_esign",
+      "breakpoints": true
     }
   ]
 }
