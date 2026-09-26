@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { auditLogs, domainEvents } from "../drizzle/schema";
 import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents";
 import { toIntegrationEvent } from "../shared/integrationContract";
@@ -82,10 +82,18 @@ export function startFinancialBridgePump(
     try {
       const db = await getDb();
       if (!db) return 0;
-      const events = await db.select().from(domainEvents)
-        .where(inArray(domainEvents.eventName, [...FINANCIAL_EVENT_NAMES]))
+      const events = await db.select({ event: domainEvents }).from(domainEvents)
+        .leftJoin(
+          auditLogs,
+          sql`${auditLogs.idempotencyKey} = CONCAT('financial-event:', ${domainEvents.id})`,
+        )
+        .where(and(
+          inArray(domainEvents.eventName, [...FINANCIAL_EVENT_NAMES]),
+          isNull(auditLogs.id),
+        ))
         .orderBy(asc(domainEvents.id)).limit(500);
-      for (const event of events) {
+      for (const row of events) {
+        const event = row.event;
         if (await alreadyHandled(db, event.id)) continue;
         try {
           const body = financialBridgeEnvelope(event, project);
@@ -112,6 +120,9 @@ export function startFinancialBridgePump(
           options.onError?.(error);
         }
       }
+      return delivered;
+    } catch (error) {
+      options.onError?.(error);
       return delivered;
     } finally {
       running = false;
