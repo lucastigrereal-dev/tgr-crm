@@ -5,8 +5,42 @@ vi.mock("./db", () => dbMocks);
 
 import { financeRouter } from "./routers/finance";
 
+function query<T>(rows: T) {
+  const promise = Promise.resolve(rows) as Promise<T> & Record<string, (...args: unknown[]) => unknown>;
+  for (const method of ["from", "leftJoin", "where", "groupBy", "limit"]) promise[method] = () => promise;
+  return promise;
+}
+
 describe("carteira financeira", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("conta somente o caixa recebido depois da atribuição", async () => {
+    const assignmentRows = [{
+      assignmentId: 901,
+      ownerUserId: 7,
+      contractId: 41,
+      paidAmountBaseline: "900.00",
+      startsAt: new Date("2026-09-01T12:00:00Z"),
+      openAmount: "0.00",
+      overdueAmount: "0.00",
+      currentPaidAmount: "1000.00",
+    }];
+    const owners = [{ id: 7, name: "Financeiro 7", email: null }];
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(query(assignmentRows))
+        .mockReturnValueOnce(query(owners)),
+    };
+    dbMocks.getDb.mockResolvedValue(db);
+    const caller = financeRouter.createCaller({ user: { id: 3, role: "finance" } } as never);
+
+    await expect(caller.portfolioScorecards()).resolves.toEqual([expect.objectContaining({
+      ownerUserId: 7,
+      assignedContracts: 1,
+      recoveredAfterAssignment: 100,
+      regularizationRate: 100,
+    })]);
+  });
 
   it("encerra o responsável ativo e abre uma nova atribuição auditável", async () => {
     const updates: unknown[] = [];
