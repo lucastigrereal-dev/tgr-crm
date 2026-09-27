@@ -5,8 +5,9 @@ import { commercialPolicyVersions, resorts } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
+import { monetaryAdjustmentPolicySchema } from "../monetaryAdjustment";
 
-const policyType = z.enum(["commission", "cancellation", "revenue_quality"]);
+const policyType = z.enum(["commission", "cancellation", "revenue_quality", "monetary_adjustment"]);
 
 function isDuplicateKeyError(error: unknown) {
   if (!error || typeof error !== "object") return false;
@@ -26,7 +27,11 @@ export const commercialPoliciesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const resort = (await db.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1))[0];
     if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento não encontrado." });
-    const duplicate = (await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, input.policyType), eq(commercialPolicyVersions.version, input.version))).limit(1))[0];
+    if (input.policyType === "monetary_adjustment") {
+      const parsed = monetaryAdjustmentPolicySchema.safeParse(input.policy);
+      if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: "Política monetária inválida. Informe indexCode, periodicityMonths, spreadMonthlyPercent e applyTo." });
+    }
+        const duplicate = (await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, input.policyType), eq(commercialPolicyVersions.version, input.version))).limit(1))[0];
     if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma versão com esse código para o empreendimento e tipo de política." });
     let created;
     try {
