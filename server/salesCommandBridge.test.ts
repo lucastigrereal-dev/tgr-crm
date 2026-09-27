@@ -105,6 +105,6 @@ describe("Sales Command to CRM HTTP boundary", () => {
       });
       expect(response.status).toBe(503);
       expect(mockedGetDb).not.toHaveBeenCalled();
-    }, undefined);
+    }, "");
   });
 });
