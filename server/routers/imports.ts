@@ -60,13 +60,37 @@ export const importsRouter = router({
         if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de inventário." });
         const touchedResorts = new Set<number>();
         for (const row of rows) {
-          const resortKey = normalizedKey(row.resortName); let resort = resortsByName.get(resortKey);
+          const resortKey = normalizedKey(row.resortName);
+          let resort = resortsByName.get(resortKey);
           const resortValues = { name: row.resortName, city: row.resortCity, state: row.resortState, status: row.resortStatus };
-          if (!resort) { const inserted = await tx.insert(resorts).values(resortValues).$returningId(); const resortId = inserted[0]?.id; if (!resortId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o empreendimento importado." }); resort = { id: resortId, ...resortValues, createdAt: new Date() }; resortsByName.set(resortKey, resort); await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resortId, action: "created" }); }
-          else if (!touchedResorts.has(resort.id)) { await tx.update(resorts).set(resortValues).where(eq(resorts.id, resort.id)); await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resort.id, action: "updated", beforeSnapshot: JSON.stringify(resort) }); touchedResorts.add(resort.id); }
-          const key = `${resort.id}::${normalizedKey(row.code)}`; const before = unitsByKey.get(key); const values = unitValues(row);
-          if (before) { await tx.update(units).set(values).where(eq(units.id, before.id)); await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before) }); updated += 1; }
-          else { const inserted = await tx.insert(units).values({ resortId: resort.id, ...values }).$returningId(); const unitId = inserted[0]?.id; if (!unitId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a unidade importada." }); unitsByKey.set(key, { id: unitId, resortId: resort.id, ...values, createdAt: new Date() }); await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: unitId, action: "created" }); created += 1; }
+          if (!resort) {
+            const inserted = await tx.insert(resorts).values(resortValues).$returningId();
+            const resortId = inserted[0]?.id;
+            if (!resortId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o empreendimento importado." });
+            resort = { id: resortId, externalKey: null, ...resortValues, createdAt: new Date() };
+            resortsByName.set(resortKey, resort);
+            await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resortId, action: "created" });
+          } else if (!touchedResorts.has(resort.id)) {
+            await tx.update(resorts).set(resortValues).where(eq(resorts.id, resort.id));
+            await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resort.id, action: "updated", beforeSnapshot: JSON.stringify(resort) });
+            touchedResorts.add(resort.id);
+          }
+          if (!resort) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Empreendimento importado indisponível." });
+          const key = `${resort.id}::${normalizedKey(row.code)}`;
+          const before = unitsByKey.get(key);
+          const values = unitValues(row);
+          if (before) {
+            await tx.update(units).set(values).where(eq(units.id, before.id));
+            await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before) });
+            updated += 1;
+          } else {
+            const inserted = await tx.insert(units).values({ resortId: resort.id, ...values }).$returningId();
+            const unitId = inserted[0]?.id;
+            if (!unitId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a unidade importada." });
+            unitsByKey.set(key, { id: unitId, resortId: resort.id, ...values, createdAt: new Date() });
+            await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: unitId, action: "created" });
+            created += 1;
+          }
         }
         await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: updated, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId));
       });
