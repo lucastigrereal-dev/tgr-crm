@@ -123,7 +123,7 @@ export const financeRouter = router({
       const cancellation = latestCancellationByContractId.get(contract.id);
       const facts = buildRevenueQualityLedger({
         contract: { id: contract.id, totalAmount: contract.totalAmount, status: contract.status },
-        installments: (installmentsByContractId.get(contract.id) || []).map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, status: row.status })),
+        installments: (installmentsByContractId.get(contract.id) || []).map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, paidAmount: row.paidAmount, status: row.status })),
         commissions: (commissionsByContractId.get(contract.id) || []).map(row => ({ id: row.id, amount: row.amount, status: row.status, lifecycleStatus: row.lifecycleStatus, sourceInstallmentId: row.sourceInstallmentId })),
         cancellation: cancellation ? { status: cancellation.status } : null,
         policyVersion: "tgr-derived-ledger/v1",
