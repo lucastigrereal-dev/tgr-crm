@@ -169,7 +169,7 @@ export const contractsRouter = router({
   simulateCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-    const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360); const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount), 0);
+    const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360); const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
     const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
     const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
     return { contractId: contract.id, resortId: resortId ?? null, policy: parseCancellationPolicy(settings?.cancellationPolicy), ...simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }) };
@@ -185,7 +185,7 @@ export const contractsRouter = router({
       const existingRequest = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, input.contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))).limit(1))[0];
       if (existingRequest) throw new TRPCError({ code: "CONFLICT", message: "Já existe um distrato aguardando decisão ou execução para este contrato." });
       const paid = await tx.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360);
-      const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount), 0);
+      const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
       const context = await tx.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
       const resortId = context[0]?.capture?.resortId;
       const settings = resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
@@ -225,7 +225,7 @@ export const contractsRouter = router({
       const commissionRows = await tx.select({ id: salesCommissions.id, status: salesCommissions.status }).from(salesCommissions).where(eq(salesCommissions.contractId, contract.id)).for("update");
       const impact = planCancellationExecution({ requestStatus: request.status, contractStatus: contract.status, installments: schedule, commissions: commissionRows });
       const simulation = JSON.parse(request.simulationSnapshot) as { paidAmount?: number; penalty?: number; retained?: number; refund?: number };
-      const currentPaidAmount = schedule.reduce((sum, item) => sum + Number(item.paidAmount), 0);
+      const currentPaidAmount = schedule.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
       if (simulation.paidAmount !== undefined && Math.abs(currentPaidAmount - Number(simulation.paidAmount)) > 0.005) throw new TRPCError({ code: "CONFLICT", message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar." });
       const settlementDate = new Date();
       await tx.update(contracts).set({ status: "cancelled", cancelledAt: new Date(), cancellationReason: request.reason }).where(eq(contracts.id, contract.id));
