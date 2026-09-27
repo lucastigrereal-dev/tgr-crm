@@ -56,6 +56,10 @@ export const contractsRouter = router({
       if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
       if (opportunity.customerId !== input.customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "A proposta informada não pertence ao cliente do contrato." });
     }
+    if (!input.fractionId) {
+      const inventoryExists = (await db.select({ id: commercialFractions.id }).from(commercialFractions).limit(1))[0];
+      if (inventoryExists) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O estoque comercial está ativo. Selecione uma cota/fração antes de criar o contrato." });
+    }
     const schedule = buildInstallmentSchedule(input.totalAmount, input.installmentCount, input.firstDueDate);
     let allocatedFractionId: number | null = null;
     const result = await db.transaction(async tx => {
@@ -73,6 +77,7 @@ export const contractsRouter = router({
           if (!activeHold) throw new TRPCError({ code: "CONFLICT", message: "A cota está marcada como reservada sem hold ativo. Reprocesse o estoque antes de vender." });
           if (new Date(activeHold.expiresAt).getTime() <= Date.now()) throw new TRPCError({ code: "CONFLICT", message: "O hold da cota expirou. Reserve a cota novamente antes de criar o contrato." });
           if (activeHold.proposalId !== (input.proposalId ?? null)) throw new TRPCError({ code: "CONFLICT", message: "O hold da cota pertence a outra proposta." });
+          if (ctx.user.role !== "admin" && activeHold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "A cota está em hold de outro operador." });
         }
       }
       const created = await tx.insert(contracts).values({
