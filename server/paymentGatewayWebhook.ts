@@ -48,7 +48,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
 
   let billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
-  let installmentPaymentAmount = 0;
+  let installmentPaymentAmount = "0.00";
   let commissionBlocked = false;
   const createdCommissionFacts: Array<{ id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number }> = [];
 
@@ -66,7 +66,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         const paidAt = new Date();
         const fullAmount = Number(billing.installment.amount);
         const previousPaid = Number(billing.installment.paidAmount ?? (billing.installment.status === "paid" ? billing.installment.amount : 0));
-        const receivedNow = Number(billing.billing.amount);
+        const receivedNow = Number(billing.billing.amount ?? Math.max(0, fullAmount - previousPaid));
         const nextPaid = Math.min(fullAmount, Number((previousPaid + receivedNow).toFixed(2)));
         const fullyPaid = nextPaid >= fullAmount;
         const installmentUpdate = await tx.update(installments).set({
@@ -77,7 +77,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
         const paymentRecorded = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
         if (paymentRecorded) {
-          installmentPaymentAmount = receivedNow;
+          installmentPaymentAmount = receivedNow.toFixed(2);
           installmentPaid = fullyPaid;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
           if (fullyPaid) {
