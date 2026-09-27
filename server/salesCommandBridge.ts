@@ -29,7 +29,7 @@ import { syncRevenueQualityForContract } from "./revenueQualitySync";
 const entryScheduleRow = z.strictObject({
   sequence: z.number().int().min(1).max(100),
   amountCents: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isStrictCalendarDate, "Invalid calendar date"),
 });
 
 export const salesCommandSaleSchema = z.strictObject({
@@ -83,7 +83,20 @@ function salesCommandReference(saleId: string) {
   return `SC-${createHash("sha256").update(saleId).digest("hex").slice(0, 48)}`;
 }
 
+function salesCommandEntryIdempotencyKey(saleId: string) {
+  return `sc-entry:${createHash("sha256").update(saleId).digest("hex")}`;
+}
+
+function isStrictCalendarDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
 function dateValue(value: string) {
+  if (!isStrictCalendarDate(value)) throw new Error("Invalid calendar date");
   return new Date(`${value}T12:00:00Z`);
 }
 
@@ -224,6 +237,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   const balanceCents = event.sale.vgvCents - event.sale.entryContractedCents;
   const balanceCount = balanceCents > 0 ? terms.balanceInstallmentCount : 0;
   const totalInstallments = entrySchedule.length + balanceCount;
+  if (totalInstallments > 360) throw new Error("Combined contract installment schedule exceeds supported limit of 360");
   const proposalRow = await tx.insert(proposals).values({
     opportunityId,
     reference: salesCommandReference(event.saleId),
@@ -308,7 +322,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
 
   if (event.sale.entryReceivedCents > 0) {
     await tx.insert(financialTransactions).values({
-      idempotencyKey: `sc-entry:${event.saleId}`,
+      idempotencyKey: salesCommandEntryIdempotencyKey(event.saleId),
       contractId,
       campaignId: null,
       type: "income",
