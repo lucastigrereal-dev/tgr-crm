@@ -96,6 +96,20 @@ describe("Sales Command to CRM HTTP boundary", () => {
     });
   });
 
+  it("rejects an impossible entry calendar date before touching the database", async () => {
+    const body = canonicalBody();
+    body.sale.entrySchedule[0]!.dueDate = "2026-02-30";
+    await withApp(async base => {
+      const response = await fetch(base + "/api/integrations/sales-command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer sales-command-test-key" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(mockedGetDb).not.toHaveBeenCalled();
+    });
+  });
+
   it("fails closed when the integration key is not configured", async () => {
     await withApp(async base => {
       const response = await fetch(base + "/api/integrations/sales-command", {
