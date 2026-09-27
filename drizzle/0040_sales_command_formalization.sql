@@ -11,3 +11,5 @@ ALTER TABLE `contracts` ADD `externalSaleId` varchar(120);
 CREATE UNIQUE INDEX `contracts_external_sale_unique` ON `contracts` (`externalSource`,`externalSaleId`);
 --> statement-breakpoint
 ALTER TABLE `installments` ADD `paidAmount` decimal(14,2) NOT NULL DEFAULT '0.00';
+--> statement-breakpoint
+UPDATE `installments` SET `paidAmount` = `amount` WHERE `status` = 'paid';
