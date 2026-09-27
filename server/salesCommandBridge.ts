@@ -31,7 +31,7 @@ const entryScheduleRow = z.strictObject({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
-const salesCommandSaleSchema = z.strictObject({
+export const salesCommandSaleSchema = z.strictObject({
   eventId: z.string().trim().min(1).max(120),
   eventName: z.literal("sale.ready_for_contract.v1"),
   source: z.literal("sales-command"),
@@ -60,7 +60,7 @@ const salesCommandSaleSchema = z.strictObject({
   }),
 });
 
-type SalesCommandSale = z.infer<typeof salesCommandSaleSchema>;
+export type SalesCommandSale = z.infer<typeof salesCommandSaleSchema>;
 
 function safeEqual(left: string, right: string) {
   const a = createHash("sha256").update(left).digest();
@@ -166,7 +166,7 @@ function allocateReceived(entrySchedule: SalesCommandSale["sale"]["entrySchedule
   });
 }
 
-async function materializeSale(tx: any, event: SalesCommandSale) {
+export async function materializeSalesCommandSale(tx: any, event: SalesCommandSale) {
   const existing = await findFormalization(tx, event.saleId);
   if (existing) return { ...existing, replay: true as const };
 
@@ -387,9 +387,9 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
     return;
   }
 
-  let result: Awaited<ReturnType<typeof materializeSale>>;
+  let result: Awaited<ReturnType<typeof materializeSalesCommandSale>>;
   try {
-    result = await db.transaction(tx => materializeSale(tx, event));
+    result = await db.transaction(tx => materializeSalesCommandSale(tx, event));
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       const raced = await findFormalization(db, event.saleId);
