@@ -30,32 +30,56 @@ export const financeRouter = router({
   portfolioScorecards: financeProcedure.query(async () => {
     const db = await getDb();
     if (!db) return [];
-    const [scorecardRows, ownerRows] = await Promise.all([
+    const [assignmentRows, ownerRows] = await Promise.all([
       db.select({
+        assignmentId: financialPortfolioAssignments.id,
         ownerUserId: financialPortfolioAssignments.ownerUserId,
-        assignedContracts: sql<number>`count(distinct ${financialPortfolioAssignments.contractId})`,
+        contractId: financialPortfolioAssignments.contractId,
+        paidAmountBaseline: financialPortfolioAssignments.paidAmountBaseline,
+        startsAt: financialPortfolioAssignments.startsAt,
         openAmount: sql<number>`coalesce(sum(case when ${installments.status} not in ('paid', 'cancelled') then greatest(${installments.amount} - ${installments.paidAmount}, 0) else 0 end), 0)`,
         overdueAmount: sql<number>`coalesce(sum(case when ${installments.status} = 'overdue' then greatest(${installments.amount} - ${installments.paidAmount}, 0) else 0 end), 0)`,
-        recoveredAfterAssignment: sql<number>`coalesce(sum(case when ${installments.status} = 'paid' and ${installments.paidAt} >= ${financialPortfolioAssignments.startsAt} then ${installments.amount} else 0 end), 0)`,
-        assignedSince: sql<Date>`min(${financialPortfolioAssignments.startsAt})`,
-      }).from(financialPortfolioAssignments).leftJoin(installments, eq(financialPortfolioAssignments.contractId, installments.contractId)).where(isNull(financialPortfolioAssignments.endsAt)).groupBy(financialPortfolioAssignments.ownerUserId),
+        currentPaidAmount: sql<number>`coalesce(sum(${installments.paidAmount}), 0)`,
+      }).from(financialPortfolioAssignments)
+        .leftJoin(installments, eq(financialPortfolioAssignments.contractId, installments.contractId))
+        .where(isNull(financialPortfolioAssignments.endsAt))
+        .groupBy(
+          financialPortfolioAssignments.id,
+          financialPortfolioAssignments.ownerUserId,
+          financialPortfolioAssignments.contractId,
+          financialPortfolioAssignments.paidAmountBaseline,
+          financialPortfolioAssignments.startsAt,
+        ),
       db.select({ id: users.id, name: users.name, email: users.email }).from(users).limit(1000),
     ]);
     const names = new Map(ownerRows.map(owner => [owner.id, owner.name || owner.email || `Usuário #${owner.id}`]));
-    return scorecardRows.map(scorecard => {
-      const openAmount = Number(scorecard.openAmount ?? 0);
-      const overdueAmount = Number(scorecard.overdueAmount ?? 0);
-      const recoveredAfterAssignment = Number(scorecard.recoveredAfterAssignment ?? 0);
+    const byOwner = new Map<number, { assignedContracts: number; openAmount: number; overdueAmount: number; recoveredAfterAssignment: number; assignedSince: Date | null }>();
+    for (const assignment of assignmentRows) {
+      const current = byOwner.get(assignment.ownerUserId) ?? { assignedContracts: 0, openAmount: 0, overdueAmount: 0, recoveredAfterAssignment: 0, assignedSince: null };
+      const currentPaid = Number(assignment.currentPaidAmount ?? 0);
+      const baseline = Number(assignment.paidAmountBaseline ?? 0);
+      current.assignedContracts += 1;
+      current.openAmount += Number(assignment.openAmount ?? 0);
+      current.overdueAmount += Number(assignment.overdueAmount ?? 0);
+      current.recoveredAfterAssignment += Math.max(0, currentPaid - baseline);
+      const startsAt = assignment.startsAt ? new Date(assignment.startsAt) : null;
+      if (startsAt && (!current.assignedSince || startsAt < current.assignedSince)) current.assignedSince = startsAt;
+      byOwner.set(assignment.ownerUserId, current);
+    }
+    return [...byOwner.entries()].map(([ownerUserId, scorecard]) => {
+      const openAmount = scorecard.openAmount;
+      const overdueAmount = scorecard.overdueAmount;
+      const recoveredAfterAssignment = scorecard.recoveredAfterAssignment;
       const regularizationBase = recoveredAfterAssignment + openAmount;
       return {
-        ownerUserId: scorecard.ownerUserId,
-        ownerName: names.get(scorecard.ownerUserId) || `Usuário #${scorecard.ownerUserId}`,
-        assignedContracts: Number(scorecard.assignedContracts ?? 0),
+        ownerUserId,
+        ownerName: names.get(ownerUserId) || `Usuário #${ownerUserId}`,
+        assignedContracts: scorecard.assignedContracts,
         openAmount: Number(openAmount.toFixed(2)),
         overdueAmount: Number(overdueAmount.toFixed(2)),
         recoveredAfterAssignment: Number(recoveredAfterAssignment.toFixed(2)),
         regularizationRate: regularizationBase ? Number((recoveredAfterAssignment / regularizationBase * 100).toFixed(2)) : null,
-        assignedSince: scorecard.assignedSince ? new Date(scorecard.assignedSince) : null,
+        assignedSince: scorecard.assignedSince,
       };
     });
   }),
@@ -86,8 +110,12 @@ export const financeRouter = router({
     const assignmentId = await db.transaction(async tx => {
       const lockedContract = (await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
       if (!lockedContract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+      const [paidSnapshot] = await tx.select({
+        paidAmountBaseline: sql<number>`coalesce(sum(${installments.paidAmount}), 0)`,
+      }).from(installments).where(eq(installments.contractId, input.contractId));
+      const paidAmountBaseline = Number(paidSnapshot?.paidAmountBaseline ?? 0).toFixed(2);
       await tx.update(financialPortfolioAssignments).set({ endsAt: now }).where(and(eq(financialPortfolioAssignments.contractId, input.contractId), isNull(financialPortfolioAssignments.endsAt)));
-      const created = await tx.insert(financialPortfolioAssignments).values({ contractId: input.contractId, ownerUserId: input.ownerUserId, assignedByUserId: ctx.user.id, startsAt: now, notes: input.notes || null }).$returningId();
+      const created = await tx.insert(financialPortfolioAssignments).values({ contractId: input.contractId, ownerUserId: input.ownerUserId, assignedByUserId: ctx.user.id, paidAmountBaseline, startsAt: now, notes: input.notes || null }).$returningId();
       return created[0]?.id;
     });
     if (!assignmentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível atribuir a carteira financeira." });
