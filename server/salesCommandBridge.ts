@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
-import { and, asc, desc, eq, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lte, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
@@ -157,11 +157,11 @@ async function resolveSaleTerms(tx: any, resortId: number, occurredAt: Date) {
   const rows = await tx.select().from(commercialPolicyVersions).where(and(
     eq(commercialPolicyVersions.resortId, resortId),
     eq(commercialPolicyVersions.policyType, "sale_terms"),
-    isNull(commercialPolicyVersions.retiredAt),
     lte(commercialPolicyVersions.effectiveAt, occurredAt),
+    or(isNull(commercialPolicyVersions.retiredAt), gt(commercialPolicyVersions.retiredAt, occurredAt)),
   )).orderBy(desc(commercialPolicyVersions.effectiveAt), desc(commercialPolicyVersions.id)).limit(2);
   const policy = rows[0];
-  if (!policy) throw new Error("Active sale_terms policy required before CRM formalization");
+  if (!policy) throw new Error("Applicable sale_terms policy required at sale occurrence time");
   const sameEffective = rows[1] && rows[1].effectiveAt.getTime() === policy.effectiveAt.getTime();
   if (sameEffective) throw new Error("Ambiguous sale_terms policy effective date");
   return { row: policy, terms: parseSaleTermsPolicy(policy.policyJson) };
