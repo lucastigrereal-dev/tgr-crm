@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import mysql from "mysql2/promise";
 import { getE2EFixture } from "../shared/e2eFixture";
@@ -237,7 +238,7 @@ test.describe("homologação isolada estrita", () => {
 
     const cashRows = await queryDatabase<Array<{ amount: string; status: string }>>(
       "SELECT amount, status FROM financial_transactions WHERE idempotencyKey = ?",
-      [`sc-entry:${saleId}`],
+      [`sc-entry:${createHash("sha256").update(saleId).digest("hex")}`],
     );
     expect(cashRows).toEqual([{ amount: "1800.00", status: "paid" }]);
 
