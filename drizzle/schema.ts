@@ -617,6 +617,7 @@ export const financialPortfolioAssignments = mysqlTable("financial_portfolio_ass
   contractId: int("contractId").notNull().references(() => contracts.id),
   ownerUserId: int("ownerUserId").notNull().references(() => users.id),
   assignedByUserId: int("assignedByUserId").references(() => users.id),
+  paidAmountBaseline: decimal("paidAmountBaseline", { precision: 14, scale: 2 }).default("0.00").notNull(),
   startsAt: timestamp("startsAt").defaultNow().notNull(),
   endsAt: timestamp("endsAt"),
   notes: text("notes"),
