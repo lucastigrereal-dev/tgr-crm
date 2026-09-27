@@ -28,6 +28,17 @@ function waitForMutation(page: import("@playwright/test").Page, procedure: strin
 }
 
 test.describe("homologação isolada estrita", () => {
+  test("mantém a captação sem overflow horizontal no celular", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/captacao");
+    await expect(page.getByRole("heading", { name: "Central de captação" })).toBeVisible();
+    const geometry = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+    }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  });
+
   test("importa e reverte CSV no backend real", async ({ page }) => {
     const fx = fixture!;
     const csv = [
