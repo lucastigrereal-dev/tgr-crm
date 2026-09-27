@@ -41,7 +41,7 @@ export const salesCommandSaleSchema = z.strictObject({
   project: z.strictObject({
     externalKey: z.string().trim().min(1).max(120),
     name: z.string().trim().min(1).max(160),
-    timezone: z.string().trim().min(1).max(80),
+    timezone: z.string().trim().min(1).max(80).refine(isValidTimeZone, "Invalid IANA time zone"),
   }),
   saleId: z.string().trim().min(1).max(120),
   encounterId: z.string().trim().min(1).max(120),
@@ -62,6 +62,15 @@ export const salesCommandSaleSchema = z.strictObject({
 });
 
 export type SalesCommandSale = z.infer<typeof salesCommandSaleSchema>;
+
+function isValidTimeZone(value: string) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function safeEqual(left: string, right: string) {
   const a = createHash("sha256").update(left).digest();
