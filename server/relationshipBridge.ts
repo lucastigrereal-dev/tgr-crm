@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
@@ -47,8 +47,10 @@ async function lineageForContract(contractId: number) {
   const [matched] = await db.select({ payload: domainEvents.payload }).from(domainEvents)
     .where(and(
       eq(domainEvents.eventName, "sales.command.sale.ingested"),
-      eq(domainEvents.aggregateType, "opportunity"),
-      eq(domainEvents.aggregateId, String(row.opportunityId)),
+      or(
+        and(eq(domainEvents.aggregateType, "contract"), eq(domainEvents.aggregateId, String(contractId))),
+        and(eq(domainEvents.aggregateType, "opportunity"), eq(domainEvents.aggregateId, String(row.opportunityId))),
+      ),
     )).orderBy(asc(domainEvents.id)).limit(1);
   if (!matched) return null;
   const lineage = objectPayload(matched.payload);
