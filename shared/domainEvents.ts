@@ -10,6 +10,7 @@ export const domainEventCatalog = {
   "contract.cancellation.executed": { aggregateType: "contract_cancellation_request", description: "Execução de distrato e efeitos derivados registrados." },
   "contract.document.uploaded": { aggregateType: "contract_document", description: "Documento contratual anexado." },
   "contract.document.signed": { aggregateType: "contract_document", description: "Assinatura documental confirmada pela administração." },
+  "contract.monetary_adjustment.applied": { aggregateType: "contract", description: "Reajuste monetário aplicado ao saldo aberto com memória de cálculo." },
   "ownership.entitlement.created": { aggregateType: "ownership_entitlement", description: "Direito de uso criado." },
   "unit.maintenance.blocked": { aggregateType: "unit_maintenance_block", description: "Unidade bloqueada para manutenção." },
   "opportunity.created": { aggregateType: "opportunity", description: "Oportunidade comercial criada." },
