@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, like, lte, or, SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, lte, or, sql, SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
   commercialFractionHistory,
@@ -29,17 +29,23 @@ export const inventoryRouter = router({
   summary: internalProcedure.input(z.object({ resortId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return { total: 0, available: 0, held: 0, sold: 0, blocked: 0, expiredHolds: 0 };
-    const rows = await db.select({ status: commercialFractions.status, heldUntil: commercialFractions.heldUntil })
-      .from(commercialFractions)
-      .where(eq(commercialFractions.resortId, input.resortId))
-      .limit(10000);
     const now = new Date();
-    const counts = { total: rows.length, available: 0, held: 0, sold: 0, blocked: 0, expiredHolds: 0 };
-    for (const row of rows) {
-      counts[row.status] += 1;
-      if (row.status === "held" && isExpired(row.heldUntil, now)) counts.expiredHolds += 1;
-    }
-    return counts;
+    const [counts] = await db.select({
+      total: sql<number>`count(*)`,
+      available: sql<number>`coalesce(sum(case when ${commercialFractions.status} = 'available' then 1 else 0 end), 0)`,
+      held: sql<number>`coalesce(sum(case when ${commercialFractions.status} = 'held' then 1 else 0 end), 0)`,
+      sold: sql<number>`coalesce(sum(case when ${commercialFractions.status} = 'sold' then 1 else 0 end), 0)`,
+      blocked: sql<number>`coalesce(sum(case when ${commercialFractions.status} = 'blocked' then 1 else 0 end), 0)`,
+      expiredHolds: sql<number>`coalesce(sum(case when ${commercialFractions.status} = 'held' and ${commercialFractions.heldUntil} <= ${now} then 1 else 0 end), 0)`,
+    }).from(commercialFractions).where(eq(commercialFractions.resortId, input.resortId));
+    return {
+      total: Number(counts?.total ?? 0),
+      available: Number(counts?.available ?? 0),
+      held: Number(counts?.held ?? 0),
+      sold: Number(counts?.sold ?? 0),
+      blocked: Number(counts?.blocked ?? 0),
+      expiredHolds: Number(counts?.expiredHolds ?? 0),
+    };
   }),
 
   list: internalProcedure.input(z.object({
@@ -191,6 +197,7 @@ export const inventoryRouter = router({
     const result = await db.transaction(async tx => {
       const hold = (await tx.select().from(commercialFractionHolds).where(eq(commercialFractionHolds.id, input.holdId)).limit(1).for("update"))[0];
       if (!hold) throw new TRPCError({ code: "NOT_FOUND", message: "Hold não encontrado." });
+      if (ctx.user.role !== "admin" && hold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o dono do hold ou a administração pode liberar esta cota." });
       if (hold.status !== "active") return { fractionId: hold.fractionId, alreadyClosed: true };
       const fraction = (await tx.select().from(commercialFractions).where(eq(commercialFractions.id, hold.fractionId)).limit(1).for("update"))[0];
       if (!fraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota do hold não encontrada." });
