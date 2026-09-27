@@ -65,7 +65,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(and(eq(billingRecords.id, billing.billing.id), inArray(billingRecords.status, ["pending", "generated", "paid"])));
         const paidAt = new Date();
         const fullAmount = Number(billing.installment.amount);
-        const previousPaid = Number(billing.installment.paidAmount);
+        const previousPaid = Number(billing.installment.paidAmount ?? (billing.installment.status === "paid" ? billing.installment.amount : 0));
         const receivedNow = Number(billing.billing.amount);
         const nextPaid = Math.min(fullAmount, Number((previousPaid + receivedNow).toFixed(2)));
         const fullyPaid = nextPaid >= fullAmount;
