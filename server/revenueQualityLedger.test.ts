@@ -21,6 +21,24 @@ describe("revenue quality ledger", () => {
     expect(facts).not.toContainEqual(expect.objectContaining({ type: "commission_at_risk", commissionId: 31 }));
   });
 
+  it("separa recebimento parcial do saldo ainda exposto", () => {
+    const facts = buildRevenueQualityLedger({
+      contract: { id: 73, totalAmount: "1000.00", status: "active" },
+      installments: [
+        { id: 5, sequence: 1, amount: "1000.00", paidAmount: "350.00", status: "open" },
+      ],
+      commissions: [],
+      policyVersion: "resort-1/revenue/2026-09",
+    });
+
+    expect(summarizeRevenueQualityLedger(facts)).toMatchObject({
+      cashConfirmed: 350,
+      cashExposure: 650,
+    });
+    expect(facts).toContainEqual(expect.objectContaining({ type: "cash_confirmed", installmentId: 5, amount: 350 }));
+    expect(facts).toContainEqual(expect.objectContaining({ type: "cash_exposure", installmentId: 5, amount: 650 }));
+  });
+
   it("preserva os fatos da venda e acrescenta reversão, retenção, reembolso e estorno no distrato executado", () => {
     const facts = buildRevenueQualityLedger({
       contract: { id: 72, totalAmount: 10000, status: "cancelled" },

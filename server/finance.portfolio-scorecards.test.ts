@@ -20,7 +20,7 @@ describe("finance.portfolioScorecards", () => {
 
   it("agrega carteira ativa, saldo, atraso e recuperação posterior à posse", async () => {
     const responses = [
-      [{ ownerUserId: 4, assignedContracts: 1, openAmount: "300.00", overdueAmount: "300.00", recoveredAfterAssignment: "200.00", assignedSince: new Date("2026-08-10T12:00:00Z") }],
+      [{ assignmentId: 91, ownerUserId: 4, contractId: 77, paidAmountBaseline: "900.00", startsAt: new Date("2026-08-10T12:00:00Z"), openAmount: "300.00", overdueAmount: "300.00", currentPaidAmount: "1100.00" }],
       [{ id: 4, name: "Fábio Financeiro", email: "fabio@tgr.local" }],
     ];
     dbMocks.getDb.mockResolvedValue({ select: vi.fn(() => chain(responses.shift() ?? [])) });

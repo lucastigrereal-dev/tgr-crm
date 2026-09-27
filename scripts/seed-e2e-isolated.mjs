@@ -68,6 +68,11 @@ try {
   if (!resortId) throw new Error("Empreendimento E2E não foi persistido.");
 
   await db.execute(
+    "INSERT INTO commercial_policy_versions (resortId, policyType, version, policyJson, effectiveAt, approvedByUserId) VALUES (?, 'sale_terms', ?, ?, DATE_SUB(NOW(), INTERVAL 1 DAY), ?)",
+    [resortId, `E2E-SALE-TERMS-${fixture.normalizedRunId}`, JSON.stringify({ usageModel: "fixed_week", balanceInstallmentCount: 84, balanceCadenceMonths: 1 }), ownerId],
+  );
+
+  await db.execute(
     "INSERT INTO units (resortId, code, category, capacity, beds, status) VALUES (?, ?, 'Suite', 4, 2, 'active'), (?, ?, 'Suite', 4, 2, 'active')",
     [resortId, fixture.unitGuestCode, resortId, fixture.unitWaitlistCode],
   );
@@ -80,6 +85,11 @@ try {
   if (!unitForGuest || !unitForWaitlist) {
     throw new Error("Unidades E2E não foram persistidas.");
   }
+
+  await db.execute(
+    "INSERT INTO commercial_fractions (resortId, unitId, code, sequence, status, listPrice, priceTableVersion) VALUES (?, ?, ?, 1, 'available', 28900, 'E2E-2026'), (?, ?, ?, 2, 'available', 28900, 'E2E-2026')",
+    [resortId, unitForGuest, `${fixture.unitGuestCode}-C01`, resortId, unitForGuest, `${fixture.unitGuestCode}-C02`],
+  );
 
   const customers = [
     {
@@ -222,6 +232,8 @@ try {
     ownerOpenId: fixture.ownerOpenId,
     resortId,
     unitForWaitlist,
+    salesCommandProjectExternalKey: `E2E-SC-${fixture.normalizedRunId}`,
+    salesCommandSaleId: `E2E-SALE-${fixture.normalizedRunId}`,
     reused: false,
   };
   await mkdir(path.dirname(receiptPath), { recursive: true });

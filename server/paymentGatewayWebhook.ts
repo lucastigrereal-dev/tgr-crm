@@ -48,6 +48,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
 
   let billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
+  let installmentPaymentAmount = "0.00";
   let commissionBlocked = false;
   const createdCommissionFacts: Array<{ id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number }> = [];
 
@@ -63,25 +64,38 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         if (["cancelled", "expired"].includes(billing.billing.status) || ["cancelled", "renegotiated"].includes(billing.installment.status)) return;
         await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(and(eq(billingRecords.id, billing.billing.id), inArray(billingRecords.status, ["pending", "generated", "paid"])));
         const paidAt = new Date();
-        const installmentUpdate = await tx.update(installments).set({ status: "paid", paidAt, paymentMethod: billing.billing.type }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
-        const installmentWasSettled = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
-        if (installmentWasSettled) {
-          installmentPaid = true;
-          await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa via gateway Asaas · parcela ${billing.installment.sequence}`, amount: billing.installment.amount, dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
-          const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
-          const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
-          const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
-          const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);
-          commissionBlocked = commissionNeedsPolicy && !policy;
-          if (commissionNeedsPolicy && policy && context?.contract && context.proposal && context.capture) {
-            const existingCommission = (await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, billing.installment.id)).limit(1))[0];
-            if (!existingCommission) {
-              const paymentMethod = billing.billing.type === "pix" ? "pix" : "boleto";
-              const rows = buildInstallmentCommissions({ installmentId: billing.installment.id, installmentAmount: Number(billing.installment.amount), entryTotal: Number(context.proposal.downPaymentAmount), contractTotal: Number(context.contract.totalAmount), paymentMethod, compensatedAt: paidAt, linerId: context.capture.linerId, closerId: context.capture.closerId, rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, calendar: { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay } });
-              if (rows.length) {
-                const commissionValues = rows.map(row => ({ ...row, contractId: billing.installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
-                const insertedCommissions = await tx.insert(salesCommissions).values(commissionValues).$returningId();
-                insertedCommissions.forEach((inserted, index) => { const row = commissionValues[index]; if (row && inserted?.id) createdCommissionFacts.push({ id: inserted.id, sellerId: row.sellerId, campaignId: row.campaignId, opportunityId: row.opportunityId, contractId: row.contractId, sourceInstallmentId: row.sourceInstallmentId, commissionRole: row.commissionRole, amount: Number(row.amount), rate: Number(row.rate) }); });
+        const fullAmount = Number(billing.installment.amount);
+        const previousPaid = Number(billing.installment.paidAmount ?? (billing.installment.status === "paid" ? billing.installment.amount : 0));
+        const receivedNow = Number(billing.billing.amount ?? Math.max(0, fullAmount - previousPaid));
+        const nextPaid = Math.min(fullAmount, Number((previousPaid + receivedNow).toFixed(2)));
+        const fullyPaid = nextPaid >= fullAmount;
+        const installmentUpdate = await tx.update(installments).set({
+          status: fullyPaid ? "paid" : billing.installment.status,
+          paidAmount: nextPaid.toFixed(2),
+          paidAt: fullyPaid ? paidAt : billing.installment.paidAt,
+          paymentMethod: billing.billing.type,
+        }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
+        const paymentRecorded = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
+        if (paymentRecorded) {
+          installmentPaymentAmount = receivedNow.toFixed(2);
+          installmentPaid = fullyPaid;
+          await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
+          if (fullyPaid) {
+            const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
+            const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
+            const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
+            const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);
+            commissionBlocked = commissionNeedsPolicy && !policy;
+            if (commissionNeedsPolicy && policy && context?.contract && context.proposal && context.capture) {
+              const existingCommission = (await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, billing.installment.id)).limit(1))[0];
+              if (!existingCommission) {
+                const paymentMethod = billing.billing.type === "pix" ? "pix" : "boleto";
+                const rows = buildInstallmentCommissions({ installmentId: billing.installment.id, installmentAmount: Number(billing.installment.amount), entryTotal: Number(context.proposal.downPaymentAmount), contractTotal: Number(context.contract.totalAmount), paymentMethod, compensatedAt: paidAt, linerId: context.capture.linerId, closerId: context.capture.closerId, rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, calendar: { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay } });
+                if (rows.length) {
+                  const commissionValues = rows.map(row => ({ ...row, contractId: billing.installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
+                  const insertedCommissions = await tx.insert(salesCommissions).values(commissionValues).$returningId();
+                  insertedCommissions.forEach((inserted, index) => { const row = commissionValues[index]; if (row && inserted?.id) createdCommissionFacts.push({ id: inserted.id, sellerId: row.sellerId, campaignId: row.campaignId, opportunityId: row.opportunityId, contractId: row.contractId, sourceInstallmentId: row.sourceInstallmentId, commissionRole: row.commissionRole, amount: Number(row.amount), rate: Number(row.rate) }); });
+                }
               }
             }
           }
@@ -103,7 +117,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       await recordAudit(null, "installment", billing.installment.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada.");
       await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, reason: "incomplete_project_policy", source: "asaas" } });
     }
-    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: billing.installment.amount, contractId: billing.installment.contractId, sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked } });
+    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: installmentPaymentAmount, contractId: billing.installment.contractId, sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked } });
     for (const commission of createdCommissionFacts) { await recordAudit(null, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: null, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }
     await syncRevenueQualityForContract({ contractId: billing.installment.contractId, actorUserId: null, trigger: "webhook Asaas" });
   }

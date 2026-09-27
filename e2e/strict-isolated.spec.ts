@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import mysql from "mysql2/promise";
 import { getE2EFixture } from "../shared/e2eFixture";
@@ -167,6 +168,98 @@ test.describe("homologação isolada estrita", () => {
       presentationStatus: "no_tour",
       noTourReason: "Casal desistiu da apresentação no teste isolado.",
     });
+  });
+
+  test("formaliza SALE_CONFIRMED do Sales Command em contrato, parcelas e estoque uma única vez", async ({ request }) => {
+    const fx = fixture!;
+    const baseUrl = process.env.E2E_BASE_URL!;
+    const integrationKey = process.env.SALES_COMMAND_INTEGRATION_KEY!;
+    const saleId = `E2E-SALE-${fx.normalizedRunId}`;
+    const projectExternalKey = `E2E-SC-${fx.normalizedRunId}`;
+    const saleDate = new Date().toISOString().slice(0, 10);
+    const secondEntryDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    const body = {
+      eventId: `evt-${saleId}`,
+      eventName: "sale.ready_for_contract.v1",
+      source: "sales-command",
+      correlationId: `corr-${saleId}`,
+      occurredAt: new Date().toISOString(),
+      project: { externalKey: projectExternalKey, name: fx.resortName, timezone: "America/Recife" },
+      saleId,
+      encounterId: `enc-${fx.normalizedRunId}`,
+      customer: { name: `${fx.prefix}Sales Command Cliente` },
+      sale: {
+        quotasCount: 2,
+        vgvCents: 2_890_000,
+        entryContractedCents: 360_000,
+        entryReceivedCents: 180_000,
+        entryInstallmentCount: 2,
+        entrySchedule: [
+          { sequence: 1, amountCents: 180_000, dueDate: saleDate },
+          { sequence: 2, amountCents: 180_000, dueDate: secondEntryDate },
+        ],
+        firstBalanceDueInDays: 120,
+        paymentMethods: ["PIX"],
+      },
+    };
+
+    const first = await request.post(`${baseUrl}/api/integrations/sales-command`, {
+      headers: { Authorization: `Bearer ${integrationKey}` },
+      data: body,
+    });
+    expect(first.status()).toBe(201);
+    const firstJson = await first.json();
+    expect(firstJson).toMatchObject({ accepted: true, replay: false, saleId, installmentCount: 86 });
+    expect(firstJson.fractionIds).toHaveLength(2);
+
+    const contracts = await queryDatabase<Array<{ id: number; opportunityId: number; proposalId: number; status: string; externalSaleId: string }>>(
+      "SELECT c.id, p.opportunityId, c.proposalId, c.status, c.externalSaleId FROM contracts c JOIN proposals p ON p.id = c.proposalId WHERE c.externalSource = 'sales-command' AND c.externalSaleId = ?",
+      [saleId],
+    );
+    expect(contracts).toHaveLength(1);
+    expect(contracts[0]).toMatchObject({ status: "pending_signature", externalSaleId: saleId });
+
+    const installmentRows = await queryDatabase<Array<{ sequence: number; amount: string; paidAmount: string; status: string }>>(
+      "SELECT sequence, amount, paidAmount, status FROM installments WHERE contractId = ? ORDER BY sequence",
+      [contracts[0]!.id],
+    );
+    expect(installmentRows).toHaveLength(86);
+    expect(installmentRows[0]).toMatchObject({ sequence: 1, amount: "1800.00", paidAmount: "1800.00", status: "paid" });
+    expect(installmentRows[1]).toMatchObject({ sequence: 2, amount: "1800.00", paidAmount: "0.00", status: "open" });
+    const contractualTotal = installmentRows.reduce((sum, row) => sum + Number(row.amount), 0);
+    expect(contractualTotal).toBeCloseTo(28_900, 2);
+
+    const fractionRows = await queryDatabase<Array<{ status: string; currentContractId: number }>>(
+      "SELECT status, currentContractId FROM commercial_fractions WHERE currentContractId = ? ORDER BY id",
+      [contracts[0]!.id],
+    );
+    expect(fractionRows).toHaveLength(2);
+    expect(fractionRows.every(row => row.status === "sold")).toBe(true);
+
+    const cashRows = await queryDatabase<Array<{ amount: string; status: string }>>(
+      "SELECT amount, status FROM financial_transactions WHERE idempotencyKey = ?",
+      [`sc-entry:${createHash("sha256").update(saleId).digest("hex")}`],
+    );
+    expect(cashRows).toEqual([{ amount: "1800.00", status: "paid" }]);
+
+    const resortRows = await queryDatabase<Array<{ externalKey: string | null }>>(
+      "SELECT externalKey FROM resorts WHERE name = ?",
+      [fx.resortName],
+    );
+    expect(resortRows[0]?.externalKey).toBe(projectExternalKey);
+
+    const replay = await request.post(`${baseUrl}/api/integrations/sales-command`, {
+      headers: { Authorization: `Bearer ${integrationKey}` },
+      data: body,
+    });
+    expect(replay.status()).toBe(200);
+    expect(await replay.json()).toMatchObject({ accepted: true, replay: true, contractId: contracts[0]!.id, saleId });
+
+    const afterReplay = await queryDatabase<Array<{ count: number | string }>>(
+      "SELECT COUNT(*) AS count FROM contracts WHERE externalSource = 'sales-command' AND externalSaleId = ?",
+      [saleId],
+    );
+    expect(Number(afterReplay[0]?.count ?? 0)).toBe(1);
   });
 
   test("solicita, aprova e executa distrato uma única vez", async ({ page }) => {

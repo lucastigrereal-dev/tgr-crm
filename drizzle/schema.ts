@@ -108,12 +108,16 @@ export const customerInteractions = mysqlTable(
 
 export const resorts = mysqlTable("resorts", {
   id: int("id").autoincrement().primaryKey(),
+  externalKey: varchar("externalKey", { length: 120 }),
   name: varchar("name", { length: 180 }).notNull(),
   city: varchar("city", { length: 120 }),
   state: varchar("state", { length: 2 }),
   status: mysqlEnum("status", ["active", "inactive"]).default("active").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [uniqueIndex("resorts_name_unique").on(table.name)]);
+}, table => [
+  uniqueIndex("resorts_name_unique").on(table.name),
+  uniqueIndex("resorts_external_key_unique").on(table.externalKey),
+]);
 
 export const commercialProjectSettings = mysqlTable("commercial_project_settings", {
   id: int("id").autoincrement().primaryKey(),
@@ -131,7 +135,7 @@ export const commercialProjectSettings = mysqlTable("commercial_project_settings
 export const commercialPolicyVersions = mysqlTable("commercial_policy_versions", {
   id: int("id").autoincrement().primaryKey(),
   resortId: int("resortId").notNull().references(() => resorts.id),
-  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality", "monetary_adjustment"]).notNull(),
+  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality", "monetary_adjustment", "sale_terms"]).notNull(),
   version: varchar("version", { length: 80 }).notNull(),
   policyJson: text("policyJson").notNull(),
   effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
@@ -361,6 +365,8 @@ export const contracts = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     number: varchar("number", { length: 80 }).notNull().unique(),
+    externalSource: varchar("externalSource", { length: 64 }),
+    externalSaleId: varchar("externalSaleId", { length: 120 }),
     customerId: int("customerId").notNull().references(() => customers.id),
     proposalId: int("proposalId").references(() => proposals.id),
     sellerId: int("sellerId").references(() => users.id),
@@ -375,7 +381,12 @@ export const contracts = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [index("contracts_status_idx").on(table.status), index("contracts_customer_idx").on(table.customerId), index("contracts_proposal_status_idx").on(table.proposalId, table.status)],
+  table => [
+    index("contracts_status_idx").on(table.status),
+    index("contracts_customer_idx").on(table.customerId),
+    index("contracts_proposal_status_idx").on(table.proposalId, table.status),
+    uniqueIndex("contracts_external_sale_unique").on(table.externalSource, table.externalSaleId),
+  ],
 );
 
 export const contractDocuments = mysqlTable("contract_documents", {
@@ -521,6 +532,7 @@ export const installments = mysqlTable(
     sequence: int("sequence").notNull(),
     dueDate: date("dueDate").notNull(),
     amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
+    paidAmount: decimal("paidAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
     status: mysqlEnum("status", ["open", "paid", "overdue", "cancelled", "renegotiated"]).default("open").notNull(),
     paidAt: timestamp("paidAt"),
     paymentMethod: varchar("paymentMethod", { length: 64 }),
@@ -616,6 +628,7 @@ export const financialPortfolioAssignments = mysqlTable("financial_portfolio_ass
   contractId: int("contractId").notNull().references(() => contracts.id),
   ownerUserId: int("ownerUserId").notNull().references(() => users.id),
   assignedByUserId: int("assignedByUserId").references(() => users.id),
+  paidAmountBaseline: decimal("paidAmountBaseline", { precision: 14, scale: 2 }).default("0.00").notNull(),
   startsAt: timestamp("startsAt").defaultNow().notNull(),
   endsAt: timestamp("endsAt"),
   notes: text("notes"),

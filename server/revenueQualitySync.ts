@@ -35,7 +35,7 @@ export async function syncRevenueQualityForContract(input: { contractId: number;
   const cancellation = cancellationRows.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
   const projection = buildPersistableRevenueProjection({
     contract: { id: contract.id, totalAmount: contract.totalAmount, status: contract.status },
-    installments: installmentRows.map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, status: row.status })),
+    installments: installmentRows.map(row => ({ id: row.id, sequence: row.sequence, amount: row.amount, paidAmount: row.paidAmount, status: row.status })),
     commissions: commissionRows.map(row => ({ id: row.id, amount: row.amount, status: row.status, lifecycleStatus: row.lifecycleStatus, sourceInstallmentId: row.sourceInstallmentId })),
     cancellation: cancellation ? { status: cancellation.status } : null,
     policyVersion,

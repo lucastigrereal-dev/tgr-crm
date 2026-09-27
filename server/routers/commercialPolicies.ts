@@ -6,8 +6,9 @@ import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { monetaryAdjustmentPolicySchema } from "../monetaryAdjustment";
+import { saleTermsPolicySchema } from "../saleTermsPolicy";
 
-const policyType = z.enum(["commission", "cancellation", "revenue_quality", "monetary_adjustment"]);
+const policyType = z.enum(["commission", "cancellation", "revenue_quality", "monetary_adjustment", "sale_terms"]);
 
 function isDuplicateKeyError(error: unknown) {
   if (!error || typeof error !== "object") return false;
@@ -30,6 +31,10 @@ export const commercialPoliciesRouter = router({
     if (input.policyType === "monetary_adjustment") {
       const parsed = monetaryAdjustmentPolicySchema.safeParse(input.policy);
       if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: "Política monetária inválida. Informe indexCode, periodicityMonths, spreadMonthlyPercent e applyTo." });
+    }
+    if (input.policyType === "sale_terms") {
+      const parsed = saleTermsPolicySchema.safeParse(input.policy);
+      if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: "Política de formalização inválida. Informe usageModel, balanceInstallmentCount e balanceCadenceMonths." });
     }
         const duplicate = (await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, input.policyType), eq(commercialPolicyVersions.version, input.version))).limit(1))[0];
     if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma versão com esse código para o empreendimento e tipo de política." });
