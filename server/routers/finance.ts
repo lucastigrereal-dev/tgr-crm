@@ -66,7 +66,7 @@ export const financeRouter = router({
       if (startsAt && (!current.assignedSince || startsAt < current.assignedSince)) current.assignedSince = startsAt;
       byOwner.set(assignment.ownerUserId, current);
     }
-    return [...byOwner.entries()].map(([ownerUserId, scorecard]) => {
+    return Array.from(byOwner.entries()).map(([ownerUserId, scorecard]) => {
       const openAmount = scorecard.openAmount;
       const overdueAmount = scorecard.overdueAmount;
       const recoveredAfterAssignment = scorecard.recoveredAfterAssignment;
