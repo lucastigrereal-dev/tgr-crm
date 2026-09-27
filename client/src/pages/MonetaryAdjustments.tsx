@@ -59,7 +59,7 @@ export default function MonetaryAdjustments() {
     onSuccess: async () => { toast.success("Valor do índice registrado."); await utils.monetaryAdjustments.indexValues.invalidate(); await simulation.refetch(); },
     onError: error => toast.error(error.message),
   });
-  const apply = trpc.monetaryAdjustments.apply.useMutation({
+  const applyAdjustment = trpc.monetaryAdjustments.applyAdjustment.useMutation({
     onSuccess: async data => {
       toast.success(`Reajuste #${data.adjustmentId} aplicado com memória de cálculo.`);
       await Promise.all([simulation.refetch(), history.refetch(), utils.customers.installments.invalidate(), utils.finance.installments.invalidate()]);
@@ -138,6 +138,7 @@ export default function MonetaryAdjustments() {
       </div>
 
       {simulation.error ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{simulation.error.message}</p> : null}
+      {simulation.data?.activeBillings?.length ? <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">Há {simulation.data.activeBillings.length} cobrança(s) ativa(s) nas parcelas deste reajuste. Simulação liberada, aplicação bloqueada até cancelar/reconciliar essas cobranças.</p> : null}
       {calc ? calc.eligible ? <div className="space-y-4">
         <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <Metric label="Base" value={simulation.data?.baseDate ?? "—"} />
@@ -148,11 +149,11 @@ export default function MonetaryAdjustments() {
           <Metric label="Depois" value={money(calc.afterTotal)} />
         </div>
         <div className="overflow-x-auto rounded-2xl border border-[#e8e3d9]"><table className="w-full min-w-[720px] text-sm"><thead className="bg-[#f4f0e7] text-left text-[10px] font-bold uppercase tracking-[.12em] text-[#52615c]"><tr><th className="px-4 py-3">Parcela</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Antes</th><th className="px-4 py-3">Depois</th><th className="px-4 py-3">Delta</th></tr></thead><tbody>{calc.installments.map(item => <tr key={item.id} className="border-t border-[#eee9df]"><td className="px-4 py-3">#{item.sequence}</td><td className="px-4 py-3">{item.status}</td><td className="px-4 py-3">{money(item.before)}</td><td className="px-4 py-3 font-semibold">{money(item.after)}</td><td className="px-4 py-3">{money(item.delta)}</td></tr>)}</tbody></table></div>
-        <Button disabled={apply.isPending} onClick={() => {
+        <Button disabled={applyAdjustment.isPending || Boolean(simulation.data?.activeBillings?.length)} onClick={() => {
           if (!window.confirm(`Aplicar o reajuste revisado de ${money(calc.beforeTotal)} para ${money(calc.afterTotal)}? Esta ação altera parcelas abertas e grava ledger.`)) return;
-          apply.mutate({ contractId: Number(contractId), policyVersionId: Number(policyVersionId), throughDate, confirmation: "APPLY_REVIEWED_ADJUSTMENT" });
+          applyAdjustment.mutate({ contractId: Number(contractId), policyVersionId: Number(policyVersionId), throughDate, confirmation: "APPLY_REVIEWED_ADJUSTMENT" });
         }}>Aplicar reajuste revisado</Button>
-      </div> : <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Periodicidade ainda não atingida: {calc.elapsedMonths}/{calc.requiredMonths} meses.</p> : null}
+      </div> : <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{calc.reason === "index_series_incomplete" ? `Série ${calc.indexCode} incompleta. Ausentes: ${calc.missingMonths.join(", ") || "nenhum"}; duplicados: ${calc.duplicateMonths.join(", ") || "nenhum"}.` : `Periodicidade ainda não atingida: ${calc.elapsedMonths}/${calc.requiredMonths} meses.`}</p> : null}
     </CardContent></Card>
 
     {history.data?.length ? <Card><CardContent className="p-5"><p className="mb-3 text-xs font-bold uppercase tracking-[.14em] text-[#b18f4b]">Memórias aplicadas</p><div className="space-y-2">{history.data.map(item => <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e8e3d9] bg-white p-3 text-sm"><span>#{item.id} · {item.indexCode} · {String(item.baseDate).slice(0,10)} → {String(item.throughDate).slice(0,10)}</span><strong>{money(Number(item.beforeTotal))} → {money(Number(item.afterTotal))}</strong></div>)}</div></CardContent></Card> : null}
