@@ -191,7 +191,7 @@ export const financeRouter = router({
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const installment = (await db.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1))[0]; if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
     if (["paid", "cancelled", "renegotiated"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta parcela não pode ser renegociada." });
-    const originalAmount = Number((Number(installment.amount) - Number(installment.paidAmount)).toFixed(2)); if (originalAmount <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta parcela não possui saldo aberto para renegociação." }); if (input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "O acordo não pode aumentar o saldo aberto da parcela." });
+    const originalAmount = Number((Number(installment.amount) - Number(installment.paidAmount ?? 0)).toFixed(2)); if (originalAmount <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Esta parcela não possui saldo aberto para renegociação." }); if (input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "O acordo não pode aumentar o saldo aberto da parcela." });
     return { contractId: installment.contractId, originalAmount, proposedAmount: input.proposedAmount, discountAmount: Number((originalAmount - input.proposedAmount).toFixed(2)), proposedDueDate: input.proposedDueDate };
   }),
 
@@ -200,7 +200,7 @@ export const financeRouter = router({
     const renegotiation = await db.transaction(async tx => {
       const installment = (await tx.select().from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
       if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
-      const originalAmount = Number((Number(installment.amount) - Number(installment.paidAmount)).toFixed(2));
+      const originalAmount = Number((Number(installment.amount) - Number(installment.paidAmount ?? 0)).toFixed(2));
       if (["paid", "cancelled", "renegotiated"].includes(installment.status) || originalAmount <= 0 || input.proposedAmount > originalAmount) throw new TRPCError({ code: "BAD_REQUEST", message: "Acordo inválido para o saldo aberto desta parcela." });
       const active = (await tx.select({ id: installmentRenegotiations.id }).from(installmentRenegotiations).where(and(eq(installmentRenegotiations.originalInstallmentId, input.installmentId), inArray(installmentRenegotiations.status, ["draft", "approved", "applied"]))).limit(1))[0];
       if (active) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma renegociação ativa para esta parcela." });
@@ -244,7 +244,7 @@ export const financeRouter = router({
           await tx.insert(paymentGatewayCustomers).values({ customerId: row.customer.id, gatewayProvider: "asaas", gatewayCustomerId }).onDuplicateKeyUpdate({ set: { gatewayCustomerId, updatedAt: new Date() } });
         }
 
-        const outstandingAmount = Number((Number(row.installment.amount) - Number(row.installment.paidAmount)).toFixed(2));
+        const outstandingAmount = Number((Number(row.installment.amount) - Number(row.installment.paidAmount ?? 0)).toFixed(2));
         if (outstandingAmount <= 0) throw new TRPCError({ code: "BAD_REQUEST", message: "A parcela não possui saldo aberto para cobrança." });
         const externalReference = billingExternalReference(input.installmentId);
         const expectedBillingType = asaasBillingType(input.type);
@@ -289,7 +289,7 @@ export const financeRouter = router({
           const installment = (await tx.select({ id: installments.id, status: installments.status, amount: installments.amount, paidAmount: installments.paidAmount, dueDate: installments.dueDate }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
           if (!installment) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela da cobrança não encontrada." });
           if (["paid", "cancelled", "renegotiated"].includes(installment.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível registrar cobrança para uma parcela paga, cancelada ou renegociada." });
-          const outstandingAmount = Number((Number(installment.amount) - Number(installment.paidAmount)).toFixed(2)).toFixed(2); if (outstandingAmount !== expectedAmount || installment.dueDate.getTime() !== expectedDueDate.getTime()) throw new TRPCError({ code: "BAD_REQUEST", message: "Valor e vencimento da cobrança devem coincidir com o saldo aberto da parcela." });
+          const outstandingAmount = Number((Number(installment.amount) - Number(installment.paidAmount ?? 0)).toFixed(2)).toFixed(2); if (outstandingAmount !== expectedAmount || installment.dueDate.getTime() !== expectedDueDate.getTime()) throw new TRPCError({ code: "BAD_REQUEST", message: "Valor e vencimento da cobrança devem coincidir com o saldo aberto da parcela." });
           const duplicateReference = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "manual"), eq(billingRecords.externalReference, externalReference))).limit(1))[0];
           if (duplicateReference) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma cobrança manual com esta referência externa." });
           const activeDuplicate = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.installmentId, input.installmentId), eq(billingRecords.type, input.type), eq(billingRecords.gatewayProvider, "manual"), inArray(billingRecords.status, ["pending", "generated", "paid"]))).limit(1))[0];
@@ -333,7 +333,7 @@ export const financeRouter = router({
         if (!lockedItem) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
         if (lockedItem.status === "paid") return false;
         if (!["open", "overdue"].includes(lockedItem.status)) throw new TRPCError({ code: "CONFLICT", message: "A parcela não está em estado elegível para baixa." });
-        const remainingAmount = Number((Number(lockedItem.amount) - Number(lockedItem.paidAmount)).toFixed(2));
+        const remainingAmount = Number((Number(lockedItem.amount) - Number(lockedItem.paidAmount ?? 0)).toFixed(2));
         if (remainingAmount <= 0) throw new TRPCError({ code: "CONFLICT", message: "A parcela não possui saldo aberto para baixa." });
         const updateResult = await tx.update(installments).set({ status: "paid", paidAmount: lockedItem.amount, paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(and(eq(installments.id, input.id), inArray(installments.status, ["open", "overdue"])));
         if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return false;
@@ -348,7 +348,7 @@ export const financeRouter = router({
         await recordAudit(ctx.user.id, "installment", input.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada.");
         await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, reason: "incomplete_project_policy", source: "manual" } });
       }
-      await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { installmentId: input.id, paidAmount: Number((Number(item.amount) - Number(item.paidAmount)).toFixed(2)), contractId: item.contractId, sequence: item.sequence, amount: item.amount, source: "manual", gatewayPaymentId: null, commissionBlocked } });
+      await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { installmentId: input.id, paidAmount: Number((Number(item.amount) - Number(item.paidAmount ?? 0)).toFixed(2)), contractId: item.contractId, sequence: item.sequence, amount: item.amount, source: "manual", gatewayPaymentId: null, commissionBlocked } });
       for (const commission of createdCommissionFacts) { await recordAudit(ctx.user.id, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: ctx.user.id, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }
       await syncRevenueQualityForContract({ contractId: item.contractId, actorUserId: ctx.user.id, trigger: "baixa de parcela" });
       return { success: true, alreadyPaid: false, commissionBlocked };
