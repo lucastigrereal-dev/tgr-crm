@@ -288,6 +288,13 @@
       "when": 1790518000000,
       "tag": "0040_sales_command_formalization",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1790522000000,
+      "tag": "0041_portfolio_paid_baseline",
+      "breakpoints": true
     }
   ]
 }
