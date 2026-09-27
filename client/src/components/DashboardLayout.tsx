@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/sidebar";
 import { startLogin } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { BrainCircuit, CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, DoorOpen, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, Settings, ShieldCheck, TrendingUp, Trophy, Upload, UsersRound } from "lucide-react";
+import { Boxes, BrainCircuit, CalendarDays, ChartNoAxesCombined, CircleDollarSign, ClipboardList, DoorOpen, FileSignature, LayoutDashboard, LogOut, Megaphone, PanelLeft, Settings, ShieldCheck, TrendingUp, Trophy, Upload, UsersRound } from "lucide-react";
 import { CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
@@ -32,7 +32,7 @@ import { Label } from "./ui/label";
 
 const menuGroups = [
   { label: "Hoje", items: [{ icon: LayoutDashboard, label: "Visão geral", path: "/" }, { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" }] },
-  { label: "Comercial", items: [{ icon: ClipboardList, label: "Captação", path: "/captacao" }, { icon: ChartNoAxesCombined, label: "Vendas", path: "/vendas" }, { icon: TrendingUp, label: "Análise de vendas", path: "/analise-de-vendas" }, { icon: Megaphone, label: "Campanhas", path: "/campanhas" }] },
+  { label: "Comercial", items: [{ icon: ClipboardList, label: "Captação", path: "/captacao" }, { icon: ChartNoAxesCombined, label: "Vendas", path: "/vendas" }, { icon: Boxes, label: "Estoque de cotas", path: "/estoque-comercial" }, { icon: TrendingUp, label: "Análise de vendas", path: "/analise-de-vendas" }, { icon: Megaphone, label: "Campanhas", path: "/campanhas" }] },
   { label: "Receita", items: [{ icon: Trophy, label: "Comissões", path: "/comissoes" }, { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" }, { icon: FileSignature, label: "Contratos", path: "/contratos" }] },
   { label: "Proprietário", items: [{ icon: UsersRound, label: "Clientes", path: "/clientes" }, { icon: CalendarDays, label: "Reservas", path: "/reservas" }, { icon: CalendarDays, label: "Agenda", path: "/agenda" }] },
   { label: "Gestão", items: [{ icon: BrainCircuit, label: "Saúde da carteira", path: "/inteligencia" }, { icon: ShieldCheck, label: "Equipe", path: "/equipe" }] },

@@ -267,6 +267,13 @@
       "when": 1787747776585,
       "tag": "0037_cooing_lilandra",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1790440000000,
+      "tag": "0038_tse_cutover_inventory",
+      "breakpoints": true
     }
   ]
 }

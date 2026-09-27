@@ -2,6 +2,7 @@ import {
   boolean,
   date,
   decimal,
+  foreignKey,
   index,
   int,
   mysqlEnum,
@@ -383,6 +384,85 @@ export const contractCancellationRequests = mysqlTable("contract_cancellation_re
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [index("cancellation_requests_contract_status_idx").on(table.contractId, table.status), index("cancellation_requests_status_idx").on(table.status, table.createdAt)]);
+
+export const commercialFractions = mysqlTable(
+  "commercial_fractions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    resortId: int("resortId").notNull(),
+    unitId: int("unitId").notNull(),
+    code: varchar("code", { length: 96 }).notNull(),
+    sequence: int("sequence").notNull(),
+    status: mysqlEnum("status", ["available", "held", "sold", "blocked"]).default("available").notNull(),
+    currentProposalId: int("currentProposalId"),
+    currentContractId: int("currentContractId"),
+    listPrice: decimal("listPrice", { precision: 14, scale: 2 }),
+    priceTableVersion: varchar("priceTableVersion", { length: 80 }),
+    heldUntil: timestamp("heldUntil"),
+    blockedReason: text("blockedReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("commercial_fractions_resort_code_unique").on(table.resortId, table.code),
+    uniqueIndex("commercial_fractions_unit_sequence_unique").on(table.unitId, table.sequence),
+    index("commercial_fractions_resort_status_idx").on(table.resortId, table.status),
+    index("commercial_fractions_proposal_status_idx").on(table.currentProposalId, table.status),
+    index("commercial_fractions_contract_status_idx").on(table.currentContractId, table.status),
+    foreignKey({ name: "cf_resort_fk", columns: [table.resortId], foreignColumns: [resorts.id] }),
+    foreignKey({ name: "cf_unit_fk", columns: [table.unitId], foreignColumns: [units.id] }),
+    foreignKey({ name: "cf_proposal_fk", columns: [table.currentProposalId], foreignColumns: [proposals.id] }),
+    foreignKey({ name: "cf_contract_fk", columns: [table.currentContractId], foreignColumns: [contracts.id] }),
+  ],
+);
+
+export const commercialFractionHolds = mysqlTable(
+  "commercial_fraction_holds",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    fractionId: int("fractionId").notNull(),
+    proposalId: int("proposalId"),
+    heldByUserId: int("heldByUserId").notNull(),
+    activeKey: varchar("activeKey", { length: 128 }),
+    status: mysqlEnum("status", ["active", "released", "expired", "consumed"]).default("active").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    releasedAt: timestamp("releasedAt"),
+    releaseReason: varchar("releaseReason", { length: 255 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("commercial_fraction_holds_active_key_unique").on(table.activeKey),
+    index("commercial_fraction_holds_fraction_status_idx").on(table.fractionId, table.status, table.expiresAt),
+    index("commercial_fraction_holds_proposal_status_idx").on(table.proposalId, table.status),
+    foreignKey({ name: "cfh_fraction_fk", columns: [table.fractionId], foreignColumns: [commercialFractions.id] }),
+    foreignKey({ name: "cfh_proposal_fk", columns: [table.proposalId], foreignColumns: [proposals.id] }),
+    foreignKey({ name: "cfh_user_fk", columns: [table.heldByUserId], foreignColumns: [users.id] }),
+  ],
+);
+
+export const commercialFractionHistory = mysqlTable(
+  "commercial_fraction_history",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    fractionId: int("fractionId").notNull(),
+    fromStatus: varchar("fromStatus", { length: 32 }),
+    toStatus: varchar("toStatus", { length: 32 }).notNull(),
+    proposalId: int("proposalId"),
+    contractId: int("contractId"),
+    actorUserId: int("actorUserId"),
+    reason: varchar("reason", { length: 255 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [
+    index("commercial_fraction_history_fraction_idx").on(table.fractionId, table.createdAt),
+    index("commercial_fraction_history_contract_idx").on(table.contractId, table.createdAt),
+    foreignKey({ name: "cfhist_fraction_fk", columns: [table.fractionId], foreignColumns: [commercialFractions.id] }),
+    foreignKey({ name: "cfhist_proposal_fk", columns: [table.proposalId], foreignColumns: [proposals.id] }),
+    foreignKey({ name: "cfhist_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+    foreignKey({ name: "cfhist_user_fk", columns: [table.actorUserId], foreignColumns: [users.id] }),
+  ],
+);
 
 export const installments = mysqlTable(
   "installments",

@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, financialTransactions, financialTransfers, installments, opportunities, ownershipEntitlements, proposals, salesCommissions, users } from "../../drizzle/schema";
+import { billingRecords, captureRecords, commercialFractionHistory, commercialFractionHolds, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, financialTransactions, financialTransfers, installments, opportunities, ownershipEntitlements, proposals, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
@@ -31,6 +31,7 @@ export const contractsRouter = router({
     number: z.string().trim().min(3).max(80),
     customerId: z.number().int().positive(),
     proposalId: z.number().int().positive().optional().nullable(),
+    fractionId: z.number().int().positive().optional().nullable(),
     sellerId: z.number().int().positive().optional().nullable(),
     usageModel: z.enum(["fixed_week", "flexible_week", "points"]).default("fixed_week"),
     status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).default("draft"),
@@ -55,8 +56,30 @@ export const contractsRouter = router({
       if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
       if (opportunity.customerId !== input.customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "A proposta informada não pertence ao cliente do contrato." });
     }
+    if (!input.fractionId) {
+      const inventoryExists = (await db.select({ id: commercialFractions.id }).from(commercialFractions).limit(1))[0];
+      if (inventoryExists) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O estoque comercial está ativo. Selecione uma cota/fração antes de criar o contrato." });
+    }
     const schedule = buildInstallmentSchedule(input.totalAmount, input.installmentCount, input.firstDueDate);
+    let allocatedFractionId: number | null = null;
     const result = await db.transaction(async tx => {
+      let lockedFraction: typeof commercialFractions.$inferSelect | null = null;
+      let activeHold: typeof commercialFractionHolds.$inferSelect | null = null;
+      if (input.fractionId) {
+        lockedFraction = (await tx.select().from(commercialFractions).where(eq(commercialFractions.id, input.fractionId)).limit(1).for("update"))[0] ?? null;
+        if (!lockedFraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota comercial não encontrada." });
+        if (lockedFraction.status === "sold") throw new TRPCError({ code: "CONFLICT", message: "A cota comercial já foi vendida." });
+        if (lockedFraction.status === "blocked") throw new TRPCError({ code: "CONFLICT", message: "A cota comercial está bloqueada." });
+        if (lockedFraction.status === "held") {
+          activeHold = (await tx.select().from(commercialFractionHolds)
+            .where(and(eq(commercialFractionHolds.fractionId, lockedFraction.id), eq(commercialFractionHolds.status, "active")))
+            .limit(1).for("update"))[0] ?? null;
+          if (!activeHold) throw new TRPCError({ code: "CONFLICT", message: "A cota está marcada como reservada sem hold ativo. Reprocesse o estoque antes de vender." });
+          if (new Date(activeHold.expiresAt).getTime() <= Date.now()) throw new TRPCError({ code: "CONFLICT", message: "O hold da cota expirou. Reserve a cota novamente antes de criar o contrato." });
+          if (activeHold.proposalId !== (input.proposalId ?? null)) throw new TRPCError({ code: "CONFLICT", message: "O hold da cota pertence a outra proposta." });
+          if (ctx.user.role !== "admin" && activeHold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "A cota está em hold de outro operador." });
+        }
+      }
       const created = await tx.insert(contracts).values({
         number: input.number,
         customerId: input.customerId,
@@ -77,10 +100,42 @@ export const contractsRouter = router({
         amount: item.amount,
         status: "open" as const,
       })));
+      if (lockedFraction) {
+        const previousStatus = lockedFraction.status;
+        await tx.update(commercialFractions).set({
+          status: "sold",
+          currentProposalId: input.proposalId ?? null,
+          currentContractId: contractId,
+          heldUntil: null,
+          blockedReason: null,
+        }).where(eq(commercialFractions.id, lockedFraction.id));
+        if (activeHold) {
+          await tx.update(commercialFractionHolds).set({
+            status: "consumed",
+            activeKey: null,
+            releasedAt: new Date(),
+            releaseReason: "Consumido na criação do contrato",
+          }).where(and(eq(commercialFractionHolds.id, activeHold.id), eq(commercialFractionHolds.status, "active")));
+        }
+        await tx.insert(commercialFractionHistory).values({
+          fractionId: lockedFraction.id,
+          fromStatus: previousStatus,
+          toStatus: "sold",
+          proposalId: input.proposalId ?? null,
+          contractId,
+          actorUserId: ctx.user.id,
+          reason: "Cota consumida na criação do contrato",
+        });
+        allocatedFractionId = lockedFraction.id;
+      }
       return contractId;
     });
     await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
     await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, usageModel: input.usageModel, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
+    if (allocatedFractionId) {
+      await recordAudit(ctx.user.id, "commercial_fraction", allocatedFractionId, "sold", `Cota vinculada ao contrato ${input.number}.`);
+      await recordDomainEvent({ eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: allocatedFractionId, actorUserId: ctx.user.id, payload: { fractionId: allocatedFractionId, status: "sold", proposalId: input.proposalId ?? null, contractId: result, reason: "Contrato criado" } });
+    }
     await syncRevenueQualityForContract({ contractId: result, actorUserId: ctx.user.id, trigger: "criação de contrato" });
     return { id: result };
   }),
@@ -179,19 +234,38 @@ export const contractsRouter = router({
       await tx.update(financialTransactions).set({ status: "cancelled" }).where(and(eq(financialTransactions.contractId, contract.id), eq(financialTransactions.status, "open")));
       await tx.update(financialTransfers).set({ status: "cancelled" }).where(and(eq(financialTransfers.contractId, contract.id), eq(financialTransfers.status, "pending")));
       await tx.update(ownershipEntitlements).set({ status: "cancelled" }).where(and(eq(ownershipEntitlements.contractId, contract.id), ne(ownershipEntitlements.status, "cancelled")));
+      const soldFractions = await tx.select({ id: commercialFractions.id }).from(commercialFractions)
+        .where(and(eq(commercialFractions.currentContractId, contract.id), eq(commercialFractions.status, "sold"))).for("update");
+      const returnedFractionIds = soldFractions.map(item => item.id);
+      if (returnedFractionIds.length) {
+        await tx.update(commercialFractions).set({ status: "available", currentContractId: null, currentProposalId: null, heldUntil: null, blockedReason: null })
+          .where(inArray(commercialFractions.id, returnedFractionIds));
+        await tx.insert(commercialFractionHistory).values(returnedFractionIds.map(fractionId => ({
+          fractionId,
+          fromStatus: "sold",
+          toStatus: "available",
+          contractId: contract.id,
+          actorUserId: ctx.user.id,
+          reason: "Retorno ao estoque após distrato executado",
+        })));
+      }
       if (impact.cancelInstallmentIds.length) await tx.update(billingRecords).set({ status: "cancelled" }).where(and(inArray(billingRecords.installmentId, impact.cancelInstallmentIds), inArray(billingRecords.status, ["pending", "generated", "expired"])));
       const financialImpact = [] as Array<{ contractId: number; type: "income" | "expense"; category: string; description: string; amount: string; dueDate: Date; status: "open"; createdByUserId: number }>;
       if (Number(simulation.penalty ?? 0) > 0 || Number(simulation.retained ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "income", category: "Distrato · multa/retenção", description: `Impacto previsto do distrato aprovado #${request.id}`, amount: Number(simulation.penalty ?? simulation.retained ?? 0).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
       if (Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
       if (financialImpact.length) { const insertedFinancialEntries = await tx.insert(financialTransactions).values(financialImpact).$returningId(); insertedFinancialEntries.forEach((inserted, index) => { const entry = financialImpact[index]; if (entry && inserted?.id) createdFinancialEntryFacts.push({ id: inserted.id, contractId: entry.contractId, type: entry.type, category: entry.category, amount: Number(entry.amount) }); }); }
       await tx.update(contractCancellationRequests).set({ status: "executed", executedAt: new Date(), decisionNotes: [request.decisionNotes, input.executionNotes?.trim()].filter(Boolean).join("\n") || null }).where(eq(contractCancellationRequests.id, request.id));
-      return { contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length };
+      return { contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
     });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId}; parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
     await recordDomainEvent({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, cancelledInstallments: outcome.cancelledInstallments, cancelledCommissions: outcome.cancelledCommissions, financialEntries: outcome.financialEntries } });
     for (const commissionId of outcome.cancelledCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "cancelled", `Comissão cancelada pelo distrato do contrato ${outcome.contractId}.`); await recordDomainEvent({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { status: "cancelled", contractId: outcome.contractId } }); }
     for (const entry of createdFinancialEntryFacts) { await recordAudit(ctx.user.id, "financial_transaction", entry.id, "created", `Lançamento ${entry.type} de ${entry.amount.toFixed(2)} criado pelo distrato.`); await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: entry.id, actorUserId: ctx.user.id, payload: { type: entry.type, category: entry.category, amount: entry.amount, contractId: entry.contractId, campaignId: null } }); }
+    for (const fractionId of outcome.returnedFractionIds) {
+      await recordAudit(ctx.user.id, "commercial_fraction", fractionId, "returned_to_inventory", `Cota retornou ao estoque após distrato do contrato ${outcome.contractId}.`);
+      await recordDomainEvent({ eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: fractionId, actorUserId: ctx.user.id, payload: { fractionId, status: "available", contractId: outcome.contractId, reason: "Distrato executado" } });
+    }
     await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
     return { success: true, ...outcome };
   }),
