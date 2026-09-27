@@ -23,7 +23,7 @@ export type RevenueQualityLedgerFact = {
 
 export type RevenueQualityLedgerInput = {
   contract: { id: number; totalAmount: number | string; status: "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed" };
-  installments: Array<{ id: number; sequence: number; amount: number | string; status: "open" | "paid" | "overdue" | "cancelled" | "renegotiated" }>;
+  installments: Array<{ id: number; sequence: number; amount: number | string; paidAmount?: number | string; status: "open" | "paid" | "overdue" | "cancelled" | "renegotiated" }>;
   commissions: Array<{ id: number; amount: number | string; status: "pending" | "approved" | "paid" | "cancelled"; lifecycleStatus: string; sourceInstallmentId?: number | null }>;
   cancellation?: { status: "requested" | "approved" | "rejected" | "executed" | "cancelled"; retentionAmount?: number | string; refundAmount?: number | string } | null;
   policyVersion: string;
@@ -41,10 +41,13 @@ export function buildRevenueQualityLedger(input: RevenueQualityLedgerInput): Rev
   }
 
   for (const installment of input.installments) {
-    const base = { amount: asMoney(installment.amount), contractId: contract.id, installmentId: installment.id, policyVersion, source: "installment" as const };
-    if (installment.status === "paid") facts.push({ ...base, type: "cash_confirmed" });
-    if (["open", "overdue", "renegotiated"].includes(installment.status)) {
-      facts.push({ ...base, type: "cash_exposure", reason: installment.status === "overdue" ? "installment_overdue" : undefined });
+    const amount = asMoney(installment.amount);
+    const paidAmount = Math.min(amount, Math.max(0, asMoney(installment.paidAmount ?? (installment.status === "paid" ? amount : 0))));
+    const exposure = asMoney(Math.max(0, amount - paidAmount));
+    const base = { contractId: contract.id, installmentId: installment.id, policyVersion, source: "installment" as const };
+    if (paidAmount > 0) facts.push({ ...base, amount: paidAmount, type: "cash_confirmed" });
+    if (exposure > 0 && ["open", "overdue", "renegotiated"].includes(installment.status)) {
+      facts.push({ ...base, amount: exposure, type: "cash_exposure", reason: installment.status === "overdue" ? "installment_overdue" : undefined });
     }
   }
 
