@@ -7,6 +7,7 @@ import {
   commercialFractionHistory,
   commercialFractions,
   commercialPolicyVersions,
+  captureRecords,
   contracts,
   customers,
   domainEvents,
@@ -78,6 +79,10 @@ function money(cents: number) {
   return (cents / 100).toFixed(2);
 }
 
+function salesCommandReference(saleId: string) {
+  return `SC-${createHash("sha256").update(saleId).digest("hex").slice(0, 48)}`;
+}
+
 function dateValue(value: string) {
   return new Date(`${value}T12:00:00Z`);
 }
@@ -89,6 +94,7 @@ function validateCommercialSnapshot(event: SalesCommandSale) {
   const entryTotal = ordered.reduce((sum, row) => sum + row.amountCents, 0);
   if (!Number.isSafeInteger(entryTotal) || entryTotal !== event.sale.entryContractedCents) throw new Error("Entry schedule total mismatch");
   if (event.sale.entryContractedCents > event.sale.vgvCents) throw new Error("Entry cannot exceed VGV");
+  if (event.sale.entryReceivedCents > event.sale.entryContractedCents) throw new Error("Received entry cannot exceed contracted entry");
   return ordered;
 }
 
@@ -186,7 +192,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
       fullName: event.customer.name,
       phone: event.customer.phone ?? null,
       acquisitionSource: "Sales Command",
-      status: "client",
+      status: "active",
       notes: "Criado automaticamente pela formalização Sales Command → CRM.",
     }).$returningId();
     customerId = createdCustomer[0]?.id;
@@ -205,12 +211,22 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   const opportunityId = opportunityRow[0]?.id;
   if (!opportunityId) throw new Error("Opportunity formalization failed");
 
+  await tx.insert(captureRecords).values({
+    customerId,
+    resortId: resort.id,
+    opportunityId,
+    captureLocation: "Sales Command",
+    presentationStatus: "closed",
+    qualificationStatus: "qualified",
+    notes: `Formalização automática da venda ${event.saleId}.`,
+  });
+
   const balanceCents = event.sale.vgvCents - event.sale.entryContractedCents;
   const balanceCount = balanceCents > 0 ? terms.balanceInstallmentCount : 0;
   const totalInstallments = entrySchedule.length + balanceCount;
   const proposalRow = await tx.insert(proposals).values({
     opportunityId,
-    reference: `SC-${event.saleId}`,
+    reference: salesCommandReference(event.saleId),
     productDescription: `${event.project.name} · ${event.sale.quotasCount} cota(s)`,
     totalAmount: money(event.sale.vgvCents),
     downPaymentAmount: money(event.sale.entryContractedCents),
@@ -221,7 +237,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   if (!proposalId) throw new Error("Proposal formalization failed");
 
   const contractRow = await tx.insert(contracts).values({
-    number: `SC-${event.saleId}`,
+    number: salesCommandReference(event.saleId),
     externalSource: "sales-command",
     externalSaleId: event.saleId,
     customerId,
@@ -235,34 +251,32 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   const contractId = contractRow[0]?.id;
   if (!contractId) throw new Error("Contract formalization failed");
 
-  const anyInventory = (await tx.select({ id: commercialFractions.id }).from(commercialFractions)
-    .where(eq(commercialFractions.resortId, resort.id)).limit(1).for("update"))[0];
-  let fractionIds: number[] = [];
-  if (anyInventory) {
-    const available = await tx.select().from(commercialFractions).where(and(
-      eq(commercialFractions.resortId, resort.id),
-      eq(commercialFractions.status, "available"),
-    )).orderBy(asc(commercialFractions.id)).limit(event.sale.quotasCount).for("update");
-    if (available.length !== event.sale.quotasCount) throw new Error("Insufficient commercial fraction inventory for confirmed sale");
-    fractionIds = available.map((item: typeof commercialFractions.$inferSelect) => item.id);
-    for (const fraction of available) {
-      await tx.update(commercialFractions).set({
-        status: "sold",
-        currentProposalId: proposalId,
-        currentContractId: contractId,
-        heldUntil: null,
-        blockedReason: null,
-      }).where(and(eq(commercialFractions.id, fraction.id), eq(commercialFractions.status, "available")));
-      await tx.insert(commercialFractionHistory).values({
-        fractionId: fraction.id,
-        fromStatus: "available",
-        toStatus: "sold",
-        proposalId,
-        contractId,
-        actorUserId: null,
-        reason: "Venda confirmada recebida do Sales Command",
-      });
+  const available = await tx.select().from(commercialFractions).where(and(
+    eq(commercialFractions.resortId, resort.id),
+    eq(commercialFractions.status, "available"),
+  )).orderBy(asc(commercialFractions.id)).limit(event.sale.quotasCount).for("update");
+  if (available.length !== event.sale.quotasCount) throw new Error("Insufficient commercial fraction inventory for confirmed sale");
+  const fractionIds = available.map((item: typeof commercialFractions.$inferSelect) => item.id);
+  for (const fraction of available) {
+    const updateResult = await tx.update(commercialFractions).set({
+      status: "sold",
+      currentProposalId: proposalId,
+      currentContractId: contractId,
+      heldUntil: null,
+      blockedReason: null,
+    }).where(and(eq(commercialFractions.id, fraction.id), eq(commercialFractions.status, "available")));
+    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) !== 1) {
+      throw new Error("Commercial fraction was claimed concurrently");
     }
+    await tx.insert(commercialFractionHistory).values({
+      fractionId: fraction.id,
+      fromStatus: "available",
+      toStatus: "sold",
+      proposalId,
+      contractId,
+      actorUserId: null,
+      reason: "Venda confirmada recebida do Sales Command",
+    });
   }
 
   const primaryMethod = event.sale.paymentMethods[0] ?? null;
