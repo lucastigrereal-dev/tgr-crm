@@ -80,20 +80,22 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           installmentPaymentAmount = receivedNow;
           installmentPaid = fullyPaid;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
-          const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
-          const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
-          const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
-          const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);
-          commissionBlocked = commissionNeedsPolicy && !policy;
-          if (commissionNeedsPolicy && policy && context?.contract && context.proposal && context.capture) {
-            const existingCommission = (await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, billing.installment.id)).limit(1))[0];
-            if (!existingCommission) {
-              const paymentMethod = billing.billing.type === "pix" ? "pix" : "boleto";
-              const rows = buildInstallmentCommissions({ installmentId: billing.installment.id, installmentAmount: Number(billing.installment.amount), entryTotal: Number(context.proposal.downPaymentAmount), contractTotal: Number(context.contract.totalAmount), paymentMethod, compensatedAt: paidAt, linerId: context.capture.linerId, closerId: context.capture.closerId, rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, calendar: { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay } });
-              if (rows.length) {
-                const commissionValues = rows.map(row => ({ ...row, contractId: billing.installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
-                const insertedCommissions = await tx.insert(salesCommissions).values(commissionValues).$returningId();
-                insertedCommissions.forEach((inserted, index) => { const row = commissionValues[index]; if (row && inserted?.id) createdCommissionFacts.push({ id: inserted.id, sellerId: row.sellerId, campaignId: row.campaignId, opportunityId: row.opportunityId, contractId: row.contractId, sourceInstallmentId: row.sourceInstallmentId, commissionRole: row.commissionRole, amount: Number(row.amount), rate: Number(row.rate) }); });
+          if (fullyPaid) {
+            const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
+            const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
+            const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
+            const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);
+            commissionBlocked = commissionNeedsPolicy && !policy;
+            if (commissionNeedsPolicy && policy && context?.contract && context.proposal && context.capture) {
+              const existingCommission = (await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, billing.installment.id)).limit(1))[0];
+              if (!existingCommission) {
+                const paymentMethod = billing.billing.type === "pix" ? "pix" : "boleto";
+                const rows = buildInstallmentCommissions({ installmentId: billing.installment.id, installmentAmount: Number(billing.installment.amount), entryTotal: Number(context.proposal.downPaymentAmount), contractTotal: Number(context.contract.totalAmount), paymentMethod, compensatedAt: paidAt, linerId: context.capture.linerId, closerId: context.capture.closerId, rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, calendar: { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay } });
+                if (rows.length) {
+                  const commissionValues = rows.map(row => ({ ...row, contractId: billing.installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
+                  const insertedCommissions = await tx.insert(salesCommissions).values(commissionValues).$returningId();
+                  insertedCommissions.forEach((inserted, index) => { const row = commissionValues[index]; if (row && inserted?.id) createdCommissionFacts.push({ id: inserted.id, sellerId: row.sellerId, campaignId: row.campaignId, opportunityId: row.opportunityId, contractId: row.contractId, sourceInstallmentId: row.sourceInstallmentId, commissionRole: row.commissionRole, amount: Number(row.amount), rate: Number(row.rate) }); });
+                }
               }
             }
           }
