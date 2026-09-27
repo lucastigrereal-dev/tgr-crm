@@ -14,23 +14,36 @@ function Read-EnvValue([string]$Name) {
   throw ($Name + ' not found in pilot env')
 }
 
-$rootPassword = Read-EnvValue 'MYSQL_ROOT_PASSWORD'
+function New-HexSecret([int]$Bytes = 32) {
+  $buffer = New-Object byte[] $Bytes
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($buffer) } finally { $rng.Dispose() }
+  return (($buffer | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+$appPassword = Read-EnvValue 'MYSQL_APP_PASSWORD'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $restoreDb = 'tgr_crm_restore_' + (Get-Date -Format 'yyyyMMddHHmmss')
+$restoreContainer = 'tgr-crm-restore-verify-' + $stamp
+$verifyRootPassword = New-HexSecret 32
+$verifyAppPassword = New-HexSecret 32
 New-Item -ItemType Directory -Force -Path $BackupDirectory | Out-Null
 $sqlFile = Join-Path $BackupDirectory ('tgr-crm-pilot-' + $stamp + '.sql')
 $documentsFile = Join-Path $BackupDirectory ('tgr-crm-documents-' + $stamp + '.tgz')
 $manifestFile = Join-Path $BackupDirectory ('manifest-' + $stamp + '.json')
 $containerSql = '/tmp/tgr-crm-' + $stamp + '.sql'
-$containerRestore = '/tmp/tgr-crm-restore-' + $stamp + '.sql'
+$restoreSql = '/tmp/tgr-crm-restore-' + $stamp + '.sql'
 
 & docker inspect $MySqlContainer *> $null
 if ($LASTEXITCODE -ne 0) { throw 'CRM pilot MySQL container is not running.' }
+$mysqlImage = (& docker inspect --format '{{.Config.Image}}' $MySqlContainer).Trim()
+if (-not $mysqlImage) { throw 'Could not discover CRM pilot MySQL image.' }
 
-& docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer sh -c ('mysqldump -uroot --single-transaction --skip-comments --no-tablespaces --set-gtid-purged=OFF tgr_crm_pilot > ' + $containerSql)
+& docker exec -e ('MYSQL_PWD=' + $appPassword) $MySqlContainer sh -c ('mysqldump -utgr_app --single-transaction --skip-comments --no-tablespaces --set-gtid-purged=OFF tgr_crm_pilot > ' + $containerSql)
 if ($LASTEXITCODE -ne 0) { throw 'CRM pilot mysqldump failed.' }
 & docker cp ($MySqlContainer + ':' + $containerSql) $sqlFile | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Copying CRM SQL backup failed.' }
+& docker exec $MySqlContainer rm -f $containerSql *> $null 2>$null
 
 $documentsContainer = 'tgr-crm-documents-backup-' + $stamp
 try {
@@ -44,37 +57,44 @@ try {
   & docker rm -f $documentsContainer *> $null 2>$null
 }
 
-$verifyContainer = 'tgr-crm-documents-verify-' + $stamp
+$documentsVerifyContainer = 'tgr-crm-documents-verify-' + $stamp
 try {
-  & docker create --name $verifyContainer busybox:1.36 sh -c 'tar tzf /tmp/documents.tgz >/dev/null' *> $null
-  & docker cp $documentsFile ($verifyContainer + ':/tmp/documents.tgz') | Out-Null
-  & docker start -a $verifyContainer *> $null
+  & docker create --name $documentsVerifyContainer busybox:1.36 sh -c 'tar tzf /tmp/documents.tgz >/dev/null' *> $null
+  & docker cp $documentsFile ($documentsVerifyContainer + ':/tmp/documents.tgz') | Out-Null
+  & docker start -a $documentsVerifyContainer *> $null
   if ($LASTEXITCODE -ne 0) { throw 'Documents archive verification failed.' }
 } finally {
-  & docker rm -f $verifyContainer *> $null 2>$null
+  & docker rm -f $documentsVerifyContainer *> $null 2>$null
 }
 
-$restoreCreated = $false
+$restoreStarted = $false
 try {
-  & docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer mysql -uroot -Nse ('CREATE DATABASE ' + $restoreDb + ' CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci')
-  if ($LASTEXITCODE -ne 0) { throw 'Temporary restore database creation failed.' }
-  $restoreCreated = $true
-  & docker cp $sqlFile ($MySqlContainer + ':' + $containerRestore) | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Copying SQL for restore failed.' }
-  & docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer sh -c ('mysql -uroot ' + $restoreDb + ' < ' + $containerRestore)
-  if ($LASTEXITCODE -ne 0) { throw 'CRM SQL restore failed.' }
+  & docker run -d --name $restoreContainer -e ('MYSQL_ROOT_PASSWORD=' + $verifyRootPassword) -e ('MYSQL_DATABASE=' + $restoreDb) -e 'MYSQL_USER=tgr_verify' -e ('MYSQL_PASSWORD=' + $verifyAppPassword) $mysqlImage --skip-log-bin *> $null
+  if ($LASTEXITCODE -ne 0) { throw 'Disposable CRM restore verifier could not start.' }
+  $restoreStarted = $true
+  $ready = $false
+  for ($attempt = 0; $attempt -lt 60; $attempt++) {
+    & docker exec -e ('MYSQL_PWD=' + $verifyAppPassword) $restoreContainer mysql -utgr_verify -D $restoreDb -Nse 'SELECT 1' *> $null
+    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+    Start-Sleep -Seconds 2
+  }
+  if (-not $ready) { throw 'Disposable CRM restore verifier did not become ready.' }
 
-  $tables = @(& docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer mysql -uroot -Nse "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='tgr_crm_pilot' AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME")
+  & docker cp $sqlFile ($restoreContainer + ':' + $restoreSql) | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Copying CRM SQL into verifier failed.' }
+  & docker exec -e ('MYSQL_PWD=' + $verifyAppPassword) $restoreContainer sh -c ('mysql -utgr_verify ' + $restoreDb + ' < ' + $restoreSql)
+  if ($LASTEXITCODE -ne 0) { throw 'CRM SQL restore drill failed.' }
+
+  $tables = @(& docker exec -e ('MYSQL_PWD=' + $appPassword) $MySqlContainer mysql -utgr_app -Nse "SHOW TABLES FROM tgr_crm_pilot")
   if ($LASTEXITCODE -ne 0 -or $tables.Count -eq 0) { throw 'Could not enumerate CRM pilot tables.' }
   $counts = @()
   foreach ($table in $tables) {
     if ($table -notmatch '^[A-Za-z0-9_]+$') { throw 'Unexpected table identifier.' }
-    $source = @(& docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer mysql -uroot -Nse ('SELECT COUNT(*) FROM tgr_crm_pilot.' + $table))[0]
-    $restored = @(& docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer mysql -uroot -Nse ('SELECT COUNT(*) FROM ' + $restoreDb + '.' + $table))[0]
+    $source = @(& docker exec -e ('MYSQL_PWD=' + $appPassword) $MySqlContainer mysql -utgr_app -Nse ('SELECT COUNT(*) FROM tgr_crm_pilot.' + $table))[0]
+    $restored = @(& docker exec -e ('MYSQL_PWD=' + $verifyAppPassword) $restoreContainer mysql -utgr_verify -Nse ('SELECT COUNT(*) FROM ' + $restoreDb + '.' + $table))[0]
     if ([int64]$source -ne [int64]$restored) { throw ('Restore mismatch in table ' + $table) }
     $counts += [pscustomobject]@{ table = $table; source = [int64]$source; restored = [int64]$restored }
   }
-
   $manifest = [pscustomobject]@{
     createdAt = [DateTimeOffset]::Now.ToString('o')
     sqlFile = $sqlFile
@@ -82,6 +102,7 @@ try {
     documentsFile = $documentsFile
     documentsSha256 = (Get-FileHash -Algorithm SHA256 $documentsFile).Hash
     verifiedTables = $counts.Count
+    verifierImage = $mysqlImage
     counts = $counts
   }
   $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestFile -Encoding utf8NoBOM
@@ -89,8 +110,5 @@ try {
   Write-Output ('VERIFIED_TABLES=' + $counts.Count)
   Write-Output 'BACKUP_RESTORE=PASS'
 } finally {
-  if ($restoreCreated) {
-    & docker exec -e ('MYSQL_PWD=' + $rootPassword) $MySqlContainer mysql -uroot -Nse ('DROP DATABASE IF EXISTS ' + $restoreDb) *> $null
-  }
-  & docker exec $MySqlContainer rm -f $containerSql $containerRestore *> $null 2>$null
+  if ($restoreStarted) { & docker rm -f $restoreContainer *> $null 2>$null }
 }
