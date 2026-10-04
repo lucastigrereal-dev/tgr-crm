@@ -26,6 +26,10 @@ URL atual: `infra/pilot/.pilot-url.local.txt`.
 
 O backup salva MySQL + documentos privados. O SQL é restaurado em banco temporário e todas as tabelas são comparadas antes do PASS.
 
+Linux/CI: `APP_PASSWORD=... DOCUMENTS_VOLUME=tgr-crm-pilot_documents_data bash ./infra/pilot/backup-restore-drill.sh`
+
+Mesmo drill, sem root no banco de origem, com restore em container descartável e comparação de contagem **e** `CHECKSUM TABLE` por tabela.
+
 ## Parar
 `pwsh ./infra/pilot/stop-pilot.ps1`
 
