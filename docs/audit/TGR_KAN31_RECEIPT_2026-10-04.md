@@ -133,3 +133,13 @@ O drill roda `infra/pilot/backup-restore-drill.sh` contra o banco sintético `tg
 ## Veredito
 
 KAN-31 homologação técnica: **PASS** dentro do escopo controlável, com 5 correções de bug reais e provadas e E2E autenticado verde. Merge na `main` e o encaminhamento dos achados abertos dependem de GO humano.
+
+## Adendo — recertificação independente em Windows (04/10/2026)
+
+Host Windows 11, Node 24.13.0, pnpm 10.26.2, Docker 29.5.3.
+
+- Achado mecânico: no base `f039994`, `pnpm test` falhava em Windows (4 testes em `e2eIsolationScripts.test.ts` e timeouts intermitentes em `playwrightConfig`, `funnelExport` e `salesCommandBridge`). Causa: import frio (mysql2, playwright, tsx) passa de 5 s no host sob carga paralela. O `spawnSync` com timeout matava o script, e o teste de "abortar antes de conectar" virava falso negativo (saída vazia). Não é defeito do produto.
+- Correção: `testTimeout` global de 30 s no `vitest.config.ts`; timeout de 30 s no script filho; um filho morto por timeout agora lança erro em vez de passar como "abort guardado".
+- Gates no head com a correção: `pnpm check` exit 0; `pnpm test` 141 arquivos / 463 testes PASS (3 arquivos / 13 testes opt-in pulados).
+- Suítes MySQL opt-in em `mysql:8.4` descartável (usuário de aplicação, banco `tgr_crm_kan31win_e2e`, porta 43391 em loopback, senhas aleatórias nunca impressas): `drizzle-kit migrate` exit 0; **13/13 PASS** (Clicksign 4, guards 3, Sales Command 6). Container removido depois.
+- Não reexecutados aqui: E2E Playwright, drill de backup em bash/Linux, build e budget.
