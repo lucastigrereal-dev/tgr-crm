@@ -5,7 +5,7 @@ import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaas
 import { buildInstallmentCommissions } from "./commissionAutomation";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
-import { isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
 
 export type AsaasWebhookPayload = {
   id?: string;
@@ -70,7 +70,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           paidAt: fullyPaid ? paidAt : billing.installment.paidAt,
           paymentMethod: billing.billing.type,
         }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
-        const paymentRecorded = !(installmentUpdate && typeof installmentUpdate === "object" && "affectedRows" in installmentUpdate && Number(installmentUpdate.affectedRows) === 0);
+        const paymentRecorded = affectedRows(installmentUpdate) !== 0;
         if (paymentRecorded) {
           installmentPaymentAmount = receivedNow.toFixed(2);
           installmentPaid = fullyPaid;

@@ -5,6 +5,7 @@ import { users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
+import { affectedRows } from "../mysqlErrors";
 
 export const teamRouter = router({
   list: adminProcedure.query(async () => {
@@ -27,7 +28,7 @@ export const teamRouter = router({
       const existing = (await db.select({ id: users.id }).from(users).where(eq(users.id, input.id)).limit(1))[0];
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado." });
       const updateResult = await db.update(users).set({ role: input.role }).where(eq(users.id, input.id));
-      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O usuário foi alterado por outra operação. Recarregue e tente novamente." });
+      if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O usuário foi alterado por outra operação. Recarregue e tente novamente." });
       await recordAudit(ctx.user.id, "user", input.id, "role_updated", `Perfil alterado para ${input.role}.`);
       return { success: true };
     }),

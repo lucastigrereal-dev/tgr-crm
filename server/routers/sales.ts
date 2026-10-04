@@ -9,6 +9,7 @@ import { resolveFollowUpAt } from "../domain";
 import { buildSellerQualityRanking } from "../salesQuality";
 import { saleStageFromFacts } from "../saleLifecycle";
 import { canTransitionOpportunityStage } from "../../shared/opportunityLifecycle";
+import { affectedRows } from "../mysqlErrors";
 
 const opportunityInput = z.object({
   customerId: z.number().int().positive(),
@@ -83,7 +84,7 @@ export const salesRouter = router({
     if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido de desconto não encontrado." });
     if (existing.status !== "pending") throw new TRPCError({ code: "CONFLICT", message: "Este pedido de desconto já foi decidido." });
     const updateResult = await db.update(proposalDiscountApprovals).set({ status: input.approve ? "approved" : "rejected", approvedAmount: input.approve ? existing.requestedAmount : null, decidedByUserId: ctx.user.id, decisionNotes: input.decisionNotes || null, decidedAt: new Date() }).where(and(eq(proposalDiscountApprovals.id, input.id), eq(proposalDiscountApprovals.status, "pending")));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O pedido de desconto foi alterado por outra operação." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O pedido de desconto foi alterado por outra operação." });
     await recordAudit(ctx.user.id, "proposal_discount", input.id, input.approve ? "approved" : "rejected", "Pedido de desconto decidido pela administração.");
     await recordDomainEvent({ eventName: "proposal.discount.decided", aggregateType: "proposal_discount", aggregateId: input.id, actorUserId: ctx.user.id, payload: { proposalId: existing.proposalId, status: input.approve ? "approved" : "rejected", approvedAmount: input.approve ? Number(existing.requestedAmount) : null } });
     return { success: true };
@@ -180,7 +181,7 @@ export const salesRouter = router({
       lossReason: input.data.lossReason?.trim() || null,
       closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
     }).where(and(eq(opportunities.id, input.id), eq(opportunities.stage, previous.stage)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "opportunity", input.id, "updated", `Oportunidade atualizada para ${input.data.stage}.`);
     await recordDomainEvent({ eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: input.id, actorUserId: ctx.user.id, payload: { sellerId: input.data.sellerId ?? null, campaignId: input.data.campaignId ?? null, previousStage: previous.stage, stage: input.data.stage, expectedAmount: input.data.expectedAmount } });
     return { success: true };
@@ -216,7 +217,7 @@ export const salesRouter = router({
       const proposalId = result[0]?.id;
       if (!proposalId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
       const stageUpdate = await tx.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.stage, opportunity.stage)));
-      if (stageUpdate && typeof stageUpdate === "object" && "affectedRows" in stageUpdate && Number(stageUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
+      if (affectedRows(stageUpdate) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
       return proposalId;
     });
     await recordAudit(ctx.user.id, "proposal", id, "created", `Proposta ${input.reference} criada.`);

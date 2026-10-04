@@ -9,3 +9,13 @@ export function isDuplicateKeyError(error: unknown): boolean {
   }
   return false;
 }
+
+// Updates/deletes do drizzle+mysql2 resolvem para [ResultSetHeader, fields]; os
+// mocks de teste usam { affectedRows }. Aceita os dois e devolve null se não houver
+// contagem. mysql2 usa FOUND_ROWS: conta linhas casadas, não só alteradas.
+export function affectedRows(result: unknown): number | null {
+  const header = Array.isArray(result) ? result[0] : result;
+  if (!header || typeof header !== "object" || !("affectedRows" in header)) return null;
+  const count = Number((header as { affectedRows: unknown }).affectedRows);
+  return Number.isFinite(count) ? count : null;
+}

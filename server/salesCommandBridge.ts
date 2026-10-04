@@ -25,7 +25,7 @@ import {
   parseSaleTermsPolicy,
 } from "./saleTermsPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
-import { isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
 
 const entryScheduleRow = z.strictObject({
   sequence: z.number().int().min(1).max(100),
@@ -283,7 +283,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
       heldUntil: null,
       blockedReason: null,
     }).where(and(eq(commercialFractions.id, fraction.id), eq(commercialFractions.status, "available")));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) !== 1) {
+    if ((affectedRows(updateResult) ?? 1) !== 1) {
       throw new Error("Commercial fraction was claimed concurrently");
     }
     await tx.insert(commercialFractionHistory).values({

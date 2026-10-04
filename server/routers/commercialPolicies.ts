@@ -7,7 +7,7 @@ import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { monetaryAdjustmentPolicySchema } from "../monetaryAdjustment";
 import { saleTermsPolicySchema } from "../saleTermsPolicy";
-import { isDuplicateKeyError } from "../mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 
 const policyType = z.enum(["commission", "cancellation", "revenue_quality", "monetary_adjustment", "sale_terms"]);
 
@@ -50,7 +50,7 @@ export const commercialPoliciesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.update(commercialPolicyVersions).set({ retiredAt: new Date() }).where(and(eq(commercialPolicyVersions.id, input.id), isNull(commercialPolicyVersions.retiredAt)));
-    if (result && typeof result === "object" && "affectedRows" in result && Number(result.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A política já foi aposentada ou não existe." });
+    if (affectedRows(result) === 0) throw new TRPCError({ code: "CONFLICT", message: "A política já foi aposentada ou não existe." });
     await recordAudit(ctx.user.id, "commercial_policy_version", input.id, "retired", "Política comercial aposentada; histórico preservado.");
     return { success: true };
   }),

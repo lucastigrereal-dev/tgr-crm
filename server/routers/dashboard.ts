@@ -11,6 +11,7 @@ import { buildConversionBreakdown, calculateConversionMetrics, filterConversionC
 import { buildCommercialIntegrityAlerts } from "../commercialIntegrity";
 import { parseRequiredContractDocuments } from "../projectPolicy";
 import { buildProfessionalRhythmAlerts, type ProfessionalRhythmFact } from "../professionalRhythm";
+import { affectedRows } from "../mysqlErrors";
 
 function monthBounds() {
   const now = new Date();
@@ -102,7 +103,7 @@ export const dashboardRouter = router({
     if (row.createdByUserId !== ctx.user.id && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só quem criou ou um administrador pode apagar este filtro." });
     const deleteCondition = ctx.user.role === "admin" ? eq(savedAnalysisViews.id, input.id) : and(eq(savedAnalysisViews.id, input.id), eq(savedAnalysisViews.createdByUserId, ctx.user.id));
     const deleteResult = await db.delete(savedAnalysisViews).where(deleteCondition);
-    if (deleteResult && typeof deleteResult === "object" && "affectedRows" in deleteResult && Number(deleteResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A view salva foi alterada por outra operação. Recarregue e tente novamente." });
+    if (affectedRows(deleteResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A view salva foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "saved_analysis_view", input.id, "deleted", "View salva excluída.");
     return { deleted: true };
   }),

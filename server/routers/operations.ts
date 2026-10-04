@@ -8,7 +8,7 @@ import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
 import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod } from "../domain";
 import { canTransitionReservationStatus, canTransitionWaitlistStatus } from "../../shared/reservationLifecycle";
 import { canTransitionTaskStatus } from "../../shared/taskLifecycle";
-import { isDuplicateKeyError } from "../mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 
 function waitlistActiveKey(input: { customerId: number; contractId?: number | null; resortId?: number | null; desiredCheckIn: string; desiredCheckOut: string }) {
   return `customer:${input.customerId}|contract:${input.contractId ?? 0}|resort:${input.resortId ?? 0}|from:${input.desiredCheckIn}|to:${input.desiredCheckOut}`;
@@ -80,7 +80,7 @@ export const operationsRouter = router({
         const activeReservations = await tx.select({ partySize: sql<number>`coalesce(${reservations.adults}, 1) + coalesce(${reservations.children}, 0) + count(${reservationGuests.id})` }).from(reservations).leftJoin(reservationGuests, eq(reservationGuests.reservationId, reservations.id)).where(and(eq(reservations.unitId, input.id), inArray(reservations.status, ["pending", "confirmed", "checked_in"]))).groupBy(reservations.id, reservations.adults, reservations.children);
         if (activeReservations.some(row => Number(row.partySize) > input.capacity)) throw new TRPCError({ code: "CONFLICT", message: "A nova capacidade fica abaixo da lotação de uma reserva ativa." });
         const updateResult = await tx.update(units).set({ code: input.code, category: input.category || null, capacity: input.capacity, beds: input.beds, status: input.status }).where(eq(units.id, input.id));
-        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A unidade foi alterada por outra operação. Recarregue e tente novamente." });
+        if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A unidade foi alterada por outra operação. Recarregue e tente novamente." });
       });
       await recordAudit(ctx.user.id, "unit", input.id, "updated", `Unidade ${input.code} atualizada para ${input.status}.`);
       return { success: true };
@@ -167,7 +167,7 @@ export const operationsRouter = router({
     if (!canTransitionWaitlistStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de fila inválida: ${current.status} → ${input.status}.` });
     const now = new Date();
     const updateResult = await db.update(reservationWaitlist).set({ status: input.status, activeKey: ["waiting", "offered"].includes(input.status) ? current.activeKey : null, offeredAt: input.status === "offered" ? now : undefined, expiresAt: input.status === "offered" ? new Date(now.getTime() + 24 * 60 * 60 * 1000) : undefined }).where(and(eq(reservationWaitlist.id, input.id), eq(reservationWaitlist.status, current.status)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A posição da fila foi alterada por outra operação. Recarregue e tente novamente." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A posição da fila foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "reservation_waitlist", input.id, "status_updated", `Fila de espera atualizada para ${input.status}.`);
     return { success: true };
   }),
@@ -193,7 +193,7 @@ export const operationsRouter = router({
       const created = await tx.insert(reservations).values({ customerId: item.customerId, contractId: item.contractId, unitId: input.unitId, checkIn: item.desiredCheckIn, checkOut: item.desiredCheckOut, adults: item.partySize, children: 0, notes: input.notes || item.preferenceNotes || null, status: "confirmed", createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id; if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível confirmar a reserva da fila." });
       const waitlistUpdate = await tx.update(reservationWaitlist).set({ status: "confirmed" }).where(and(eq(reservationWaitlist.id, item.id), eq(reservationWaitlist.status, "offered")));
-      if (waitlistUpdate && typeof waitlistUpdate === "object" && "affectedRows" in waitlistUpdate && Number(waitlistUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oferta da fila foi confirmada por outra operação." });
+      if (affectedRows(waitlistUpdate) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oferta da fila foi confirmada por outra operação." });
       return { id, waitlistId: item.id };
     });
     await recordAudit(ctx.user.id, "reservation", reservationId.id, "created_from_waitlist", `Reserva criada da fila ${reservationId.waitlistId}.`);
@@ -272,7 +272,7 @@ export const operationsRouter = router({
         if (!canTransitionReservationStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de reserva inválida: ${current.status} → ${input.status}.` });
         const now = new Date();
         const updateResult = await tx.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(and(eq(reservations.id, input.id), eq(reservations.status, current.status)));
-        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A reserva foi alterada por outra operação. Recarregue e tente novamente." });
+        if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A reserva foi alterada por outra operação. Recarregue e tente novamente." });
         if (input.status === "completed") await tx.update(reservationGuests).set({ checkedOutAt: now }).where(and(eq(reservationGuests.reservationId, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
       });
       await recordAudit(ctx.user.id, "reservation", input.id, "status_updated", `Reserva atualizada para ${input.status}.`);
@@ -315,7 +315,7 @@ export const operationsRouter = router({
     if (input.action === "check_out" && !guest.checkedInAt) throw new TRPCError({ code: "BAD_REQUEST", message: "O acompanhante precisa fazer check-in antes do check-out." });
     if (input.action === "check_out" && guest.checkedOutAt) return { success: true, alreadyCheckedOut: true };
     const presenceUpdate = await db.update(reservationGuests).set(input.action === "check_in" ? { checkedInAt: new Date() } : { checkedOutAt: new Date() }).where(input.action === "check_in" ? and(eq(reservationGuests.id, input.id), isNull(reservationGuests.checkedInAt)) : and(eq(reservationGuests.id, input.id), isNotNull(reservationGuests.checkedInAt), isNull(reservationGuests.checkedOutAt)));
-    if (presenceUpdate && typeof presenceUpdate === "object" && "affectedRows" in presenceUpdate && Number(presenceUpdate.affectedRows) === 0) return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: true } : { alreadyCheckedOut: true }) };
+    if (affectedRows(presenceUpdate) === 0) return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: true } : { alreadyCheckedOut: true }) };
     await recordAudit(ctx.user.id, "reservation_guest", input.id, input.action, `Presença de acompanhante registrada: ${input.action}.`);
     return { success: true, ...(input.action === "check_in" ? { alreadyCheckedIn: false } : { alreadyCheckedOut: false }) };
   }),
@@ -421,7 +421,7 @@ export const operationsRouter = router({
       if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Tarefa não encontrada." });
       if (!canTransitionTaskStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de tarefa inválida: ${current.status} → ${input.status}.` });
       const updateResult = await db.update(tasks).set({ status: input.status, completedAt: input.status === "done" ? new Date() : null }).where(and(eq(tasks.id, input.id), eq(tasks.status, current.status)));
-      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A tarefa foi alterada por outra operação. Recarregue e tente novamente." });
+      if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A tarefa foi alterada por outra operação. Recarregue e tente novamente." });
       await recordAudit(ctx.user.id, "task", input.id, "status_updated", `Tarefa atualizada para ${input.status}.`);
       return { success: true };
     }),

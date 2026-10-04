@@ -13,6 +13,7 @@ import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
+import { affectedRows } from "../mysqlErrors";
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -204,7 +205,7 @@ export const contractsRouter = router({
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const request = (await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0]; if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." }); if (request.status !== "requested") throw new TRPCError({ code: "CONFLICT", message: "Esta solicitação já recebeu uma decisão." });
     const updateResult = await db.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(and(eq(contractCancellationRequests.id, input.requestId), eq(contractCancellationRequests.status, "requested")));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`);
     await recordDomainEvent({ eventName: "contract.cancellation.decided", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { decision: input.decision } });
     return { success: true };
@@ -287,7 +288,7 @@ export const contractsRouter = router({
       cancelledAt: undefined,
       cancellationReason: null,
     }).where(and(eq(contracts.id, input.id), eq(contracts.status, current.status)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
@@ -336,7 +337,7 @@ export const contractsRouter = router({
     if (!document) throw new TRPCError({ code: "NOT_FOUND", message: "Documento contratual não encontrado." });
     if (document.signed) return { success: true, alreadySigned: true } as const;
     const updateResult = await db.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, input.documentId), eq(contractDocuments.signed, false)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadySigned: true } as const;
+    if (affectedRows(updateResult) === 0) return { success: true, alreadySigned: true } as const;
     await recordAudit(ctx.user.id, "contract_document", input.documentId, "signed", `Assinatura do documento contratual #${input.documentId} confirmada.`);
     await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: input.documentId, actorUserId: ctx.user.id, payload: { contractId: document.contractId } });
     return { success: true, alreadySigned: false } as const;

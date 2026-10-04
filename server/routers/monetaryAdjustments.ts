@@ -17,7 +17,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { buildMonetaryAdjustment, parseMonetaryAdjustmentPolicy } from "../monetaryAdjustment";
-import { isDuplicateKeyError } from "../mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 
 const day = (value: Date | string) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 const atNoon = (value: Date | string) => value instanceof Date ? value : new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
@@ -192,7 +192,7 @@ export const monetaryAdjustmentsRouter = router({
       for (const item of calculation.installments) {
         const update = await tx.update(installments).set({ amount: item.after.toFixed(2) })
           .where(and(eq(installments.id, item.id), inArray(installments.status, ["open", "overdue"])));
-        if (update && typeof update === "object" && "affectedRows" in update && Number(update.affectedRows) !== 1) {
+        if ((affectedRows(update) ?? 1) !== 1) {
           throw new TRPCError({ code: "CONFLICT", message: `A parcela #${item.id} mudou durante o reajuste. Nenhuma alteração foi aplicada.` });
         }
       }

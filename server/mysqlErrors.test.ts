@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
 
 describe("isDuplicateKeyError", () => {
   it("reconhece o erro direto do mysql2", () => {
@@ -17,5 +17,19 @@ describe("isDuplicateKeyError", () => {
     expect(isDuplicateKeyError(new Error("Failed query", { cause: { code: "ER_LOCK_DEADLOCK", errno: 1213 } }))).toBe(false);
     expect(isDuplicateKeyError(null)).toBe(false);
     expect(isDuplicateKeyError("ER_DUP_ENTRY")).toBe(false);
+  });
+});
+
+describe("affectedRows", () => {
+  it("lê o formato real do drizzle+mysql2 e o formato dos mocks", () => {
+    expect(affectedRows([{ affectedRows: 0, changedRows: 0 }, null])).toBe(0);
+    expect(affectedRows([{ affectedRows: 2 }, null])).toBe(2);
+    expect(affectedRows({ affectedRows: 1 })).toBe(1);
+  });
+
+  it("devolve null quando não há contagem para não inventar conflito", () => {
+    expect(affectedRows(undefined)).toBeNull();
+    expect(affectedRows([])).toBeNull();
+    expect(affectedRows({})).toBeNull();
   });
 });
