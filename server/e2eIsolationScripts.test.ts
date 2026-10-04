@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
+const SCRIPT_TIMEOUT_MS = 30_000;
 
 function runScript(
   script: string,
@@ -19,8 +20,12 @@ function runScript(
     cwd: root,
     env: env as NodeJS.ProcessEnv,
     encoding: "utf8",
-    timeout: 5_000,
+    // Cold mysql2 imports can take several seconds on Windows under a
+    // parallel test run; a killed child must not pass as a guarded abort.
+    timeout: SCRIPT_TIMEOUT_MS,
   });
+
+  if (result.error) throw result.error;
 
   return {
     status: result.status,
@@ -38,7 +43,7 @@ const confirmedBaseEnv = {
   E2E_CONFIRM_ISOLATED: "I_CONFIRM_ISOLATED_E2E",
 };
 
-describe("E2E isolation scripts", () => {
+describe("E2E isolation scripts", { timeout: SCRIPT_TIMEOUT_MS + 5_000 }, () => {
   test("rejects a non-MySQL E2E database URL", () => {
     const result = runScript("scripts/check-e2e-isolation.mjs", {
       DATABASE_URL: undefined,

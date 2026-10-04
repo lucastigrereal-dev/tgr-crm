@@ -14,6 +14,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Cold imports (playwright, mysql2, tsx) exceed 5s on slower Windows
+    // hosts during the parallel suite; real failures still fail on assertions.
+    testTimeout: 30_000,
     include: ["server/**/*.test.ts", "server/**/*.spec.ts", "shared/**/*.test.ts", "shared/**/*.spec.ts"],
   },
 });
