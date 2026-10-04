@@ -4,7 +4,7 @@
 
 import { ENV } from "./_core/env";
 import { fetchWithTimeout } from "./integrationReliability";
-import { getLocalStorageRoot, putLocalStorageFile } from "./localStorage";
+import { getLocalStorageRoot, putLocalStorageFile, readLocalStorageFile } from "./localStorage";
 
 const MAX_STORAGE_UPLOAD_BYTES = 50 * 1024 * 1024;
 
@@ -88,6 +88,16 @@ export async function storagePut(
   }
 
   return { key, url: `/manus-storage/${key}` };
+}
+
+export async function storageReadBytes(relKey: string): Promise<Buffer> {
+  const key = normalizeKey(relKey);
+  if (getLocalStorageRoot()) return readLocalStorageFile(key);
+  const signedUrl = await storageGetSignedUrl(key);
+  const response = await fetchWithTimeout(signedUrl);
+  if (!response.ok) throw new Error(`Storage download failed (${response.status})`);
+  const bytes = await response.arrayBuffer();
+  return Buffer.from(bytes);
 }
 
 export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
