@@ -6,7 +6,7 @@ Execução da missão `docs/TGR_CLOUD_MISSION_KAN31.md` no branch `kan-31/homolo
 Sem PR, merge, deploy, produção, dado real, segredo real ou integração GuestPass.
 
 - Base: `f039994` (= `main` `bcca1c2` + doc da missão)
-- Head certificado: `e603365d8973ab9f780a48057ec1b933178f12e8`
+- Head de código certificado: `5df449c` (este recibo vem no commit seguinte)
 - Banco: MySQL 8.4.11 em container descartável (`mysql:8.4`), usuário de aplicação sem root, bancos `*_e2e`
 - Runtime: Node 22.22.0, pnpm 10.26.2
 
@@ -22,24 +22,27 @@ Sem PR, merge, deploy, produção, dado real, segredo real ou integração Guest
 | `6613642` | Dependências: vulnerabilidades de produção 23 → 0 |
 | `b7b6191` | Drill Linux de backup + restore com checksum por tabela |
 | `e603365` | Segurança: envio de e-sign só admin; token Asaas em tempo constante |
+| `5df449c` | Fix: cobrança Asaas parcial não soma duas vezes |
 
 ## Resultado por item da missão
 
 | Item | Resultado | Evidência |
 | --- | --- | --- |
 | Recertificar baseline | PASS | Base `f039994`: tsc 0, Vitest 137/449 PASS, build PASS, budget PASS |
-| Corrigir problemas com evidência | PASS | 4 bugs reais corrigidos, cada um com teste que falha no código antigo (abaixo) |
+| Corrigir problemas com evidência | PASS | 5 bugs reais corrigidos, cada um com teste que falha no código antigo (abaixo) |
 | Fração exata e atribuição | PASS | `server/salesCommandBridge.mysql.test.ts` 6/6 em MySQL real |
 | Reconciliar Clicksign localmente | PASS | Port sem conflito de código; `server/eSignatureService.mysql.test.ts` 4/4 com HMAC local, sem rede |
 | Backup/restore | PASS | `infra/pilot/backup-restore-drill.sh`: 49 tabelas, contagem + `CHECKSUM TABLE` iguais; teste negativo detecta 0,01 |
 | Revisão de segurança | PASS com pendências | 2 correções; achados abertos listados abaixo |
 | Recibos | PASS | Este documento |
 
-## Gates finais no head `e603365`
+## Gates finais no head `5df449c`
 
 - `pnpm check`: exit 0
-- `pnpm test`: 141 arquivos / 463 testes PASS; 3 arquivos / 12 testes opt-in pulados sem MySQL
-- Suítes MySQL opt-in (`TGR_MYSQL_INTEGRATION_URL`): 12/12 PASS
+- `pnpm test`: 141 arquivos / 463 testes PASS; 3 arquivos / 13 testes opt-in pulados sem MySQL
+- Suítes MySQL opt-in (`TGR_MYSQL_INTEGRATION_URL`): 13/13 PASS
+- E2E autenticado estrito (mesmo fluxo do job `e2e` do CI, local, Chromium headless): **7/7 PASS** em 31,2 s. Run `kan31_local`, banco `tgr_crm_kan31_local_e2e`, porta 43337. Fluxos: captação mobile, CSV com undo, XLSX/PDF, reserva, sala, Sales Command e distrato. Cleanup `CLEANUP_EXIT=0`; porta livre depois do run.
+  - Para isso foi usado o Chromium 1194 já instalado na máquina, via config temporária não versionada e symlink temporário do headless shell; ambos foram removidos. O CI do repo só roda em PR/main, então não houve run remoto.
 - Migrations do zero (`drizzle-kit migrate`): exit 0, 43/43 aplicadas, 49 tabelas
 - `pnpm build`: exit 0
 - Budget gzip: app 149.8/450 KB, Excel 264.4/300 KB, PDF 123.4/150 KB
@@ -72,6 +75,12 @@ O nome do banco precisa terminar em `_e2e`, `_test` ou `_staging` (`validateIsol
 
 ### 4. Envio de assinatura eletrônica sem controle de papel (`e603365`)
 - Qualquer perfil interno podia criar envelope Clicksign, o que envia e-mail ao cliente e gera custo. Agora exige `document.sign` (admin), igual à confirmação manual.
+- **Regressão:** `server/electronicSignatures.access.test.ts` falha em 3/4 no router antigo.
+
+### 5. Cobrança Asaas parcial somada duas vezes (`5df449c`)
+- Parcela de 300,00 com cobrança de 100,00, recebendo `PAYMENT_CONFIRMED` e depois `PAYMENT_RECEIVED`.
+- **Antes:** receitas `["100.00","100.00"]`. **Depois:** `["100.00"]`, `paidAmount` 100,00 e parcela `open`.
+- **Correção:** o webhook encerra quando a cobrança travada já está `paid`; o evento continua registrado para manter a idempotência.
 
 ## Fração exata e atribuição — o que está provado
 
@@ -107,13 +116,11 @@ O drill roda `infra/pilot/backup-restore-drill.sh` contra o banco sintético `tg
 | --- | --- | --- |
 | Drift entre `drizzle/schema.ts` e o schema real: FK de `contract_documents.contractId` ausente no schema.ts, nome de FK de `contract_monetary_adjustments` divergente, sem snapshot da 0041 | Um `drizzle-kit generate` futuro proporia **DROP de FK real** | Mudança dedicada alinhando o schema.ts e revisando o SQL gerado à mão |
 | `getAsaasConfig` usa `https://api.asaas.com` (produção) quando `ASAAS_API_URL` está vazio | Chave de sandbox ou dev pode bater em produção | Exigir URL explícita, como o Clicksign já faz; mexe em configuração de produção, depende de GO |
-| Webhook Asaas com cobrança **parcial**: um segundo evento de confirmação diferente para o mesmo billing ainda pode somar o valor de novo, porque a parcela continua `open` | Suspeito, **não provado** | Guardar por `billingRecords.status` antes de somar; precisa de teste dedicado |
 | Contrato vindo do Sales Command entra com `sellerId = null`; o evento v1 não traz liner/closer | Comissão automática dessas vendas não nasce | Decisão de produto: incluir papéis no contrato de evento v2 |
 | `vitest` < 4.1.11 (2 moderate, dev) | Só em dev | Upgrade de major separado |
 
 ## Não executado
 
-- E2E Playwright autenticado: não rodado neste container. As provas desta missão são de servidor, em MySQL real.
 - Diário no Notion: este ambiente cloud não tem conector Notion, então nada foi escrito lá.
 
 ## Fronteiras respeitadas
@@ -125,4 +132,4 @@ O drill roda `infra/pilot/backup-restore-drill.sh` contra o banco sintético `tg
 
 ## Veredito
 
-KAN-31 homologação técnica: **PASS** dentro do escopo controlável, com 4 correções de bug reais e provadas. Merge na `main` e o encaminhamento dos achados abertos dependem de GO humano.
+KAN-31 homologação técnica: **PASS** dentro do escopo controlável, com 5 correções de bug reais e provadas e E2E autenticado verde. Merge na `main` e o encaminhamento dos achados abertos dependem de GO humano.
