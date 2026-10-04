@@ -76,4 +76,20 @@ describe.skipIf(!integrationUrl)("guards de concorrência em MySQL real", () => 
     const [row] = await db.select().from(installments).where(eq(installments.id, installment.id));
     expect(row).toMatchObject({ status: "paid", paidAmount: "300.00" });
   });
+
+  it("cobrança parcial confirmada por dois eventos diferentes soma o valor uma única vez", async () => {
+    const contractId = await seedContract("asaas-partial");
+    const [installment] = await db.insert(installments).values({ contractId, sequence: 1, dueDate: new Date("2026-10-10T12:00:00Z"), amount: "300.00" }).$returningId();
+    const paymentId = `pay_partial_${runId}`;
+    await db.insert(billingRecords).values({ installmentId: installment.id, type: "boleto", status: "generated", gatewayProvider: "asaas", gatewayPaymentId: paymentId, amount: "100.00", dueDate: new Date("2026-10-10T12:00:00Z") });
+
+    await processAsaasWebhook(webhookToken, { id: `evt_partial_confirmed_${runId}`, event: "PAYMENT_CONFIRMED", payment: { id: paymentId, status: "CONFIRMED" } });
+    await processAsaasWebhook(webhookToken, { id: `evt_partial_received_${runId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } });
+
+    const income = await db.select().from(financialTransactions).where(and(eq(financialTransactions.contractId, contractId), eq(financialTransactions.type, "income")));
+    expect(income.map(row => row.amount)).toEqual(["100.00"]);
+    const [row] = await db.select().from(installments).where(eq(installments.id, installment.id));
+    expect(row).toMatchObject({ status: "open", paidAmount: "100.00" });
+  });
 });
+

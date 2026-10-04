@@ -56,7 +56,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       billing = lockedBilling;
 
       if (isAsaasPaymentConfirmed(event)) {
-        if (["cancelled", "expired"].includes(billing.billing.status) || ["cancelled", "renegotiated"].includes(billing.installment.status)) return;
+        if (["cancelled", "expired", "paid"].includes(billing.billing.status) || ["cancelled", "renegotiated"].includes(billing.installment.status)) return;
         await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(and(eq(billingRecords.id, billing.billing.id), inArray(billingRecords.status, ["pending", "generated", "paid"])));
         const paidAt = new Date();
         const fullAmount = Number(billing.installment.amount);
