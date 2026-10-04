@@ -23,7 +23,7 @@ import {
   verifyClicksignWebhook,
 } from "./clicksign";
 import { storageReadBytes } from "./storage";
-import { isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
 
 function contentTypeFor(filename: string) {
   const lower = filename.toLowerCase();
@@ -266,8 +266,9 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
           signedAt: now,
           closedAt: closedEvents.has(eventName) ? now : undefined,
         }).where(eq(contractSignatureDocuments.id, signatureDocument.id));
-        signedContractDocumentId = signatureDocument.contractDocumentId;
-        await tx.update(contractDocuments).set({ signed: true }).where(eq(contractDocuments.id, signatureDocument.contractDocumentId));
+        const documentUpdate = await tx.update(contractDocuments).set({ signed: true })
+          .where(and(eq(contractDocuments.id, signatureDocument.contractDocumentId), eq(contractDocuments.signed, false)));
+        if (affectedRows(documentUpdate) !== 0) signedContractDocumentId = signatureDocument.contractDocumentId;
       } else if (signatureDocument && canceledEvents.has(eventName)) {
         await tx.update(contractSignatureDocuments).set({ status: "canceled" }).where(eq(contractSignatureDocuments.id, signatureDocument.id));
       }
