@@ -9,7 +9,7 @@ import { getDb } from "../db";
 import { getClicksignConfig } from "../clicksign";
 import { reconcileContractSignature, startContractElectronicSignature } from "../eSignatureService";
 import { router } from "../_core/trpc";
-import { contractsProcedure } from "./access";
+import { assertCapability, contractsProcedure } from "./access";
 
 export const electronicSignaturesRouter = router({
   configStatus: contractsProcedure.query(() => {
@@ -47,12 +47,14 @@ export const electronicSignaturesRouter = router({
     contractId: z.number().int().positive(),
     contractDocumentId: z.number().int().positive(),
   })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "document.sign", "Somente a administração pode enviar contrato para assinatura eletrônica.");
     return startContractElectronicSignature({ actorUserId: ctx.user.id, ...input });
   }),
 
   reconcile: contractsProcedure.input(z.object({
     envelopeId: z.number().int().positive(),
   })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "document.sign", "Somente a administração pode reconciliar a assinatura eletrônica.");
     return reconcileContractSignature({ actorUserId: ctx.user.id, envelopeId: input.envelopeId });
   }),
 });

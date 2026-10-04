@@ -150,10 +150,10 @@ function DocumentsCard({
           {linked ? <div className="mt-3 rounded-lg border border-[#dfd8cb] bg-white p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><p className="text-xs font-semibold text-[#1d2b2a]">Envelope #{linked.envelope.id} · {linked.envelope.status}</p><p className="mt-1 text-[11px] text-muted-foreground">{signer ? `${signer.name} · ${signer.status}` : "Signer aguardando"}{linked.envelope.lastEventName ? ` · último evento ${linked.envelope.lastEventName}` : ""}</p></div>
-              {linked.envelope.externalEnvelopeId && !["closed", "canceled"].includes(linked.envelope.status) ? <Button type="button" size="sm" variant="outline" disabled={electronicPending} onClick={() => onReconcile(linked.envelope.id)}><RefreshCw className="mr-1.5 h-3.5 w-3.5" />Reconciliar</Button> : null}
+              {canSign && linked.envelope.externalEnvelopeId && !["closed", "canceled"].includes(linked.envelope.status) ? <Button type="button" size="sm" variant="outline" disabled={electronicPending} onClick={() => onReconcile(linked.envelope.id)}><RefreshCw className="mr-1.5 h-3.5 w-3.5" />Reconciliar</Button> : null}
             </div>
           </div> : null}
-          {!document.signed && !linked && electronicConfigured ? <Button type="button" size="sm" className="mt-3 bg-[#1d2b2a] hover:bg-[#29413e]" disabled={electronicPending} onClick={() => onStartElectronic(document.id)}><FileSignature className="mr-1.5 h-3.5 w-3.5" />Enviar para assinatura</Button> : null}
+          {!document.signed && !linked && electronicConfigured && canSign ? <Button type="button" size="sm" className="mt-3 bg-[#1d2b2a] hover:bg-[#29413e]" disabled={electronicPending} onClick={() => onStartElectronic(document.id)}><FileSignature className="mr-1.5 h-3.5 w-3.5" />Enviar para assinatura</Button> : null}
           {!document.signed && !linked && !electronicConfigured && canSign ? <Button type="button" size="sm" variant="outline" className="mt-3 border-[#b18f4b] text-[#8a6b2d]" disabled={signPending} onClick={() => onSign(document.id)}><ShieldCheck className="mr-1.5 h-3.5 w-3.5" />Confirmar manualmente</Button> : null}
         </div>;
       }) : <p className="rounded-xl bg-[#faf8f3] p-4 text-sm text-muted-foreground">Nenhum documento anexado.</p>}

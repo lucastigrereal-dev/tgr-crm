@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { fetchWithTimeout } from "./integrationReliability";
 
 export type GatewayBillingType = "pix" | "boleto";
@@ -108,5 +109,8 @@ export function isAsaasPaymentOverdue(event: string) {
 }
 
 export function isAsaasWebhookTokenValid(config: AsaasConfig, token: string | undefined) {
-  return Boolean(config.webhookToken) && Boolean(token) && token === config.webhookToken;
+  if (!config.webhookToken || !token) return false;
+  const expected = createHash("sha256").update(config.webhookToken).digest();
+  const received = createHash("sha256").update(token).digest();
+  return timingSafeEqual(expected, received);
 }
