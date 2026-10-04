@@ -25,6 +25,7 @@ import {
   parseSaleTermsPolicy,
 } from "./saleTermsPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
+import { isDuplicateKeyError } from "./mysqlErrors";
 
 const entryScheduleRow = z.strictObject({
   sequence: z.number().int().min(1).max(100),
@@ -76,12 +77,6 @@ function safeEqual(left: string, right: string) {
   const a = createHash("sha256").update(left).digest();
   const b = createHash("sha256").update(right).digest();
   return timingSafeEqual(a, b);
-}
-
-function isDuplicateKeyError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
 }
 
 function money(cents: number) {

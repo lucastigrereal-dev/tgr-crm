@@ -23,6 +23,7 @@ import {
   verifyClicksignWebhook,
 } from "./clicksign";
 import { storageReadBytes } from "./storage";
+import { isDuplicateKeyError } from "./mysqlErrors";
 
 function contentTypeFor(filename: string) {
   const lower = filename.toLowerCase();
@@ -54,12 +55,6 @@ function parseOccurredAt(value: unknown) {
   if (!candidate) return null;
   const date = new Date(candidate);
   return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function isDuplicateKeyError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
 }
 
 export async function startContractElectronicSignature(input: {

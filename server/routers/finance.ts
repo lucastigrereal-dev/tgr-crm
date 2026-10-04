@@ -12,6 +12,7 @@ import { parseCompleteCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { asaasBillingType, billingExternalReference, createAsaasCustomer, createAsaasPayment, findAsaasPaymentsByReference, getAsaasConfig, getAsaasIdentificationField, getAsaasPixQrCode } from "../paymentGateway";
+import { isDuplicateKeyError } from "../mysqlErrors";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const ASAAS_GATEWAY_ERROR = "O gateway de cobrança não respondeu corretamente. Tente novamente.";
@@ -23,8 +24,6 @@ async function runAsaas<T>(operation: () => Promise<T>): Promise<T> {
     throw new TRPCError({ code: "BAD_GATEWAY", message: ASAAS_GATEWAY_ERROR });
   }
 }
-
-const isDuplicateKeyError = (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY");
 
 export const financeRouter = router({
   portfolioScorecards: financeProcedure.query(async () => {
@@ -519,7 +518,7 @@ export const financeRouter = router({
       try {
         created = await db.insert(financialTransfers).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: input.contractId ?? null, beneficiaryName: input.beneficiaryName, description: input.description || null, amount: expectedAmount, dueDate: expectedDueDate }).$returningId();
       } catch (error) {
-        if (!input.idempotencyKey || !(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY")) throw error;
+        if (!input.idempotencyKey || !isDuplicateKeyError(error)) throw error;
         const existing = (await db.select({ id: financialTransfers.id, contractId: financialTransfers.contractId, beneficiaryName: financialTransfers.beneficiaryName, description: financialTransfers.description, amount: financialTransfers.amount, dueDate: financialTransfers.dueDate }).from(financialTransfers).where(eq(financialTransfers.idempotencyKey, input.idempotencyKey)).limit(1))[0];
         if (!existing) throw new TRPCError({ code: "CONFLICT", message: "O repasse foi criado por outra operação. Recarregue a tela." });
         if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outro repasse." });

@@ -5,6 +5,7 @@ import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaas
 import { buildInstallmentCommissions } from "./commissionAutomation";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
+import { isDuplicateKeyError } from "./mysqlErrors";
 
 export type AsaasWebhookPayload = {
   id?: string;
@@ -24,12 +25,6 @@ export type ProcessAsaasWebhookResult = {
   installmentPaid?: boolean;
   message: string;
 };
-
-function isDuplicateKeyError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
-}
 
 export async function processAsaasWebhook(token: string | undefined, payload: AsaasWebhookPayload): Promise<ProcessAsaasWebhookResult> {
   const config = getAsaasConfig();

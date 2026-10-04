@@ -17,6 +17,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { buildMonetaryAdjustment, parseMonetaryAdjustmentPolicy } from "../monetaryAdjustment";
+import { isDuplicateKeyError } from "../mysqlErrors";
 
 const day = (value: Date | string) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 const atNoon = (value: Date | string) => value instanceof Date ? value : new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
@@ -214,10 +215,7 @@ export const monetaryAdjustmentsRouter = router({
           appliedByUserId: ctx.user.id,
         }).$returningId();
       } catch (error) {
-        if (error && typeof error === "object" && ("code" in error || "errno" in error)) {
-          const candidate = error as { code?: unknown; errno?: unknown };
-          if (candidate.code === "ER_DUP_ENTRY" || Number(candidate.errno) === 1062) throw new TRPCError({ code: "CONFLICT", message: "Este contrato já foi reajustado para a data informada." });
-        }
+        if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Este contrato já foi reajustado para a data informada." });
         throw error;
       }
       const adjustmentId = created[0]?.id;

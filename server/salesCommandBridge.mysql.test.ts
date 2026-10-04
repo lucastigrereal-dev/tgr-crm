@@ -21,6 +21,7 @@ import {
   units,
 } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { isDuplicateKeyError } from "./mysqlErrors";
 import { materializeSalesCommandSale, type SalesCommandSale } from "./salesCommandBridge";
 
 // Integração real contra MySQL descartável. Só roda quando TGR_MYSQL_INTEGRATION_URL
@@ -237,5 +238,22 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const history = await db.select().from(commercialFractionHistory).where(eq(commercialFractionHistory.toStatus, "sold"));
     const raceHistory = history.filter(row => sold.some(fraction => fraction.id === row.fractionId));
     expect(raceHistory).toHaveLength(2);
+  });
+
+  it("corrida do mesmo saleId falha com chave duplicada reconhecível para replay", async () => {
+    const { resortId, project } = await seedProject("same-sale", 4);
+    const event = saleEvent(project);
+
+    const outcomes = await Promise.allSettled([
+      db.transaction(tx => materializeSalesCommandSale(tx, event)),
+      db.transaction(tx => materializeSalesCommandSale(tx, { ...event, eventId: `evt-${randomUUID()}` })),
+    ]);
+
+    const rejected = outcomes.filter(item => item.status === "rejected") as PromiseRejectedResult[];
+    expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(isDuplicateKeyError(rejected[0].reason)).toBe(true);
+    expect(await db.select().from(contracts).where(eq(contracts.externalSaleId, event.saleId))).toHaveLength(1);
+    expect(await db.select().from(commercialFractions).where(and(eq(commercialFractions.resortId, resortId), eq(commercialFractions.status, "sold")))).toHaveLength(2);
   });
 });

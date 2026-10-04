@@ -8,12 +8,7 @@ import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
 import { entitlementPriorityScore, getCollectionStage, isValidReservationPeriod } from "../domain";
 import { canTransitionReservationStatus, canTransitionWaitlistStatus } from "../../shared/reservationLifecycle";
 import { canTransitionTaskStatus } from "../../shared/taskLifecycle";
-
-function isDuplicateKeyError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
-}
+import { isDuplicateKeyError } from "../mysqlErrors";
 
 function waitlistActiveKey(input: { customerId: number; contractId?: number | null; resortId?: number | null; desiredCheckIn: string; desiredCheckOut: string }) {
   return `customer:${input.customerId}|contract:${input.contractId ?? 0}|resort:${input.resortId ?? 0}|from:${input.desiredCheckIn}|to:${input.desiredCheckOut}`;

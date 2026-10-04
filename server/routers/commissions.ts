@@ -10,10 +10,10 @@ import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, commissionsProcedure, financeProcedure } from "./access";
 import { buildProfessionalScorecards, type ProfessionalSaleFact } from "../professionalScorecard";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
+import { isDuplicateKeyError } from "../mysqlErrors";
 
 const campaignDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => { const parsed = new Date(`${value}T00:00:00Z`); return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value; }, "Data de campanha inválida.");
 const closingMonth = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Mês de fechamento inválido.");
-const isDuplicateKeyError = (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY");
 const campaignInput = z.object({ name: z.string().min(3).max(180), code: z.string().min(2).max(64).transform(value => value.trim().toUpperCase().replace(/\s+/g, "-")), description: z.string().max(2000).optional(), startsAt: campaignDate.optional(), endsAt: campaignDate.optional(), commissionRate: z.coerce.number().min(0).max(100), targetAmount: z.coerce.number().min(0).default(0), status: z.enum(["draft", "active", "closed"]).default("draft") }).superRefine((value, refinement) => { if (value.startsAt && value.endsAt && value.endsAt < value.startsAt) refinement.addIssue({ code: "custom", path: ["endsAt"], message: "A data final da campanha precisa ser posterior ou igual à inicial." }); });
 
 export const commissionsRouter = router({

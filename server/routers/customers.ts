@@ -18,6 +18,7 @@ import { storagePut } from "../storage";
 import { internalProcedure } from "./access";
 import { buildRelationshipRadar } from "../relationshipRadar";
 import { decodeUpload } from "../uploadValidation";
+import { isDuplicateKeyError } from "../mysqlErrors";
 
 const customerInput = z.object({
   fullName: z.string().trim().min(3).max(255),
@@ -41,12 +42,6 @@ const customerInput = z.object({
 
 function nullableText(value?: string | null) {
   return value?.trim() ? value.trim() : null;
-}
-
-function isDuplicateKeyError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
 }
 
 export const customersRouter = router({
