@@ -55,6 +55,11 @@ if (localAuth && env.NODE_ENV === "production") {
   warnings.push("LOCAL_AUTH_ENABLED=1 com NODE_ENV=production: login local é modo de piloto/self-hosted");
 }
 
+// Admin primário (WP10): mesma regra de server/localAuth.ts — fora do padrão o login local fica desabilitado.
+if (localAuth && isNonEmpty("LOCAL_AUTH_USERNAME") && !/^[a-z0-9._-]{3,58}$/.test(env.LOCAL_AUTH_USERNAME.trim())) {
+  problems.push("LOCAL_AUTH_USERNAME fora do padrão ^[a-z0-9._-]{3,58}$ (minúsculas, sem espaço/@): o login local ficará desabilitado");
+}
+
 // Personas de piloto (GAP-1): mesmas regras de server/localAuth.ts. Nunca imprime o conteúdo.
 if (localAuth && isNonEmpty("LOCAL_AUTH_USERS")) {
   const taken = new Set([env.LOCAL_AUTH_USERNAME?.trim().toLowerCase()].filter(Boolean));

@@ -15,10 +15,13 @@ function evictIfFull(now: number) {
   const limit = maxTrackedKeys();
   if (attempts.size < limit) return;
   attempts.forEach((state, key) => { if (now >= state.resetAt) attempts.delete(key); }); // tsconfig sem downlevelIteration: sem for-of no Map
+  // Review: expulsar primeiro chaves NÃO bloqueadas — senão um atacante enche o map com usernames novos para apagar o próprio bloqueio.
   while (attempts.size >= limit) {
-    const oldest = attempts.keys().next().value;
-    if (oldest === undefined) break;
-    attempts.delete(oldest);
+    let victim: string | undefined;
+    attempts.forEach((state, key) => { if (victim === undefined && state.count < MAX_ATTEMPTS) victim = key; });
+    if (victim === undefined) victim = attempts.keys().next().value; // só bloqueadas: cai na mais antiga
+    if (victim === undefined) break;
+    attempts.delete(victim);
   }
 }
 /** Só para testes: quantas chaves estão sendo acompanhadas. */

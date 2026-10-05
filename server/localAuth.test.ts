@@ -181,6 +181,15 @@ describe("local auth — WP10 (PRD v4 E0.8): map de tentativas limitado e userna
     expect(localAuthAttemptsTracked()).toBeLessThanOrEqual(20);
   });
 
+  it("P1 (review): uma chave BLOQUEADA sobrevive à eviction — encher o map com usernames novos não apaga o próprio bloqueio", async () => {
+    vi.stubEnv("LOCAL_AUTH_MAX_TRACKED", "20");
+    for (let i = 0; i < 5; i += 1) await authenticateLocalUser({ username: "syn.admin", password: "errada-errada" }, "attacker").catch(() => undefined);
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "attacker")).rejects.toMatchObject({ code: "LOCKED" });
+    for (let i = 0; i < 40; i += 1) await authenticateLocalUser({ username: `syn.spray${i}`, password: "errada-errada" }, "attacker").catch(() => undefined);
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "attacker")).rejects.toMatchObject({ code: "LOCKED" });
+    expect(localAuthAttemptsTracked()).toBeLessThanOrEqual(20);
+  });
+
   it("P1: username primário fora do padrão invalida a configuração em vez de entrar com um openId estranho", async () => {
     vi.stubEnv("LOCAL_AUTH_USERNAME", "Admin Root!");
     expect(localAuthStatus().enabled).toBe(false);
