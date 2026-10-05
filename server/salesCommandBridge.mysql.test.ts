@@ -211,7 +211,7 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const { resortId, project } = await seedProject("short", 1);
     const event = saleEvent(project);
 
-    await expect(db.transaction(tx => materializeSalesCommandSale(tx, event))).rejects.toThrow("Insufficient commercial fraction inventory");
+    await expect(db.transaction(tx => materializeSalesCommandSale(tx, event))).rejects.toMatchObject({ name: "SalesIngestRejection", code: "INSUFFICIENT_INVENTORY", message: expect.stringContaining("Insufficient commercial fraction inventory") });
 
     expect(await db.select().from(contracts).where(eq(contracts.externalSaleId, event.saleId))).toHaveLength(0);
     expect(await db.select().from(customers).where(eq(customers.phone, event.customer.phone!))).toHaveLength(0);
