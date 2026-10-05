@@ -30,9 +30,11 @@ import { logger } from "./logger";
 
 // PIL-008: recusa de DOMÍNIO (não vale a pena o Sales reenviar) vs falha de INFRAESTRUTURA (transitória, 503).
 // O Sales lê o código, para de tentar e deixa a venda visível para revisão (PRD v4, resposta 7: REJECTED_BY_CRM com motivo).
-export type SalesIngestRejectionCode =
-  | "INSUFFICIENT_INVENTORY" | "SALE_TERMS_POLICY_MISSING" | "SALE_TERMS_POLICY_AMBIGUOUS"
-  | "PROJECT_NOT_MAPPED" | "PROJECT_MAPPING_CONFLICT" | "INVALID_COMMERCIAL_SNAPSHOT" | "INSTALLMENT_LIMIT_EXCEEDED";
+export const SALES_INGEST_REJECTION_CODES = [
+  "INSUFFICIENT_INVENTORY", "SALE_TERMS_POLICY_MISSING", "SALE_TERMS_POLICY_AMBIGUOUS",
+  "PROJECT_NOT_MAPPED", "PROJECT_MAPPING_CONFLICT", "INVALID_COMMERCIAL_SNAPSHOT", "INSTALLMENT_LIMIT_EXCEEDED",
+] as const;
+export type SalesIngestRejectionCode = (typeof SALES_INGEST_REJECTION_CODES)[number];
 export class SalesIngestRejection extends Error {
   constructor(readonly code: SalesIngestRejectionCode, message: string) { super(message); this.name = "SalesIngestRejection"; }
 }

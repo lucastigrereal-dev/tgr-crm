@@ -1,0 +1,203 @@
+{
+  "contractVersion": "tgr.events.v1",
+  "financial": {
+    "forwardedEventNames": [
+      "contract.created",
+      "contract.created.v2",
+      "contract.status.updated",
+      "contract.cancellation.executed",
+      "installment.paid",
+      "commission.created",
+      "commission.status.updated",
+      "financial.entry.created",
+      "financial.entry.reconciled",
+      "financial.transfer.created",
+      "financial.transfer.paid"
+    ],
+    "allowedPayloadFields": {
+      "contract.created": [
+        "customerId",
+        "status",
+        "usageModel"
+      ],
+      "contract.created.v2": [
+        "contractId",
+        "saleId",
+        "customerId",
+        "totalAmount",
+        "currency",
+        "status",
+        "usageModel",
+        "source"
+      ],
+      "contract.status.updated": [
+        "status"
+      ],
+      "contract.cancellation.executed": [
+        "contractId",
+        "cancelledInstallments",
+        "cancelledCommissions",
+        "financialEntries"
+      ],
+      "installment.paid": [
+        "installmentId",
+        "paidAmount",
+        "contractId",
+        "customerId",
+        "sequence",
+        "amount",
+        "source",
+        "gatewayPaymentId",
+        "commissionBlocked"
+      ],
+      "commission.created": [
+        "sellerId",
+        "campaignId",
+        "opportunityId",
+        "contractId",
+        "sourceInstallmentId",
+        "commissionRole",
+        "amount",
+        "rate"
+      ],
+      "commission.status.updated": [
+        "status",
+        "contractId"
+      ],
+      "financial.entry.created": [
+        "type",
+        "category",
+        "amount",
+        "contractId",
+        "campaignId"
+      ],
+      "financial.entry.reconciled": [
+        "reference",
+        "reconciledAt"
+      ],
+      "financial.transfer.created": [
+        "amount",
+        "recipient",
+        "contractId"
+      ],
+      "financial.transfer.paid": [
+        "amount",
+        "contractId"
+      ]
+    },
+    "sampleEnvelope": {
+      "source": "crm",
+      "correlationId": "crm-fin-4242",
+      "project": {
+        "externalKey": "SYN-PONTA-NEGRA",
+        "name": "SYN Ponta Negra",
+        "timezone": "America/Recife"
+      },
+      "event": {
+        "contractVersion": "tgr.events.v1",
+        "eventId": 4242,
+        "eventName": "contract.created.v2",
+        "aggregate": {
+          "type": "contract",
+          "id": "9001"
+        },
+        "actorUserId": null,
+        "occurredAt": "2026-10-05T12:00:00.000Z",
+        "payload": {
+          "contractId": 9001,
+          "saleId": "00000000-0000-4000-8000-000000000001",
+          "customerId": 501,
+          "totalAmount": "28900.00",
+          "currency": "BRL",
+          "status": "active",
+          "usageModel": "points",
+          "source": "sales-command"
+        }
+      }
+    }
+  },
+  "relationship": {
+    "eventNames": [
+      "crm.contract.activated.v1",
+      "crm.contract.cancelled.v1"
+    ],
+    "sampleBodies": [
+      {
+        "eventId": "crm-contract-9001-active",
+        "eventName": "crm.contract.activated.v1",
+        "source": "crm",
+        "correlationId": "SYN-corr-1",
+        "occurredAt": "2026-10-05T12:00:00.000Z",
+        "project": {
+          "externalKey": "SYN-PONTA-NEGRA",
+          "name": "SYN Ponta Negra",
+          "timezone": "America/Recife"
+        },
+        "saleId": "00000000-0000-4000-8000-000000000001",
+        "customerId": "501",
+        "contractId": "9001",
+        "customer": {
+          "name": "SYN Cliente Contrato",
+          "phone": "84900000000"
+        }
+      },
+      {
+        "eventId": "crm-contract-9001-cancelled",
+        "eventName": "crm.contract.cancelled.v1",
+        "source": "crm",
+        "correlationId": "SYN-corr-1",
+        "occurredAt": "2026-10-05T12:00:00.000Z",
+        "project": {
+          "externalKey": "SYN-PONTA-NEGRA",
+          "name": "SYN Ponta Negra",
+          "timezone": "America/Recife"
+        },
+        "saleId": "00000000-0000-4000-8000-000000000001",
+        "customerId": "501",
+        "contractId": "9001",
+        "customer": {
+          "name": "SYN Cliente Contrato",
+          "phone": "84900000000"
+        },
+        "effectiveAt": "2026-10-05T12:00:00.000Z",
+        "closureReason": "SYN motivo"
+      }
+    ]
+  },
+  "sales": {
+    "cancellationSampleBody": {
+      "eventId": "crm-contract-9001-cancelled",
+      "eventName": "crm.contract.cancelled.v1",
+      "source": "crm",
+      "correlationId": "SYN-corr-1",
+      "occurredAt": "2026-10-05T12:00:00.000Z",
+      "project": {
+        "externalKey": "SYN-PONTA-NEGRA",
+        "name": "SYN Ponta Negra",
+        "timezone": "America/Recife"
+      },
+      "saleId": "00000000-0000-4000-8000-000000000001",
+      "customerId": "501",
+      "contractId": "9001",
+      "effectiveAt": "2026-10-05T12:00:00.000Z",
+      "closureReason": "SYN motivo"
+    },
+    "ingestRejection": {
+      "status": 422,
+      "body": {
+        "accepted": false,
+        "code": "INSUFFICIENT_INVENTORY",
+        "error": "SYN"
+      },
+      "codes": [
+        "INSUFFICIENT_INVENTORY",
+        "SALE_TERMS_POLICY_MISSING",
+        "SALE_TERMS_POLICY_AMBIGUOUS",
+        "PROJECT_NOT_MAPPED",
+        "PROJECT_MAPPING_CONFLICT",
+        "INVALID_COMMERCIAL_SNAPSHOT",
+        "INSTALLMENT_LIMIT_EXCEEDED"
+      ]
+    }
+  }
+}

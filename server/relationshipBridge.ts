@@ -140,6 +140,42 @@ async function lineageForContract(contractId: number) {
   };
 }
 
+export type ContractLineage = NonNullable<Awaited<ReturnType<typeof lineageForContract>>>;
+
+// WP5 (PRD v4 E0.3): corpo puro do evento de contrato. É a MESMA função usada na entrega e no export do contrato
+// (shared/contracts/tgr-events.snapshot.json), então o snapshot dos consumidores não deriva do código real.
+export function buildContractStateBody(lineage: ContractLineage, status: BridgeStatus, contractId: number, occurredAt: Date, includeCustomer: boolean) {
+  const eventName = status === "active" ? "crm.contract.activated.v1" : "crm.contract.cancelled.v1";
+  const correlationId = lineage.correlationId ?? ("crm-rel-" + contractId + "-" + status);
+  return {
+    eventId: "crm-contract-" + contractId + "-" + status,
+    eventName,
+    source: "crm",
+    correlationId,
+    occurredAt: occurredAt.toISOString(),
+    project: {
+      externalKey: lineage.projectExternalKey,
+      name: lineage.projectName,
+      timezone: lineage.projectTimezone,
+    },
+    saleId: lineage.saleId,
+    customerId: String(lineage.customerId),
+    contractId: String(contractId),
+    ...(includeCustomer ? {
+      customer: {
+        name: lineage.customerName,
+        ...(lineage.customerPhone ? { phone: lineage.customerPhone } : {}),
+      },
+    } : {}),
+    ...(status === "cancelled" ? {
+      effectiveAt: occurredAt.toISOString(),
+      ...(lineage.cancellationReason ? { closureReason: lineage.cancellationReason } : {}),
+    } : {}),
+  };
+}
+
+export const CONTRACT_STATE_TARGETS = { relationship: { includeCustomer: true, statuses: ["active", "cancelled"] as const }, salesCancellation: { includeCustomer: false, statuses: ["cancelled"] as const } };
+
 async function alreadyHandled(idempotencyKey: string) {
   const db = await getDb();
   if (!db) return false;
@@ -155,33 +191,8 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
     await recordAudit(null, "contract", contractId, target.notApplicableAction, "Contrato sem linhagem Sales Command; bridge " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
     return "not_applicable";
   }
-  const eventName = status === "active" ? "crm.contract.activated.v1" : "crm.contract.cancelled.v1";
-  const correlationId = lineage.correlationId ?? ("crm-rel-" + contractId + "-" + status);
-  const body = {
-    eventId: "crm-contract-" + contractId + "-" + status,
-    eventName,
-    source: "crm",
-    correlationId,
-    occurredAt: occurredAt.toISOString(),
-    project: {
-      externalKey: lineage.projectExternalKey,
-      name: lineage.projectName,
-      timezone: lineage.projectTimezone,
-    },
-    saleId: lineage.saleId,
-    customerId: String(lineage.customerId),
-    contractId: String(contractId),
-    ...(target.includeCustomer ? {
-      customer: {
-        name: lineage.customerName,
-        ...(lineage.customerPhone ? { phone: lineage.customerPhone } : {}),
-      },
-    } : {}),
-    ...(status === "cancelled" ? {
-      effectiveAt: occurredAt.toISOString(),
-      ...(lineage.cancellationReason ? { closureReason: lineage.cancellationReason } : {}),
-    } : {}),
-  };
+  const body = buildContractStateBody(lineage, status, contractId, occurredAt, target.includeCustomer);
+  const { eventName, correlationId } = body;
   const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {

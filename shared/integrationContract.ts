@@ -2,7 +2,7 @@ import { DomainEventName } from "./domainEvents";
 
 export const integrationContractVersion = "tgr.events.v1";
 
-const allowedPayloadFields: Record<DomainEventName, readonly string[]> = {
+export const allowedPayloadFields: Record<DomainEventName, readonly string[]> = {
   "customer.created": ["status", "acquisitionSource"], "customer.updated": ["status", "city", "state"], "customer.interaction.created": ["customerId", "type", "direction"], "customer.document.uploaded": ["customerId", "category", "filename"],
   "contract.created": ["customerId", "status", "usageModel"], "contract.created.v2": ["contractId", "saleId", "customerId", "totalAmount", "currency", "status", "usageModel", "source"], "contract.status.updated": ["status"], "contract.cancellation.requested": ["contractId", "paidAmount"], "contract.cancellation.decided": ["decision"], "contract.cancellation.executed": ["contractId", "cancelledInstallments", "cancelledCommissions", "financialEntries"], "contract.document.uploaded": ["contractId", "category", "filename"], "contract.document.signed": ["contractId"], "contract.signature.started": ["contractId", "contractDocumentId", "provider", "externalEnvelopeId"], "contract.signature.completed": ["contractId", "provider", "eventName"], "contract.monetary_adjustment.applied": ["adjustmentId", "contractId", "policyVersionId", "policyVersion", "baseDate", "throughDate", "indexCode", "totalFactor", "beforeTotal", "afterTotal"],
   "ownership.entitlement.created": ["contractId", "unitId", "priorityLevel", "entitlementType"], "unit.maintenance.blocked": ["unitId", "startsAt", "endsAt", "reason"],
