@@ -36,7 +36,8 @@ function pilotAccounts(raw: string, taken: Set<string>): LocalAccount[] | null {
   for (const item of parsed) {
     const entry = (item ?? {}) as Record<string, unknown>;
     const { username, role, passwordHash, displayName } = entry;
-    if (typeof username !== "string" || !/^[a-z0-9._-]{3,64}$/.test(username) || taken.has(username)) return null;
+    // 58 = varchar(64) do openId menos o prefixo "local:"; colisão comparada sem caixa (collation do MySQL).
+    if (typeof username !== "string" || !/^[a-z0-9._-]{3,58}$/.test(username) || taken.has(username)) return null;
     if (typeof role !== "string" || !(PILOT_ROLES as readonly string[]).includes(role)) return null;
     if (typeof passwordHash !== "string" || !/^scrypt:[0-9a-f]{32,128}:[0-9a-f]{128}$/i.test(passwordHash)) return null;
     taken.add(username);
@@ -52,8 +53,16 @@ function config() {
   const primary: LocalAccount[] = username && passwordHash
     ? [{ username, passwordHash, role: "admin", displayName: process.env.LOCAL_AUTH_DISPLAY_NAME?.trim() || "Administrador TGR" }]
     : [];
-  const extra = pilotAccounts(process.env.LOCAL_AUTH_USERS?.trim() ?? "", new Set(primary.map(account => account.username)));
+  const extra = pilotAccounts(process.env.LOCAL_AUTH_USERS?.trim() ?? "", new Set(primary.map(account => account.username.toLowerCase())));
   return { enabled, valid: extra !== null, accounts: extra === null ? [] : [...primary, ...extra] };
+}
+
+/** Sessão local (`local:<username>`) só vale se a persona ainda existe com o mesmo papel (troca/remoção derruba sessões). */
+export function isLocalSessionValid(openId: string, role: string): boolean {
+  const value = config();
+  if (!value.enabled || !value.valid) return false;
+  const account = value.accounts.find(candidate => `local:${candidate.username}` === openId);
+  return Boolean(account && account.role === role);
 }
 
 export function localAuthStatus() {
@@ -113,7 +122,8 @@ export async function authenticateLocalUser(
     throw new LocalAuthError("Login local não configurado.", "MISCONFIGURED");
   }
 
-  const key = clientKey || "unknown";
+  // Tentativas por (cliente, usuário): o login válido de uma persona não zera as tentativas contra outra.
+  const key = `${clientKey || "unknown"}|${input.username.trim().toLowerCase()}`;
   assertAttemptAllowed(key, now);
 
   const account = value.accounts.find(candidate => candidate.username === input.username.trim());

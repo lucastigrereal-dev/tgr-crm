@@ -51,14 +51,18 @@ if (
   errors.push("LOCAL_AUTH_PASSWORD_HASH precisa usar o formato scrypt seguro para runtime");
 }
 
+if (localAuth && env.NODE_ENV === "production") {
+  warnings.push("LOCAL_AUTH_ENABLED=1 com NODE_ENV=production: login local é modo de piloto/self-hosted");
+}
+
 // Personas de piloto (GAP-1): mesmas regras de server/localAuth.ts. Nunca imprime o conteúdo.
 if (localAuth && isNonEmpty("LOCAL_AUTH_USERS")) {
-  const taken = new Set([env.LOCAL_AUTH_USERNAME?.trim()].filter(Boolean));
+  const taken = new Set([env.LOCAL_AUTH_USERNAME?.trim().toLowerCase()].filter(Boolean));
   let valid = false;
   try {
     const list = JSON.parse(env.LOCAL_AUTH_USERS);
     valid = Array.isArray(list) && list.every(item => {
-      const ok = item && /^[a-z0-9._-]{3,64}$/.test(item.username ?? "") && !taken.has(item.username)
+      const ok = item && /^[a-z0-9._-]{3,58}$/.test(item.username ?? "") && !taken.has(item.username)
         && ["admin", "seller", "finance", "service"].includes(item.role)
         && /^scrypt:[0-9a-f]{32,128}:[0-9a-f]{128}$/i.test(item.passwordHash ?? "");
       if (ok) taken.add(item.username);

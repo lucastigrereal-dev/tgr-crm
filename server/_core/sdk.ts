@@ -6,6 +6,7 @@ import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
+import { isLocalSessionValid } from "../localAuth";
 import { logger } from "../logger";
 import { ENV } from "./env";
 import type {
@@ -317,6 +318,10 @@ class SDKServer {
 
     if (!user) {
       throw ForbiddenError("User not found");
+    }
+
+    if (user.openId.startsWith("local:") && !isLocalSessionValid(user.openId, user.role)) {
+      throw ForbiddenError("Local session no longer valid");
     }
 
     try {
