@@ -19,6 +19,17 @@ describe("CRM event contract export", () => {
   });
 
   it("rejection codes are machine-readable for the Sales outbox classifier", () => {
-    for (const code of exportEventContract().sales.ingestRejection.codes) expect(code).toMatch(/^[A-Z0-9_]{1,64}$/);
+    const { ingestRejection, ingestTransientFailure } = exportEventContract().sales;
+    for (const code of ingestRejection.codes ?? []) expect(code).toMatch(/^[A-Z0-9_]{1,64}$/);
+    expect(ingestRejection).toMatchObject({ status: 422, body: { accepted: false, code: "INSUFFICIENT_INVENTORY" } });
+    // Falha transitória: 503 genérico, nunca a mensagem interna.
+    expect(ingestTransientFailure).toEqual({ status: 503, body: { accepted: false, code: "EVENT_PROCESSING_FAILED", error: "Event processing failed" } });
+  });
+
+  it("export targets are the delivery targets themselves (no copy that can drift, e.g. PII to Sales)", async () => {
+    const { CONTRACT_STATE_TARGETS } = await import("./relationshipBridge");
+    expect(CONTRACT_STATE_TARGETS.salesCancellation.includeCustomer).toBe(false);
+    expect(CONTRACT_STATE_TARGETS.salesCancellation.label).toBe("Sales Command");
+    expect(CONTRACT_STATE_TARGETS.relationship.label).toBe("Relationship");
   });
 });

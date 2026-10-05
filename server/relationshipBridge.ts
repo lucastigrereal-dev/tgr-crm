@@ -174,7 +174,7 @@ export function buildContractStateBody(lineage: ContractLineage, status: BridgeS
   };
 }
 
-export const CONTRACT_STATE_TARGETS = { relationship: { includeCustomer: true, statuses: ["active", "cancelled"] as const }, salesCancellation: { includeCustomer: false, statuses: ["cancelled"] as const } };
+export const CONTRACT_STATE_TARGETS = { relationship: RELATIONSHIP_TARGET, salesCancellation: SALES_CANCELLATION_TARGET } as const;
 
 async function alreadyHandled(idempotencyKey: string) {
   const db = await getDb();

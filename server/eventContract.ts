@@ -4,7 +4,7 @@
 // Dados 100% sintéticos.
 import { FINANCIAL_EVENT_NAMES, financialBridgeEnvelope } from "./financialBridge";
 import { buildContractStateBody, CONTRACT_STATE_TARGETS, type ContractLineage } from "./relationshipBridge";
-import { SALES_INGEST_REJECTION_CODES } from "./salesCommandBridge";
+import { mapSalesIngestError, SALES_INGEST_REJECTION_CODES, SalesIngestRejection, salesIngestFailureBody } from "./salesCommandBridge";
 import { allowedPayloadFields, integrationContractVersion } from "../shared/integrationContract";
 
 const SYN_PROJECT = { externalKey: "SYN-PONTA-NEGRA", name: "SYN Ponta Negra", timezone: "America/Recife" };
@@ -14,6 +14,11 @@ const SYN_LINEAGE: ContractLineage = {
   customerPhone: "84900000000", cancellationReason: "SYN motivo",
 };
 const AT = new Date("2026-10-05T12:00:00.000Z");
+
+function sampleFailure(error: unknown, codes: string[] | undefined) {
+  const mapped = mapSalesIngestError(error);
+  return { status: mapped.status, body: salesIngestFailureBody(mapped, error), ...(codes ? { codes } : {}) };
+}
 
 export function exportEventContract() {
   return {
@@ -33,7 +38,8 @@ export function exportEventContract() {
     },
     sales: {
       cancellationSampleBody: buildContractStateBody(SYN_LINEAGE, "cancelled", 9001, AT, CONTRACT_STATE_TARGETS.salesCancellation.includeCustomer),
-      ingestRejection: { status: 422, body: { accepted: false, code: "INSUFFICIENT_INVENTORY", error: "SYN" }, codes: [...SALES_INGEST_REJECTION_CODES] },
+      ingestRejection: sampleFailure(new SalesIngestRejection("INSUFFICIENT_INVENTORY", "SYN estoque insuficiente"), [...SALES_INGEST_REJECTION_CODES]),
+      ingestTransientFailure: sampleFailure(new Error("SYN falha interna com detalhe que nunca sai"), undefined),
     },
   };
 }

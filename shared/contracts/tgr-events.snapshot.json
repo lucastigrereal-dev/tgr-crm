@@ -187,7 +187,7 @@
       "body": {
         "accepted": false,
         "code": "INSUFFICIENT_INVENTORY",
-        "error": "SYN"
+        "error": "SYN estoque insuficiente"
       },
       "codes": [
         "INSUFFICIENT_INVENTORY",
@@ -198,6 +198,14 @@
         "INVALID_COMMERCIAL_SNAPSHOT",
         "INSTALLMENT_LIMIT_EXCEEDED"
       ]
+    },
+    "ingestTransientFailure": {
+      "status": 503,
+      "body": {
+        "accepted": false,
+        "code": "EVENT_PROCESSING_FAILED",
+        "error": "Event processing failed"
+      }
     }
   }
 }
