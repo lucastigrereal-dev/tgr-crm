@@ -21,4 +21,14 @@ describe("permissionMatrix", () => {
     expect(canCapability("seller", "finance.transfer.pay")).toBe(false);
     expect(canCapability("seller", "contract.cancel.execute")).toBe(false);
   });
+
+  it("separates asking for a distrato from deciding/executing it (ADR-002)", () => {
+    for (const role of ["admin", "seller", "finance", "service"] as const) expect(canCapability(role, "contract.cancel.request")).toBe(true);
+    for (const role of ["seller", "finance", "service"] as const) {
+      expect(canCapability(role, "contract.cancel.decide")).toBe(false);
+      expect(canCapability(role, "contract.cancel.execute")).toBe(false);
+    }
+    expect(canCapability("admin", "contract.cancel.decide")).toBe(true);
+    expect(canCapability("admin", "contract.cancel.execute")).toBe(true);
+  });
 });

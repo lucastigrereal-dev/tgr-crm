@@ -8,6 +8,7 @@ import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustom
 import { assertCsvImportRowBudget, duplicateValueIndexes } from "../csvImportGuard";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
+import { affectedRows } from "../mysqlErrors";
 
 const inputSchema = z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000), mapping: z.record(z.string(), z.string()).optional() });
 const parse = (kind: ImportKind, csv: string) => kind === "customers" ? parseCustomersCsv(csv) : kind === "contracts" ? parseContractsCsv(csv) : parseUnitsCsv(csv);
@@ -184,7 +185,7 @@ export const importsRouter = router({
       }
 
       const batchUpdate = await tx.update(csvImportBatches).set({ status: "reverted", revertedAt: new Date(), revertedByUserId: ctx.user.id }).where(and(eq(csvImportBatches.id, batch.id), eq(csvImportBatches.status, "completed")));
-      if (batchUpdate && typeof batchUpdate === "object" && "affectedRows" in batchUpdate && Number(batchUpdate.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O lote foi alterado por outra operação. Recarregue e tente novamente." });
+      if (affectedRows(batchUpdate) === 0) throw new TRPCError({ code: "CONFLICT", message: "O lote foi alterado por outra operação. Recarregue e tente novamente." });
       return { batchId: batch.id, revertedItems: items.length, kind: batch.kind };
     });
     await recordAudit(ctx.user.id, "csv_import", outcome.batchId, "reverted", `Lote ${outcome.batchId} revertido com ${outcome.revertedItems} item(ns) auditado(s).`);

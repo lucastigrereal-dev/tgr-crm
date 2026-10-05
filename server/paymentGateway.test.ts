@@ -10,6 +10,15 @@ describe("payment gateway", () => {
     expect(getAsaasConfig({ ASAAS_API_KEY: " key ", ASAAS_API_URL: "https://sandbox.asaas.com/", ASAAS_WEBHOOK_TOKEN: " webhook " })).toEqual({ apiKey: "key", baseUrl: "https://sandbox.asaas.com", webhookToken: "webhook" });
   });
 
+  it("KAN-31: sem ASAAS_API_URL explícita a integração fica desligada (nunca cai em produção)", () => {
+    expect(getAsaasConfig({ ASAAS_API_KEY: "key" })).toBeNull();
+    expect(getAsaasConfig({ ASAAS_API_KEY: "key", ASAAS_API_URL: "   " })).toBeNull();
+  });
+
+  it("KAN-31: ASAAS_API_URL precisa ser https", () => {
+    expect(getAsaasConfig({ ASAAS_API_KEY: "key", ASAAS_API_URL: "http://sandbox.asaas.com" })).toBeNull();
+  });
+
   it("mapeia formas e referências determinísticas", () => {
     expect(asaasBillingType("pix")).toBe("PIX");
     expect(asaasBillingType("boleto")).toBe("BOLETO");
@@ -25,7 +34,7 @@ describe("payment gateway", () => {
   });
 
   it("exige token de webhook configurado", () => {
-    const config = getAsaasConfig({ ASAAS_API_KEY: "key", ASAAS_WEBHOOK_TOKEN: "secret" });
+    const config = getAsaasConfig({ ASAAS_API_KEY: "key", ASAAS_API_URL: "https://sandbox.asaas.com", ASAAS_WEBHOOK_TOKEN: "secret" });
     expect(config).not.toBeNull();
     expect(isAsaasWebhookTokenValid(config!, "secret")).toBe(true);
     expect(isAsaasWebhookTokenValid(config!, "wrong")).toBe(false);

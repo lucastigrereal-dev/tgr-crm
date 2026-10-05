@@ -12,7 +12,7 @@ describe("config doctor local pilot profile", () => {
       JWT_SECRET: "local-pilot-secret-with-at-least-32-characters",
       VITE_APP_ID: "tgr-crm-pilot",
       LOCAL_AUTH_ENABLED: "1",
-      LOCAL_AUTH_USERNAME: "lucas.admin",
+      LOCAL_AUTH_USERNAME: "syn.admin",
       LOCAL_AUTH_PASSWORD_HASH: "scrypt:00112233445566778899aabbccddeeff:" + "ab".repeat(64),
       LOCAL_STORAGE_DIRECTORY: "C:/tgr-private-storage",
       OAUTH_SERVER_URL: "",
@@ -32,5 +32,24 @@ describe("config doctor local pilot profile", () => {
     expect(output).not.toContain("OAUTH_SERVER_URL ausente");
     expect(output).not.toContain("BUILT_IN_FORGE_API_URL ausente");
     expect(output).toContain("ASAAS_API_KEY ausente");
+  });
+
+  it("KAN-31: avisa quando há chave Asaas sem ASAAS_API_URL explícita https", () => {
+    const env = {
+      ...process.env,
+      DATABASE_URL: "mysql://tgr:secret@127.0.0.1:3306/tgr_crm_pilot",
+      JWT_SECRET: "local-pilot-secret-with-at-least-32-characters",
+      VITE_APP_ID: "tgr-crm-pilot",
+      LOCAL_AUTH_ENABLED: "1",
+      LOCAL_AUTH_USERNAME: "syn.admin",
+      LOCAL_AUTH_PASSWORD_HASH: "scrypt:00112233445566778899aabbccddeeff:" + "ab".repeat(64),
+      LOCAL_STORAGE_DIRECTORY: "C:/tgr-private-storage",
+      ASAAS_API_KEY: "SYN-not-a-real-key",
+      ASAAS_API_URL: "",
+    };
+    const result = spawnSync(process.execPath, ["scripts/config-doctor.mjs", "--strict"], { cwd: root, env, encoding: "utf8", timeout: 5_000 });
+    const output = `${result.stdout ?? ""}
+${result.stderr ?? ""}`;
+    expect(output).toContain("ASAAS_API_URL ausente ou não-https");
   });
 });

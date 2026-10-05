@@ -1,17 +1,85 @@
-import { and, asc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, or } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
 
 type BridgeStatus = "active" | "cancelled";
 
-function safeEndpoint(endpoint: string) {
-  const url = new URL(endpoint);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Relationship endpoint must use HTTP(S)");
-  if (url.protocol === "http:" && !["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
-    throw new Error("Relationship endpoint requires TLS outside loopback");
+// Mesmo envelope crm.contract.*.v1 para dois consumidores: o Relationship recebe ativação e cancelamento;
+// o Sales Command só o cancelamento (fato separado, não muda sales.status).
+interface ContractStateTarget {
+  label: string;
+  path: string;
+  receiptPrefix: string;
+  statuses: readonly BridgeStatus[];
+  deliveredAction: string;
+  notApplicableAction: string;
+  rejectedAction: string;
+  includeCustomer: boolean;
+}
+
+// Recusa de CONTEÚDO (400/409/422) repetida MAX_CONTENT_REJECTIONS vezes seguidas vira recibo terminal e a fila segue.
+// 401/403/404 (chave/endpoint errados), 5xx e rede nunca descartam: tentam de novo e alertam.
+// ponytail: contador em memória (zera no restart, então um veneno leva no máximo +5 tentativas por boot).
+// Reprocessar um recusado: apagar a linha de audit_logs com o idempotencyKey do recibo (ver roteiro do piloto).
+export const MAX_CONTENT_REJECTIONS = 5;
+export const MIN_REJECTION_WINDOW_MS = 10 * 60_000; // e há pelo menos 10 min desde a 1ª (um 400 passageiro não esvazia a fila)
+
+/** Contador de recusas de conteúdo seguidas por chave. Qualquer outra falha ou sucesso zera. */
+export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now) {
+  const seen = new Map<K, { count: number; firstAt: number }>();
+  return {
+    /** true = desistir agora (gravar recibo terminal). */
+    record(key: K, error: unknown) {
+      if (!(error instanceof DeliveryRejectedError) || !isContentRejection(error.status)) { seen.delete(key); return false; }
+      const entry = seen.get(key) ?? { count: 0, firstAt: now() };
+      entry.count += 1;
+      if (entry.count >= MAX_CONTENT_REJECTIONS && now() - entry.firstAt >= windowMs) { seen.delete(key); return true; }
+      seen.set(key, entry);
+      return false;
+    },
+    clear(key: K) { seen.delete(key); },
+  };
+}
+export function isContentRejection(status: number) {
+  return status === 400 || status === 409 || status === 422;
+}
+
+export class DeliveryRejectedError extends Error {
+  constructor(readonly label: string, readonly status: number) {
+    super(label + " delivery failed with HTTP " + status);
   }
-  return new URL("/api/integration/events", url).toString();
+}
+
+const RELATIONSHIP_TARGET: ContractStateTarget = {
+  label: "Relationship",
+  path: "/api/integration/events",
+  receiptPrefix: "relationship-contract:",
+  statuses: ["active", "cancelled"],
+  deliveredAction: "relationship_delivered",
+  notApplicableAction: "relationship_not_applicable",
+  rejectedAction: "relationship_rejected",
+  includeCustomer: true,
+};
+
+const SALES_CANCELLATION_TARGET: ContractStateTarget = {
+  label: "Sales Command",
+  path: "/api/integration/crm/events",
+  receiptPrefix: "sales-contract:",
+  statuses: ["cancelled"],
+  deliveredAction: "sales_cancellation_delivered",
+  notApplicableAction: "sales_cancellation_not_applicable",
+  rejectedAction: "sales_cancellation_rejected",
+  includeCustomer: false, // o Sales não guarda dados pessoais do cliente; não enviar
+};
+
+function safeEndpoint(endpoint: string, target: ContractStateTarget) {
+  const url = new URL(endpoint);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error(target.label + " endpoint must use HTTP(S)");
+  if (url.protocol === "http:" && !["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
+    throw new Error(target.label + " endpoint requires TLS outside loopback");
+  }
+  return new URL(target.path, url).toString();
 }
 
 function objectPayload(value: string | null) {
@@ -79,12 +147,12 @@ async function alreadyHandled(idempotencyKey: string) {
   return Boolean(row);
 }
 
-async function deliverContractState(endpoint: string, key: string, contractId: number, status: BridgeStatus, occurredAt: Date) {
-  const receiptKey = "relationship-contract:" + contractId + ":" + status;
+async function deliverContractState(target: ContractStateTarget, endpoint: string, key: string, contractId: number, status: BridgeStatus, occurredAt: Date) {
+  const receiptKey = target.receiptPrefix + contractId + ":" + status;
   if (await alreadyHandled(receiptKey)) return "already";
   const lineage = await lineageForContract(contractId);
   if (!lineage) {
-    await recordAudit(null, "contract", contractId, "relationship_not_applicable", "Contrato sem linhagem Sales Command; bridge Relationship não aplicável.", { idempotencyKey: receiptKey });
+    await recordAudit(null, "contract", contractId, target.notApplicableAction, "Contrato sem linhagem Sales Command; bridge " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
     return "not_applicable";
   }
   const eventName = status === "active" ? "crm.contract.activated.v1" : "crm.contract.cancelled.v1";
@@ -103,10 +171,12 @@ async function deliverContractState(endpoint: string, key: string, contractId: n
     saleId: lineage.saleId,
     customerId: String(lineage.customerId),
     contractId: String(contractId),
-    customer: {
-      name: lineage.customerName,
-      ...(lineage.customerPhone ? { phone: lineage.customerPhone } : {}),
-    },
+    ...(target.includeCustomer ? {
+      customer: {
+        name: lineage.customerName,
+        ...(lineage.customerPhone ? { phone: lineage.customerPhone } : {}),
+      },
+    } : {}),
     ...(status === "cancelled" ? {
       effectiveAt: occurredAt.toISOString(),
       ...(lineage.cancellationReason ? { closureReason: lineage.cancellationReason } : {}),
@@ -121,23 +191,32 @@ async function deliverContractState(endpoint: string, key: string, contractId: n
     },
     body: JSON.stringify(body),
   }, 8_000);
-  if (!response.ok) throw new Error("Relationship delivery failed with HTTP " + response.status);
-  await recordAudit(null, "contract", contractId, "relationship_delivered", eventName + " entregue ao TGR Relationship.", { idempotencyKey: receiptKey });
+  if (!response.ok) throw new DeliveryRejectedError(target.label, response.status);
+  await recordAudit(null, "contract", contractId, target.deliveredAction, eventName + " entregue ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
   return "delivered";
 }
 
 export interface RelationshipBridgePump { tick(): Promise<number>; stop(): void; }
+export type SalesCancellationBridgePump = RelationshipBridgePump;
 
-export function startRelationshipBridgePump(
+type PumpOptions = { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number };
+
+function startContractStatePump(
+  target: ContractStateTarget,
   endpoint: string,
   integrationKey: string,
-  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void } = {},
+  options: PumpOptions,
 ): RelationshipBridgePump {
-  const target = safeEndpoint(endpoint);
-  if (!integrationKey.trim()) throw new Error("Relationship CRM integration key required");
+  const url = safeEndpoint(endpoint, target);
+  if (!integrationKey.trim()) throw new Error(target.label + " CRM integration key required");
   const intervalMs = options.intervalMs ?? 5_000;
   let running = false;
   let stopped = false;
+  // Cursor em memória: sem ele o pump relia sempre os mesmos 500 primeiros eventos e parava de entregar.
+  // ponytail: zera no restart (reler é seguro, a entrega é idempotente pelo recibo); para no 1º evento com
+  // falha para tentar de novo. Teto: 500 eventos seguidos falhando sempre ainda travam a fila.
+  let cursor = 0;
+  const rejections = createRejectionTracker<string>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS);
 
   async function tick() {
     if (running || stopped) return 0;
@@ -147,21 +226,43 @@ export function startRelationshipBridgePump(
       const db = await getDb();
       if (!db) return 0;
       const events = await db.select().from(domainEvents)
-        .where(inArray(domainEvents.eventName, ["contract.created", "contract.status.updated"]))
+        .where(and(
+          inArray(domainEvents.eventName, ["contract.created", "contract.status.updated"]),
+          gt(domainEvents.id, cursor),
+        ))
         .orderBy(asc(domainEvents.id)).limit(500);
+      let advanceTo = cursor;
+      let blocked = false;
       for (const event of events) {
         const payload = objectPayload(event.payload);
         const state = payload.status;
-        if (state !== "active" && state !== "cancelled") continue;
         const contractId = Number(event.aggregateId);
-        if (!Number.isInteger(contractId) || contractId <= 0) continue;
-        try {
-          const result = await deliverContractState(target, integrationKey, contractId, state, event.occurredAt);
-          if (result === "delivered") delivered += 1;
-        } catch (error) {
-          options.onError?.(error);
+        if ((state === "active" || state === "cancelled") && target.statuses.includes(state)
+          && Number.isInteger(contractId) && contractId > 0) {
+          const receiptKey = target.receiptPrefix + contractId + ":" + state;
+          try {
+            const result = await deliverContractState(target, url, integrationKey, contractId, state, event.occurredAt);
+            if (result === "delivered") delivered += 1;
+            rejections.clear(receiptKey);
+          } catch (error) {
+            options.onError?.(error);
+            if (rejections.record(receiptKey, error)) {
+              const eventName = state === "active" ? "crm.contract.activated.v1" : "crm.contract.cancelled.v1";
+              await recordAudit(null, "contract", contractId, target.rejectedAction,
+                eventName + " recusado pelo TGR " + target.label + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
+                { idempotencyKey: receiptKey });
+            } else {
+              blocked = true;
+            }
+          }
         }
+        if (!blocked) advanceTo = event.id;
       }
+      cursor = advanceTo;
+      return delivered;
+    } catch (error) {
+      // Falha fora da entrega (ex.: banco indisponível) não pode virar unhandled rejection no timer e derrubar o CRM.
+      options.onError?.(error);
       return delivered;
     } finally {
       running = false;
@@ -175,4 +276,12 @@ export function startRelationshipBridgePump(
     void tick();
   }
   return { tick, stop() { stopped = true; if (timer) clearInterval(timer); } };
+}
+
+export function startRelationshipBridgePump(endpoint: string, integrationKey: string, options: PumpOptions = {}): RelationshipBridgePump {
+  return startContractStatePump(RELATIONSHIP_TARGET, endpoint, integrationKey, options);
+}
+
+export function startSalesCancellationBridgePump(endpoint: string, integrationKey: string, options: PumpOptions = {}): SalesCancellationBridgePump {
+  return startContractStatePump(SALES_CANCELLATION_TARGET, endpoint, integrationKey, options);
 }

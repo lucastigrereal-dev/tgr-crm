@@ -32,4 +32,9 @@ describe("contrato de integração v1", () => {
     expect(entry.payload).toEqual({ type: "income", category: "Taxa", amount: 125, contractId: 61, campaignId: 9 });
     expect(transfer.payload).toEqual({ amount: 250, recipient: "Parceiro", contractId: 61 });
   });
+
+  it("contract.created.v2 leva valor total, venda e moeda (ADR-004) e filtra o resto", () => {
+    const event = toIntegrationEvent({ id: 8, eventName: "contract.created.v2", aggregateType: "contract", aggregateId: "61", actorUserId: null, occurredAt: new Date("2026-10-04T12:00:00Z"), payload: JSON.stringify({ contractId: 61, saleId: "44444444-4444-4444-4444-444444444444", customerId: 10, totalAmount: "19750.00", currency: "BRL", status: "pending_signature", usageModel: "fixed_week", source: "sales-command", customerName: "privado" }) });
+    expect(event.payload).toEqual({ contractId: 61, saleId: "44444444-4444-4444-4444-444444444444", customerId: 10, totalAmount: "19750.00", currency: "BRL", status: "pending_signature", usageModel: "fixed_week", source: "sales-command" });
+  });
 });

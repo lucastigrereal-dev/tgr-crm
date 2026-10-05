@@ -64,4 +64,14 @@ describe("config doctor E2E strict profile", () => {
     expect(result.output).toContain("E2E_RUN_ID ausente");
     expect(result.output).toContain("E2E_CONFIRM_ISOLATED");
   });
+  test("requires each integration endpoint to come with its key", () => {
+    const result = runDoctor({
+      ...validRuntime,
+      SALES_COMMAND_ENDPOINT: "http://127.0.0.1:3100",
+      SALES_COMMAND_CANCELLATION_KEY: undefined,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain("SALES_COMMAND_ENDPOINT e SALES_COMMAND_CANCELLATION_KEY precisam vir juntos");
+  });
 });

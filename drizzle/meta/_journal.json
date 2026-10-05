@@ -295,6 +295,13 @@
       "when": 1790522000000,
       "tag": "0041_portfolio_paid_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "5",
+      "when": 1790600000000,
+      "tag": "0042_tse_cutover_esign",
+      "breakpoints": true
     }
   ]
 }

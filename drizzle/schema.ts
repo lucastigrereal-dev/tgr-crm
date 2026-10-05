@@ -391,7 +391,7 @@ export const contracts = mysqlTable(
 
 export const contractDocuments = mysqlTable("contract_documents", {
   id: int("id").autoincrement().primaryKey(),
-  contractId: int("contractId").notNull(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
   category: varchar("category", { length: 80 }).notNull(),
   filename: varchar("filename", { length: 255 }).notNull(),
   storageKey: text("storageKey").notNull(),
@@ -498,7 +498,7 @@ export const contractMonetaryAdjustments = mysqlTable(
   "contract_monetary_adjustments",
   {
     id: int("id").autoincrement().primaryKey(),
-    contractId: int("contractId").notNull().references(() => contracts.id),
+    contractId: int("contractId").notNull(),
     policyVersionId: int("policyVersionId").notNull(),
     indexCode: varchar("indexCode", { length: 40 }).notNull(),
     baseDate: date("baseDate").notNull(),
@@ -521,6 +521,98 @@ export const contractMonetaryAdjustments = mysqlTable(
     foreignKey({ name: "cma_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
     foreignKey({ name: "cma_policy_fk", columns: [table.policyVersionId], foreignColumns: [commercialPolicyVersions.id] }),
     foreignKey({ name: "cma_user_fk", columns: [table.appliedByUserId], foreignColumns: [users.id] }),
+  ],
+);
+
+export const contractSignatureEnvelopes = mysqlTable(
+  "contract_signature_envelopes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    contractId: int("contractId").notNull(),
+    provider: varchar("provider", { length: 32 }).default("clicksign").notNull(),
+    externalEnvelopeId: varchar("externalEnvelopeId", { length: 128 }),
+    activeKey: varchar("activeKey", { length: 160 }),
+    name: varchar("name", { length: 255 }).notNull(),
+    status: mysqlEnum("status", ["draft", "running", "closed", "canceled", "error"]).default("draft").notNull(),
+    lastEventName: varchar("lastEventName", { length: 120 }),
+    lastEventAt: timestamp("lastEventAt"),
+    activatedAt: timestamp("activatedAt"),
+    closedAt: timestamp("closedAt"),
+    canceledAt: timestamp("canceledAt"),
+    createdByUserId: int("createdByUserId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_envelope_provider_external_unique").on(table.provider, table.externalEnvelopeId),
+    uniqueIndex("signature_envelope_active_key_unique").on(table.activeKey),
+    index("signature_envelope_contract_status_idx").on(table.contractId, table.status),
+    foreignKey({ name: "cse_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+    foreignKey({ name: "cse_user_fk", columns: [table.createdByUserId], foreignColumns: [users.id] }),
+  ],
+);
+
+export const contractSignatureDocuments = mysqlTable(
+  "contract_signature_documents",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    envelopeId: int("envelopeId").notNull(),
+    contractDocumentId: int("contractDocumentId").notNull(),
+    externalDocumentId: varchar("externalDocumentId", { length: 128 }).notNull(),
+    status: mysqlEnum("status", ["pending", "signed", "closed", "canceled"]).default("pending").notNull(),
+    signedAt: timestamp("signedAt"),
+    closedAt: timestamp("closedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_document_envelope_contractdoc_unique").on(table.envelopeId, table.contractDocumentId),
+    uniqueIndex("signature_document_external_unique").on(table.externalDocumentId),
+    foreignKey({ name: "csd_envelope_fk", columns: [table.envelopeId], foreignColumns: [contractSignatureEnvelopes.id] }),
+    foreignKey({ name: "csd_contractdoc_fk", columns: [table.contractDocumentId], foreignColumns: [contractDocuments.id] }),
+  ],
+);
+
+export const contractSignatureSigners = mysqlTable(
+  "contract_signature_signers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    envelopeId: int("envelopeId").notNull(),
+    customerId: int("customerId"),
+    externalSignerId: varchar("externalSignerId", { length: 128 }).notNull(),
+    name: varchar("name", { length: 180 }).notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    documentation: varchar("documentation", { length: 32 }),
+    status: mysqlEnum("status", ["pending", "signed", "refused", "canceled"]).default("pending").notNull(),
+    signedAt: timestamp("signedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_signer_envelope_external_unique").on(table.envelopeId, table.externalSignerId),
+    index("signature_signer_customer_status_idx").on(table.customerId, table.status),
+    foreignKey({ name: "css_envelope_fk", columns: [table.envelopeId], foreignColumns: [contractSignatureEnvelopes.id] }),
+    foreignKey({ name: "css_customer_fk", columns: [table.customerId], foreignColumns: [customers.id] }),
+  ],
+);
+
+export const signatureWebhookEvents = mysqlTable(
+  "signature_webhook_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    eventKey: varchar("eventKey", { length: 160 }).notNull(),
+    eventName: varchar("eventName", { length: 120 }).notNull(),
+    externalEnvelopeId: varchar("externalEnvelopeId", { length: 128 }),
+    externalDocumentId: varchar("externalDocumentId", { length: 128 }),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    occurredAt: timestamp("occurredAt"),
+    processedAt: timestamp("processedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex("signature_webhook_provider_event_unique").on(table.provider, table.eventKey),
+    index("signature_webhook_envelope_created_idx").on(table.externalEnvelopeId, table.createdAt),
   ],
 );
 
@@ -578,27 +670,38 @@ export const paymentGatewayWebhookEvents = mysqlTable("payment_gateway_webhook_e
   gatewayProvider: mysqlEnum("gatewayProvider", ["asaas"]).notNull(),
   gatewayEventId: varchar("gatewayEventId", { length: 128 }).notNull(),
   eventType: varchar("eventType", { length: 96 }).notNull(),
-  billingRecordId: int("billingRecordId").references(() => billingRecords.id),
+  billingRecordId: int("billingRecordId"),
   processedAt: timestamp("processedAt").defaultNow().notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [uniqueIndex("payment_gateway_webhook_unique").on(table.gatewayProvider, table.gatewayEventId), index("payment_gateway_webhook_billing_idx").on(table.billingRecordId, table.createdAt)]);
+}, table => [
+  uniqueIndex("payment_gateway_webhook_unique").on(table.gatewayProvider, table.gatewayEventId),
+  index("payment_gateway_webhook_billing_idx").on(table.billingRecordId, table.createdAt),
+  foreignKey({ name: "pg_webhook_billing_fk", columns: [table.billingRecordId], foreignColumns: [billingRecords.id] }),
+]);
 
 export const installmentRenegotiations = mysqlTable("installment_renegotiations", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull().references(() => contracts.id),
-  originalInstallmentId: int("originalInstallmentId").notNull().references(() => installments.id),
+  originalInstallmentId: int("originalInstallmentId").notNull(),
   originalAmount: decimal("originalAmount", { precision: 14, scale: 2 }).notNull(),
   proposedAmount: decimal("proposedAmount", { precision: 14, scale: 2 }).notNull(),
   proposedDueDate: date("proposedDueDate").notNull(),
   discountAmount: decimal("discountAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
   notes: text("notes"),
   status: mysqlEnum("status", ["draft", "approved", "applied", "rejected", "cancelled"]).default("draft").notNull(),
-  createdByUserId: int("createdByUserId").references(() => users.id),
-  approvedByUserId: int("approvedByUserId").references(() => users.id),
+  createdByUserId: int("createdByUserId"),
+  approvedByUserId: int("approvedByUserId"),
   appliedAt: timestamp("appliedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, table => [index("renegotiations_contract_idx").on(table.contractId, table.status), index("renegotiations_installment_idx").on(table.originalInstallmentId, table.status)]);
+}, table => [
+  index("renegotiations_contract_idx").on(table.contractId, table.status),
+  index("renegotiations_installment_idx").on(table.originalInstallmentId, table.status),
+  // nomes curtos reais (0006): o nome padrão passaria de 64 caracteres
+  foreignKey({ name: "reneg_orig_installment_fk", columns: [table.originalInstallmentId], foreignColumns: [installments.id] }),
+  foreignKey({ name: "reneg_created_user_fk", columns: [table.createdByUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: "reneg_approved_user_fk", columns: [table.approvedByUserId], foreignColumns: [users.id] }),
+]);
 
 export const financialTransactions = mysqlTable(
   "financial_transactions",
@@ -786,7 +889,7 @@ export const revenueQualityLedger = mysqlTable("revenue_quality_ledger", {
   installmentId: int("installmentId").references(() => installments.id),
   commissionId: int("commissionId").references(() => salesCommissions.id),
   domainEventId: int("domainEventId").references(() => domainEvents.id),
-  policyVersionId: int("policyVersionId").references(() => commercialPolicyVersions.id),
+  policyVersionId: int("policyVersionId"),
   factType: mysqlEnum("factType", ["vgv_formalized", "cash_confirmed", "cash_exposure", "revenue_reversed", "cancellation_retention", "cancellation_refund", "commission_expected", "commission_at_risk", "commission_paid", "commission_reversed"]).notNull(),
   amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
   reason: varchar("reason", { length: 80 }),
@@ -797,6 +900,7 @@ export const revenueQualityLedger = mysqlTable("revenue_quality_ledger", {
   uniqueIndex("revenue_ledger_fingerprint_unique").on(table.sourceFingerprint),
   index("revenue_ledger_contract_fact_idx").on(table.contractId, table.factType, table.occurredAt),
   index("revenue_ledger_policy_idx").on(table.policyVersionId, table.occurredAt),
+  foreignKey({ name: "revenue_ledger_policy_fk", columns: [table.policyVersionId], foreignColumns: [commercialPolicyVersions.id] }),
 ]);
 
 export const csvImportBatches = mysqlTable("csv_import_batches", {

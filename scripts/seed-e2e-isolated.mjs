@@ -87,7 +87,7 @@ try {
   }
 
   await db.execute(
-    "INSERT INTO commercial_fractions (resortId, unitId, code, sequence, status, listPrice, priceTableVersion) VALUES (?, ?, ?, 1, 'available', 28900, 'E2E-2026'), (?, ?, ?, 2, 'available', 28900, 'E2E-2026')",
+    "INSERT INTO commercial_fractions (resortId, unitId, code, sequence, status, listPrice, priceTableVersion) VALUES (?, ?, ?, 1, 'available', 19750, 'E2E-2026'), (?, ?, ?, 2, 'available', 19750, 'E2E-2026')",
     [resortId, unitForGuest, `${fixture.unitGuestCode}-C01`, resortId, unitForGuest, `${fixture.unitGuestCode}-C02`],
   );
 
