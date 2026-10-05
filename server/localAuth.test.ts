@@ -98,3 +98,60 @@ describe("local auth", () => {
     )).rejects.toBeInstanceOf(LocalAuthError);
   });
 });
+
+// GAP-1 do piloto humano: personas finance/service/seller com login local próprio (LOCAL_AUTH_USERS).
+describe("local auth — usuários de piloto (LOCAL_AUTH_USERS)", () => {
+  const financePassword = "Senha-Financeiro-2026!";
+  const financeHash = hashLocalPassword(financePassword, "ffeeddccbbaa99887766554433221100");
+  const users = (list: unknown) => vi.stubEnv("LOCAL_AUTH_USERS", JSON.stringify(list));
+  const finance = { username: "syn.finance", role: "finance", passwordHash: financeHash, displayName: "SYN Financeiro" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("LOCAL_AUTH_ENABLED", "1");
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "syn.admin");
+    vi.stubEnv("LOCAL_AUTH_PASSWORD_HASH", hashLocalPassword(password, salt));
+    dbMocks.getUserByOpenId.mockImplementation(async (openId: string) => ({ ...admin, openId }));
+    resetLocalAuthAttemptsForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetLocalAuthAttemptsForTests();
+  });
+
+  it("autentica a persona com o papel configurado, não admin", async () => {
+    users([finance]);
+    await authenticateLocalUser({ username: "syn.finance", password: financePassword }, "127.0.0.1");
+    expect(dbMocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({
+      openId: "local:syn.finance", role: "finance", name: "SYN Financeiro", loginMethod: "local",
+    }));
+  });
+
+  it("senha de outra persona não serve", async () => {
+    users([finance]);
+    await expect(authenticateLocalUser({ username: "syn.finance", password }, "127.0.0.1"))
+      .rejects.toMatchObject({ code: "INVALID" });
+    expect(dbMocks.upsertUser).not.toHaveBeenCalled();
+  });
+
+  it("o admin principal continua funcionando junto com as personas", async () => {
+    users([finance]);
+    await authenticateLocalUser({ username: "syn.admin", password }, "127.0.0.1");
+    expect(dbMocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({ openId: "local:syn.admin", role: "admin" }));
+  });
+
+  it.each([
+    ["JSON inválido", "não-é-json"],
+    ["papel fora da lista", JSON.stringify([{ ...finance, role: "superadmin" }])],
+    ["papel user não é persona de piloto", JSON.stringify([{ ...finance, role: "user" }])],
+    ["username duplicado com o admin", JSON.stringify([{ ...finance, username: "syn.admin" }])],
+    ["hash fora do formato scrypt", JSON.stringify([{ ...finance, passwordHash: "plain-text-password" }])],
+    ["username inválido", JSON.stringify([{ ...finance, username: "Fin Ance" }])],
+  ])("configuração inválida (%s) recusa todo login local", async (_label, raw) => {
+    vi.stubEnv("LOCAL_AUTH_USERS", raw);
+    expect(localAuthStatus()).toEqual({ enabled: false });
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "127.0.0.1"))
+      .rejects.toMatchObject({ code: "MISCONFIGURED" });
+  });
+});
