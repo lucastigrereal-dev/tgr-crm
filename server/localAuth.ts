@@ -14,7 +14,7 @@ const maxTrackedKeys = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRAC
 function evictIfFull(now: number) {
   const limit = maxTrackedKeys();
   if (attempts.size < limit) return;
-  for (const [key, state] of attempts) if (now >= state.resetAt) attempts.delete(key);
+  attempts.forEach((state, key) => { if (now >= state.resetAt) attempts.delete(key); }); // tsconfig sem downlevelIteration: sem for-of no Map
   while (attempts.size >= limit) {
     const oldest = attempts.keys().next().value;
     if (oldest === undefined) break;
