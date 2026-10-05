@@ -8,6 +8,21 @@ const KEY_LENGTH = 64;
 
 type AttemptState = { count: number; resetAt: number };
 const attempts = new Map<string, AttemptState>();
+// WP10/E0.8: o map de tentativas é limitado — chaves distintas sem fim (spray de usuários/IPs) não podem crescer a memória.
+// Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta a chave mais antiga (ordem de inserção do Map).
+const maxTrackedKeys = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRACKED ?? 1000) || 1000);
+function evictIfFull(now: number) {
+  const limit = maxTrackedKeys();
+  if (attempts.size < limit) return;
+  for (const [key, state] of attempts) if (now >= state.resetAt) attempts.delete(key);
+  while (attempts.size >= limit) {
+    const oldest = attempts.keys().next().value;
+    if (oldest === undefined) break;
+    attempts.delete(oldest);
+  }
+}
+/** Só para testes: quantas chaves estão sendo acompanhadas. */
+export function localAuthAttemptsTracked() { return attempts.size; }
 
 export class LocalAuthError extends Error {
   constructor(
@@ -50,11 +65,13 @@ function config() {
   const enabled = process.env.LOCAL_AUTH_ENABLED === "1";
   const username = process.env.LOCAL_AUTH_USERNAME?.trim() ?? "";
   const passwordHash = process.env.LOCAL_AUTH_PASSWORD_HASH?.trim() ?? "";
-  const primary: LocalAccount[] = username && passwordHash
+  // WP10/E0.8: o admin primário segue a MESMA regra das personas (openId `local:<username>` cabe em varchar 64, sem espaço/maiúscula).
+  const primaryValid = !username || /^[a-z0-9._-]{3,58}$/.test(username);
+  const primary: LocalAccount[] = username && passwordHash && primaryValid
     ? [{ username, passwordHash, role: "admin", displayName: process.env.LOCAL_AUTH_DISPLAY_NAME?.trim() || "Administrador TGR" }]
     : [];
   const extra = pilotAccounts(process.env.LOCAL_AUTH_USERS?.trim() ?? "", new Set(primary.map(account => account.username.toLowerCase())));
-  return { enabled, valid: extra !== null, accounts: extra === null ? [] : [...primary, ...extra] };
+  return { enabled, valid: primaryValid && extra !== null, accounts: !primaryValid || extra === null ? [] : [...primary, ...extra] };
 }
 
 /** Sessão local (`local:<username>`) só vale se a persona ainda existe com o mesmo papel (troca/remoção derruba sessões). */
@@ -102,6 +119,7 @@ function assertAttemptAllowed(key: string, now: number) {
 function recordFailure(key: string, now: number) {
   const current = attempts.get(key);
   if (!current || now >= current.resetAt) {
+    if (!current) evictIfFull(now);
     attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
     return;
   }

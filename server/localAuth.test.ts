@@ -15,6 +15,7 @@ import {
   localAuthStatus,
   resetLocalAuthAttemptsForTests,
   verifyLocalPassword,
+  localAuthAttemptsTracked,
 } from "./localAuth";
 
 const salt = "00112233445566778899aabbccddeeff";
@@ -158,6 +159,35 @@ describe("local auth — usuários de piloto (LOCAL_AUTH_USERS)", () => {
 });
 
 // Revisão de segurança do GAP-1 (P1/P2).
+describe("local auth — WP10 (PRD v4 E0.8): map de tentativas limitado e username primário validado", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("LOCAL_AUTH_ENABLED", "1");
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "syn.admin");
+    vi.stubEnv("LOCAL_AUTH_PASSWORD_HASH", hashLocalPassword(password, salt));
+    resetLocalAuthAttemptsForTests();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); resetLocalAuthAttemptsForTests(); });
+
+  it("P1: o map de tentativas não cresce sem limite (chaves distintas são evictadas ao bater o teto)", async () => {
+    // Teto baixo só no teste (padrão 1000 em produção): cada tentativa roda scrypt, 1200 levariam minutos.
+    vi.stubEnv("LOCAL_AUTH_MAX_TRACKED", "20");
+    for (let i = 0; i < 30; i += 1) {
+      await authenticateLocalUser({ username: `syn.user${i}`, password: "errada-errada" }, `client-${i}`).catch(() => undefined);
+    }
+    expect(localAuthAttemptsTracked()).toBeLessThanOrEqual(20);
+    // a chave mais antiga saiu; a mais nova continua contada
+    await authenticateLocalUser({ username: "syn.user29", password: "errada-errada" }, "client-29").catch(() => undefined);
+    expect(localAuthAttemptsTracked()).toBeLessThanOrEqual(20);
+  });
+
+  it("P1: username primário fora do padrão invalida a configuração em vez de entrar com um openId estranho", async () => {
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "Admin Root!");
+    expect(localAuthStatus().enabled).toBe(false);
+    await expect(authenticateLocalUser({ username: "Admin Root!", password }, "client")).rejects.toMatchObject({ code: "MISCONFIGURED" });
+  });
+});
+
 describe("local auth — revisão de segurança do GAP-1", () => {
   const financePassword = "Senha-Financeiro-2026!";
   const financeHash = hashLocalPassword(financePassword, "ffeeddccbbaa99887766554433221100");
