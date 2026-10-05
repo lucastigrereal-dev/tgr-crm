@@ -24,8 +24,9 @@ export const capabilityMatrix = {
   "commission.view": ["admin", "seller", "finance"],
   "commission.pay": ["admin", "finance"],
   "contract.cancel.request": ["admin", "seller", "finance", "service"],
-  "contract.cancel.decide": ["admin", "finance"],
-  "contract.cancel.execute": ["admin", "finance"],
+  // ADR-002 (2026-10-04): pedir distrato é amplo; decidir/executar é só de papel superior (não há "manager" no CRM).
+  "contract.cancel.decide": ["admin"],
+  "contract.cancel.execute": ["admin"],
   "document.read": ["admin", "seller", "finance", "service"],
   "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],

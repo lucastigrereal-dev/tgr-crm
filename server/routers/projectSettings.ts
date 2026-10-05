@@ -5,6 +5,7 @@ import { commercialProjectSettings, resorts } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
+import { affectedRows } from "../mysqlErrors";
 
 const jsonText = z.string().max(20_000).nullable().optional().superRefine((value, context) => {
   if (!value?.trim()) return;
@@ -39,7 +40,7 @@ export const projectSettingsRouter = router({
       const values = { ...input, cancellationPolicy: normalizeJsonText(input.cancellationPolicy), requiredCaptureFields: normalizeJsonText(input.requiredCaptureFields), requiredContractDocuments: normalizeJsonText(input.requiredContractDocuments), commercialRoles: normalizeJsonText(input.commercialRoles), commissionPolicy: normalizeJsonText(input.commissionPolicy), updatedByUserId: ctx.user.id };
       if (current) {
         const updateResult = await tx.update(commercialProjectSettings).set(values).where(eq(commercialProjectSettings.id, current.id));
-        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A configuração foi alterada por outra operação. Recarregue e tente novamente." });
+        if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A configuração foi alterada por outra operação. Recarregue e tente novamente." });
       } else {
         await tx.insert(commercialProjectSettings).values(values);
       }

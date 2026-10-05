@@ -12,6 +12,7 @@ import { parseCompleteCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { asaasBillingType, billingExternalReference, createAsaasCustomer, createAsaasPayment, findAsaasPaymentsByReference, getAsaasConfig, getAsaasIdentificationField, getAsaasPixQrCode } from "../paymentGateway";
+import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const ASAAS_GATEWAY_ERROR = "O gateway de cobrança não respondeu corretamente. Tente novamente.";
@@ -23,8 +24,6 @@ async function runAsaas<T>(operation: () => Promise<T>): Promise<T> {
     throw new TRPCError({ code: "BAD_GATEWAY", message: ASAAS_GATEWAY_ERROR });
   }
 }
-
-const isDuplicateKeyError = (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY");
 
 export const financeRouter = router({
   portfolioScorecards: financeProcedure.query(async () => {
@@ -364,7 +363,7 @@ export const financeRouter = router({
         const remainingAmount = Number((Number(lockedItem.amount) - Number(lockedItem.paidAmount ?? 0)).toFixed(2));
         if (remainingAmount <= 0) throw new TRPCError({ code: "CONFLICT", message: "A parcela não possui saldo aberto para baixa." });
         const updateResult = await tx.update(installments).set({ status: "paid", paidAmount: Number(lockedItem.amount).toFixed(2), paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(and(eq(installments.id, input.id), inArray(installments.status, ["open", "overdue"])));
-        if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return false;
+        if (affectedRows(updateResult) === 0) return false;
         await tx.update(billingRecords).set({ status: "paid" }).where(and(eq(billingRecords.installmentId, input.id), inArray(billingRecords.status, ["pending", "generated"])));
         await tx.insert(financialTransactions).values({ contractId: item.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: remainingAmount.toFixed(2), dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });
         if (commissionContext?.proposal && commissionContext.capture && Number(commissionContext.proposal.downPaymentAmount) > 0 && commissionPolicy) { const exists = await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, item.id)).limit(1); if (!exists.length) { const method = (["pix", "debit", "credit", "boleto", "cash", "cheque"].includes((input.paymentMethod || "").toLowerCase()) ? (input.paymentMethod || "").toLowerCase() : "other") as Parameters<typeof buildInstallmentCommissions>[0]["paymentMethod"]; const rows = buildInstallmentCommissions({ installmentId: item.id, installmentAmount: Number(item.amount), entryTotal: Number(commissionContext.proposal.downPaymentAmount), contractTotal: Number(commissionContext.contract.totalAmount), paymentMethod: method, compensatedAt: new Date(), linerId: commissionContext.capture.linerId, closerId: commissionContext.capture.closerId, rates: { liner: commissionPolicy.linerRate, closer: commissionPolicy.closerRate, ftb: commissionPolicy.ftbRate }, calendar: { cancellationDeadlineDay: commissionPolicy.cancellationDeadlineDay, expectedPaymentDay: commissionPolicy.expectedPaymentDay } }); if (rows.length) { const commissionValues = rows.map(row => ({ ...row, contractId: item.contractId, opportunityId: commissionContext.opportunity?.id ?? null, campaignId: commissionContext.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod })); const insertedCommissions = await tx.insert(salesCommissions).values(commissionValues).$returningId(); insertedCommissions.forEach((inserted, index) => { const row = commissionValues[index]; if (row && inserted?.id) createdCommissionFacts.push({ id: inserted.id, sellerId: row.sellerId, campaignId: row.campaignId, opportunityId: row.opportunityId, contractId: row.contractId, sourceInstallmentId: row.sourceInstallmentId, commissionRole: row.commissionRole, amount: Number(row.amount), rate: Number(row.rate) }); }); } } }
@@ -477,7 +476,7 @@ export const financeRouter = router({
     }
     const reconciledAt = new Date();
     const updateResult = await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt, reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) {
+    if (affectedRows(updateResult) === 0) {
       const latest = (await db.select({ reconciliationReference: financialTransactions.reconciliationReference }).from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
       if (latest?.reconciliationReference === input.reconciliationReference) return { success: true, alreadyReconciled: true };
       throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi conciliado por outra operação com referência diferente." });
@@ -519,7 +518,7 @@ export const financeRouter = router({
       try {
         created = await db.insert(financialTransfers).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: input.contractId ?? null, beneficiaryName: input.beneficiaryName, description: input.description || null, amount: expectedAmount, dueDate: expectedDueDate }).$returningId();
       } catch (error) {
-        if (!input.idempotencyKey || !(error && typeof error === "object" && "code" in error && String(error.code) === "ER_DUP_ENTRY")) throw error;
+        if (!input.idempotencyKey || !isDuplicateKeyError(error)) throw error;
         const existing = (await db.select({ id: financialTransfers.id, contractId: financialTransfers.contractId, beneficiaryName: financialTransfers.beneficiaryName, description: financialTransfers.description, amount: financialTransfers.amount, dueDate: financialTransfers.dueDate }).from(financialTransfers).where(eq(financialTransfers.idempotencyKey, input.idempotencyKey)).limit(1))[0];
         if (!existing) throw new TRPCError({ code: "CONFLICT", message: "O repasse foi criado por outra operação. Recarregue a tela." });
         if (!matchesExisting(existing)) throw new TRPCError({ code: "CONFLICT", message: "A chave idempotente já foi usada para outro repasse." });
@@ -542,7 +541,7 @@ export const financeRouter = router({
       if (transfer.status === "paid") return { success: true, alreadyPaid: true, amount: transfer.amount, contractId: transfer.contractId };
       if (transfer.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Repasse cancelado não pode ser pago." });
       const updateResult = await tx.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(and(eq(financialTransfers.id, input.id), eq(financialTransfers.status, "pending")));
-      if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadyPaid: true };
+      if (affectedRows(updateResult) === 0) return { success: true, alreadyPaid: true };
       return { success: true, alreadyPaid: false, amount: transfer.amount, contractId: transfer.contractId };
     });
     if (!outcome.alreadyPaid) {

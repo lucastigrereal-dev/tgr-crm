@@ -23,11 +23,11 @@ function query(rows: unknown[]) {
 describe("estoque comercial de cotas", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("materializa 52 cotas por UH sem duplicar códigos existentes", async () => {
+  it("materializa 10 cotas por UH sem duplicar códigos existentes", async () => {
     const inserted: unknown[][] = [];
     const db = {
       select: vi.fn(() => ({ from: (table: unknown) => {
-        if (table === resorts) return query([{ id: 1, name: "Ponta Negra Eco Resort" }]);
+        if (table === resorts) return query([{ id: 1, name: "SYN Resort Laboratório" }]);
         if (table === units) return query([{ id: 10, code: "UH-101" }, { id: 11, code: "UH-102" }]);
         if (table === commercialFractions) return query([{ code: "UH-101-C01" }]);
         return query([]);
@@ -37,14 +37,14 @@ describe("estoque comercial de cotas", () => {
     dbMocks.getDb.mockResolvedValue(db);
     const caller = inventoryRouter.createCaller({ user: { id: 7, role: "admin" } } as never);
 
-    await expect(caller.bootstrap({ resortId: 1, fractionsPerUnit: 52, listPrice: 28900, priceTableVersion: "NATAL-2026-01" }))
-      .resolves.toEqual({ created: 103, units: 2, expectedTotal: 104 });
+    await expect(caller.bootstrap({ resortId: 1, fractionsPerUnit: 10, listPrice: 19750, priceTableVersion: "NATAL-2026-01" }))
+      .resolves.toEqual({ created: 19, units: 2, expectedTotal: 20 });
 
     const values = inserted.flat();
-    expect(values).toHaveLength(103);
-    expect(values).toContainEqual(expect.objectContaining({ unitId: 10, code: "UH-101-C02", sequence: 2, listPrice: "28900.00" }));
-    expect(values).toContainEqual(expect.objectContaining({ unitId: 11, code: "UH-102-C52", sequence: 52 }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(7, "commercial_inventory", 1, "bootstrapped", expect.stringContaining("103 novas cotas"));
+    expect(values).toHaveLength(19);
+    expect(values).toContainEqual(expect.objectContaining({ unitId: 10, code: "UH-101-C02", sequence: 2, listPrice: "19750.00" }));
+    expect(values).toContainEqual(expect.objectContaining({ unitId: 11, code: "UH-102-C10", sequence: 10 }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(7, "commercial_inventory", 1, "bootstrapped", expect.stringContaining("19 novas cotas"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commercial.inventory.bootstrapped" }));
   });
 

@@ -81,6 +81,14 @@ describe("eventos e auditoria de contratos", () => {
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "active", totalAmount: 12000, installmentCount: 12 }) }));
   });
 
+  it("emite contract.created.v2 com valor total em BRL e mantém o v1 intacto (ADR-004)", async () => {
+    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+    await caller().create({ number: "TS-2026-702", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "active", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created" }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created.v2", aggregateType: "contract", aggregateId: 701,
+      payload: { contractId: 701, saleId: null, customerId: 11, totalAmount: "12000.00", currency: "BRL", status: "active", usageModel: "flexible_week", source: "manual" } }));
+  });
+
   it("exige cota quando o estoque comercial está materializado", async () => {
     dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false, inventoryExists: true }));
 

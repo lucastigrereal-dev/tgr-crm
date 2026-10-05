@@ -21,7 +21,7 @@ const password = "Senha-Piloto-Forte-2026!";
 
 const admin: User = {
   id: 1,
-  openId: "local:lucas.admin",
+  openId: "local:syn.admin",
   name: "Lucas Admin",
   email: null,
   loginMethod: "local",
@@ -34,7 +34,7 @@ describe("local auth", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("LOCAL_AUTH_ENABLED", "1");
-    vi.stubEnv("LOCAL_AUTH_USERNAME", "lucas.admin");
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "syn.admin");
     vi.stubEnv("LOCAL_AUTH_PASSWORD_HASH", hashLocalPassword(password, salt));
     vi.stubEnv("LOCAL_AUTH_DISPLAY_NAME", "Lucas Admin");
     resetLocalAuthAttemptsForTests();
@@ -61,14 +61,14 @@ describe("local auth", () => {
     dbMocks.getUserByOpenId.mockResolvedValue(admin);
 
     const result = await authenticateLocalUser(
-      { username: "lucas.admin", password },
+      { username: "syn.admin", password },
       "127.0.0.1",
       Date.parse("2026-09-19T23:00:00Z"),
     );
 
     expect(result).toEqual(admin);
     expect(dbMocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({
-      openId: "local:lucas.admin",
+      openId: "local:syn.admin",
       name: "Lucas Admin",
       loginMethod: "local",
       role: "admin",
@@ -78,13 +78,13 @@ describe("local auth", () => {
   it("limita tentativas repetidas dentro da mesma janela", async () => {
     for (let index = 0; index < 5; index++) {
       await expect(authenticateLocalUser(
-        { username: "lucas.admin", password: "Senha-Errada-123456!" },
+        { username: "syn.admin", password: "Senha-Errada-123456!" },
         "10.0.0.8",
         1_000,
       )).rejects.toMatchObject({ code: "INVALID" });
     }
     await expect(authenticateLocalUser(
-      { username: "lucas.admin", password },
+      { username: "syn.admin", password },
       "10.0.0.8",
       1_001,
     )).rejects.toMatchObject({ code: "LOCKED" });
@@ -93,7 +93,7 @@ describe("local auth", () => {
   it("recusa login quando o recurso está desabilitado", async () => {
     vi.stubEnv("LOCAL_AUTH_ENABLED", "0");
     await expect(authenticateLocalUser(
-      { username: "lucas.admin", password },
+      { username: "syn.admin", password },
       "127.0.0.1",
     )).rejects.toBeInstanceOf(LocalAuthError);
   });

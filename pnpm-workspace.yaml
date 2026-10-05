@@ -10,6 +10,12 @@ overrides:
   '@esbuild-kit/core-utils>esbuild': 0.25.10
   'exceljs>uuid': 11.1.1
   '@vitejs/plugin-react>@babel/core': 7.29.6
+  qs: 6.16.0
+  dompurify: 3.4.16
+  'brace-expansion@^1': 1.1.21
+  'brace-expansion@^2': 2.1.7
+  browserslist: 4.28.7
+  baseline-browser-mapping: 2.11.0
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

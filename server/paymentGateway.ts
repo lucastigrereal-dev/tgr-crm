@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { fetchWithTimeout } from "./integrationReliability";
 
 export type GatewayBillingType = "pix" | "boleto";
@@ -35,10 +36,12 @@ export type AsaasPixQrCode = { encodedImage?: string | null; payload?: string | 
 
 export function getAsaasConfig(env: NodeJS.ProcessEnv = process.env): AsaasConfig | null {
   const apiKey = env.ASAAS_API_KEY?.trim();
-  if (!apiKey) return null;
+  // Fail-closed: sem URL explícita (https) a integração fica desligada; nunca cai na URL de produção por omissão.
+  const explicitUrl = env.ASAAS_API_URL?.trim();
+  if (!apiKey || !explicitUrl || !explicitUrl.startsWith("https://")) return null;
   return {
     apiKey,
-    baseUrl: (env.ASAAS_API_URL?.trim() || "https://api.asaas.com").replace(/\/$/, ""),
+    baseUrl: explicitUrl.replace(/\/$/, ""),
     webhookToken: env.ASAAS_WEBHOOK_TOKEN?.trim() || "",
   };
 }
@@ -108,5 +111,8 @@ export function isAsaasPaymentOverdue(event: string) {
 }
 
 export function isAsaasWebhookTokenValid(config: AsaasConfig, token: string | undefined) {
-  return Boolean(config.webhookToken) && Boolean(token) && token === config.webhookToken;
+  if (!config.webhookToken || !token) return false;
+  const expected = createHash("sha256").update(config.webhookToken).digest();
+  const received = createHash("sha256").update(token).digest();
+  return timingSafeEqual(expected, received);
 }

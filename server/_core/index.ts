@@ -16,7 +16,9 @@ import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { ENV } from "./env";
-import { startRelationshipBridgePump, type RelationshipBridgePump } from "../relationshipBridge";
+import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
+import { processClicksignWebhook } from "../eSignatureService";
+import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -44,11 +46,37 @@ async function startServer() {
     throw new Error("Relationship bridge configuration incomplete");
   }
   let relationshipPump: RelationshipBridgePump | undefined;
+  const salesEndpoint = ENV.salesCommandEndpoint.trim();
+  const salesCancellationKey = ENV.salesCommandCancellationKey.trim();
+  if (Boolean(salesEndpoint) !== Boolean(salesCancellationKey)) {
+    throw new Error("Sales Command cancellation bridge configuration incomplete");
+  }
+  let salesCancellationPump: SalesCancellationBridgePump | undefined;
+  const financialEndpoint = ENV.financialEndpoint.trim();
+  const financialKey = ENV.financialCrmIntegrationKey.trim();
+  const financialProject = {
+    externalKey: ENV.financialProjectExternalKey.trim(),
+    name: ENV.financialProjectName.trim(),
+    timezone: ENV.financialProjectTimezone.trim(),
+  };
+  if (Boolean(financialEndpoint) !== Boolean(financialKey)) {
+    throw new Error("Financial bridge configuration incomplete");
+  }
+  if (financialEndpoint && (!financialProject.externalKey || !financialProject.name || !financialProject.timezone)) {
+    throw new Error("Financial project identity incomplete");
+  }
+  let financialPump: FinancialBridgePump | undefined;
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
   app.use(attachRequestId);
   app.use(applySecurityHeaders);
+  app.post("/api/webhooks/clicksign", express.raw({ type: "*/*", limit: "2mb" }), async (req, res) => {
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? "");
+    const signature = req.get("x-clicksign-signature") || req.get("content-hmac") || undefined;
+    const result = await processClicksignWebhook(signature, rawBody);
+    res.status(result.status).json(result);
+  });
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
@@ -128,6 +156,8 @@ async function startServer() {
 
   const shutdown = (signal: string) => {
     relationshipPump?.stop();
+    salesCancellationPump?.stop();
+    financialPump?.stop();
     logger.info("Graceful shutdown requested", { signal });
     server.close(error => {
       if (error) {
@@ -139,10 +169,21 @@ async function startServer() {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
 
-  server.listen(port, () => {
+  // HOST opcional (ex.: 127.0.0.1), como nos apps da Suite; vazio mantém todas as interfaces.
+  server.listen(port, ENV.host.trim() || undefined, () => {
     if (relationshipEndpoint && relationshipKey) {
       relationshipPump = startRelationshipBridgePump(relationshipEndpoint, relationshipKey, {
         onError: error => logger.error("Relationship bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+      });
+    }
+    if (salesEndpoint && salesCancellationKey) {
+      salesCancellationPump = startSalesCancellationBridgePump(salesEndpoint, salesCancellationKey, {
+        onError: error => logger.error("Sales Command cancellation delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+      });
+    }
+    if (financialEndpoint && financialKey) {
+      financialPump = startFinancialBridgePump(financialEndpoint, financialKey, financialProject, {
+        onError: error => logger.error("Financial bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }
     logger.info("Server running", { port });

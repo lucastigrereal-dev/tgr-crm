@@ -13,6 +13,7 @@ import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
+import { affectedRows } from "../mysqlErrors";
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -132,6 +133,8 @@ export const contractsRouter = router({
     });
     await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
     await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, usageModel: input.usageModel, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
+    // ADR-004: evento versionado com valor total do contrato (não é pagamento). v1 acima continua para quem já o consome.
+    await recordDomainEvent({ eventName: "contract.created.v2", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { contractId: result, saleId: null, customerId: input.customerId, totalAmount: input.totalAmount.toFixed(2), currency: "BRL", status: input.status, usageModel: input.usageModel, source: "manual" } });
     if (allocatedFractionId) {
       await recordAudit(ctx.user.id, "commercial_fraction", allocatedFractionId, "sold", `Cota vinculada ao contrato ${input.number}.`);
       await recordDomainEvent({ eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: allocatedFractionId, actorUserId: ctx.user.id, payload: { fractionId: allocatedFractionId, status: "sold", proposalId: input.proposalId ?? null, contractId: result, reason: "Contrato criado" } });
@@ -166,7 +169,7 @@ export const contractsRouter = router({
     };
   }),
 
-  simulateCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
+  simulateCancellation: contractsProcedure.input(z.object({ contractId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
     const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360); const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
@@ -175,7 +178,7 @@ export const contractsRouter = router({
     return { contractId: contract.id, resortId: resortId ?? null, policy: parseCancellationPolicy(settings?.cancellationPolicy), ...simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }) };
   }),
 
-  requestCancellation: salesProcedure.input(z.object({ contractId: z.number().int().positive(), reason: z.string().trim().min(3).max(2000) })).mutation(async ({ ctx, input }) => {
+  requestCancellation: contractsProcedure.input(z.object({ contractId: z.number().int().positive(), reason: z.string().trim().min(3).max(2000) })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.request");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const requested = await db.transaction(async tx => {
@@ -204,7 +207,7 @@ export const contractsRouter = router({
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const request = (await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0]; if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." }); if (request.status !== "requested") throw new TRPCError({ code: "CONFLICT", message: "Esta solicitação já recebeu uma decisão." });
     const updateResult = await db.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(and(eq(contractCancellationRequests.id, input.requestId), eq(contractCancellationRequests.status, "requested")));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`);
     await recordDomainEvent({ eventName: "contract.cancellation.decided", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { decision: input.decision } });
     return { success: true };
@@ -287,7 +290,7 @@ export const contractsRouter = router({
       cancelledAt: undefined,
       cancellationReason: null,
     }).where(and(eq(contracts.id, input.id), eq(contracts.status, current.status)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
+    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
@@ -336,7 +339,7 @@ export const contractsRouter = router({
     if (!document) throw new TRPCError({ code: "NOT_FOUND", message: "Documento contratual não encontrado." });
     if (document.signed) return { success: true, alreadySigned: true } as const;
     const updateResult = await db.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, input.documentId), eq(contractDocuments.signed, false)));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) === 0) return { success: true, alreadySigned: true } as const;
+    if (affectedRows(updateResult) === 0) return { success: true, alreadySigned: true } as const;
     await recordAudit(ctx.user.id, "contract_document", input.documentId, "signed", `Assinatura do documento contratual #${input.documentId} confirmada.`);
     await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: input.documentId, actorUserId: ctx.user.id, payload: { contractId: document.contractId } });
     return { success: true, alreadySigned: false } as const;

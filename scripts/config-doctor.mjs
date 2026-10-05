@@ -57,8 +57,19 @@ for (const name of [
   "OAUTH_SERVER_URL",
   "BUILT_IN_FORGE_API_URL",
   "ASAAS_API_URL",
+  "RELATIONSHIP_ENDPOINT",
+  "SALES_COMMAND_ENDPOINT",
+  "FINANCIAL_ENDPOINT",
 ]) {
   if (isNonEmpty(name) && !isUrl(name)) errors.push(`${name} não é uma URL válida`);
+}
+
+for (const [endpoint, key] of [
+  ["RELATIONSHIP_ENDPOINT", "RELATIONSHIP_CRM_INTEGRATION_KEY"],
+  ["SALES_COMMAND_ENDPOINT", "SALES_COMMAND_CANCELLATION_KEY"],
+  ["FINANCIAL_ENDPOINT", "FINANCIAL_CRM_INTEGRATION_KEY"],
+]) {
+  if (isNonEmpty(endpoint) !== isNonEmpty(key)) errors.push(`${endpoint} e ${key} precisam vir juntos`);
 }
 
 if (
@@ -73,6 +84,7 @@ if (
 if (strict && !localStorage && !isNonEmpty("BUILT_IN_FORGE_API_URL")) warnings.push("BUILT_IN_FORGE_API_URL ausente; IA, storage e integrações Manus podem não funcionar");
 if (strict && !localStorage && !isNonEmpty("BUILT_IN_FORGE_API_KEY")) warnings.push("BUILT_IN_FORGE_API_KEY ausente; chamadas server-side do Forge podem falhar");
 if (strict && !isNonEmpty("ASAAS_API_KEY")) warnings.push("ASAAS_API_KEY ausente; cobrança Asaas ficará indisponível");
+if (isNonEmpty("ASAAS_API_KEY") && !String(env.ASAAS_API_URL ?? "").trim().startsWith("https://")) warnings.push("ASAAS_API_URL ausente ou não-https; com chave Asaas a integração fica desligada (nunca cai em produção por omissão)");
 if (strict && !isNonEmpty("ASAAS_WEBHOOK_TOKEN")) warnings.push("ASAAS_WEBHOOK_TOKEN ausente; webhook Asaas não deve ser habilitado");
 if (env.NODE_ENV === "production" && env.JWT_SECRET?.trim() === "troque-por-um-segredo-forte") errors.push("JWT_SECRET ainda usa o placeholder do exemplo");
 

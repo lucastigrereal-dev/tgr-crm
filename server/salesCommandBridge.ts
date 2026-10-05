@@ -25,6 +25,7 @@ import {
   parseSaleTermsPolicy,
 } from "./saleTermsPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
+import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
 
 const entryScheduleRow = z.strictObject({
   sequence: z.number().int().min(1).max(100),
@@ -76,12 +77,6 @@ function safeEqual(left: string, right: string) {
   const a = createHash("sha256").update(left).digest();
   const b = createHash("sha256").update(right).digest();
   return timingSafeEqual(a, b);
-}
-
-function isDuplicateKeyError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; errno?: unknown };
-  return candidate.code === "ER_DUP_ENTRY" || Number(candidate.code) === 1062 || Number(candidate.errno) === 1062;
 }
 
 function money(cents: number) {
@@ -288,7 +283,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
       heldUntil: null,
       blockedReason: null,
     }).where(and(eq(commercialFractions.id, fraction.id), eq(commercialFractions.status, "available")));
-    if (updateResult && typeof updateResult === "object" && "affectedRows" in updateResult && Number(updateResult.affectedRows) !== 1) {
+    if ((affectedRows(updateResult) ?? 1) !== 1) {
       throw new Error("Commercial fraction was claimed concurrently");
     }
     await tx.insert(commercialFractionHistory).values({
@@ -370,6 +365,16 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     firstBalanceDueInDays: event.sale.firstBalanceDueInDays,
     paymentMethods: event.sale.paymentMethods,
   };
+  // ADR-004: o contrato vindo do Sales anuncia o valor total ao Financial na mesma transação; a chave impede duplicar no replay.
+  await tx.insert(domainEvents).values({
+    eventName: "contract.created.v2",
+    aggregateType: "contract",
+    aggregateId: String(contractId),
+    actorUserId: null,
+    payload: JSON.stringify({ contractId, saleId: event.saleId, customerId, totalAmount: money(event.sale.vgvCents), currency: "BRL", status: "pending_signature", usageModel: terms.usageModel, source: "sales-command" }),
+    idempotencyKey: `sales-command:contract-v2:${event.saleId}`,
+    occurredAt,
+  });
   await tx.insert(domainEvents).values({
     eventName: "sales.command.sale.ingested",
     aggregateType: "contract",

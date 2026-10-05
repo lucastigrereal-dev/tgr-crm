@@ -31,7 +31,7 @@ function canonicalBody() {
     occurredAt: "2026-09-25T12:00:00.000Z",
     project: {
       externalKey: "22222222-2222-2222-2222-222222222222",
-      name: "Ponta Negra Eco Resort",
+      name: "SYN Resort Laboratório",
       timezone: "America/Recife",
     },
     saleId: "44444444-4444-4444-4444-444444444444",
