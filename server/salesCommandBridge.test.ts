@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("./db", () => ({ getDb: vi.fn() }));
 vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn() }));
 import { getDb } from "./db";
-import { registerSalesCommandBridge } from "./salesCommandBridge";
+import { mapSalesIngestError, registerSalesCommandBridge, SalesIngestRejection } from "./salesCommandBridge";
 
 const mockedGetDb = vi.mocked(getDb);
 
@@ -134,5 +134,43 @@ describe("Sales Command to CRM HTTP boundary", () => {
       expect(response.status).toBe(503);
       expect(mockedGetDb).not.toHaveBeenCalled();
     }, "");
+  });
+});
+
+// PIL-008 (piloto técnico 2026-10-05): recusa de domínio (ex.: estoque de frações esgotado) respondia 503 genérico e sem log;
+// o Sales tratava como transitório, tentava 8x e mandava a venda para a DLQ sem motivo acionável.
+describe("Sales Command ingest: domain rejection vs infrastructure failure", () => {
+  it("maps a typed domain rejection to 422 with its code and anything else to 503", () => {
+    expect(mapSalesIngestError(new SalesIngestRejection("INSUFFICIENT_INVENTORY", "Insufficient commercial fraction inventory for confirmed sale")))
+      .toEqual({ status: 422, code: "INSUFFICIENT_INVENTORY" });
+    expect(mapSalesIngestError(new Error("Commercial fraction was claimed concurrently"))).toEqual({ status: 503, code: "EVENT_PROCESSING_FAILED" });
+    expect(mapSalesIngestError("not an error")).toEqual({ status: 503, code: "EVENT_PROCESSING_FAILED" });
+  });
+
+  it("answers 422 + code (not 503) when the sale is rejected by a domain rule, and 503 for unknown failures", async () => {
+    // Banco falso: SELECT resolve [] (nenhuma formalização prévia); a transação rejeita com a recusa de domínio.
+    const selectChain: unknown = new Proxy(function () {}, {
+      get(_t, prop) { if (prop === "then") return (resolve: (v: unknown) => void) => resolve([]); return () => selectChain; },
+      apply() { return selectChain; },
+    });
+    const dbRejecting = (error: unknown) => ({ select: () => selectChain, transaction: async () => { throw error; } });
+    mockedGetDb.mockResolvedValueOnce(dbRejecting(new SalesIngestRejection("INSUFFICIENT_INVENTORY", "Insufficient commercial fraction inventory for confirmed sale")) as never);
+    await withApp(async base => {
+      const response = await fetch(base + "/api/integrations/sales-command", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer sales-command-test-key" }, body: JSON.stringify(canonicalBody()),
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({ accepted: false, code: "INSUFFICIENT_INVENTORY" });
+    });
+    mockedGetDb.mockResolvedValueOnce(dbRejecting(new Error("mysql went away")) as never);
+    await withApp(async base => {
+      const response = await fetch(base + "/api/integrations/sales-command", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer sales-command-test-key" }, body: JSON.stringify(canonicalBody()),
+      });
+      expect(response.status).toBe(503);
+      const body = await response.json();
+      expect(body).toMatchObject({ code: "EVENT_PROCESSING_FAILED" });
+      expect(JSON.stringify(body)).not.toContain("mysql went away"); // 503 continua genérico: nada do erro interno vaza
+    });
   });
 });

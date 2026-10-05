@@ -26,6 +26,20 @@ import {
 } from "./saleTermsPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
+import { logger } from "./logger";
+
+// PIL-008: recusa de DOMÍNIO (não vale a pena o Sales reenviar) vs falha de INFRAESTRUTURA (transitória, 503).
+// O Sales lê o código, para de tentar e deixa a venda visível para revisão (PRD v4, resposta 7: REJECTED_BY_CRM com motivo).
+export type SalesIngestRejectionCode =
+  | "INSUFFICIENT_INVENTORY" | "SALE_TERMS_POLICY_MISSING" | "SALE_TERMS_POLICY_AMBIGUOUS"
+  | "PROJECT_NOT_MAPPED" | "PROJECT_MAPPING_CONFLICT" | "INVALID_COMMERCIAL_SNAPSHOT" | "INSTALLMENT_LIMIT_EXCEEDED";
+export class SalesIngestRejection extends Error {
+  constructor(readonly code: SalesIngestRejectionCode, message: string) { super(message); this.name = "SalesIngestRejection"; }
+}
+export function mapSalesIngestError(error: unknown): { status: 422 | 503; code: string } {
+  if (error instanceof SalesIngestRejection) return { status: 422, code: error.code };
+  return { status: 503, code: "EVENT_PROCESSING_FAILED" };
+}
 
 const entryScheduleRow = z.strictObject({
   sequence: z.number().int().min(1).max(100),
@@ -100,18 +114,19 @@ function isStrictCalendarDate(value: string) {
 }
 
 function dateValue(value: string) {
-  if (!isStrictCalendarDate(value)) throw new Error("Invalid calendar date");
+  if (!isStrictCalendarDate(value)) throw new SalesIngestRejection("INVALID_COMMERCIAL_SNAPSHOT", "Invalid calendar date");
   return new Date(`${value}T12:00:00Z`);
 }
 
 function validateCommercialSnapshot(event: SalesCommandSale) {
+  const invalid = (message: string) => new SalesIngestRejection("INVALID_COMMERCIAL_SNAPSHOT", message);
   const ordered = [...event.sale.entrySchedule].sort((left, right) => left.sequence - right.sequence);
-  if (ordered.length !== event.sale.entryInstallmentCount) throw new Error("Entry schedule count mismatch");
-  if (ordered.some((row, index) => row.sequence !== index + 1)) throw new Error("Entry schedule must be contiguous");
+  if (ordered.length !== event.sale.entryInstallmentCount) throw invalid("Entry schedule count mismatch");
+  if (ordered.some((row, index) => row.sequence !== index + 1)) throw invalid("Entry schedule must be contiguous");
   const entryTotal = ordered.reduce((sum, row) => sum + row.amountCents, 0);
-  if (!Number.isSafeInteger(entryTotal) || entryTotal !== event.sale.entryContractedCents) throw new Error("Entry schedule total mismatch");
-  if (event.sale.entryContractedCents > event.sale.vgvCents) throw new Error("Entry cannot exceed VGV");
-  if (event.sale.entryReceivedCents > event.sale.entryContractedCents) throw new Error("Received entry cannot exceed contracted entry");
+  if (!Number.isSafeInteger(entryTotal) || entryTotal !== event.sale.entryContractedCents) throw invalid("Entry schedule total mismatch");
+  if (event.sale.entryContractedCents > event.sale.vgvCents) throw invalid("Entry cannot exceed VGV");
+  if (event.sale.entryReceivedCents > event.sale.entryContractedCents) throw invalid("Received entry cannot exceed contracted entry");
   return ordered;
 }
 
@@ -145,12 +160,12 @@ async function findFormalization(db: any, saleId: string) {
 async function resolveResort(tx: any, project: SalesCommandSale["project"]) {
   const byKey = (await tx.select().from(resorts).where(eq(resorts.externalKey, project.externalKey)).limit(1).for("update"))[0];
   if (byKey) {
-    if (byKey.name !== project.name) throw new Error("Project external key is mapped to another resort name");
+    if (byKey.name !== project.name) throw new SalesIngestRejection("PROJECT_MAPPING_CONFLICT", "Project external key is mapped to another resort name");
     return byKey;
   }
   const byName = (await tx.select().from(resorts).where(eq(resorts.name, project.name)).limit(1).for("update"))[0];
-  if (!byName) throw new Error("Sales Command project is not mapped to a CRM resort");
-  if (byName.externalKey && byName.externalKey !== project.externalKey) throw new Error("CRM resort is already mapped to another Sales Command project");
+  if (!byName) throw new SalesIngestRejection("PROJECT_NOT_MAPPED", "Sales Command project is not mapped to a CRM resort");
+  if (byName.externalKey && byName.externalKey !== project.externalKey) throw new SalesIngestRejection("PROJECT_MAPPING_CONFLICT", "CRM resort is already mapped to another Sales Command project");
   if (!byName.externalKey) {
     await tx.update(resorts).set({ externalKey: project.externalKey }).where(and(eq(resorts.id, byName.id), isNull(resorts.externalKey)));
   }
@@ -165,9 +180,9 @@ async function resolveSaleTerms(tx: any, resortId: number, occurredAt: Date) {
     or(isNull(commercialPolicyVersions.retiredAt), gt(commercialPolicyVersions.retiredAt, occurredAt)),
   )).orderBy(desc(commercialPolicyVersions.effectiveAt), desc(commercialPolicyVersions.id)).limit(2);
   const policy = rows[0];
-  if (!policy) throw new Error("Applicable sale_terms policy required at sale occurrence time");
+  if (!policy) throw new SalesIngestRejection("SALE_TERMS_POLICY_MISSING", "Applicable sale_terms policy required at sale occurrence time");
   const sameEffective = rows[1] && rows[1].effectiveAt.getTime() === policy.effectiveAt.getTime();
-  if (sameEffective) throw new Error("Ambiguous sale_terms policy effective date");
+  if (sameEffective) throw new SalesIngestRejection("SALE_TERMS_POLICY_AMBIGUOUS", "Ambiguous sale_terms policy effective date");
   return { row: policy, terms: parseSaleTermsPolicy(policy.policyJson) };
 }
 
@@ -241,7 +256,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   const balanceCents = event.sale.vgvCents - event.sale.entryContractedCents;
   const balanceCount = balanceCents > 0 ? terms.balanceInstallmentCount : 0;
   const totalInstallments = entrySchedule.length + balanceCount;
-  if (totalInstallments > 360) throw new Error("Combined contract installment schedule exceeds supported limit of 360");
+  if (totalInstallments > 360) throw new SalesIngestRejection("INSTALLMENT_LIMIT_EXCEEDED", "Combined contract installment schedule exceeds supported limit of 360");
   const proposalRow = await tx.insert(proposals).values({
     opportunityId,
     reference: salesCommandReference(event.saleId),
@@ -273,7 +288,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     eq(commercialFractions.resortId, resort.id),
     eq(commercialFractions.status, "available"),
   )).orderBy(asc(commercialFractions.id)).limit(event.sale.quotasCount).for("update");
-  if (available.length !== event.sale.quotasCount) throw new Error("Insufficient commercial fraction inventory for confirmed sale");
+  if (available.length !== event.sale.quotasCount) throw new SalesIngestRejection("INSUFFICIENT_INVENTORY", "Insufficient commercial fraction inventory for confirmed sale");
   const fractionIds = available.map((item: typeof commercialFractions.$inferSelect) => item.id);
   for (const fraction of available) {
     const updateResult = await tx.update(commercialFractions).set({
@@ -441,7 +456,13 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
         return;
       }
     }
-    throw error;
+    const mapped = mapSalesIngestError(error);
+    const context = { code: mapped.code, saleId: event.saleId, correlationId: (event as { correlationId?: string }).correlationId ?? null };
+    if (mapped.status === 422) logger.warn("Sales Command sale rejected by a domain rule", context);
+    else logger.error("Sales Command ingest failed", { ...context, errorName: error instanceof Error ? error.name : "non-Error" });
+    // 422 traz a razão (texto de domínio, sem PII); 503 continua genérico.
+    response.status(mapped.status).json({ accepted: false, code: mapped.code, error: mapped.status === 422 && error instanceof Error ? error.message : "Event processing failed" });
+    return;
   }
 
   await syncRevenueQualityForContract({ contractId: result.contractId, actorUserId: null, trigger: "formalização Sales Command" });
@@ -457,8 +478,9 @@ export function registerSalesCommandBridge(app: Express, integrationKey: string 
     }
     try {
       await handleSalesCommandSale(request, response, key);
-    } catch {
-      response.status(503).json({ error: "Event processing failed" });
+    } catch (error) {
+      logger.error("Sales Command ingest failed outside the transaction", { errorName: error instanceof Error ? error.name : "non-Error" });
+      if (!response.headersSent) response.status(503).json({ accepted: false, code: "EVENT_PROCESSING_FAILED", error: "Event processing failed" });
     }
   });
 }
