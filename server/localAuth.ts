@@ -19,18 +19,55 @@ export class LocalAuthError extends Error {
   }
 }
 
+// Personas de piloto (GAP-1): só papéis comerciais; "user" e papéis desconhecidos não entram.
+const PILOT_ROLES = ["admin", "seller", "finance", "service"] as const;
+type LocalRole = (typeof PILOT_ROLES)[number];
+type LocalAccount = { username: string; passwordHash: string; displayName: string; role: LocalRole };
+// Hash fictício para rodar o scrypt mesmo com usuário inexistente (não revela usernames pelo tempo).
+const DUMMY_HASH = `scrypt:${"00".repeat(16)}:${"00".repeat(KEY_LENGTH)}`;
+
+/** Lê LOCAL_AUTH_USERS (JSON). Qualquer item inválido invalida a configuração inteira (fail closed). */
+function pilotAccounts(raw: string, taken: Set<string>): LocalAccount[] | null {
+  if (!raw) return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(parsed)) return null;
+  const accounts: LocalAccount[] = [];
+  for (const item of parsed) {
+    const entry = (item ?? {}) as Record<string, unknown>;
+    const { username, role, passwordHash, displayName } = entry;
+    // 58 = varchar(64) do openId menos o prefixo "local:"; colisão comparada sem caixa (collation do MySQL).
+    if (typeof username !== "string" || !/^[a-z0-9._-]{3,58}$/.test(username) || taken.has(username)) return null;
+    if (typeof role !== "string" || !(PILOT_ROLES as readonly string[]).includes(role)) return null;
+    if (typeof passwordHash !== "string" || !/^scrypt:[0-9a-f]{32,128}:[0-9a-f]{128}$/i.test(passwordHash)) return null;
+    taken.add(username);
+    accounts.push({ username, passwordHash, role: role as LocalRole, displayName: typeof displayName === "string" && displayName.trim() ? displayName.trim() : username });
+  }
+  return accounts;
+}
+
 function config() {
-  return {
-    enabled: process.env.LOCAL_AUTH_ENABLED === "1",
-    username: process.env.LOCAL_AUTH_USERNAME?.trim() ?? "",
-    passwordHash: process.env.LOCAL_AUTH_PASSWORD_HASH?.trim() ?? "",
-    displayName: process.env.LOCAL_AUTH_DISPLAY_NAME?.trim() || "Administrador TGR",
-  };
+  const enabled = process.env.LOCAL_AUTH_ENABLED === "1";
+  const username = process.env.LOCAL_AUTH_USERNAME?.trim() ?? "";
+  const passwordHash = process.env.LOCAL_AUTH_PASSWORD_HASH?.trim() ?? "";
+  const primary: LocalAccount[] = username && passwordHash
+    ? [{ username, passwordHash, role: "admin", displayName: process.env.LOCAL_AUTH_DISPLAY_NAME?.trim() || "Administrador TGR" }]
+    : [];
+  const extra = pilotAccounts(process.env.LOCAL_AUTH_USERS?.trim() ?? "", new Set(primary.map(account => account.username.toLowerCase())));
+  return { enabled, valid: extra !== null, accounts: extra === null ? [] : [...primary, ...extra] };
+}
+
+/** Sessão local (`local:<username>`) só vale se a persona ainda existe com o mesmo papel (troca/remoção derruba sessões). */
+export function isLocalSessionValid(openId: string, role: string): boolean {
+  const value = config();
+  if (!value.enabled || !value.valid) return false;
+  const account = value.accounts.find(candidate => `local:${candidate.username}` === openId);
+  return Boolean(account && account.role === role);
 }
 
 export function localAuthStatus() {
   const value = config();
-  return { enabled: value.enabled && Boolean(value.username && value.passwordHash) };
+  return { enabled: value.enabled && value.valid && value.accounts.length > 0 };
 }
 export function hashLocalPassword(password: string, saltHex: string): string {
   if (password.length < 12) throw new Error("Senha local precisa ter pelo menos 12 caracteres.");
@@ -81,28 +118,29 @@ export async function authenticateLocalUser(
 ): Promise<User> {
   const value = config();
   if (!value.enabled) throw new LocalAuthError("Login local desabilitado.", "DISABLED");
-  if (!value.username || !value.passwordHash) {
+  if (!value.valid || value.accounts.length === 0) {
     throw new LocalAuthError("Login local não configurado.", "MISCONFIGURED");
   }
 
-  const key = clientKey || "unknown";
+  // Tentativas por (cliente, usuário): o login válido de uma persona não zera as tentativas contra outra.
+  const key = `${clientKey || "unknown"}|${input.username.trim().toLowerCase()}`;
   assertAttemptAllowed(key, now);
 
-  const usernameMatches = input.username.trim() === value.username;
-  const passwordMatches = verifyLocalPassword(input.password, value.passwordHash);
-  if (!usernameMatches || !passwordMatches) {
+  const account = value.accounts.find(candidate => candidate.username === input.username.trim());
+  const passwordMatches = verifyLocalPassword(input.password, account?.passwordHash ?? DUMMY_HASH);
+  if (!account || !passwordMatches) {
     recordFailure(key, now);
     throw new LocalAuthError("Usuário ou senha inválidos.", "INVALID");
   }
   clearFailures(key);
 
-  const openId = `local:${value.username}`;
+  const openId = `local:${account.username}`;
   await db.upsertUser({
     openId,
-    name: value.displayName,
+    name: account.displayName,
     email: null,
     loginMethod: "local",
-    role: "admin",
+    role: account.role,
     lastSignedIn: new Date(now),
   });
   const user = await db.getUserByOpenId(openId);

@@ -37,3 +37,15 @@ describe("confiabilidade da sessão", () => {
     expect(dbMocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({ openId: "user-7", lastSignedIn: expect.any(Date) }));
   });
 });
+
+describe("sessão local (GAP-1, P1)", () => {
+  it("recusa sessão local cuja persona foi removida ou mudou de papel", async () => {
+    const local = { ...user, openId: "local:syn.finance", role: "finance" as const, loginMethod: "local" };
+    vi.spyOn(sdk, "verifySession").mockResolvedValue({ openId: local.openId, appId: "test-app", name: "SYN" });
+    dbMocks.getUserByOpenId.mockResolvedValue(local);
+    vi.stubEnv("LOCAL_AUTH_ENABLED", "1");
+    vi.stubEnv("LOCAL_AUTH_USERS", "[]");
+    await expect(sdk.authenticateRequest({ headers: { cookie: `${COOKIE_NAME}=valid-session` } } as never)).rejects.toThrow();
+    vi.unstubAllEnvs();
+  });
+});

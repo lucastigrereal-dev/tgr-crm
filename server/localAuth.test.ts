@@ -11,6 +11,7 @@ import {
   LocalAuthError,
   authenticateLocalUser,
   hashLocalPassword,
+  isLocalSessionValid,
   localAuthStatus,
   resetLocalAuthAttemptsForTests,
   verifyLocalPassword,
@@ -96,5 +97,116 @@ describe("local auth", () => {
       { username: "syn.admin", password },
       "127.0.0.1",
     )).rejects.toBeInstanceOf(LocalAuthError);
+  });
+});
+
+// GAP-1 do piloto humano: personas finance/service/seller com login local próprio (LOCAL_AUTH_USERS).
+describe("local auth — usuários de piloto (LOCAL_AUTH_USERS)", () => {
+  const financePassword = "Senha-Financeiro-2026!";
+  const financeHash = hashLocalPassword(financePassword, "ffeeddccbbaa99887766554433221100");
+  const users = (list: unknown) => vi.stubEnv("LOCAL_AUTH_USERS", JSON.stringify(list));
+  const finance = { username: "syn.finance", role: "finance", passwordHash: financeHash, displayName: "SYN Financeiro" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("LOCAL_AUTH_ENABLED", "1");
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "syn.admin");
+    vi.stubEnv("LOCAL_AUTH_PASSWORD_HASH", hashLocalPassword(password, salt));
+    dbMocks.getUserByOpenId.mockImplementation(async (openId: string) => ({ ...admin, openId }));
+    resetLocalAuthAttemptsForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetLocalAuthAttemptsForTests();
+  });
+
+  it("autentica a persona com o papel configurado, não admin", async () => {
+    users([finance]);
+    await authenticateLocalUser({ username: "syn.finance", password: financePassword }, "127.0.0.1");
+    expect(dbMocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({
+      openId: "local:syn.finance", role: "finance", name: "SYN Financeiro", loginMethod: "local",
+    }));
+  });
+
+  it("senha de outra persona não serve", async () => {
+    users([finance]);
+    await expect(authenticateLocalUser({ username: "syn.finance", password }, "127.0.0.1"))
+      .rejects.toMatchObject({ code: "INVALID" });
+    expect(dbMocks.upsertUser).not.toHaveBeenCalled();
+  });
+
+  it("o admin principal continua funcionando junto com as personas", async () => {
+    users([finance]);
+    await authenticateLocalUser({ username: "syn.admin", password }, "127.0.0.1");
+    expect(dbMocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({ openId: "local:syn.admin", role: "admin" }));
+  });
+
+  it.each([
+    ["JSON inválido", "não-é-json"],
+    ["papel fora da lista", JSON.stringify([{ ...finance, role: "superadmin" }])],
+    ["papel user não é persona de piloto", JSON.stringify([{ ...finance, role: "user" }])],
+    ["username duplicado com o admin", JSON.stringify([{ ...finance, username: "syn.admin" }])],
+    ["hash fora do formato scrypt", JSON.stringify([{ ...finance, passwordHash: "plain-text-password" }])],
+    ["username inválido", JSON.stringify([{ ...finance, username: "Fin Ance" }])],
+  ])("configuração inválida (%s) recusa todo login local", async (_label, raw) => {
+    vi.stubEnv("LOCAL_AUTH_USERS", raw);
+    expect(localAuthStatus()).toEqual({ enabled: false });
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "127.0.0.1"))
+      .rejects.toMatchObject({ code: "MISCONFIGURED" });
+  });
+});
+
+// Revisão de segurança do GAP-1 (P1/P2).
+describe("local auth — revisão de segurança do GAP-1", () => {
+  const financePassword = "Senha-Financeiro-2026!";
+  const financeHash = hashLocalPassword(financePassword, "ffeeddccbbaa99887766554433221100");
+  const finance = { username: "syn.finance", role: "finance", passwordHash: financeHash };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("LOCAL_AUTH_ENABLED", "1");
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "syn.admin");
+    vi.stubEnv("LOCAL_AUTH_PASSWORD_HASH", hashLocalPassword(password, salt));
+    vi.stubEnv("LOCAL_AUTH_USERS", JSON.stringify([finance]));
+    dbMocks.getUserByOpenId.mockImplementation(async (openId: string) => ({ ...admin, openId }));
+    resetLocalAuthAttemptsForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetLocalAuthAttemptsForTests();
+  });
+
+  it("P1: login válido de uma persona não zera as tentativas contra o admin no mesmo IP", async () => {
+    for (let i = 0; i < 4; i++) {
+      await expect(authenticateLocalUser({ username: "syn.admin", password: "errada-errada-000" }, "10.0.0.9")).rejects.toMatchObject({ code: "INVALID" });
+    }
+    await authenticateLocalUser({ username: "syn.finance", password: financePassword }, "10.0.0.9");
+    await expect(authenticateLocalUser({ username: "syn.admin", password: "errada-errada-000" }, "10.0.0.9")).rejects.toMatchObject({ code: "INVALID" });
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.0.9")).rejects.toMatchObject({ code: "LOCKED" });
+  });
+
+  it("P1: sessão local só vale enquanto a persona existe com o mesmo papel", () => {
+    expect(isLocalSessionValid("local:syn.finance", "finance")).toBe(true);
+    expect(isLocalSessionValid("local:syn.admin", "admin")).toBe(true);
+    expect(isLocalSessionValid("local:syn.finance", "admin")).toBe(false);
+    vi.stubEnv("LOCAL_AUTH_USERS", JSON.stringify([{ ...finance, role: "service" }]));
+    expect(isLocalSessionValid("local:syn.finance", "finance")).toBe(false);
+    vi.stubEnv("LOCAL_AUTH_USERS", "[]");
+    expect(isLocalSessionValid("local:syn.finance", "finance")).toBe(false);
+    vi.stubEnv("LOCAL_AUTH_ENABLED", "0");
+    expect(isLocalSessionValid("local:syn.admin", "admin")).toBe(false);
+  });
+
+  it("P2: username acima de 58 caracteres invalida a configuração (openId varchar 64)", () => {
+    vi.stubEnv("LOCAL_AUTH_USERS", JSON.stringify([{ ...finance, username: "a".repeat(59) }]));
+    expect(localAuthStatus()).toEqual({ enabled: false });
+  });
+
+  it("P2: persona que só difere do admin em maiúsculas é colisão", () => {
+    vi.stubEnv("LOCAL_AUTH_USERNAME", "SYN.Admin");
+    vi.stubEnv("LOCAL_AUTH_USERS", JSON.stringify([{ ...finance, username: "syn.admin" }]));
+    expect(localAuthStatus()).toEqual({ enabled: false });
   });
 });
