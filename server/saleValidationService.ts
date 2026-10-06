@@ -97,6 +97,12 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
   const confirmedAt = new Date();
   const correlationId = correlationIdForContract(input.contractId);
   const outcome = await db.transaction(async tx => {
+    // Red Team P1-3: trava o contrato (mesma ordem do validateSale: contrato -> validação) e recheca o estado aqui dentro;
+    // um distrato que comitou depois da pré-checagem não pode ganhar pagamento confirmado.
+    const locked = (await tx.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
+    if (!locked || (locked.status !== "pending_signature" && locked.status !== "draft")) {
+      throw saleValidationError("CONFLICT", "SALE_PAYMENT_CONTRACT_STATE", `Pagamento só pode ser confirmado com contrato em rascunho ou aguardando assinatura (atual: ${locked?.status ?? "inexistente"}).`);
+    }
     // Garante a linha e a trava; a unique(contractId) serializa dois cliques concorrentes.
     await tx.insert(saleValidations).values({ contractId: input.contractId }).onDuplicateKeyUpdate({ set: { contractId: sql`contractId` } });
     const row = (await tx.select().from(saleValidations).where(eq(saleValidations.contractId, input.contractId)).limit(1).for("update"))[0];
@@ -114,6 +120,10 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
     return { alreadyConfirmed: false as const, confirmedAt };
   });
   return { success: true as const, ...outcome };
+}
+
+class AlreadyValidated extends Error {
+  constructor(readonly validatedAt: Date) { super("already validated"); }
 }
 
 class GatesNotReady extends Error {
@@ -151,8 +161,10 @@ export async function validateSale(actorUserId: number, input: { contractId: num
   try {
     const result = await db.transaction(async tx => {
       const locked = (await tx.select({ id: contracts.id, status: contracts.status, signedAt: contracts.signedAt }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
-      if (!locked || (locked.status !== "pending_signature" && locked.status !== "draft")) throw new GatesNotReady("state", [], `Contrato em estado ${locked?.status ?? "inexistente"} não pode ser validado.`);
       const facts = await loadSaleValidationFacts(tx, input.contractId);
+      // Red Team P1-2: quem perdeu a corrida para outro gerente recebe "já validada", não uma recusa falsa na trilha.
+      if (locked?.status === "active" && facts.validation?.validatedAt) throw new AlreadyValidated(facts.validation.validatedAt);
+      if (!locked || (locked.status !== "pending_signature" && locked.status !== "draft")) throw new GatesNotReady("state", [], `Contrato em estado ${locked?.status ?? "inexistente"} não pode ser validado.`);
       const gates = evaluateSaleValidationGates({ contract: locked, documents: facts.documents, envelopes: facts.envelopes, validation: facts.validation });
       if (!gates.ready) throw new GatesNotReady("gates", gates.missing, `Portões abertos: faltam ${gates.missing.join(", ")}.`);
       const document = pickSignedDocument(facts.documents, input.signedDocumentId ?? null);
@@ -174,7 +186,8 @@ export async function validateSale(actorUserId: number, input: { contractId: num
         contractId: input.contractId, step: "final_validated", actorUserId, occurredAt: validatedAt,
         beforeJson: JSON.stringify({ contractStatus: locked.status, validatedAt: null }),
         afterJson: JSON.stringify({ contractStatus: "active", validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, signedDocumentId: document.id, paymentConfirmedAt: paymentConfirmedAt.toISOString(), paymentConfirmedByUserId, contractGeneratedAt: stamps.contractGeneratedAt.toISOString(), contractSignedAt: stamps.contractSignedAt.toISOString(), documentStoredAt: stamps.documentStoredAt.toISOString(), documentRef }),
-        reason: null, documentRef: document.storageKey, correlationId, externalSaleId: saleId,
+        // Trilha append-only: só a referência opaca (o storageKey carrega nome de arquivo, que pode ter dado do cliente).
+        reason: null, documentRef, correlationId, externalSaleId: saleId,
       });
       await txAudit(tx, { actorUserId, entityType: "contract", entityId: input.contractId, action: "status_updated", summary: "Status alterado para active (venda validada pelo gerente)." });
       await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "validated", summary: `Venda do contrato ${input.contractId} validada (pagamento, contrato assinado e documento armazenado conferidos).`, idempotencyKey: `sale-validated:${input.contractId}` });
@@ -196,6 +209,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
     }
     return { success: true as const, alreadyValidated: false as const, ...result };
   } catch (error) {
+    if (error instanceof AlreadyValidated) return { success: true as const, alreadyValidated: true as const, validatedAt: error.validatedAt };
     if (!(error instanceof GatesNotReady)) throw error;
     const facts = await loadSaleValidationFacts(db, input.contractId);
     const gates = facts.contract ? evaluateSaleValidationGates({ contract: facts.contract, documents: facts.documents, envelopes: facts.envelopes, validation: facts.validation }) : null;

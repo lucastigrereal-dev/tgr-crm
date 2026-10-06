@@ -451,7 +451,8 @@ export const saleValidations = mysqlTable("sale_validations", {
   foreignKey({ name: "sv_signed_document_fk", columns: [table.signedDocumentId], foreignColumns: [contractDocuments.id] }),
 ]);
 
-// Trilha append-only (triggers na migration 0044 recusam UPDATE/DELETE). documentRef = storageKey, nunca o arquivo.
+// Trilha append-only (triggers na migration 0044 recusam UPDATE/DELETE). documentRef = referência opaca crm-doc:<c>:<d>
+// na validação final (KAN-31 V6) ou a referência de evidência informada pelo gerente na confirmação do pagamento.
 export const saleValidationEvents = mysqlTable("sale_validation_events", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull(),

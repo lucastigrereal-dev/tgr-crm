@@ -124,7 +124,7 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const steps = await trail(contractId);
     expect(steps.map(step => step.step).sort()).toEqual(["final_validated", "payment_confirmed"]);
     const final = steps.find(step => step.step === "final_validated")!;
-    expect(final).toMatchObject({ actorUserId: adminId, documentRef: "contracts/ok/assinado.pdf", correlationId: `crm-sale-${contractId}` });
+    expect(final).toMatchObject({ actorUserId: adminId, documentRef: `crm-doc:${contractId}:${documentIds[1]}`, correlationId: `crm-sale-${contractId}` });
     expect(JSON.parse(String(final.beforeJson))).toMatchObject({ contractStatus: "pending_signature", validatedAt: null });
     expect(JSON.parse(String(final.afterJson))).toMatchObject({ contractStatus: "active", signedDocumentId: documentIds[1] });
 
@@ -159,10 +159,38 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const { contractId } = await seed("okcc", { signedAt: new Date(), documents: [{ signed: true, storageKey: "contracts/cc/assinado.pdf" }] });
     await svc.confirmPayment(adminId, { contractId, note: "conferido" });
     const results = await Promise.allSettled([1, 2, 3].map(() => svc.validateSale(adminId, { contractId })));
-    expect(results.filter(r => r.status === "fulfilled").length).toBeGreaterThanOrEqual(1);
     expect(await eventsOf(contractId, "sale.validated")).toHaveLength(1);
     expect(await eventsOf(contractId, "contract.status.updated")).toHaveLength(1);
     expect((await contractRow(contractId)).status).toBe("active");
+    // Red Team P1-2: perder a corrida não é recusa: todas resolvem e nenhuma grava validation_rejected.
+    expect(results.every(r => r.status === "fulfilled")).toBe(true);
+    expect((await trail(contractId)).filter(step => step.step === "validation_rejected")).toHaveLength(0);
+  });
+
+  it("Red Team P1-3: confirmPayment trava o contrato e recheca o estado dentro da transação", async () => {
+    const { contractId } = await seed("paylock");
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("SELECT id FROM contracts WHERE id = ? FOR UPDATE", [contractId]);
+      const pending = svc.confirmPayment(adminId, { contractId, note: "conferido" });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await conn.query("UPDATE contracts SET status = 'cancelled' WHERE id = ?", [contractId]);
+      await conn.commit();
+      await expect(pending).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_PAYMENT_CONTRACT_STATE") });
+    } finally { conn.release(); }
+    const [row] = await db.select().from(saleValidations).where(eq(saleValidations.contractId, contractId));
+    expect(row?.paymentConfirmedAt ?? null).toBeNull();
+    expect(await eventsOf(contractId, "sale.payment.confirmed")).toHaveLength(0);
+  });
+
+  it("Red Team P2: trilha append-only guarda a referência opaca, nunca o storageKey (nome de arquivo pode ter dado do cliente)", async () => {
+    const { contractId, documentIds } = await seed("opaque", { signedAt: new Date(), documents: [{ signed: true, storageKey: "contracts/77/1700000000-Maria da Silva assinado.pdf" }] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await svc.validateSale(adminId, { contractId });
+    const final = (await trail(contractId)).find(step => step.step === "final_validated")!;
+    expect(final.documentRef).toBe(`crm-doc:${contractId}:${documentIds[0]}`);
+    expect(JSON.stringify(await trail(contractId))).not.toContain("Maria");
   });
 
   it("documento indicado inválido (não assinado) recusa com código próprio e não ativa", async () => {
