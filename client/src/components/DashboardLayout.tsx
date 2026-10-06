@@ -255,7 +255,7 @@ function DashboardLayoutContent({
               <div key={group.label} className="px-3 pt-4 first:pt-2">
                 {!isCollapsed ? <p className="px-2 pb-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-white/35">{group.label}</p> : null}
                 <SidebarMenu className="gap-0">
-                  {group.items.filter(item => !["/importar", "/configuracoes-projeto"].includes(item.path) || user?.role === "admin").map(item => {
+                  {group.items.filter(item => (!["/importar", "/configuracoes-projeto"].includes(item.path) || user?.role === "admin") && (item.path !== "/politicas" || user?.role === "admin" || user?.role === "finance")).map(item => {
                     const isActive = matchesMenuPath(location, item.path);
                     return (
                       <SidebarMenuItem key={item.path}>
