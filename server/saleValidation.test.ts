@@ -3,14 +3,14 @@ import { evaluateSaleValidationGates, pickSignedDocument, SALE_GATE_KEYS } from 
 
 const T = new Date("2026-10-06T12:00:00.000Z");
 const contract = { id: 1, signedAt: null as Date | null };
-const doc = (over: Partial<{ id: number; signed: boolean; storageKey: string }> = {}) => ({ id: 10, signed: false, storageKey: "contracts/1/a.pdf", ...over });
+const doc = (over: Partial<{ id: number; signed: boolean; storageKey: string; category: string }> = {}) => ({ id: 10, signed: false, storageKey: "contracts/1/a.pdf", category: "Contrato", ...over });
 const paid = { paymentConfirmedAt: T, validatedAt: null };
 
 describe("evaluateSaleValidationGates (ADR-007)", () => {
   it("contrato sem nada: todos os portões abertos, 4 pendências, não pronto", () => {
     const g = evaluateSaleValidationGates({ contract, documents: [], validation: null });
     expect(g).toMatchObject({ paymentConfirmed: false, contractGenerated: false, contractSigned: false, signedDocumentStored: false, managerValidated: false, ready: false });
-    expect(g.missing).toEqual([...SALE_GATE_KEYS]);
+    expect(g.missing).toEqual(SALE_GATE_KEYS.filter(key => key !== "noOpenCancellation"));
   });
 
   it("contrato inexistente (null) nunca gera portão aberto", () => {
@@ -71,7 +71,7 @@ describe("evaluateSaleValidationGates (ADR-007)", () => {
     const g = evaluateSaleValidationGates({ contract, documents: [], validation: { paymentConfirmedAt: null, validatedAt: T } });
     expect(g.managerValidated).toBe(true);
     expect(g.ready).toBe(false);
-    expect(g.missing).toEqual([...SALE_GATE_KEYS]);
+    expect(g.missing).toEqual(SALE_GATE_KEYS.filter(key => key !== "noOpenCancellation"));
   });
 
   it("combinatória exaustiva dos 4 pré-requisitos: missing reflete exatamente os portões falsos", () => {
@@ -93,6 +93,41 @@ describe("evaluateSaleValidationGates (ADR-007)", () => {
   });
 });
 
+describe("portões: só documento da categoria do contrato conta (revisão KAN-31)", () => {
+  it("cópia de RG/comprovante assinada NÃO satisfaz contractSigned nem signedDocumentStored", () => {
+    for (const category of ["Comprovante", "Documento pessoal", "Aditivo", "RG"]) {
+      const g = evaluateSaleValidationGates({ contract, documents: [doc({ signed: true, category })], validation: paid });
+      expect(g.contractSigned, category).toBe(false);
+      expect(g.signedDocumentStored, category).toBe(false);
+      expect(g.ready, category).toBe(false);
+    }
+  });
+  it("categorias do contrato (Contrato / Contrato assinado, sem diferenciar caixa) satisfazem", () => {
+    for (const category of ["Contrato", "Contrato assinado", " contrato ", "CONTRATO ASSINADO", "contrato"]) {
+      const g = evaluateSaleValidationGates({ contract, documents: [doc({ signed: true, category })], validation: paid });
+      expect(g.signedDocumentStored, category).toBe(true);
+      expect(g.ready, category).toBe(true);
+    }
+  });
+  it("signedAt continua valendo como contrato assinado, mas o documento armazenado exige a categoria do contrato", () => {
+    const g = evaluateSaleValidationGates({ contract: { id: 1, signedAt: T }, documents: [doc({ signed: true, category: "Comprovante" })], validation: paid });
+    expect(g.contractSigned).toBe(true);
+    expect(g.signedDocumentStored).toBe(false);
+  });
+});
+
+describe("portão noOpenCancellation (revisão KAN-31)", () => {
+  const base = { contract: { id: 1, signedAt: T }, documents: [doc({ signed: true })], validation: paid };
+  it("sem pedido de distrato aberto: portão aberto e pronto", () => {
+    expect(evaluateSaleValidationGates({ ...base, openCancellationRequests: 0 })).toMatchObject({ noOpenCancellation: true, ready: true, missing: [] });
+    expect(evaluateSaleValidationGates(base)).toMatchObject({ noOpenCancellation: true, ready: true });
+  });
+  it("pedido requested|approved aberto: fecha o portão e entra em missing", () => {
+    const g = evaluateSaleValidationGates({ ...base, openCancellationRequests: 1 });
+    expect(g).toMatchObject({ noOpenCancellation: false, ready: false, missing: ["noOpenCancellation"] });
+  });
+});
+
 describe("pickSignedDocument", () => {
   it("escolhe o assinado com storageKey, mais recente; respeita preferido válido", () => {
     const docs = [doc({ id: 1, signed: true, storageKey: "a" }), doc({ id: 3, signed: true, storageKey: "c" }), doc({ id: 2, signed: false, storageKey: "b" })];
@@ -108,5 +143,14 @@ describe("pickSignedDocument", () => {
   it("sem documento assinado armazenado => null", () => {
     expect(pickSignedDocument([doc({ signed: false })])).toBeNull();
     expect(pickSignedDocument([])).toBeNull();
+  });
+});
+
+describe("pickSignedDocument: categoria do contrato (revisão KAN-31)", () => {
+  it("documento assinado de outra categoria nunca é escolhido, nem como preferido", () => {
+    const docs = [doc({ id: 1, signed: true, storageKey: "a", category: "Contrato assinado" }), doc({ id: 9, signed: true, storageKey: "z", category: "Comprovante" })];
+    expect(pickSignedDocument(docs)?.id).toBe(1);
+    expect(pickSignedDocument(docs, 9)).toBeNull();
+    expect(pickSignedDocument([doc({ id: 9, signed: true, category: "RG" })])).toBeNull();
   });
 });
