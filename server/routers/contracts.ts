@@ -13,7 +13,7 @@ import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { canCapability } from "../../shared/permissions";
-import { saleValidationError } from "../saleValidationService";
+import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
 
@@ -43,10 +43,10 @@ export const contractsRouter = router({
     installmentCount: z.coerce.number().int().min(1).max(360),
     notes: z.string().trim().max(5000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
-    if (input.status === "active") {
-      assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
-      // ADR-007 (V6): `active` = venda VALIDADA; nasce só de saleValidation.validateSale.
-      throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "Contrato não pode ser criado já ativo. Crie em rascunho/aguardando assinatura e use a validação final da venda (saleValidation.validateSale).");
+    // ADR-007 (V6): contrato nasce SÓ em rascunho ou aguardando assinatura (qualquer papel). `active` = venda VALIDADA e só
+    // nasce de saleValidation.validateSale; overdue/cancelled/closed na criação seriam estados históricos sem venda validada.
+    if (input.status !== "draft" && input.status !== "pending_signature") {
+      throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", `Contrato não pode ser criado como ${input.status}. Crie em rascunho/aguardando assinatura e use a validação final da venda (saleValidation.validateSale).`);
     }
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
@@ -293,8 +293,10 @@ export const contractsRouter = router({
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
     const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-    // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active (o contrato já foi validado).
+    // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active (exige venda já validada, abaixo).
     if (input.status === "active" && current.status !== "overdue") throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "A ativação do contrato só ocorre pela validação final da venda (saleValidation.validateSale): pagamento confirmado, contrato assinado, documento assinado armazenado e confirmação do gerente.");
+    // overdue -> active só para contrato cuja venda foi validada (inclui importado em CSV como overdue: sem validação não ativa).
+    if (input.status === "active" && !(await isSaleValidated(db, input.id))) throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "Contrato vencido só volta a ativo se a venda foi validada (saleValidation.validateSale). Valide a venda antes de regularizar.");
     if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
     const updateResult = await db.update(contracts).set({
       status: input.status,
