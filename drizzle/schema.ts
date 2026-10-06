@@ -445,7 +445,7 @@ export const saleValidations = mysqlTable("sale_validations", {
   foreignKey({ name: "sv_signed_document_fk", columns: [table.signedDocumentId], foreignColumns: [contractDocuments.id] }),
 ]);
 
-// Trilha append-only (triggers na migration 0044 recusam UPDATE/DELETE). documentRef = storageKey, nunca o arquivo.
+// Trilha append-only POR CÓDIGO (sem triggers: MySQL gerenciado com binlog pode recusar CREATE TRIGGER); server/saleValidationAppendOnly.test.ts garante que nenhum caminho faz UPDATE/DELETE. documentRef = `contract_document:<id>`, nunca storageKey/filename.
 export const saleValidationEvents = mysqlTable("sale_validation_events", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull(),

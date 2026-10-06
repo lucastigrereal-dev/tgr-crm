@@ -4,7 +4,7 @@ import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { createRejectionTracker, DeliveryRejectedError, MAX_CONTENT_REJECTIONS, MIN_REJECTION_WINDOW_MS } from "./relationshipBridge";
+import { createRejectionTracker, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
 
 export const FINANCIAL_EVENT_NAMES = [
   "contract.created",
@@ -78,7 +78,7 @@ export function startFinancialBridgePump(
   const intervalMs = options.intervalMs ?? 5_000;
   let running = false;
   let stopped = false;
-  const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS);
+  const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: true });
 
   async function tick() {
     if (running || stopped) return 0;
@@ -122,7 +122,7 @@ export function startFinancialBridgePump(
             },
             body: JSON.stringify(body),
           }, 8_000);
-          if (!response.ok) throw new DeliveryRejectedError("Financial", response.status);
+          if (!response.ok) throw new DeliveryRejectedError("Financial", response.status, await readRejectionCode(response));
           await recordAudit(
             null,
             "integration_event",
@@ -138,7 +138,7 @@ export function startFinancialBridgePump(
           // Mesma regra do bridge de contrato: só recusa de conteúdo repetida (e por tempo mínimo) vira recibo terminal.
           if (rejections.record(event.id, error)) {
             await recordAudit(null, "integration_event", event.id, "financial_rejected",
-              event.eventName + " recusado pelo TGR Financial Layer " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
+              rejectionReceiptSummary(event.eventName, "Financial Layer", error as DeliveryRejectedError),
               { idempotencyKey: "financial-event:" + event.id });
           }
         }

@@ -27,7 +27,6 @@ const ACTIONS: Array<{ name: string; capability: Capability; allowed: Role[]; ca
   { name: "contracts.executeCancellation", capability: "contract.cancel.execute", allowed: ["admin"], call: c => c.contracts.executeCancellation({ requestId: 1 }) },
   // PRD Apêndice B #11: ativação do contrato é registro da administração (seller passava antes).
   { name: "contracts.updateStatus(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.updateStatus({ id: 1, status: "active" }) },
-  { name: "contracts.create(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.create({ number: "SYN-RBAC-1", customerId: 1, status: "active", totalAmount: 1000, firstDueDate: "2026-11-01", installmentCount: 1 }) },
   // ADR-007 (V6): "gerente" do CRM = admin (CRM_MANAGER_ROLE pendente). Closer (seller), finance e service NÃO confirmam pagamento nem validam venda.
   { name: "saleValidation.confirmPayment", capability: "sale.payment.confirm", allowed: ["admin"], call: c => c.saleValidation.confirmPayment({ contractId: 1, note: "SYN conferido" }) },
   { name: "saleValidation.validateSale", capability: "sale.validate", allowed: ["admin"], call: c => c.saleValidation.validateSale({ contractId: 1 }) },
@@ -66,6 +65,25 @@ describe("matriz RBAC papel x ação crítica (routers reais)", () => {
       }
     });
   }
+
+  it("contracts.create só aceita draft/pending_signature para qualquer papel comercial (active/overdue/cancelled/closed => CONFLICT, nunca por papel)", async () => {
+    for (const status of ["active", "overdue", "cancelled", "closed"] as const) {
+      for (const role of ROLES) {
+        const result = await outcome(callerFor(role).contracts.create({ number: "SYN-RBAC-1", customerId: 1, status, totalAmount: 1000, firstDueDate: "2026-11-10", installmentCount: 1 }));
+        if (role === "admin" || role === "seller") expect(result, `${role}/${status}`).toBe("CONFLICT");
+        else expect(result, `${role}/${status}`).toBe("FORBIDDEN");
+      }
+    }
+  });
+
+  it("saleValidation.getValidationStatus só para admin e finance (nota de pagamento/documento não vaza para seller/service)", async () => {
+    expect([...(capabilityMatrix["sale.validation.view"] as readonly string[])].sort()).toEqual(["admin", "finance"]);
+    for (const role of ROLES) {
+      const result = await outcome(callerFor(role).saleValidation.getValidationStatus({ contractId: 1 }));
+      if (role === "admin" || role === "finance") expect(result, role).not.toBe("FORBIDDEN");
+      else expect(result, role).toBe("FORBIDDEN");
+    }
+  });
 
   it("só administração decide desconto (adminProcedure)", async () => {
     for (const role of ROLES) {

@@ -7,7 +7,10 @@ const contractId = z.number().int().positive();
 
 // ADR-007: "gerente" do CRM = capacidades sale.payment.confirm / sale.validate, concedidas a admin.
 export const saleValidationRouter = router({
-  getValidationStatus: contractsProcedure.input(z.object({ contractId })).query(({ input }) => getValidationStatus(input.contractId)),
+  getValidationStatus: contractsProcedure.input(z.object({ contractId })).query(({ ctx, input }) => {
+    assertCapability(ctx.user.role, "sale.validation.view", "Somente administração e financeiro consultam a validação da venda.");
+    return getValidationStatus(input.contractId);
+  }),
 
   confirmPayment: contractsProcedure.input(z.object({
     contractId,

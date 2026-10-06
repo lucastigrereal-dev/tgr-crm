@@ -34,6 +34,8 @@ export const capabilityMatrix = {
   // POLICY_PENDING CRM_MANAGER_ROLE: se o CRM ganhar papel "gerente" próprio, só esta matriz muda.
   "sale.payment.confirm": ["admin"],
   "sale.validate": ["admin"],
+  // Leitura dos portões da venda (inclui nota de conferência do pagamento e referência de documento): só gerência e financeiro.
+  "sale.validation.view": ["admin", "finance"],
   "document.read": ["admin", "seller", "finance", "service"],
   "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],
