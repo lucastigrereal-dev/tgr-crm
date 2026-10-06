@@ -8,7 +8,7 @@ vi.mock("./revenueQualitySync", () => syncMocks);
 
 import { commissionsRouter } from "./routers/commissions";
 
-function makeDb({ sellerExists = true, sellerEligible = true, campaignExists = true, opportunityExists = true, contractExists = true, saleValidated = true, existingCommission, insertError }: { saleValidated?: boolean; sellerExists?: boolean; sellerEligible?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
+function makeDb({ sellerExists = true, sellerEligible = true, campaignExists = true, opportunityExists = true, contractExists = true, contractStatus = "active", saleValidated = true, existingCommission, insertError }: { contractStatus?: string; saleValidated?: boolean; sellerExists?: boolean; sellerEligible?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
   const inserted: unknown[] = [];
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => ({
@@ -17,7 +17,7 @@ function makeDb({ sellerExists = true, sellerEligible = true, campaignExists = t
           if (table === users) return sellerExists && sellerEligible ? [{ id: 55 }] : [];
           if (table === salesCampaigns) return campaignExists ? [{ id: 10 }] : [];
           if (table === opportunities) return opportunityExists ? [{ id: 20 }] : [];
-          if (table === contracts) return contractExists ? [{ id: 30 }] : [];
+          if (table === contracts) return contractExists ? [{ id: 30, status: contractStatus }] : [];
           if (table === saleValidations) return saleValidated ? [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] : [];
           if (table === salesCommissions) return existingCommission ? [existingCommission] : [];
           return [];
@@ -51,6 +51,14 @@ describe("integridade do lançamento manual de comissão", () => {
 
   it("ADR-007: contrato sem venda validada (VENDEU, pendente ou só pagamento confirmado) não gera comissão manual", async () => {
     const fixture = makeDb({ saleValidated: false });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(caller().record(baseInput)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("COMMISSION_REQUIRES_VALIDATED_SALE") });
+    expect(fixture.inserted).toEqual([]);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("revisão KAN-31: contrato CANCELADO não recebe comissão manual, mesmo com a venda que um dia foi validada", async () => {
+    const fixture = makeDb({ contractStatus: "cancelled", saleValidated: true });
     dbMocks.getDb.mockResolvedValue(fixture.db);
     await expect(caller().record(baseInput)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("COMMISSION_REQUIRES_VALIDATED_SALE") });
     expect(fixture.inserted).toEqual([]);
