@@ -147,6 +147,25 @@ export const commercialPolicyVersions = mysqlTable("commercial_policy_versions",
   index("commercial_policy_effective_idx").on(table.resortId, table.policyType, table.effectiveAt),
 ]);
 
+// WP11 (PRD v4 §13): registry de política ABERTA — status e vigência, sem valores. Nenhum motor lê esta tabela;
+// os motores continuam em commercial_policy_versions (teste policyRegistryIsolation).
+export const policyRegistry = mysqlTable("policy_registry", {
+  id: int("id").autoincrement().primaryKey(),
+  resortId: int("resortId").notNull().references(() => resorts.id),
+  policyType: mysqlEnum("policyType", ["commission", "cancellation_terms", "monetary_index", "delinquency", "retention", "messaging", "consent_final", "contact_hours"]).notNull(),
+  version: varchar("version", { length: 80 }).notNull(),
+  status: mysqlEnum("status", ["DRAFT", "UNAPPROVED", "APPROVED", "RETIRED"]).default("UNAPPROVED").notNull(),
+  validFrom: date("validFrom"),
+  validTo: date("validTo"),
+  approver: varchar("approver", { length: 160 }),
+  receiptRef: varchar("receiptRef", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("policy_registry_version_unique").on(table.resortId, table.policyType, table.version),
+  index("policy_registry_status_idx").on(table.resortId, table.status),
+]);
+
 export const monetaryIndexValues = mysqlTable(
   "monetary_index_values",
   {
