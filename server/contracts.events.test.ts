@@ -8,7 +8,7 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; inventoryExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
+function makeDb(options: { legacySnapshot?: boolean; requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; inventoryExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
   let selectCall = 0;
   let contractSelectCall = 0;
   let ledgerSelectCall = 0;
@@ -28,7 +28,7 @@ function makeDb(options: { requestStatus?: "requested" | "approved" | "rejected"
     insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); const insertedCount = Array.isArray(values) ? values.length : 1; return { $returningId: async () => table ? Array.from({ length: insertedCount }, (_, index) => ({ id: 701 + index })) : [] }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
       const data = [
-        [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80 }) }],
+        [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80, policyConfigured: options.legacySnapshot ? undefined : true }) }],
         [{ id: 701, status: "active" }],
         [{ id: 71, amount: "500.00", status: "open" }, { id: 72, amount: "1000.00", status: "paid" }, { id: 73, amount: "500.00", status: "overdue" }],
         [{ id: 91, status: "pending" }, { id: 92, status: "paid" }, { id: 93, status: "approved" }],
@@ -157,6 +157,13 @@ describe("eventos e auditoria de contratos", () => {
       message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar.",
     });
     expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
+  });
+
+  it("PRD Apêndice B #12: pedido aprovado antes da correção (simulação sem política marcada) executa sem lançar multa/devolução", async () => {
+    const db = makeDb({ legacySnapshot: true }); dbMocks.getDb.mockResolvedValue(db);
+    await expect(caller().executeCancellation({ requestId: 801 })).resolves.toMatchObject({ success: true, contractId: 701, policyConfigured: false, financialEntries: 0 });
+    expect(db.financialEntries).toEqual([]);
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("NÃO configurada"));
   });
 
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {

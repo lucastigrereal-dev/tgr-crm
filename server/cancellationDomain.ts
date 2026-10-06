@@ -7,8 +7,11 @@ const money = (value: number) => Math.round(Math.max(0, value) * 100) / 100;
 // ficam nulos com o motivo, e a execução não gera lançamento financeiro.
 export const CANCELLATION_POLICY_MISSING = "CANCELLATION_POLICY_MISSING" as const;
 
+// Configurada = modo de devolução definido e, quando a devolução depende da multa ("after_penalty"), a taxa de multa
+// também. Política parcial (só base, só taxa) conta como NÃO configurada: completar com padrão inventaria valor.
 export function isCancellationPolicyConfigured(policy: ProjectCancellationPolicy) {
-  return Object.values(policy).some(value => value !== undefined && value !== null);
+  if (policy.refundMode === undefined || policy.refundMode === null) return false;
+  return policy.refundMode === "none" || policy.refundMode === "full" || (policy.penaltyRate !== undefined && policy.penaltyRate !== null);
 }
 
 export function simulateCancellation(input: { contractAmount: number; paidAmount: number; policy: ProjectCancellationPolicy }) {

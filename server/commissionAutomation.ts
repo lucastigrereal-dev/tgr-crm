@@ -72,3 +72,9 @@ export function buildInstallmentCommissions(input: {
     };
   });
 }
+
+// PRD Apêndice B #17 (PILOTO V1): comissão só pode virar devida com contrato ATIVO + entrada liquidada e política
+// completa do empreendimento. Sem qualquer um dos dois, fica bloqueada (auditado como commission_blocked).
+export function canCommissionBecomeDue(contractStatus: string | null | undefined, completePolicy: unknown): boolean {
+  return Boolean(completePolicy) && contractStatus === "active";
+}

@@ -41,3 +41,15 @@ it("não gera comissão automática com política incompleta", () => {
   });
   expect(rows).toEqual([]);
 });
+
+it("PRD Apêndice B #17: comissão só vira devida com contrato ativo e política completa", async () => {
+  const { canCommissionBecomeDue } = await import("./commissionAutomation");
+  const policy = parseCompleteCommissionPolicy(completePolicy);
+  expect(canCommissionBecomeDue("active", policy)).toBe(true);
+  for (const status of ["draft", "pending_signature", "overdue", "cancelled", "closed", null, undefined]) expect(canCommissionBecomeDue(status, policy), String(status)).toBe(false);
+  expect(canCommissionBecomeDue("active", null)).toBe(false);
+  const { readFileSync } = await import("node:fs");
+  for (const file of ["routers/finance.ts", "paymentGatewayWebhook.ts"]) {
+    expect(readFileSync(new URL(`./${file}`, import.meta.url), "utf8"), `${file} usa a regra única`).toMatch(/canCommissionBecomeDue\(/);
+  }
+});

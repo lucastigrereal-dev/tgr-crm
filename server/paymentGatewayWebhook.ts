@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
-import { buildInstallmentCommissions } from "./commissionAutomation";
+import { buildInstallmentCommissions, canCommissionBecomeDue } from "./commissionAutomation";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
@@ -82,8 +82,8 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
             const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
             const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
             const commissionNeedsPolicy = Boolean(context?.contract && context.proposal && context.capture && Number(context.proposal.downPaymentAmount) > 0);
-            commissionBlocked = commissionNeedsPolicy && !policy;
-            if (commissionNeedsPolicy && policy && context?.contract && context.proposal && context.capture) {
+            commissionBlocked = commissionNeedsPolicy && !canCommissionBecomeDue(context?.contract?.status, policy);
+            if (commissionNeedsPolicy && policy && context?.contract && canCommissionBecomeDue(context.contract.status, policy) && context.proposal && context.capture) {
               const existingCommission = (await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, billing.installment.id)).limit(1))[0];
               if (!existingCommission) {
                 const paymentMethod = billing.billing.type === "pix" ? "pix" : "boleto";
@@ -111,7 +111,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   await recordAudit(null, "billing_record", billing?.billing.id ?? paymentId, `gateway_${event.toLowerCase()}`, `Webhook Asaas recebido para pagamento ${paymentId}.`);
   if (billing && installmentPaid) {
     if (commissionBlocked) {
-      await recordAudit(null, "installment", billing.installment.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada.");
+      await recordAudit(null, "installment", billing.installment.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada ou o contrato não está ativo.");
       await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, reason: "incomplete_project_policy", source: "asaas" } });
     }
     await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: installmentPaymentAmount, contractId: billing.installment.contractId, ...(settledCustomerId ? { customerId: settledCustomerId } : {}), sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked } });

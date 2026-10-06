@@ -9,3 +9,9 @@ it("sem política configurada não inventa multa nem devolução (PRD Apêndice 
 it("política configurada continua calculando e marca policyConfigured", () => {
   expect(simulateCancellation({ contractAmount: 10000, paidAmount: 2000, policy: { refundMode: "full" } })).toMatchObject({ refund: 2000, penalty: 0, policyConfigured: true, reason: null });
 });
+it("política parcial conta como não configurada (não completa com padrão inventado)", () => {
+  for (const policy of [{ penaltyBase: "paid" as const }, { penaltyRate: 0 }, { penaltyRate: 0.1 }, { refundMode: "after_penalty" as const }]) {
+    expect(simulateCancellation({ contractAmount: 10000, paidAmount: 2000, policy }).policyConfigured, JSON.stringify(policy)).toBe(false);
+  }
+  expect(simulateCancellation({ contractAmount: 10000, paidAmount: 2000, policy: { refundMode: "after_penalty", penaltyRate: 0.1 } }).policyConfigured).toBe(true);
+});
