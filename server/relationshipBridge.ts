@@ -65,8 +65,12 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
       const attempts = (entries.get(key)?.attempts ?? 0) + 1;
       entries.set(key, { attempts, nextAt: now() + Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_CAP_MS), item });
     },
+    /** Guarda o item sem contar tentativa (vence já): evento lido mas barrado por um mais antigo da mesma chave de ordem. */
+    defer(key: K, item: V) { if (!entries.has(key)) entries.set(key, { attempts: 0, nextAt: now(), item }); },
     remove(key: K) { entries.delete(key); },
     scheduled(key: K) { return entries.has(key); },
+    /** Todos os itens pendentes (qualquer backoff). */
+    items(): V[] { return Array.from(entries.values()).map(entry => entry.item); },
     nextAt(key: K) { return entries.get(key)?.nextAt; },
     /** Itens cujo backoff venceu, do mais antigo para o mais novo. */
     due(): V[] {
@@ -74,6 +78,44 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
       return Array.from(entries.values()).filter(entry => entry.nextAt <= t).sort((a, b) => a.nextAt - b.nextAt).map(entry => entry.item);
     },
   };
+}
+
+/**
+ * Ordem por chave (RED TEAM R1): um evento NÃO é tentado enquanto houver um evento MAIS ANTIGO, da mesma chave de ordem
+ * (ex.: contrato), ainda pendente no backoff. Chaves sem relação seguem andando (sem inanição).
+ * Nunca perde evento: o cursor só avança depois que o evento foi entregue/terminal OU registrado no backoff
+ * (falha em qualquer etapa, inclusive leitura de recibo, entrega ou gravação do recibo, vai para o retry com backoff).
+ */
+export async function drainOrdered<E extends { id: number }>(opts: {
+  retry: ReturnType<typeof createRetryBackoff<number, E>>;
+  fresh: E[];
+  orderKey: (event: E) => string;
+  attempt: (event: E) => Promise<boolean>;
+  advance: (id: number) => void;
+  onError?: (error: unknown) => void;
+}): Promise<number> {
+  const { retry, orderKey } = opts;
+  let delivered = 0;
+  const blocked = (event: E) => { const key = orderKey(event); return retry.items().some(other => other.id < event.id && orderKey(other) === key); };
+  const run = async (event: E) => {
+    try { return await opts.attempt(event); } catch (error) {
+      opts.onError?.(error);
+      retry.fail(event.id, event); // falha inesperada: continua no conjunto de retry, com backoff
+      return false;
+    }
+  };
+  for (const event of retry.due().sort((a, b) => a.id - b.id)) {
+    if (blocked(event)) continue;
+    if (await run(event)) delivered += 1;
+  }
+  for (const event of opts.fresh) {
+    if (!retry.scheduled(event.id)) {
+      if (blocked(event)) retry.defer(event.id, event);
+      else if (await run(event)) delivered += 1;
+    }
+    opts.advance(event.id);
+  }
+  return delivered;
 }
 
 export function isContentRejection(status: number) {
@@ -394,12 +436,12 @@ function startContractStatePump(
           gt(domainEvents.id, cursor),
         ))
         .orderBy(asc(domainEvents.id)).limit(batchSize);
-      for (const event of retry.due()) if (await attempt(event)) delivered += 1;
-      for (const event of events) {
-        cursor = Math.max(cursor, event.id);
-        if (retry.scheduled(event.id)) continue;
-        if (await attempt(event)) delivered += 1;
-      }
+      delivered = await drainOrdered({
+        retry, fresh: events, onError: options.onError,
+        orderKey: event => "contract:" + event.aggregateId,
+        attempt,
+        advance: id => { cursor = Math.max(cursor, id); },
+      });
       return delivered;
     } catch (error) {
       // Falha fora da entrega (ex.: banco indisponível) não pode virar unhandled rejection no timer e derrubar o CRM.
