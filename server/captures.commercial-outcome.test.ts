@@ -52,14 +52,17 @@ describe("captures.recordCommercialOutcome", () => {
     expect(recordDomainEvent).toHaveBeenCalledWith({ eventName: "capture.commercial_outcome.recorded", aggregateType: "capture", aggregateId: 91, actorUserId: 17, payload: { outcome: "vendeu" } });
   });
 
-  it("CAIU EM MESA pelo admin com motivo: evento leva o motivo; sem efeitos de venda", async () => {
+  it("CAIU EM MESA pelo admin com motivo: evento leva só o outcome (motivo fica nas colunas); sem efeitos de venda", async () => {
     const f = fixture([capture({ closerId: 5 })]);
     await expect(caller("admin", 1).captures.recordCommercialOutcome({ id: 91, outcome: "caiu_em_mesa", reason: "  Cliente desistiu na mesa  " })).resolves.toMatchObject({ success: true, outcome: "caiu_em_mesa" });
     expect(f.set).toHaveBeenCalledWith(expect.objectContaining({ commercialOutcome: "caiu_em_mesa", commercialOutcomeReason: "Cliente desistiu na mesa", commercialOutcomeByUserId: 1 }));
     expect(f.update).toHaveBeenCalledTimes(1);
     expect(f.insert).not.toHaveBeenCalled();
     expect(recordDomainEvent).toHaveBeenCalledTimes(1);
-    expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.commercial_outcome.recorded", payload: { outcome: "caiu_em_mesa", reason: "Cliente desistiu na mesa" } }));
+    expect(recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "capture.commercial_outcome.recorded", payload: { outcome: "caiu_em_mesa" } }));
+    // PII: o motivo (texto livre) fica só nas colunas da captação; nunca no evento nem no resumo de auditoria.
+    expect(JSON.stringify((recordDomainEvent as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("desistiu");
+    expect(JSON.stringify((recordAudit as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("desistiu");
   });
 
   it.each([undefined, null, "", "  ", " ab "])("CAIU EM MESA exige motivo com ≥3 caracteres úteis (%j)", async reason => {

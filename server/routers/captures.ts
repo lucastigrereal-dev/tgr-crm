@@ -390,8 +390,8 @@ export const capturesRouter = router({
       throw rejectChange();
     }
     const label = input.outcome === "vendeu" ? "VENDEU" : "CAIU EM MESA";
-    await recordAudit(ctx.user.id, "capture", input.id, "commercial_outcome_recorded", `Resultado comercial ${label} registrado${reason ? `: ${reason}` : ""}.`);
-    await recordDomainEvent({ eventName: "capture.commercial_outcome.recorded", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: input.outcome === "caiu_em_mesa" ? { outcome: input.outcome, reason } : { outcome: input.outcome } });
+    await recordAudit(ctx.user.id, "capture", input.id, "commercial_outcome_recorded", `Resultado comercial ${label} registrado.`);
+    await recordDomainEvent({ eventName: "capture.commercial_outcome.recorded", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { outcome: input.outcome } });
     return { success: true as const, alreadyRecorded: false as const, outcome: input.outcome, recordedAt };
   }),
 
