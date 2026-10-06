@@ -8,25 +8,30 @@ vi.mock("./revenueQualitySync", () => syncMocks);
 
 import { commissionsRouter } from "./routers/commissions";
 
-function makeDb({ sellerExists = true, sellerEligible = true, campaignExists = true, opportunityExists = true, contractExists = true, contractStatus = "active", saleValidated = true, existingCommission, insertError }: { contractStatus?: string; saleValidated?: boolean; sellerExists?: boolean; sellerEligible?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
+function makeDb({ sellerExists = true, sellerEligible = true, campaignExists = true, opportunityExists = true, contractExists = true, contractStatus = "active", saleValidated = true, txContractStatus, txSaleValidated, existingCommission, insertError }: { contractStatus?: string; saleValidated?: boolean; txContractStatus?: string; txSaleValidated?: boolean; sellerExists?: boolean; sellerEligible?: boolean; campaignExists?: boolean; opportunityExists?: boolean; contractExists?: boolean; existingCommission?: unknown; insertError?: unknown } = {}) {
   const inserted: unknown[] = [];
-  const select = vi.fn(() => ({
+  const events: string[] = [];
+  // `inTx`: dentro da transação o teste pode simular a corrida (contrato cancelado/invalidado entre a pré-checagem e a trava).
+  const makeSelect = (inTx: boolean) => vi.fn(() => ({
     from: vi.fn((table: unknown) => ({
-      where: vi.fn(() => ({
-        limit: vi.fn(async () => {
+      where: vi.fn(() => {
+        const rows = () => {
           if (table === users) return sellerExists && sellerEligible ? [{ id: 55 }] : [];
           if (table === salesCampaigns) return campaignExists ? [{ id: 10 }] : [];
           if (table === opportunities) return opportunityExists ? [{ id: 20 }] : [];
-          if (table === contracts) return contractExists ? [{ id: 30, status: contractStatus }] : [];
-          if (table === saleValidations) return saleValidated ? [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] : [];
+          if (table === contracts) return contractExists ? [{ id: 30, status: inTx ? (txContractStatus ?? contractStatus) : contractStatus }] : [];
+          if (table === saleValidations) return (inTx ? (txSaleValidated ?? saleValidated) : saleValidated) ? [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] : [];
           if (table === salesCommissions) return existingCommission ? [existingCommission] : [];
           return [];
-        }),
-      })),
+        };
+        return { limit: vi.fn(() => Object.assign(Promise.resolve(rows()), { for: vi.fn(async (mode: string) => { events.push(`lock:${inTx ? "tx" : "db"}:${mode}:${table === contracts ? "contracts" : "other"}`); return rows(); }) })) };
+      }),
     })),
   }));
-  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => { if (insertError) throw insertError; return [{ id: 901 }]; } }; }) }));
-  return { db: { select, insert }, inserted, insert };
+  const insert = vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: async () => { if (insertError) throw insertError; events.push("insert"); return [{ id: 901 }]; } }; }) }));
+  const txObject = { select: makeSelect(true), insert };
+  const transaction = vi.fn(async (callback: (tx: typeof txObject) => Promise<unknown>) => { events.push("begin"); const result = await callback(txObject); events.push("commit"); return result; });
+  return { db: { select: makeSelect(false), insert: vi.fn(() => { throw new Error("insert fora da transação"); }), transaction }, inserted, insert, events, transaction };
 }
 
 function caller() {
@@ -132,5 +137,29 @@ describe("integridade do lançamento manual de comissão", () => {
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
-});
 
+  it("RED TEAM P3-5: checagem de validação/cancelamento e insert na MESMA transação, com o contrato travado FOR UPDATE", async () => {
+    const fixture = makeDb();
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(caller().record(baseInput)).resolves.toEqual({ id: 901, amount: 100 });
+    expect(fixture.transaction).toHaveBeenCalledTimes(1);
+    expect(fixture.events).toEqual(["begin", "lock:tx:update:contracts", "insert", "commit"]);
+  });
+
+  it("RED TEAM P3-5: contrato cancelado ENTRE a pré-checagem e a trava => recusa, sem insert, sem efeitos", async () => {
+    const fixture = makeDb({ contractStatus: "active", txContractStatus: "cancelled" });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(caller().record(baseInput)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("COMMISSION_REQUIRES_VALIDATED_SALE") });
+    expect(fixture.inserted).toEqual([]);
+    expect(fixture.events).not.toContain("insert");
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("RED TEAM P3-5: venda deixa de estar validada na trava => recusa", async () => {
+    const fixture = makeDb({ saleValidated: true, txSaleValidated: false });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(caller().record(baseInput)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(fixture.inserted).toEqual([]);
+  });
+});
