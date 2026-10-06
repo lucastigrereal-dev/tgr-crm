@@ -117,7 +117,7 @@ function PortfolioOwnerCard({ assignments, candidates, candidateTruncated, candi
 function DocumentsCard({
   documents, canSign, signPending, onSign, electronicConfigured, electronicEnvironment, envelopes, electronicPending, onStartElectronic, onReconcile,
 }: {
-  documents: Array<{ id: number; storageKey: string; filename: string; category: string; signed: boolean }>;
+  documents: Array<{ id: number; storageKey: string; filename: string; category: string; signed: boolean; signedArtifact: boolean }>;
   canSign: boolean;
   signPending: boolean;
   onSign: (documentId: number) => void;

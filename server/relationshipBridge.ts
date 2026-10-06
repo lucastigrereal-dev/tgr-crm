@@ -50,6 +50,32 @@ export function createRejectionTracker<K>(windowMs: number, now: () => number = 
     clear(key: K) { seen.delete(key); },
   };
 }
+/**
+ * Backoff exponencial por evento (em memória). Falha não-terminal (5xx/rede/chave errada/recusa sem código ainda não desistida):
+ * o evento entra aqui, sai da frente da fila (o cursor segue) e só é retentado quando vence: 5s, 10s, 20s... teto 10 min.
+ * Sem isso um evento preso era martelado a cada tick e, com o cursor parado nele, os 500 primeiros presos escondiam os novos.
+ * ponytail: zera no restart (reler é seguro: a entrega é idempotente pelo recibo).
+ */
+export const RETRY_BASE_MS = 5_000;
+export const RETRY_CAP_MS = 10 * 60_000;
+export function createRetryBackoff<K, V>(now: () => number = Date.now) {
+  const entries = new Map<K, { attempts: number; nextAt: number; item: V }>();
+  return {
+    fail(key: K, item: V) {
+      const attempts = (entries.get(key)?.attempts ?? 0) + 1;
+      entries.set(key, { attempts, nextAt: now() + Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_CAP_MS), item });
+    },
+    remove(key: K) { entries.delete(key); },
+    scheduled(key: K) { return entries.has(key); },
+    nextAt(key: K) { return entries.get(key)?.nextAt; },
+    /** Itens cujo backoff venceu, do mais antigo para o mais novo. */
+    due(): V[] {
+      const t = now();
+      return Array.from(entries.values()).filter(entry => entry.nextAt <= t).sort((a, b) => a.nextAt - b.nextAt).map(entry => entry.item);
+    },
+  };
+}
+
 export function isContentRejection(status: number) {
   return status === 400 || status === 409 || status === 422;
 }
@@ -304,7 +330,8 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
 export interface RelationshipBridgePump { tick(): Promise<number>; stop(): void; }
 export type SalesCancellationBridgePump = RelationshipBridgePump;
 
-type PumpOptions = { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number };
+type PumpOptions = { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number };
+type DomainEventRow = typeof domainEvents.$inferSelect;
 
 function startContractStatePump(
   target: ContractStateTarget,
@@ -315,13 +342,44 @@ function startContractStatePump(
   const url = safeEndpoint(endpoint, target);
   if (!integrationKey.trim()) throw new Error(target.label + " CRM integration key required");
   const intervalMs = options.intervalMs ?? 5_000;
+  const now = options.now ?? Date.now;
+  const batchSize = options.batchSize ?? 500;
   let running = false;
   let stopped = false;
-  // Cursor em memória: sem ele o pump relia sempre os mesmos 500 primeiros eventos e parava de entregar.
-  // ponytail: zera no restart (reler é seguro, a entrega é idempotente pelo recibo); para no 1º evento com
-  // falha para tentar de novo. Teto: 500 eventos seguidos falhando sempre ainda travam a fila.
+  // Cursor em memória: avança sobre TODO evento lido (inclusive os que falharam). Evento com falha não-terminal vai para o
+  // backoff por evento (5s dobrando, teto 10 min) e é retentado só quando vence, sem ficar na frente da fila: antes o cursor
+  // parava no 1º falho, ele era reenviado a cada tick e 500 presos escondiam todo evento novo.
+  // ponytail: tudo zera no restart (reler é seguro, a entrega é idempotente pelo recibo).
   let cursor = 0;
+  const retry = createRetryBackoff<number, DomainEventRow>(now);
   const rejections = createRejectionTracker<string>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: target.codedRejections });
+
+  /** Tenta entregar um evento. Devolve true se entregou agora. Falha não-terminal agenda o retry. */
+  async function attempt(event: DomainEventRow): Promise<boolean> {
+    const payload = objectPayload(event.payload);
+    const state = event.eventName === "sale.validated" ? "validated" : payload.status;
+    const contractId = Number(event.aggregateId);
+    if (!((state === "active" || state === "cancelled" || state === "validated") && target.statuses.includes(state)
+      && Number.isInteger(contractId) && contractId > 0)) { retry.remove(event.id); return false; }
+    const receiptKey = target.receiptPrefix + contractId + ":" + state;
+    try {
+      const result = await deliverContractState(target, url, integrationKey, contractId, state, event.occurredAt, payload);
+      rejections.clear(receiptKey);
+      retry.remove(event.id);
+      return result === "delivered";
+    } catch (error) {
+      options.onError?.(error);
+      if (rejections.record(receiptKey, error)) {
+        await recordAudit(null, "contract", contractId, actionsFor(target, state).rejected,
+          rejectionReceiptSummary(eventNameFor(state), target.label, error as DeliveryRejectedError),
+          { idempotencyKey: receiptKey });
+        retry.remove(event.id);
+      } else {
+        retry.fail(event.id, event);
+      }
+      return false;
+    }
+  }
 
   async function tick() {
     if (running || stopped) return 0;
@@ -335,34 +393,13 @@ function startContractStatePump(
           inArray(domainEvents.eventName, ["contract.created", "contract.status.updated", "sale.validated"]),
           gt(domainEvents.id, cursor),
         ))
-        .orderBy(asc(domainEvents.id)).limit(500);
-      let advanceTo = cursor;
-      let blocked = false;
+        .orderBy(asc(domainEvents.id)).limit(batchSize);
+      for (const event of retry.due()) if (await attempt(event)) delivered += 1;
       for (const event of events) {
-        const payload = objectPayload(event.payload);
-        const state = event.eventName === "sale.validated" ? "validated" : payload.status;
-        const contractId = Number(event.aggregateId);
-        if ((state === "active" || state === "cancelled" || state === "validated") && target.statuses.includes(state)
-          && Number.isInteger(contractId) && contractId > 0) {
-          const receiptKey = target.receiptPrefix + contractId + ":" + state;
-          try {
-            const result = await deliverContractState(target, url, integrationKey, contractId, state, event.occurredAt, payload);
-            if (result === "delivered") delivered += 1;
-            rejections.clear(receiptKey);
-          } catch (error) {
-            options.onError?.(error);
-            if (rejections.record(receiptKey, error)) {
-              await recordAudit(null, "contract", contractId, actionsFor(target, state).rejected,
-                rejectionReceiptSummary(eventNameFor(state), target.label, error as DeliveryRejectedError),
-                { idempotencyKey: receiptKey });
-            } else {
-              blocked = true;
-            }
-          }
-        }
-        if (!blocked) advanceTo = event.id;
+        cursor = Math.max(cursor, event.id);
+        if (retry.scheduled(event.id)) continue;
+        if (await attempt(event)) delivered += 1;
       }
-      cursor = advanceTo;
       return delivered;
     } catch (error) {
       // Falha fora da entrega (ex.: banco indisponível) não pode virar unhandled rejection no timer e derrubar o CRM.
