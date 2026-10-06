@@ -124,13 +124,13 @@ describe("pump: seleção de eventos sale.validated", () => {
     expect(mockedFetch).not.toHaveBeenCalled();
   });
 
-  it("payload sem os três instantes: recibo not_applicable (não trava a fila nem inventa data)", async () => {
+  it("payload sem os portões: recibo de recusa visível (DLQ), não trava a fila nem inventa data", async () => {
     dbWith([[validatedEvent(12, { contractId: 303, validatedAt: facts.validatedAt })], [], ...lineageRows()]);
     mockedRecordAudit.mockResolvedValue(undefined);
     const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "sales-key", { autoStart: false });
     try { await pump.tick(); } finally { pump.stop(); }
     expect(mockedFetch).not.toHaveBeenCalled();
-    expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_not_applicable", expect.stringContaining("sale.validated"), { idempotencyKey: "sales-contract:303:validated" });
+    expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_rejected", expect.stringContaining("sale.validated sem os portões"), { idempotencyKey: "sales-contract:303:validated" });
   });
 
   it("recusa de conteúdo repetida (409 x5) vira recibo terminal próprio; 503 nunca descarta", async () => {

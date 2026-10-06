@@ -297,8 +297,9 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
   if (status === "validated") {
     const facts = saleValidatedFactsFrom(eventPayload);
     if (!facts) {
-      await recordAudit(null, "contract", contractId, actions.notApplicable, "sale.validated sem os portões válidos (instantes, atores opacos, documentRef opaco); entrega ao " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
-      return "not_applicable";
+      // Red Team P2: fato inválido é recusa visível (DLQ), não "não aplicável"; o payload é imutável, retry não ajudaria.
+      await recordAudit(null, "contract", contractId, actions.rejected, "sale.validated sem os portões válidos (instantes, atores opacos, documentRef opaco); não enviado ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
+      return "rejected";
     }
     body = buildSaleValidatedBody(lineage, contractId, occurredAt, facts);
   } else {
