@@ -38,6 +38,8 @@ describe("idempotência concorrente de baixa de parcela", () => {
         .mockReturnValueOnce(query([{ id: 41, opportunityId: 51, downPaymentAmount: "1000.00" }]))
         .mockReturnValueOnce(query([{ id: 51 }]))
         .mockReturnValueOnce(captureQuery)
+        // ADR-007: consulta de venda validada (sale_validations) antes da política; sem linha = não validada.
+        .mockReturnValueOnce(query([]))
         .mockReturnValueOnce(query([])),
       transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
     };

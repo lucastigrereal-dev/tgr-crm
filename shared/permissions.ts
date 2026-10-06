@@ -30,6 +30,10 @@ export const capabilityMatrix = {
   "contract.cancel.execute": ["admin"],
   // PRD Apêndice B #11: ativar contrato (papel assinado e anexado) é registro da administração; o CRM não tem "manager".
   "contract.activate": ["admin"],
+  // ADR-007 (V6): o papel "gerente" do CRM é MAPEADO para `admin` (o CRM não tem papel manager; seller = closer não tem).
+  // POLICY_PENDING CRM_MANAGER_ROLE: se o CRM ganhar papel "gerente" próprio, só esta matriz muda.
+  "sale.payment.confirm": ["admin"],
+  "sale.validate": ["admin"],
   "document.read": ["admin", "seller", "finance", "service"],
   "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],

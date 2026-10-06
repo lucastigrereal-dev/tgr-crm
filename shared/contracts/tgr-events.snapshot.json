@@ -6,6 +6,8 @@
       "contract.created.v2",
       "contract.status.updated",
       "contract.cancellation.executed",
+      "sale.payment.confirmed",
+      "sale.validated",
       "installment.paid",
       "commission.created",
       "commission.status.updated",
@@ -38,6 +40,20 @@
         "cancelledInstallments",
         "cancelledCommissions",
         "financialEntries"
+      ],
+      "sale.payment.confirmed": [
+        "contractId",
+        "saleId",
+        "confirmedAt",
+        "confirmedByUserId"
+      ],
+      "sale.validated": [
+        "contractId",
+        "saleId",
+        "validatedAt",
+        "validatedByUserId",
+        "paymentConfirmedAt",
+        "signedAt"
       ],
       "installment.paid": [
         "installmentId",
@@ -114,6 +130,60 @@
           "source": "sales-command"
         }
       }
+    },
+    "saleValidatedSampleEnvelope": {
+      "source": "crm",
+      "correlationId": "crm-fin-4243",
+      "project": {
+        "externalKey": "SYN-PONTA-NEGRA",
+        "name": "SYN Ponta Negra",
+        "timezone": "America/Recife"
+      },
+      "event": {
+        "contractVersion": "tgr.events.v1",
+        "eventId": 4243,
+        "eventName": "sale.validated",
+        "aggregate": {
+          "type": "contract",
+          "id": "9001"
+        },
+        "actorUserId": 1,
+        "occurredAt": "2026-10-05T12:00:00.000Z",
+        "payload": {
+          "contractId": 9001,
+          "saleId": "00000000-0000-4000-8000-000000000001",
+          "validatedAt": "2026-10-05T12:00:00.000Z",
+          "validatedByUserId": 1,
+          "paymentConfirmedAt": "2026-10-04T12:00:00.000Z",
+          "signedAt": "2026-10-04T18:00:00.000Z"
+        }
+      }
+    },
+    "paymentConfirmedSampleEnvelope": {
+      "source": "crm",
+      "correlationId": "crm-fin-4244",
+      "project": {
+        "externalKey": "SYN-PONTA-NEGRA",
+        "name": "SYN Ponta Negra",
+        "timezone": "America/Recife"
+      },
+      "event": {
+        "contractVersion": "tgr.events.v1",
+        "eventId": 4244,
+        "eventName": "sale.payment.confirmed",
+        "aggregate": {
+          "type": "contract",
+          "id": "9001"
+        },
+        "actorUserId": 1,
+        "occurredAt": "2026-10-05T12:00:00.000Z",
+        "payload": {
+          "contractId": 9001,
+          "saleId": "00000000-0000-4000-8000-000000000001",
+          "confirmedAt": "2026-10-04T12:00:00.000Z",
+          "confirmedByUserId": 1
+        }
+      }
     }
   },
   "relationship": {
@@ -165,6 +235,27 @@
     ]
   },
   "sales": {
+    "eventNames": [
+      "crm.contract.cancelled.v1",
+      "crm.sale.validated.v1"
+    ],
+    "saleValidatedSampleBody": {
+      "eventId": "crm-sale-9001-validated",
+      "eventName": "crm.sale.validated.v1",
+      "source": "crm",
+      "correlationId": "SYN-corr-1",
+      "occurredAt": "2026-10-05T12:00:00.000Z",
+      "project": {
+        "externalKey": "SYN-PONTA-NEGRA",
+        "name": "SYN Ponta Negra",
+        "timezone": "America/Recife"
+      },
+      "saleId": "00000000-0000-4000-8000-000000000001",
+      "contractId": "9001",
+      "validatedAt": "2026-10-05T12:00:00.000Z",
+      "paymentConfirmedAt": "2026-10-04T12:00:00.000Z",
+      "signedAt": "2026-10-04T18:00:00.000Z"
+    },
     "cancellationSampleBody": {
       "eventId": "crm-contract-9001-cancelled",
       "eventName": "crm.contract.cancelled.v1",

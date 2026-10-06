@@ -28,6 +28,9 @@ const ACTIONS: Array<{ name: string; capability: Capability; allowed: Role[]; ca
   // PRD Apêndice B #11: ativação do contrato é registro da administração (seller passava antes).
   { name: "contracts.updateStatus(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.updateStatus({ id: 1, status: "active" }) },
   { name: "contracts.create(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.create({ number: "SYN-RBAC-1", customerId: 1, status: "active", totalAmount: 1000, firstDueDate: "2026-11-01", installmentCount: 1 }) },
+  // ADR-007 (V6): "gerente" do CRM = admin (CRM_MANAGER_ROLE pendente). Closer (seller), finance e service NÃO confirmam pagamento nem validam venda.
+  { name: "saleValidation.confirmPayment", capability: "sale.payment.confirm", allowed: ["admin"], call: c => c.saleValidation.confirmPayment({ contractId: 1, note: "SYN conferido" }) },
+  { name: "saleValidation.validateSale", capability: "sale.validate", allowed: ["admin"], call: c => c.saleValidation.validateSale({ contractId: 1 }) },
   { name: "contracts.markDocumentSigned", capability: "document.sign", allowed: ["admin"], call: c => c.contracts.markDocumentSigned({ documentId: 1 }) },
   { name: "electronicSignatures.start", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.start({ contractId: 1, contractDocumentId: 1 }) },
   { name: "electronicSignatures.reconcile", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.reconcile({ envelopeId: 1 }) },
