@@ -435,6 +435,12 @@ export const saleValidations = mysqlTable("sale_validations", {
   validatedAt: timestamp("validatedAt"),
   validatedByUserId: int("validatedByUserId"),
   signedDocumentId: int("signedDocumentId"),
+  // KAN-31 V6 (0045): instantes de cada portão congelados na validação final + referência opaca do documento
+  // (crm-doc:<contrato>:<documento>; nunca URL, token, storageKey ou dado do cliente).
+  contractGeneratedAt: timestamp("contractGeneratedAt"),
+  contractSignedAt: timestamp("contractSignedAt"),
+  documentStoredAt: timestamp("documentStoredAt"),
+  documentRef: varchar("documentRef", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [
@@ -457,6 +463,7 @@ export const saleValidationEvents = mysqlTable("sale_validation_events", {
   reason: text("reason"),
   documentRef: varchar("documentRef", { length: 512 }),
   correlationId: varchar("correlationId", { length: 120 }).notNull(),
+  externalSaleId: varchar("externalSaleId", { length: 64 }), // KAN-31 V6 (0045): venda do Sales Command, quando houver
 }, table => [
   index("sve_contract_idx").on(table.contractId, table.occurredAt),
   foreignKey({ name: "sve_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),

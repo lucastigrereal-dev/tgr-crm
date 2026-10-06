@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, contractDocuments, contracts, customers, domainEvents, saleValidationEvents, saleValidations, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { saleValidatedFactsFrom } from "./relationshipBridge";
 
 // ADR-007 (V6) contra MySQL descartável: venda VALIDADA em uma transação, trilha append-only, rejeição auditada.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
@@ -132,8 +133,21 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     expect(JSON.parse(String(statusEvents[0].payload))).toEqual({ status: "active", cancellationReason: null });
     const validated = await eventsOf(contractId, "sale.validated");
     expect(validated).toHaveLength(1);
-    expect(JSON.parse(String(validated[0].payload))).toMatchObject({ contractId, saleId, validatedByUserId: adminId, validatedAt: expect.any(String), paymentConfirmedAt: expect.any(String), signedAt: expect.any(String) });
+    expect(JSON.parse(String(validated[0].payload))).toMatchObject({ contractId, saleId, validatedByUserId: adminId, validatedAt: expect.any(String), paymentConfirmedAt: expect.any(String), contractSignedAt: expect.any(String) });
     expect(JSON.stringify(validated[0].payload)).not.toContain("assinado.pdf");
+    // KAN-31 V6: cada portão com instante e ator, documentRef opaco, e o payload passa nas regras do Sales.
+    const payload = JSON.parse(String(validated[0].payload));
+    expect(payload).toMatchObject({ validatedBy: String(adminId), paymentConfirmedBy: String(adminId), documentRef: `crm-doc:${contractId}:${documentIds[1]}` });
+    expect(saleValidatedFactsFrom(payload)).not.toBeNull();
+    expect(fact).toMatchObject({ documentRef: `crm-doc:${contractId}:${documentIds[1]}` });
+    for (const key of ["contractGeneratedAt", "contractSignedAt", "documentStoredAt"] as const) {
+      expect(fact[key]).toBeInstanceOf(Date);
+      expect(fact[key]!.getTime()).toBeLessThanOrEqual(fact.validatedAt!.getTime());
+      expect(payload[key]).toBe(fact[key]!.toISOString());
+    }
+    expect(fact.contractGeneratedAt!.getTime()).toBeLessThanOrEqual(fact.documentStoredAt!.getTime());
+    // trilha e audit carregam externalSaleId
+    for (const step of await trail(contractId)) expect(step.externalSaleId).toBe(saleId);
     expect(await svc.isSaleValidated(db, contractId)).toBe(true);
 
     expect(await svc.validateSale(adminId, { contractId })).toMatchObject({ success: true, alreadyValidated: true });

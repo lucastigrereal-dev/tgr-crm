@@ -316,6 +316,13 @@
       "when": 1791318876938,
       "tag": "0044_sale_validation_v6",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "5",
+      "when": 1791322971964,
+      "tag": "0045_sale_validation_gate_snapshot",
+      "breakpoints": true
     }
   ]
 }
