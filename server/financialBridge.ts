@@ -4,7 +4,7 @@ import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { createRejectionTracker, createRetryBackoff, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
+import { createRejectionTracker, createRetryBackoff, drainOrdered, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
 
 export const FINANCIAL_EVENT_NAMES = [
   "contract.created",
@@ -62,6 +62,17 @@ async function alreadyHandled(db: NonNullable<Awaited<ReturnType<typeof getDb>>>
   return Boolean(receipt);
 }
 
+/** Chave de ordem do Financial: contrato (payload.contractId, ou o agregado quando ele é o contrato); senão o agregado. */
+export function financialOrderKey(event: { aggregateType: string; aggregateId: string; payload: string | null }) {
+  try {
+    const parsed = event.payload ? JSON.parse(event.payload) as Record<string, unknown> : {};
+    const raw = parsed?.contractId;
+    if (typeof raw === "number" && Number.isInteger(raw)) return "contract:" + raw;
+    if (typeof raw === "string" && /^\d+$/.test(raw)) return "contract:" + Number(raw);
+  } catch { /* payload ilegível: cai no agregado */ }
+  return event.aggregateType === "contract" ? "contract:" + Number(event.aggregateId) : event.aggregateType + ":" + event.aggregateId;
+}
+
 export interface FinancialBridgePump { tick(): Promise<number>; stop(): void; }
 
 type DomainEventRow = typeof domainEvents.$inferSelect;
@@ -90,8 +101,8 @@ export function startFinancialBridgePump(
   const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: true });
 
   async function attempt(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, event: DomainEventRow): Promise<boolean> {
-    if (await alreadyHandled(db, event.id)) { retry.remove(event.id); return false; }
     try {
+      if (await alreadyHandled(db, event.id)) { retry.remove(event.id); return false; }
       const body = financialBridgeEnvelope(event, project);
       const contractIdRaw = body.event.payload.contractId;
       const contractId = typeof contractIdRaw === "number"
@@ -158,12 +169,12 @@ export function startFinancialBridgePump(
           gt(domainEvents.id, cursor),
         ))
         .orderBy(asc(domainEvents.id)).limit(batchSize);
-      for (const event of retry.due()) if (await attempt(db, event)) delivered += 1;
-      for (const row of events) {
-        cursor = Math.max(cursor, row.event.id);
-        if (retry.scheduled(row.event.id)) continue;
-        if (await attempt(db, row.event)) delivered += 1;
-      }
+      delivered = await drainOrdered({
+        retry, fresh: events.map(row => row.event), onError: options.onError,
+        orderKey: financialOrderKey,
+        attempt: event => attempt(db, event),
+        advance: id => { cursor = Math.max(cursor, id); },
+      });
       return delivered;
     } catch (error) {
       options.onError?.(error);

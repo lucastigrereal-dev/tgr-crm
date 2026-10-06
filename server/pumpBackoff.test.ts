@@ -7,8 +7,8 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { auditLogs, contracts, domainEvents } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { startFinancialBridgePump } from "./financialBridge";
-import { createRetryBackoff, startSalesCancellationBridgePump } from "./relationshipBridge";
+import { financialOrderKey, startFinancialBridgePump } from "./financialBridge";
+import { createRetryBackoff, startRelationshipBridgePump, startSalesCancellationBridgePump } from "./relationshipBridge";
 
 // RED TEAM P2: evento com 5xx sem code não pode (a) ser martelado a cada tick nem (b) travar os eventos novos atrás dele.
 const mockedGetDb = vi.mocked(getDb);
@@ -119,6 +119,73 @@ describe("Financial pump: backoff por evento e sem inanição", () => {
       expect(attempts(1)).toBe(1);
     } finally { pump.stop(); }
   });
+
+  it("R2: falha transitória na leitura do recibo (alreadyHandled) não perde o evento: é entregue depois, sem restart", async () => {
+    fakeDb([mk(1), mk(2)]);
+    mockedRecordAudit.mockResolvedValue(undefined);
+    const db = await mockedGetDb() as unknown as { select: (...a: unknown[]) => unknown };
+    const realSelect = db.select.bind(db);
+    let boom = 1;
+    // a 1ª leitura de recibo por evento (tabela audit_logs, sem join) falha uma vez
+    mockedGetDb.mockResolvedValue({ select: (...a: unknown[]) => {
+      const builder = realSelect(...a) as { from: (t: unknown) => unknown };
+      return { from: (table: unknown) => { if (table === auditLogs && boom-- > 0) throw new Error("ER_LOCK_DEADLOCK"); return builder.from(table); } };
+    } } as never);
+    mockedFetch.mockResolvedValue(respond(201));
+    const onError = vi.fn();
+    const pump = startFinancialBridgePump("http://127.0.0.1:3400", "k", project, { autoStart: false, now, onError });
+    try {
+      await pump.tick();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(attempts(1)).toBe(0); // 1º falhou antes de entregar
+      expect(attempts(2)).toBe(1); // outro contrato (302): só o 1 falhou; o cursor já passou pelos dois
+      clock.t += 5_000;
+      await pump.tick();
+      expect(attempts(1)).toBe(1); // reentregue pelo retry, sem reiniciar o processo
+      expect(attempts(2)).toBe(1); // sem reentrega: já tinha sido entregue
+    } finally { pump.stop(); }
+  });
+
+  it("R2: falha ao gravar o recibo terminal (recusa codificada) mantém o evento no retry", async () => {
+    fakeDb([mk(1)]);
+    mockedRecordAudit.mockRejectedValueOnce(new Error("ER_CON_COUNT_ERROR")).mockResolvedValue(undefined);
+    mockedFetch.mockImplementation(async () => new Response(JSON.stringify({ code: "INVALID_CRM_EVENT" }), { status: 422 }));
+    const pump = startFinancialBridgePump("http://127.0.0.1:3400", "k", project, { autoStart: false, now, onError: vi.fn() });
+    try {
+      await pump.tick();
+      expect(mockedRecordAudit).toHaveBeenCalledTimes(1);
+      clock.t += 5_000;
+      await pump.tick(); // tenta de novo e agora grava o recibo terminal
+      expect(mockedRecordAudit).toHaveBeenCalledTimes(2);
+      clock.t += 3_600_000; await pump.tick();
+      expect(attempts(1)).toBe(2); // terminal: não volta mais
+    } finally { pump.stop(); }
+  });
+
+  it("ordem por contrato: evento mais novo do MESMO contrato espera o mais antigo; contrato sem relação segue", async () => {
+    const ev = (id: number, contractId: number) => ({ ...mk(id), aggregateId: String(contractId), payload: JSON.stringify({ status: "active", contractId }) });
+    fakeDb([ev(1, 500), ev(2, 500), ev(3, 600)]);
+    mockedRecordAudit.mockResolvedValue(undefined);
+    let down = true;
+    mockedFetch.mockImplementation(async (_url, init) => JSON.parse(String(init?.body)).event.eventId === 1 && down ? respond(503) : respond(201));
+    const order: number[] = [];
+    mockedFetch.mockImplementation(async (_url, init) => { const id = JSON.parse(String(init?.body)).event.eventId; order.push(id); return id === 1 && down ? respond(503) : respond(201); });
+    const pump = startFinancialBridgePump("http://127.0.0.1:3400", "k", project, { autoStart: false, now, onError: vi.fn() });
+    try {
+      await pump.tick();
+      expect(order).toEqual([1, 3]); // 2 não saiu na frente do 1
+      clock.t += 5_000; await pump.tick();
+      expect(order).toEqual([1, 3, 1]); // ainda preso
+      down = false; clock.t += 10_000; await pump.tick();
+      expect(order).toEqual([1, 3, 1, 1, 2]);
+    } finally { pump.stop(); }
+  });
+
+  it("financialOrderKey: contractId do payload, senão o agregado", () => {
+    expect(financialOrderKey({ aggregateType: "installment", aggregateId: "9", payload: JSON.stringify({ contractId: 303 }) })).toBe("contract:303");
+    expect(financialOrderKey({ aggregateType: "contract", aggregateId: "303", payload: JSON.stringify({ status: "active" }) })).toBe("contract:303");
+    expect(financialOrderKey({ aggregateType: "financial_entry", aggregateId: "7", payload: null })).toBe("financial_entry:7");
+  });
 });
 
 describe("Sales/Relationship pump: backoff por evento e cursor não fica preso", () => {
@@ -164,6 +231,71 @@ describe("Sales/Relationship pump: backoff por evento e cursor não fica preso",
       clock.t += 1; await pump.tick(); expect(attempts("303")).toBe(3);
       expect(attempts("304")).toBe(1);
       expect(limits.every(limit => limit === 1)).toBe(true);
+    } finally { pump.stop(); }
+  });
+
+  const evt = (id: number, contractId: number, status: "active" | "cancelled") => ({ id, eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(contractId), actorUserId: 1, payload: JSON.stringify({ status }), idempotencyKey: null, occurredAt: new Date("2026-09-26T13:00:00.000Z") });
+  const sentStates = () => mockedFetch.mock.calls.map(call => { const b = JSON.parse(String(call[1]?.body)); return b.contractId + ":" + b.eventName; });
+
+  it("R1: Relationship fora do ar, ativa e cancela o mesmo contrato; ao voltar, activated chega ANTES de cancelled", async () => {
+    // eventos aparecem em ticks diferentes (ativação já presa em backoff quando o cancelamento é lido)
+    const events = [evt(10, 303, "active")];
+    fakeDb(events as never);
+    mockedRecordAudit.mockResolvedValue(undefined);
+    let up = false;
+    mockedFetch.mockImplementation(async () => up ? respond(201) : respond(503));
+    const pump = startRelationshipBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, now, onError: vi.fn() });
+    try {
+      await pump.tick();                       // activated falha (backoff 5s)
+      events.push(evt(11, 303, "cancelled"));
+      events.push(evt(12, 999, "active"));     // outro contrato: não pode ficar na fila de espera
+      clock.t += 1_000; await pump.tick();     // cancelled lido; não pode ser tentado; contrato 999 tentado
+      expect(sentStates().filter(s => s.startsWith("303:crm.contract.cancelled"))).toEqual([]);
+      expect(sentStates().some(s => s.startsWith("999:"))).toBe(true);
+      up = true; mockedFetch.mockClear();
+      clock.t += 600_000;
+      await pump.tick(); await pump.tick();
+      const order = sentStates().filter(s => s.startsWith("303:"));
+      expect(order).toEqual(["303:crm.contract.activated.v1", "303:crm.contract.cancelled.v1"]);
+    } finally { pump.stop(); }
+  });
+
+  it("R1: cancelamento nunca antecede ativação mesmo com backoffs diferentes e vários ticks", async () => {
+    const events = [evt(10, 303, "active"), evt(11, 303, "cancelled")];
+    fakeDb(events as never);
+    mockedRecordAudit.mockResolvedValue(undefined);
+    let up = false;
+    mockedFetch.mockImplementation(async () => up ? respond(201) : respond(503));
+    const pump = startRelationshipBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, now, onError: vi.fn() });
+    try {
+      for (let i = 0; i < 6; i += 1) { await pump.tick(); clock.t += 7_000; }
+      expect(sentStates().every(s => s === "303:crm.contract.activated.v1")).toBe(true);
+      up = true; mockedFetch.mockClear();
+      clock.t += 600_000;
+      await pump.tick(); await pump.tick();
+      expect(sentStates()).toEqual(["303:crm.contract.activated.v1", "303:crm.contract.cancelled.v1"]);
+    } finally { pump.stop(); }
+  });
+
+  it("R2: erro transitório ao ler o recibo/lineage não deixa o evento invisível: reentregue sem restart", async () => {
+    const events = [evt(10, 303, "cancelled")];
+    fakeDb(events as never);
+    mockedRecordAudit.mockResolvedValue(undefined);
+    const db = await mockedGetDb() as unknown as { select: (...a: unknown[]) => unknown };
+    const realSelect = db.select.bind(db);
+    let boom = 1;
+    mockedGetDb.mockResolvedValue({ select: (...a: unknown[]) => {
+      const builder = realSelect(...a) as { from: (t: unknown) => unknown };
+      return { from: (table: unknown) => { if (table === auditLogs && boom-- > 0) throw new Error("ER_LOCK_DEADLOCK"); return builder.from(table); } };
+    } } as never);
+    mockedFetch.mockResolvedValue(respond(201));
+    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, now, onError: vi.fn() });
+    try {
+      await pump.tick();
+      expect(mockedFetch).not.toHaveBeenCalled();
+      clock.t += 5_000;
+      expect(await pump.tick()).toBe(1);
+      expect(attempts("303")).toBe(1);
     } finally { pump.stop(); }
   });
 });
