@@ -281,7 +281,7 @@ test.describe("homologação isolada estrita", () => {
     );
     await page.goto(`/contratos/${contractId}`);
     await page
-      .getByRole("button", { name: "Solicitar revisão de distrato" })
+      .getByRole("button", { name: "Pedir distrato" })
       .click();
     await page
       .getByPlaceholder("Motivo documentado do distrato")
