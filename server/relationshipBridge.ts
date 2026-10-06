@@ -3,7 +3,8 @@ import { auditLogs, contracts, customers, domainEvents, proposals } from "../dri
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
 
-type BridgeStatus = "active" | "cancelled";
+// "validated" não é status de contrato: vem do evento sale.validated (ADR-007) e só o Sales Command o recebe.
+type BridgeStatus = "active" | "cancelled" | "validated";
 
 // Mesmo envelope crm.contract.*.v1 para dois consumidores: o Relationship recebe ativação e cancelamento;
 // o Sales Command só o cancelamento (fato separado, não muda sales.status).
@@ -16,6 +17,8 @@ interface ContractStateTarget {
   notApplicableAction: string;
   rejectedAction: string;
   includeCustomer: boolean;
+  /** Recibos/ações próprios da entrega crm.sale.validated.v1 (só o alvo que recebe "validated" os define). */
+  validatedActions?: { delivered: string; notApplicable: string; rejected: string };
 }
 
 // Recusa de CONTEÚDO (400/409/422) repetida MAX_CONTENT_REJECTIONS vezes seguidas vira recibo terminal e a fila segue.
@@ -66,12 +69,21 @@ const SALES_CANCELLATION_TARGET: ContractStateTarget = {
   label: "Sales Command",
   path: "/api/integration/crm/events",
   receiptPrefix: "sales-contract:",
-  statuses: ["cancelled"],
+  statuses: ["cancelled", "validated"],
   deliveredAction: "sales_cancellation_delivered",
   notApplicableAction: "sales_cancellation_not_applicable",
   rejectedAction: "sales_cancellation_rejected",
   includeCustomer: false, // o Sales não guarda dados pessoais do cliente; não enviar
+  validatedActions: { delivered: "sales_sale_validated_delivered", notApplicable: "sales_sale_validated_not_applicable", rejected: "sales_sale_validated_rejected" },
 };
+
+function actionsFor(target: ContractStateTarget, state: BridgeStatus) {
+  if (state === "validated" && target.validatedActions) return target.validatedActions;
+  return { delivered: target.deliveredAction, notApplicable: target.notApplicableAction, rejected: target.rejectedAction };
+}
+function eventNameFor(state: BridgeStatus) {
+  return state === "active" ? "crm.contract.activated.v1" : state === "validated" ? "crm.sale.validated.v1" : "crm.contract.cancelled.v1";
+}
 
 function safeEndpoint(endpoint: string, target: ContractStateTarget) {
   const url = new URL(endpoint);
@@ -174,6 +186,37 @@ export function buildContractStateBody(lineage: ContractLineage, status: BridgeS
   };
 }
 
+export type SaleValidatedFacts = { validatedAt: string; paymentConfirmedAt: string; signedAt: string };
+
+// ADR-007 (V6): fato "venda validada" para o Sales Command. SEM dados pessoais do cliente e sem referência de documento.
+export function buildSaleValidatedBody(lineage: ContractLineage, contractId: number, occurredAt: Date, facts: SaleValidatedFacts) {
+  const correlationId = lineage.correlationId ?? ("crm-sale-" + contractId + "-validated");
+  return {
+    eventId: "crm-sale-" + contractId + "-validated",
+    eventName: "crm.sale.validated.v1" as const,
+    source: "crm",
+    correlationId,
+    occurredAt: occurredAt.toISOString(),
+    project: {
+      externalKey: lineage.projectExternalKey,
+      name: lineage.projectName,
+      timezone: lineage.projectTimezone,
+    },
+    saleId: lineage.saleId,
+    contractId: String(contractId),
+    validatedAt: facts.validatedAt,
+    paymentConfirmedAt: facts.paymentConfirmedAt,
+    signedAt: facts.signedAt,
+  };
+}
+
+/** Lê os três instantes do payload de sale.validated; null se algum faltar/for inválido. */
+export function saleValidatedFactsFrom(payload: Record<string, unknown>): SaleValidatedFacts | null {
+  const read = (key: string) => { const value = requiredText(payload, key); return value && !Number.isNaN(Date.parse(value)) ? value : null; };
+  const validatedAt = read("validatedAt"); const paymentConfirmedAt = read("paymentConfirmedAt"); const signedAt = read("signedAt");
+  return validatedAt && paymentConfirmedAt && signedAt ? { validatedAt, paymentConfirmedAt, signedAt } : null;
+}
+
 export const CONTRACT_STATE_TARGETS = { relationship: RELATIONSHIP_TARGET, salesCancellation: SALES_CANCELLATION_TARGET } as const;
 
 async function alreadyHandled(idempotencyKey: string) {
@@ -183,15 +226,26 @@ async function alreadyHandled(idempotencyKey: string) {
   return Boolean(row);
 }
 
-async function deliverContractState(target: ContractStateTarget, endpoint: string, key: string, contractId: number, status: BridgeStatus, occurredAt: Date) {
+async function deliverContractState(target: ContractStateTarget, endpoint: string, key: string, contractId: number, status: BridgeStatus, occurredAt: Date, eventPayload: Record<string, unknown> = {}) {
   const receiptKey = target.receiptPrefix + contractId + ":" + status;
+  const actions = actionsFor(target, status);
   if (await alreadyHandled(receiptKey)) return "already";
   const lineage = await lineageForContract(contractId);
   if (!lineage) {
-    await recordAudit(null, "contract", contractId, target.notApplicableAction, "Contrato sem linhagem Sales Command; bridge " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
+    await recordAudit(null, "contract", contractId, actions.notApplicable, "Contrato sem linhagem Sales Command; bridge " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
     return "not_applicable";
   }
-  const body = buildContractStateBody(lineage, status, contractId, occurredAt, target.includeCustomer);
+  let body: ReturnType<typeof buildContractStateBody> | ReturnType<typeof buildSaleValidatedBody>;
+  if (status === "validated") {
+    const facts = saleValidatedFactsFrom(eventPayload);
+    if (!facts) {
+      await recordAudit(null, "contract", contractId, actions.notApplicable, "sale.validated sem validatedAt/paymentConfirmedAt/signedAt válidos; entrega ao " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
+      return "not_applicable";
+    }
+    body = buildSaleValidatedBody(lineage, contractId, occurredAt, facts);
+  } else {
+    body = buildContractStateBody(lineage, status, contractId, occurredAt, target.includeCustomer);
+  }
   const { eventName, correlationId } = body;
   const response = await fetchWithTimeout(endpoint, {
     method: "POST",
@@ -203,7 +257,7 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
     body: JSON.stringify(body),
   }, 8_000);
   if (!response.ok) throw new DeliveryRejectedError(target.label, response.status);
-  await recordAudit(null, "contract", contractId, target.deliveredAction, eventName + " entregue ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
+  await recordAudit(null, "contract", contractId, actions.delivered, eventName + " entregue ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
   return "delivered";
 }
 
@@ -238,7 +292,7 @@ function startContractStatePump(
       if (!db) return 0;
       const events = await db.select().from(domainEvents)
         .where(and(
-          inArray(domainEvents.eventName, ["contract.created", "contract.status.updated"]),
+          inArray(domainEvents.eventName, ["contract.created", "contract.status.updated", "sale.validated"]),
           gt(domainEvents.id, cursor),
         ))
         .orderBy(asc(domainEvents.id)).limit(500);
@@ -246,21 +300,20 @@ function startContractStatePump(
       let blocked = false;
       for (const event of events) {
         const payload = objectPayload(event.payload);
-        const state = payload.status;
+        const state = event.eventName === "sale.validated" ? "validated" : payload.status;
         const contractId = Number(event.aggregateId);
-        if ((state === "active" || state === "cancelled") && target.statuses.includes(state)
+        if ((state === "active" || state === "cancelled" || state === "validated") && target.statuses.includes(state)
           && Number.isInteger(contractId) && contractId > 0) {
           const receiptKey = target.receiptPrefix + contractId + ":" + state;
           try {
-            const result = await deliverContractState(target, url, integrationKey, contractId, state, event.occurredAt);
+            const result = await deliverContractState(target, url, integrationKey, contractId, state, event.occurredAt, payload);
             if (result === "delivered") delivered += 1;
             rejections.clear(receiptKey);
           } catch (error) {
             options.onError?.(error);
             if (rejections.record(receiptKey, error)) {
-              const eventName = state === "active" ? "crm.contract.activated.v1" : "crm.contract.cancelled.v1";
-              await recordAudit(null, "contract", contractId, target.rejectedAction,
-                eventName + " recusado pelo TGR " + target.label + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
+              await recordAudit(null, "contract", contractId, actionsFor(target, state).rejected,
+                eventNameFor(state) + " recusado pelo TGR " + target.label + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
                 { idempotencyKey: receiptKey });
             } else {
               blocked = true;

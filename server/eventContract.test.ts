@@ -18,6 +18,15 @@ describe("CRM event contract export", () => {
     expect(contract.financial.sampleEnvelope.event.payload).toHaveProperty("saleId");
   });
 
+  it("ADR-007: crm.sale.validated.v1 to Sales has no PII; Financial sale.* samples carry only whitelisted fields", () => {
+    const { sales, financial } = exportEventContract();
+    expect(Object.keys(sales.saleValidatedSampleBody).sort()).toEqual(["contractId", "correlationId", "eventId", "eventName", "occurredAt", "paymentConfirmedAt", "project", "saleId", "signedAt", "source", "validatedAt"]);
+    expect(JSON.stringify(sales.saleValidatedSampleBody)).not.toMatch(/customer|phone|document/i);
+    expect(Object.keys(financial.saleValidatedSampleEnvelope.event.payload).sort()).toEqual(["contractId", "paymentConfirmedAt", "saleId", "signedAt", "validatedAt", "validatedByUserId"]);
+    expect(Object.keys(financial.paymentConfirmedSampleEnvelope.event.payload).sort()).toEqual(["confirmedAt", "confirmedByUserId", "contractId", "saleId"]);
+    expect(financial.forwardedEventNames).toEqual(expect.arrayContaining(["sale.payment.confirmed", "sale.validated"]));
+  });
+
   it("rejection codes are machine-readable for the Sales outbox classifier", () => {
     const { ingestRejection, ingestTransientFailure } = exportEventContract().sales;
     for (const code of ingestRejection.codes ?? []) expect(code).toMatch(/^[A-Z0-9_]{1,64}$/);
