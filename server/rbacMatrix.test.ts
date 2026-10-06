@@ -25,6 +25,9 @@ const ACTIONS: Array<{ name: string; capability: Capability; allowed: Role[]; ca
   { name: "contracts.requestCancellation", capability: "contract.cancel.request", allowed: ["admin", "seller", "finance", "service"], call: c => c.contracts.requestCancellation({ contractId: 1, reason: "SYN motivo" }) },
   { name: "contracts.decideCancellation", capability: "contract.cancel.decide", allowed: ["admin"], call: c => c.contracts.decideCancellation({ requestId: 1, decision: "approved" }) },
   { name: "contracts.executeCancellation", capability: "contract.cancel.execute", allowed: ["admin"], call: c => c.contracts.executeCancellation({ requestId: 1 }) },
+  // PRD Apêndice B #11: ativação do contrato é registro da administração (seller passava antes).
+  { name: "contracts.updateStatus(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.updateStatus({ id: 1, status: "active" }) },
+  { name: "contracts.create(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.create({ number: "SYN-RBAC-1", customerId: 1, status: "active", totalAmount: 1000, firstDueDate: "2026-11-01", installmentCount: 1 }) },
   { name: "contracts.markDocumentSigned", capability: "document.sign", allowed: ["admin"], call: c => c.contracts.markDocumentSigned({ documentId: 1 }) },
   { name: "electronicSignatures.start", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.start({ contractId: 1, contractDocumentId: 1 }) },
   { name: "electronicSignatures.reconcile", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.reconcile({ envelopeId: 1 }) },

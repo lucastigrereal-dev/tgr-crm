@@ -41,6 +41,7 @@ export const contractsRouter = router({
     installmentCount: z.coerce.number().int().min(1).max(360),
     notes: z.string().trim().max(5000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
+    if (input.status === "active") assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const duplicate = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.number, input.number)).limit(1))[0];
@@ -278,6 +279,7 @@ export const contractsRouter = router({
     status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]),
     cancellationReason: z.string().trim().max(2000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
+    if (input.status === "active") assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });

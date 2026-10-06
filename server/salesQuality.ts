@@ -19,6 +19,12 @@ export type SellerQuality = {
   wonAmount: number;
 };
 
+// PRD Apêndice B #53: ranking individual público desabilitado até política de RH — só a administração vê a operação;
+// qualquer outro papel vê apenas a própria linha.
+export function visibleQualityRanking<T extends { sellerId: number }>(rows: T[], viewer: { id: number; role: string }) {
+  return viewer.role === "admin" ? rows : rows.filter(row => row.sellerId === viewer.id);
+}
+
 export function buildSellerQualityRanking(rows: SellerQualitySource[], now = new Date()): SellerQuality[] {
   const groups = new Map<number, SellerQuality>();
   for (const row of rows) {
