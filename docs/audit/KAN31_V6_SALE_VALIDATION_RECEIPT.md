@@ -75,3 +75,34 @@ Bancos descartáveis `crm_fix_<hex>_test` em `tgr-sales-v3-mysql-1` (127.0.0.1:4
 - Cancelar comissão (`setStatus cancelled`) segue permitido sem venda validada (não libera dinheiro).
 - Trava de contrato antes da parcela (baixa/webhook), igual ao distrato e à validação: mesma ordem contrato -> parcela, sem inversão.
 - Códigos de recusa: Sales/Financial devem mandar `code` só em recusa de conteúdo; condição transitória (503 sem code) nunca vira recibo terminal.
+
+---
+
+## Red Team fix round (branch `kan-31/v6-redteam-fixes`, base `17d8049`)
+Sem push, sem merge. 0044 editada no lugar (nunca aplicada em banco real); journal/snapshot consistentes, `drizzle-kit generate` = "No schema changes", `schemaDrift` verde.
+
+| SHA | Correção |
+|---|---|
+| 7f63729 | P1: `contract_documents.signedArtifact` (boolean NOT NULL default false, na 0044). Vira true SÓ em `contracts.uploadDocument` com `signed:true` por quem tem `document.sign` (bytes via `storagePut`). `markDocumentSigned` e o e-sign (sign/document_signed/envelope_closed) nunca o setam; continuam marcando `signed` (exibição/compat), que NÃO entra mais em nenhum portão. Portões: `contractSigned` = `contracts.signedAt` OU artefato assinado da categoria do contrato; `signedDocumentStored` = artefato assinado da categoria com `storageKey`; novo `noOpenSignatureEnvelope` (envelope `draft`/`running` bloqueia, entra em `missing`); `pickSignedDocument` só devolve artefatos. `signedAt` = `contracts.signedAt` (webhook `occurred_at` no fechamento) senão `createdAt` do ARQUIVO ASSINADO (horário atestado do upload; nunca o do rascunho). Categoria normalizada (caixa, acento, `_`, `-`, espaços): `contrato_assinado` = `Contrato Assinado` = `contrato-assinado` (P3-6). UI: "Contrato assinado armazenado (arquivo assinado enviado)" + linha do novo portão; lista de documentos distingue "arquivo assinado enviado" de "assinatura confirmada (falta enviar o arquivo assinado)" |
+| def7302 | P2: CSV de contratos recusa `ativo/active`, `inadimplente/overdue`, `encerrado/closed` com erro por linha (campo `status`): "Contrato ativo/legado exige decisão LEGACY_ACTIVE_BACKFILL — importe como pending_signature ou aguarde a decisão." (arquivo inteiro não grava, como qualquer erro de validação). `rascunho`/`pendente_assinatura`/`cancelado` seguem importáveis. Template da tela e guia atualizados |
+| 825232c | P2: pumps Financial e Sales/Relationship (`relationshipBridge.ts` compartilhado). Cursor por id em memória que avança sobre todo evento lido + `createRetryBackoff` por evento: 5s dobrando, teto 10 min; evento em backoff sai da frente do lote e só é retentado quando vence. Antes: Financial relia sempre os mesmos 500 primeiros sem recibo (martelando e escondendo os novos); Sales/Relationship parava o cursor no 1º falho (reenvio a cada tick; 500 presos escondem o resto). Recusa codificada segue terminal na 1ª vez; regra 5x+janela inalterada. Opções de teste `now` e `batchSize` |
+| 79fd99a | P3-5: `commissions.record` valida (contrato existe, não cancelado, venda validada) e insere na mesma transação, com o contrato travado `FOR UPDATE`; idempotência/dup-key tratadas dentro da transação |
+
+### Testes
+- Novos: `saleValidation.test.ts` (signedArtifact, categoria, envelope aberto), `contracts.signed-artifact.test.ts` (4: só admin+signed cria artefato; markDocumentSigned não), `eSignatureService.mysql.test.ts` (PoC: um `sign` não satisfaz os portões e `validateSale` é recusada; fechar envelope sem arquivo assinado continua recusado; após o admin subir o PDF assinado valida e `signedAt` == `occurred_at` do webhook), `csvImport.test.ts`/`imports.contracts-integrity.test.ts` (LEGACY_ACTIVE_BACKFILL), `pumpBackoff.test.ts` (6: backoff 5s/10s/20s/teto, preso não segura o novo, lote menor que os presos, recusa codificada), `financialBridgeStarvation.mysql.test.ts` (MySQL real + servidor HTTP: 3 presos com lote 2, o novo chega, retry só após o backoff), `commissions.record-integrity.test.ts` (+3: mesma transação com FOR UPDATE, cancelado/invalidado entre pré-checagem e trava).
+- Alterados (nenhum pulado): `saleValidation.mysql.test.ts` (semente grava `signedArtifact`), `eSignatureService.mysql.test.ts` (asserções `signedArtifact=false` após sign/close, `signedAt`), `csvImport.test.ts` (contrato importado como `pendente_assinatura`), `relationshipBridge.test.ts`/`financialBridge.test.ts`/`saleValidatedBridge.test.ts` (cada tick de teste avança o relógio além do teto de backoff via `eagerPump`; o pump lê o lote antes dos retries para manter a ordem das leituras posicionais dos mocks).
+
+### Comandos e resultados
+Bancos descartáveis `crm_rt_<hex>_test` em `tgr-sales-v3-mysql-1` (127.0.0.1:43316), migrados do zero com `DATABASE_URL=… pnpm exec drizzle-kit migrate`, derrubados ao fim.
+- `pnpm check`: PASS. `pnpm build`: PASS. `drizzle-kit generate`: "No schema changes".
+- `pnpm test -- --reporter=dot --pool=forks --poolOptions.forks.singleFork=true` SEM MySQL: 159 arquivos passed + 9 skipped / **695 passed, 47 skipped** (skips = os 9 arquivos mysql).
+- COM `TGR_MYSQL_INTEGRATION_URL` (DB nova, `DATABASE_URL` não definida): **168 arquivos / 742 passed, 0 skipped** (9 `*.mysql.test.ts`: os 8 anteriores + `financialBridgeStarvation.mysql.test.ts`).
+
+### E-sign: o que faz agora
+`clicksign.ts` NÃO tem download do documento assinado (só criar envelope, adicionar documento/signatário/requisitos, ativar, notificar, consultar envelope, verificar HMAC). Nenhuma API externa foi inventada: não há auto-download. O gerente (admin, `document.sign`) deve baixar o PDF assinado no provedor e enviá-lo em `contracts.uploadDocument` com `signed:true` (categoria do contrato). O webhook `envelope_closed` marca `contracts.signedAt` (= `occurred_at`) e `signed` do rascunho (exibição), mas nunca `signedArtifact`; com envelope `draft`/`running` a validação fica bloqueada (`noOpenSignatureEnvelope`).
+
+### Limitações
+- Contratos antigos com `signed=true` sem arquivo assinado não têm `signedArtifact`: precisam do upload do assinado para validar.
+- Backoff e cursor dos pumps são em memória (zeram no restart; releitura é segura, entrega idempotente por recibo). Com mais eventos presos que o lote, cada ciclo de varredura reabre os presos só quando o backoff vence.
+- A trava `FOR UPDATE` de `commissions.record` é provada por mock de ordem (begin, lock, insert, commit), não por teste de concorrência em MySQL.
+- A importação CSV de contratos legados ativos fica bloqueada até a decisão `LEGACY_ACTIVE_BACKFILL`.

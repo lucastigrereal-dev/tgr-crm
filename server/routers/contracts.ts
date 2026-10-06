@@ -339,6 +339,8 @@ export const contractsRouter = router({
       filename: input.filename,
       storageKey: upload.key,
       signed,
+      // Único caminho que cria arquivo assinado real (bytes acabaram de ir ao storage via storagePut, por quem tem document.sign).
+      signedArtifact: signed,
       uploadedByUserId: ctx.user.id,
     }).$returningId();
     const id = created[0]?.id;

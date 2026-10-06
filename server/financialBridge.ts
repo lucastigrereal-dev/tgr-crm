@@ -1,10 +1,10 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { auditLogs, contracts, domainEvents } from "../drizzle/schema";
 import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents";
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { createRejectionTracker, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
+import { createRejectionTracker, createRetryBackoff, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
 
 export const FINANCIAL_EVENT_NAMES = [
   "contract.created",
@@ -64,11 +64,13 @@ async function alreadyHandled(db: NonNullable<Awaited<ReturnType<typeof getDb>>>
 
 export interface FinancialBridgePump { tick(): Promise<number>; stop(): void; }
 
+type DomainEventRow = typeof domainEvents.$inferSelect;
+
 export function startFinancialBridgePump(
   endpoint: string,
   integrationKey: string,
   project: FinancialBridgeProject,
-  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number } = {},
+  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number } = {},
 ): FinancialBridgePump {
   const target = financialBridgeTarget(endpoint);
   if (!integrationKey.trim()) throw new Error("Financial CRM integration key required");
@@ -76,9 +78,67 @@ export function startFinancialBridgePump(
     throw new Error("Financial project identity required");
   }
   const intervalMs = options.intervalMs ?? 5_000;
+  const now = options.now ?? Date.now;
+  const batchSize = options.batchSize ?? 500;
   let running = false;
   let stopped = false;
+  // Cursor por id (em memória) + backoff por evento: evento com falha não-terminal (5xx sem code, rede, chave errada) é retentado
+  // com 5s dobrando (teto 10 min) e NÃO fica na frente do lote; sem isso os mesmos 500 presos eram relidos/martelados a cada tick
+  // e escondiam os eventos novos. ponytail: zera no restart (os sem recibo são relidos; a entrega é idempotente pelo recibo).
+  let cursor = 0;
+  const retry = createRetryBackoff<number, DomainEventRow>(now);
   const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: true });
+
+  async function attempt(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, event: DomainEventRow): Promise<boolean> {
+    if (await alreadyHandled(db, event.id)) { retry.remove(event.id); return false; }
+    try {
+      const body = financialBridgeEnvelope(event, project);
+      const contractIdRaw = body.event.payload.contractId;
+      const contractId = typeof contractIdRaw === "number"
+        ? contractIdRaw
+        : typeof contractIdRaw === "string" && /^\d+$/.test(contractIdRaw)
+          ? Number(contractIdRaw)
+          : null;
+      if (contractId && body.event.payload.customerId == null) {
+        const [contract] = await db.select({ customerId: contracts.customerId }).from(contracts)
+          .where(eq(contracts.id, contractId)).limit(1);
+        if (contract?.customerId) body.event.payload.customerId = contract.customerId;
+      }
+      const response = await fetchWithTimeout(target, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + integrationKey,
+          "X-Correlation-Id": body.correlationId,
+        },
+        body: JSON.stringify(body),
+      }, 8_000);
+      if (!response.ok) throw new DeliveryRejectedError("Financial", response.status, await readRejectionCode(response));
+      await recordAudit(
+        null,
+        "integration_event",
+        event.id,
+        "financial_delivered",
+        event.eventName + " entregue ao TGR Financial Layer.",
+        { idempotencyKey: "financial-event:" + event.id },
+      );
+      rejections.clear(event.id);
+      retry.remove(event.id);
+      return true;
+    } catch (error) {
+      options.onError?.(error);
+      // Mesma regra do bridge de contrato: só recusa de conteúdo repetida (e por tempo mínimo) vira recibo terminal.
+      if (rejections.record(event.id, error)) {
+        await recordAudit(null, "integration_event", event.id, "financial_rejected",
+          rejectionReceiptSummary(event.eventName, "Financial Layer", error as DeliveryRejectedError),
+          { idempotencyKey: "financial-event:" + event.id });
+        retry.remove(event.id);
+      } else {
+        retry.fail(event.id, event);
+      }
+      return false;
+    }
+  }
 
   async function tick() {
     if (running || stopped) return 0;
@@ -95,53 +155,14 @@ export function startFinancialBridgePump(
         .where(and(
           inArray(domainEvents.eventName, [...FINANCIAL_EVENT_NAMES]),
           isNull(auditLogs.id),
+          gt(domainEvents.id, cursor),
         ))
-        .orderBy(asc(domainEvents.id)).limit(500);
+        .orderBy(asc(domainEvents.id)).limit(batchSize);
+      for (const event of retry.due()) if (await attempt(db, event)) delivered += 1;
       for (const row of events) {
-        const event = row.event;
-        if (await alreadyHandled(db, event.id)) continue;
-        try {
-          const body = financialBridgeEnvelope(event, project);
-          const contractIdRaw = body.event.payload.contractId;
-          const contractId = typeof contractIdRaw === "number"
-            ? contractIdRaw
-            : typeof contractIdRaw === "string" && /^\d+$/.test(contractIdRaw)
-              ? Number(contractIdRaw)
-              : null;
-          if (contractId && body.event.payload.customerId == null) {
-            const [contract] = await db.select({ customerId: contracts.customerId }).from(contracts)
-              .where(eq(contracts.id, contractId)).limit(1);
-            if (contract?.customerId) body.event.payload.customerId = contract.customerId;
-          }
-          const response = await fetchWithTimeout(target, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: "Bearer " + integrationKey,
-              "X-Correlation-Id": body.correlationId,
-            },
-            body: JSON.stringify(body),
-          }, 8_000);
-          if (!response.ok) throw new DeliveryRejectedError("Financial", response.status, await readRejectionCode(response));
-          await recordAudit(
-            null,
-            "integration_event",
-            event.id,
-            "financial_delivered",
-            event.eventName + " entregue ao TGR Financial Layer.",
-            { idempotencyKey: "financial-event:" + event.id },
-          );
-          delivered += 1;
-          rejections.clear(event.id);
-        } catch (error) {
-          options.onError?.(error);
-          // Mesma regra do bridge de contrato: só recusa de conteúdo repetida (e por tempo mínimo) vira recibo terminal.
-          if (rejections.record(event.id, error)) {
-            await recordAudit(null, "integration_event", event.id, "financial_rejected",
-              rejectionReceiptSummary(event.eventName, "Financial Layer", error as DeliveryRejectedError),
-              { idempotencyKey: "financial-event:" + event.id });
-          }
-        }
+        cursor = Math.max(cursor, row.event.id);
+        if (retry.scheduled(row.event.id)) continue;
+        if (await attempt(db, row.event)) delivered += 1;
       }
       return delivered;
     } catch (error) {

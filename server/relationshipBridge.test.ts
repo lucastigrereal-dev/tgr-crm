@@ -13,6 +13,14 @@ const mockedGetDb = vi.mocked(getDb);
 const mockedRecordAudit = vi.mocked(recordAudit);
 const mockedFetch = vi.mocked(fetchWithTimeout);
 
+// Backoff por evento (RED TEAM P2): cada tick de teste avança o relógio além do teto (10 min), então todo evento em retry está vencido.
+const pumpClock = { t: 0 };
+function eagerPump<P extends { tick(): Promise<number>; stop(): void }>(start: (...args: any[]) => P, ...args: any[]): P {
+  const last = args.length - 1;
+  const pump = start(...args.slice(0, last), { ...args[last], now: () => pumpClock.t });
+  return { ...pump, tick: async () => { pumpClock.t += 11 * 60_000; return pump.tick(); } };
+}
+
 function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, unknown>;
   for (const method of ["from", "where", "orderBy", "limit", "innerJoin", "leftJoin"]) promise[method] = () => promise;
@@ -23,9 +31,9 @@ describe("CRM to Relationship bridge", () => {
   afterEach(() => vi.resetAllMocks());
 
   it("requires TLS outside loopback", () => {
-    expect(() => startRelationshipBridgePump("http://relationship.internal:3200", "relationship-key", { autoStart: false }))
+    expect(() => eagerPump(startRelationshipBridgePump, "http://relationship.internal:3200", "relationship-key", { autoStart: false }))
       .toThrow("Relationship endpoint requires TLS outside loopback");
-    expect(() => startRelationshipBridgePump("https://relationship.example.invalid", "relationship-key", { autoStart: false }))
+    expect(() => eagerPump(startRelationshipBridgePump, "https://relationship.example.invalid", "relationship-key", { autoStart: false }))
       .not.toThrow();
   });
 
@@ -72,7 +80,7 @@ describe("CRM to Relationship bridge", () => {
     mockedFetch.mockResolvedValue(new Response(JSON.stringify({ accepted: true }), { status: 201 }));
     mockedRecordAudit.mockResolvedValue(undefined);
 
-    const pump = startRelationshipBridgePump("http://127.0.0.1:3200", "relationship-key", { autoStart: false });
+    const pump = eagerPump(startRelationshipBridgePump, "http://127.0.0.1:3200", "relationship-key", { autoStart: false });
     try {
       expect(await pump.tick()).toBe(1);
       expect(await pump.tick()).toBe(0);
@@ -124,7 +132,7 @@ describe("CRM to Relationship bridge", () => {
     mockedFetch.mockResolvedValue(new Response("{}", { status: 201 }));
     mockedRecordAudit.mockResolvedValue(undefined);
 
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "sales-cancel-key", { autoStart: false });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "sales-cancel-key", { autoStart: false });
     try {
       expect(await pump.tick()).toBe(1);
     } finally {
@@ -146,7 +154,7 @@ describe("CRM to Relationship bridge", () => {
   });
 
   it("requires TLS for the Sales Command endpoint outside loopback", () => {
-    expect(() => startSalesCancellationBridgePump("http://sales.internal:3100", "k", { autoStart: false }))
+    expect(() => eagerPump(startSalesCancellationBridgePump, "http://sales.internal:3100", "k", { autoStart: false }))
       .toThrow("Sales Command endpoint requires TLS outside loopback");
   });
   function cancellationDb() {
@@ -158,7 +166,7 @@ describe("CRM to Relationship bridge", () => {
       [{ payload: JSON.stringify({ saleId: "44444444-4444-4444-4444-444444444444", projectExternalKey: "22222222-2222-2222-2222-222222222222",
         projectName: "SYN", projectTimezone: "America/Recife", correlationId: "corr-x" }) }],
     ];
-    let selectIndex = 0; // cada tick refaz as mesmas 4 leituras (o cursor não avança enquanto falha)
+    let selectIndex = 0; // leituras posicionais repetidas a cada tick (o teste avança o relógio para o backoff vencer)
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sequence[selectIndex++ % sequence.length])) } as never);
   }
 
@@ -167,7 +175,7 @@ describe("CRM to Relationship bridge", () => {
     mockedFetch.mockImplementation(async () => new Response("{}", { status: 409 }));
     mockedRecordAudit.mockResolvedValue(undefined);
     const onError = vi.fn();
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, onError, rejectionWindowMs: 0 });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "k", { autoStart: false, onError, rejectionWindowMs: 0 });
     try {
       for (let i = 1; i < 5; i += 1) await pump.tick();
       expect(mockedRecordAudit).not.toHaveBeenCalled();
@@ -186,7 +194,7 @@ describe("CRM to Relationship bridge", () => {
       cancellationDb();
       mockedFetch.mockImplementation(async () => new Response("{}", { status }));
       const onError = vi.fn();
-      const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, onError, rejectionWindowMs: 0 });
+      const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "k", { autoStart: false, onError, rejectionWindowMs: 0 });
       try { for (let i = 0; i < 8; i += 1) expect(await pump.tick()).toBe(0); } finally { pump.stop(); }
       expect(mockedRecordAudit).not.toHaveBeenCalled();
       expect(onError).toHaveBeenCalledTimes(8);
@@ -196,7 +204,7 @@ describe("CRM to Relationship bridge", () => {
   it("never rejects the tick when the database fails outside delivery", async () => {
     mockedGetDb.mockRejectedValue(new Error("db down"));
     const onError = vi.fn();
-    const pump = startRelationshipBridgePump("http://127.0.0.1:3200", "k", { autoStart: false, onError });
+    const pump = eagerPump(startRelationshipBridgePump, "http://127.0.0.1:3200", "k", { autoStart: false, onError });
     try { await expect(pump.tick()).resolves.toBe(0); } finally { pump.stop(); }
     expect(onError).toHaveBeenCalledTimes(1);
   });
@@ -247,7 +255,7 @@ describe("CRM to Relationship bridge", () => {
       return queries;
     }
     const respond = (status: number, body: string = "{}") => new Response(body, { status, headers: { "Content-Type": "application/json" } });
-    const sales = (onError = vi.fn()) => ({ onError, pump: startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, onError, rejectionWindowMs: 600_000 }) });
+    const sales = (onError = vi.fn()) => ({ onError, pump: eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "k", { autoStart: false, onError, rejectionWindowMs: 600_000 }) });
 
     it.each([
       [422, "INVALID_CRM_EVENT"], [404, "SALE_NOT_FOUND"], [409, "SALE_NOT_CONFIRMED"], [409, "CRM_EVENT_IDENTITY_CONFLICT"], [400, "INVALID_CRM_EVENT"],
@@ -282,7 +290,7 @@ describe("CRM to Relationship bridge", () => {
     ])("Sales: 422 %s é recusa SEM código: regra antiga (repetida), não terminal na 1ª", async (_label, body) => {
       cursorAwareDb([cancelledEvent(90, 303)]);
       mockedFetch.mockImplementation(async () => respond(422, body));
-      const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, onError: vi.fn(), rejectionWindowMs: 0 });
+      const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "k", { autoStart: false, onError: vi.fn(), rejectionWindowMs: 0 });
       try {
         for (let i = 0; i < 4; i += 1) await pump.tick();
         expect(mockedRecordAudit).not.toHaveBeenCalled();
@@ -306,7 +314,7 @@ describe("CRM to Relationship bridge", () => {
       const activeEvent = { ...cancelledEvent(90, 303), payload: JSON.stringify({ status: "active" }) };
       cursorAwareDb([activeEvent]);
       mockedFetch.mockImplementation(async () => respond(422, JSON.stringify({ code: "INVALID_CRM_EVENT" })));
-      const pump = startRelationshipBridgePump("http://127.0.0.1:3200", "k", { autoStart: false, onError: vi.fn(), rejectionWindowMs: 0 });
+      const pump = eagerPump(startRelationshipBridgePump, "http://127.0.0.1:3200", "k", { autoStart: false, onError: vi.fn(), rejectionWindowMs: 0 });
       try {
         for (let i = 0; i < 4; i += 1) await pump.tick();
         expect(mockedRecordAudit).not.toHaveBeenCalled();

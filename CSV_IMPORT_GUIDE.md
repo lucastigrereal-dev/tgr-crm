@@ -35,7 +35,7 @@ O sistema identifica associados por `documento` normalizado. Se o documento já 
 | numero_contrato | Sim | TS-2026-0001 | Único no sistema. |
 | documento_associado | Sim | 12345678900 | Deve apontar para associado existente. |
 | modelo_uso | Sim | semana_fixa | `semana_fixa`, `semana_flexivel` ou `pontos`. |
-| status | Não | ativo | `rascunho`, `pendente_assinatura`, `ativo`, `inadimplente`, `cancelado` ou `encerrado`. |
+| status | Não | pendente_assinatura | `rascunho`, `pendente_assinatura` ou `cancelado`. `ativo`, `inadimplente` e `encerrado` são recusados por linha (decisão LEGACY_ACTIVE_BACKFILL pendente; ADR-007). |
 | valor_total | Sim | 12500.00 | Aceita `12500,00` ou `12500.00`. |
 | quantidade_parcelas | Sim | 12 | Inteiro entre 1 e 360. |
 | primeiro_vencimento | Sim | 2026-09-10 | Formato AAAA-MM-DD. |

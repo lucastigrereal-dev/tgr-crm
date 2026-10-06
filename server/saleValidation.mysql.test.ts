@@ -32,7 +32,7 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const [contract] = await db.insert(contracts).values({ number: `SV-${label}-${runId}`, customerId: customer.id, status: opts.status ?? "pending_signature", totalAmount: "1000.00", signedAt: opts.signedAt ?? null, externalSource: opts.saleId ? "sales-command" : null, externalSaleId: opts.saleId ?? null }).$returningId();
     const documentIds: number[] = [];
     for (const [index, doc] of (opts.documents ?? []).entries()) {
-      const [row] = await db.insert(contractDocuments).values({ contractId: contract.id, category: doc.category ?? "contrato", filename: `c${index}.pdf`, storageKey: doc.storageKey, signed: doc.signed }).$returningId();
+      const [row] = await db.insert(contractDocuments).values({ contractId: contract.id, category: doc.category ?? "contrato", filename: `c${index}.pdf`, storageKey: doc.storageKey, signed: doc.signed, signedArtifact: doc.signed }).$returningId();
       documentIds.push(row.id);
     }
     return { contractId: contract.id, documentIds };
@@ -265,7 +265,7 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const [proposal] = await db.insert(proposals).values({ opportunityId: opportunity.id, reference: `P-${label}-${runId}`, productDescription: "Semana fixa", totalAmount: "10000.00", downPaymentAmount: "1000.00", installmentCount: 3 }).$returningId();
     await db.insert(captureRecords).values({ customerId: customer.id, resortId: resort.id, opportunityId: opportunity.id, linerId: liner.id, closerId: closer.id } as never);
     const [contract] = await db.insert(contracts).values({ number: `COM-${label}-${runId}`, customerId: customer.id, proposalId: proposal.id, status: "pending_signature", totalAmount: "10000.00", signedAt: new Date() }).$returningId();
-    await db.insert(contractDocuments).values({ contractId: contract.id, category: "Contrato assinado", filename: "c.pdf", storageKey: `contracts/com-${label}.pdf`, signed: true });
+    await db.insert(contractDocuments).values({ contractId: contract.id, category: "Contrato assinado", filename: "c.pdf", storageKey: `contracts/com-${label}.pdf`, signed: true, signedArtifact: true });
     const installmentIds: number[] = [];
     for (const sequence of [1, 2, 3]) {
       const paid = (opts.paidSequences ?? [1]).includes(sequence);

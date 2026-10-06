@@ -51,7 +51,7 @@ const iso = (value: Date | null | undefined) => (value ? value.toISOString() : n
 
 export async function loadSaleValidationFacts(reader: Reader, contractId: number) {
   const contract = (await reader.select({ id: contracts.id, status: contracts.status, signedAt: contracts.signedAt, externalSource: contracts.externalSource, externalSaleId: contracts.externalSaleId }).from(contracts).where(eq(contracts.id, contractId)).limit(1))[0] ?? null;
-  const documents = contract ? await reader.select({ id: contractDocuments.id, signed: contractDocuments.signed, storageKey: contractDocuments.storageKey, category: contractDocuments.category, filename: contractDocuments.filename, createdAt: contractDocuments.createdAt }).from(contractDocuments).where(eq(contractDocuments.contractId, contractId)) : [];
+  const documents = contract ? await reader.select({ id: contractDocuments.id, signedArtifact: contractDocuments.signedArtifact, storageKey: contractDocuments.storageKey, category: contractDocuments.category, filename: contractDocuments.filename, createdAt: contractDocuments.createdAt }).from(contractDocuments).where(eq(contractDocuments.contractId, contractId)) : [];
   const envelopes = contract ? await reader.select({ status: contractSignatureEnvelopes.status }).from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.contractId, contractId)) : [];
   const validation = (await reader.select().from(saleValidations).where(eq(saleValidations.contractId, contractId)).limit(1))[0] ?? null;
   const openCancellations = contract ? await reader.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))) : [];
@@ -180,7 +180,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
     const occurredAt = new Date();
     await db!.insert(saleValidationEvents).values({
       contractId: input.contractId, step: "validation_rejected", actorUserId, occurredAt,
-      beforeJson: JSON.stringify({ contractStatus: status, gates: gates ? { paymentConfirmed: gates.paymentConfirmed, contractGenerated: gates.contractGenerated, contractSigned: gates.contractSigned, signedDocumentStored: gates.signedDocumentStored, noOpenCancellation: gates.noOpenCancellation } : null }),
+      beforeJson: JSON.stringify({ contractStatus: status, gates: gates ? { paymentConfirmed: gates.paymentConfirmed, contractGenerated: gates.contractGenerated, contractSigned: gates.contractSigned, signedDocumentStored: gates.signedDocumentStored, noOpenCancellation: gates.noOpenCancellation, noOpenSignatureEnvelope: gates.noOpenSignatureEnvelope } : null }),
       afterJson: JSON.stringify({ contractStatus: status, missing }), reason, documentRef: null, correlationId,
     });
     await recordAudit(actorUserId, "sale_validation", input.contractId, "validation_rejected", `Validação final recusada para o contrato ${input.contractId}: ${reason}`);
@@ -207,6 +207,8 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       const document = pickSignedDocument(facts.documents, input.signedDocumentId ?? null);
       if (!document) throw new GatesNotReady("document", [], input.signedDocumentId ? `Documento ${input.signedDocumentId} não é um documento assinado armazenado deste contrato.` : "Nenhum documento assinado armazenado.");
       const documentRow = facts.documents.find(item => item.id === document.id)!;
+      // signedAt: contracts.signedAt (webhook occurred_at do e-sign) ou, sem ele, o createdAt do ARQUIVO ASSINADO (upload = horário atestado
+      // do armazenamento do assinado). Nunca o createdAt do rascunho.
       const signedAt = locked.signedAt ?? documentRow.createdAt;
       const paymentConfirmedAt = facts.validation!.paymentConfirmedAt!;
 
