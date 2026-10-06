@@ -7,6 +7,7 @@ import { LocalAuthError, authenticateLocalUser, localAuthStatus } from "./localA
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { contractsRouter } from "./routers/contracts";
+import { saleValidationRouter } from "./routers/saleValidation";
 import { commissionsRouter } from "./routers/commissions";
 import { campaignsRouter } from "./routers/campaigns";
 import { ownershipRouter } from "./routers/ownership";
@@ -74,6 +75,7 @@ export const appRouter = router({
   campaigns: campaignsRouter,
   ownership: ownershipRouter,
   contracts: contractsRouter,
+  saleValidation: saleValidationRouter,
   team: teamRouter,
   operations: operationsRouter,
   finance: financeRouter,

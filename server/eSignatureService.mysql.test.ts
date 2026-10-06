@@ -112,7 +112,9 @@ describe.skipIf(!integrationUrl)("Clicksign webhook em MySQL real: reconciliaç�
     const [envelope] = await db.select().from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.id, seeded.envelopeId));
     expect(envelope).toMatchObject({ status: "closed", activeKey: null, lastEventName: "envelope_closed" });
     [contract] = await db.select().from(contracts).where(eq(contracts.id, seeded.contractId));
-    expect(contract.status).toBe("active");
+    // ADR-007 (V6): o fechamento do envelope marca ASSINADO, mas o contrato só vira active na validação final do gerente.
+    expect(contract.status).toBe("pending_signature");
+    expect(contract.activatedAt).toBeNull();
     expect(contract.signedAt).toBeInstanceOf(Date);
 
     expect(await db.select().from(signatureWebhookEvents).where(eq(signatureWebhookEvents.externalEnvelopeId, seeded.externalEnvelopeId))).toHaveLength(2);
@@ -120,11 +122,9 @@ describe.skipIf(!integrationUrl)("Clicksign webhook em MySQL real: reconciliaç�
     expect(signedEvents).toHaveLength(1);
     const completed = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "contract.signature.completed"), eq(domainEvents.aggregateId, String(seeded.contractId))));
     expect(completed).toHaveLength(1);
-    // Revisão independente P1-1: a ativação pela assinatura precisa do mesmo evento que a troca manual de status,
-    // senão Relationship (D1–D7) e Financial nunca sabem que o contrato ficou ativo.
+    // ADR-007: sem ativação automática => nenhum contract.status.updated (Relationship D1–D7 só começa após a validação final).
     const activated = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "contract.status.updated"), eq(domainEvents.aggregateId, String(seeded.contractId))));
-    expect(activated).toHaveLength(1);
-    expect(JSON.parse(String(activated[0].payload))).toMatchObject({ status: "active" });
+    expect(activated).toHaveLength(0);
   });
 
   it("entrega duplicada simultânea grava o evento uma única vez", async () => {
@@ -140,7 +140,9 @@ describe.skipIf(!integrationUrl)("Clicksign webhook em MySQL real: reconciliaç�
     const closes = await Promise.all([processClicksignWebhook(sign(closeBody), closeBody), processClicksignWebhook(sign(closeBody), closeBody)]);
     expect(closes.every(result => result.status === 200)).toBe(true);
     const activations = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "contract.status.updated"), eq(domainEvents.aggregateId, String(seeded.contractId))));
-    expect(activations).toHaveLength(1);
+    expect(activations).toHaveLength(0);
+    const completions = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "contract.signature.completed"), eq(domainEvents.aggregateId, String(seeded.contractId))));
+    expect(completions).toHaveLength(1);
   });
 
   it("cancelamento encerra o envelope sem ativar o contrato", async () => {
