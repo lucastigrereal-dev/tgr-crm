@@ -6,7 +6,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, salesProcedure } from "./access";
 import { resolveFollowUpAt } from "../domain";
-import { buildSellerQualityRanking } from "../salesQuality";
+import { buildSellerQualityRanking, visibleQualityRanking } from "../salesQuality";
 import { saleStageFromFacts } from "../saleLifecycle";
 import { canTransitionOpportunityStage } from "../../shared/opportunityLifecycle";
 import { affectedRows } from "../mysqlErrors";
@@ -105,13 +105,14 @@ export const salesRouter = router({
     return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["funil de oportunidades"] : [] };
   }),
 
-  qualityRanking: salesProcedure.query(async () => {
+  qualityRanking: salesProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const limit = 1000;
     const rawRows = await db.select({ sellerId: opportunities.sellerId, sellerName: users.name, stage: opportunities.stage, expectedAmount: opportunities.expectedAmount, nextFollowUpAt: opportunities.nextFollowUpAt }).from(opportunities).leftJoin(users, eq(opportunities.sellerId, users.id)).orderBy(desc(opportunities.updatedAt)).limit(limit + 1);
     const truncated = rawRows.length > limit;
-    return { rows: buildSellerQualityRanking(rawRows.slice(0, limit)), truncated, truncatedSources: truncated ? ["oportunidades do ranking"] : [] };
+    const rows = visibleQualityRanking(buildSellerQualityRanking(rawRows.slice(0, limit)), ctx.user);
+    return { rows, truncated, truncatedSources: truncated ? ["oportunidades do ranking"] : [] };
   }),
 
   createOpportunity: salesProcedure.input(opportunityInput).mutation(async ({ ctx, input }) => {

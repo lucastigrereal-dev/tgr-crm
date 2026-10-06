@@ -28,6 +28,8 @@ export const capabilityMatrix = {
   // ADR-002 (2026-10-04): pedir distrato é amplo; decidir/executar é só de papel superior (não há "manager" no CRM).
   "contract.cancel.decide": ["admin"],
   "contract.cancel.execute": ["admin"],
+  // PRD Apêndice B #11: ativar contrato (papel assinado e anexado) é registro da administração; o CRM não tem "manager".
+  "contract.activate": ["admin"],
   "document.read": ["admin", "seller", "finance", "service"],
   "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],

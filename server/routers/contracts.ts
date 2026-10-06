@@ -41,6 +41,7 @@ export const contractsRouter = router({
     installmentCount: z.coerce.number().int().min(1).max(360),
     notes: z.string().trim().max(5000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
+    if (input.status === "active") assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const duplicate = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.number, input.number)).limit(1))[0];
@@ -227,7 +228,9 @@ export const contractsRouter = router({
       const schedule = await tx.select({ id: installments.id, amount: installments.amount, paidAmount: installments.paidAmount, status: installments.status }).from(installments).where(eq(installments.contractId, contract.id)).for("update");
       const commissionRows = await tx.select({ id: salesCommissions.id, status: salesCommissions.status }).from(salesCommissions).where(eq(salesCommissions.contractId, contract.id)).for("update");
       const impact = planCancellationExecution({ requestStatus: request.status, contractStatus: contract.status, installments: schedule, commissions: commissionRows });
-      const simulation = JSON.parse(request.simulationSnapshot) as { paidAmount?: number; penalty?: number; retained?: number; refund?: number };
+      const simulation = JSON.parse(request.simulationSnapshot) as { paidAmount?: number; penalty?: number | null; retained?: number | null; refund?: number | null; policyConfigured?: boolean };
+      // PRD Apêndice B #12: só lança multa/devolução se a simulação aprovada tinha política configurada; pedido antigo (sem a marca) conta como sem política.
+      const moneyFromPolicy = simulation.policyConfigured === true;
       const currentPaidAmount = schedule.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
       if (simulation.paidAmount !== undefined && Math.abs(currentPaidAmount - Number(simulation.paidAmount)) > 0.005) throw new TRPCError({ code: "CONFLICT", message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar." });
       const settlementDate = new Date();
@@ -254,13 +257,13 @@ export const contractsRouter = router({
       }
       if (impact.cancelInstallmentIds.length) await tx.update(billingRecords).set({ status: "cancelled" }).where(and(inArray(billingRecords.installmentId, impact.cancelInstallmentIds), inArray(billingRecords.status, ["pending", "generated", "expired"])));
       const financialImpact = [] as Array<{ contractId: number; type: "income" | "expense"; category: string; description: string; amount: string; dueDate: Date; status: "open"; createdByUserId: number }>;
-      if (Number(simulation.penalty ?? 0) > 0 || Number(simulation.retained ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "income", category: "Distrato · multa/retenção", description: `Impacto previsto do distrato aprovado #${request.id}`, amount: Number(simulation.penalty ?? simulation.retained ?? 0).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
-      if (Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
+      if (moneyFromPolicy && (Number(simulation.penalty ?? 0) > 0 || Number(simulation.retained ?? 0) > 0)) financialImpact.push({ contractId: contract.id, type: "income", category: "Distrato · multa/retenção", description: `Impacto previsto do distrato aprovado #${request.id}`, amount: Number(simulation.penalty ?? simulation.retained ?? 0).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
+      if (moneyFromPolicy && Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
       if (financialImpact.length) { const insertedFinancialEntries = await tx.insert(financialTransactions).values(financialImpact).$returningId(); insertedFinancialEntries.forEach((inserted, index) => { const entry = financialImpact[index]; if (entry && inserted?.id) createdFinancialEntryFacts.push({ id: inserted.id, contractId: entry.contractId, type: entry.type, category: entry.category, amount: Number(entry.amount) }); }); }
       await tx.update(contractCancellationRequests).set({ status: "executed", executedAt: new Date(), decisionNotes: [request.decisionNotes, input.executionNotes?.trim()].filter(Boolean).join("\n") || null }).where(eq(contractCancellationRequests.id, request.id));
-      return { contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
+      return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
     });
-    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId}; parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
+    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId} (política de distrato ${outcome.policyConfigured ? "configurada" : "NÃO configurada: nenhum lançamento de multa/devolução"}); parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
     await recordDomainEvent({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, cancelledInstallments: outcome.cancelledInstallments, cancelledCommissions: outcome.cancelledCommissions, financialEntries: outcome.financialEntries } });
     for (const commissionId of outcome.cancelledCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "cancelled", `Comissão cancelada pelo distrato do contrato ${outcome.contractId}.`); await recordDomainEvent({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { status: "cancelled", contractId: outcome.contractId } }); }
@@ -278,6 +281,7 @@ export const contractsRouter = router({
     status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]),
     cancellationReason: z.string().trim().max(2000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
+    if (input.status === "active") assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });

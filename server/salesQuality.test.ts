@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSellerQualityRanking } from "./salesQuality";
+import { buildSellerQualityRanking, visibleQualityRanking } from "./salesQuality";
 
 describe("ranking de qualidade comercial", () => {
   it("combina conversão e higiene de follow-up, exibindo evidências sem inventar avaliação", () => {
@@ -15,4 +15,11 @@ describe("ranking de qualidade comercial", () => {
       expect.objectContaining({ sellerName: "Bruno", conversionRate: 100, followUpCompliance: 0, qualityScore: 60, wonCount: 1, lostCount: 0, overdueFollowUps: 1, wonAmount: 1000 }),
     ]);
   });
+});
+
+describe("visibleQualityRanking (PRD Apêndice B #53)", () => {
+  const rows = [{ sellerId: 1, sellerName: "SYN Ana" }, { sellerId: 2, sellerName: "SYN Bia" }];
+  it("admin sees the whole operation", () => { expect(visibleQualityRanking(rows, { id: 9, role: "admin" })).toHaveLength(2); });
+  it("a seller sees only their own row (no public individual ranking)", () => { expect(visibleQualityRanking(rows, { id: 2, role: "seller" })).toEqual([rows[1]]); });
+  it("other roles see nothing but themselves", () => { expect(visibleQualityRanking(rows, { id: 7, role: "finance" })).toEqual([]); });
 });
