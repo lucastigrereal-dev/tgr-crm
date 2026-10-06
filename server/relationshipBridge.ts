@@ -19,9 +19,12 @@ interface ContractStateTarget {
   includeCustomer: boolean;
   /** Recibos/ações próprios da entrega crm.sale.validated.v1 (só o alvo que recebe "validated" os define). */
   validatedActions?: { delivered: string; notApplicable: string; rejected: string };
+  /** Fala o contrato de recusa PIL-008 (4xx + `code`): terminal na 1ª vez. O Relationship mantém a regra repetida. */
+  codedRejections?: boolean;
 }
 
-// Recusa de CONTEÚDO (400/409/422) repetida MAX_CONTENT_REJECTIONS vezes seguidas vira recibo terminal e a fila segue.
+// Recusa de CONTEÚDO sem `code` (400/409/422) repetida MAX_CONTENT_REJECTIONS vezes seguidas vira recibo terminal e a fila segue;
+// com `code` (^[A-Z0-9_]+$, 4xx exceto 408/425/429) é terminal na 1ª vez nos alvos Sales Command e Financial (PIL-008).
 // 401/403/404 (chave/endpoint errados), 5xx e rede nunca descartam: tentam de novo e alertam.
 // ponytail: contador em memória (zera no restart, então um veneno leva no máximo +5 tentativas por boot).
 // Reprocessar um recusado: apagar a linha de audit_logs com o idempotencyKey do recibo (ver roteiro do piloto).
@@ -29,11 +32,14 @@ export const MAX_CONTENT_REJECTIONS = 5;
 export const MIN_REJECTION_WINDOW_MS = 10 * 60_000; // e há pelo menos 10 min desde a 1ª (um 400 passageiro não esvazia a fila)
 
 /** Contador de recusas de conteúdo seguidas por chave. Qualquer outra falha ou sucesso zera. */
-export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now) {
+export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now, options: { codedRejections?: boolean } = {}) {
   const seen = new Map<K, { count: number; firstAt: number }>();
   return {
     /** true = desistir agora (gravar recibo terminal). */
     record(key: K, error: unknown) {
+      // PIL-008/R7: recusa de CONTEÚDO com `code` explícito (4xx exceto 408/425/429) é terminal já na 1ª vez e não segura a fila.
+      // Só os alvos que falam esse contrato (Sales Command e Financial) ligam `codedRejections`; o Relationship segue a regra repetida.
+      if (options.codedRejections && error instanceof DeliveryRejectedError && isCodedContentRejection(error.status, error.code)) { seen.delete(key); return true; }
       if (!(error instanceof DeliveryRejectedError) || !isContentRejection(error.status)) { seen.delete(key); return false; }
       const entry = seen.get(key) ?? { count: 0, firstAt: now() };
       entry.count += 1;
@@ -48,8 +54,29 @@ export function isContentRejection(status: number) {
   return status === 400 || status === 409 || status === 422;
 }
 
+const REJECTION_CODE = /^[A-Z0-9_]+$/;
+/** 4xx exceto 408/425/429 (esses são "tente depois") com `code` presente. 5xx nunca. */
+export function isCodedContentRejection(status: number, code: string | null | undefined) {
+  return Boolean(code) && status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429;
+}
+/** Lê `code` do corpo JSON de uma recusa 4xx. Sem corpo/JSON/code válido (`^[A-Z0-9_]+$`) => null (recusa sem código). */
+export async function readRejectionCode(response: Response): Promise<string | null> {
+  if (response.status < 400 || response.status >= 500 || typeof response.json !== "function") return null;
+  try {
+    const body = await response.json() as unknown;
+    const code = body && typeof body === "object" ? (body as Record<string, unknown>).code : undefined;
+    return typeof code === "string" && REJECTION_CODE.test(code) ? code : null;
+  } catch { return null; }
+}
+/** Texto do recibo terminal: com código => motivo explícito; sem código => regra repetida (texto histórico). */
+export function rejectionReceiptSummary(eventName: string, targetLabel: string, error: DeliveryRejectedError) {
+  return error.code
+    ? eventName + " recusado pelo TGR " + targetLabel + " (HTTP " + error.status + ", code " + error.code.slice(0, 64) + ")."
+    : eventName + " recusado pelo TGR " + targetLabel + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + error.status + ").";
+}
+
 export class DeliveryRejectedError extends Error {
-  constructor(readonly label: string, readonly status: number) {
+  constructor(readonly label: string, readonly status: number, readonly code: string | null = null) {
     super(label + " delivery failed with HTTP " + status);
   }
 }
@@ -74,6 +101,7 @@ const SALES_CANCELLATION_TARGET: ContractStateTarget = {
   notApplicableAction: "sales_cancellation_not_applicable",
   rejectedAction: "sales_cancellation_rejected",
   includeCustomer: false, // o Sales não guarda dados pessoais do cliente; não enviar
+  codedRejections: true,
   validatedActions: { delivered: "sales_sale_validated_delivered", notApplicable: "sales_sale_validated_not_applicable", rejected: "sales_sale_validated_rejected" },
 };
 
@@ -81,8 +109,13 @@ function actionsFor(target: ContractStateTarget, state: BridgeStatus) {
   if (state === "validated" && target.validatedActions) return target.validatedActions;
   return { delivered: target.deliveredAction, notApplicable: target.notApplicableAction, rejected: target.rejectedAction };
 }
-function eventNameFor(state: BridgeStatus) {
-  return state === "active" ? "crm.contract.activated.v1" : state === "validated" ? "crm.sale.validated.v1" : "crm.contract.cancelled.v1";
+function eventNameFor(state: BridgeStatus): string {
+  switch (state) {
+    case "active": return "crm.contract.activated.v1";
+    case "cancelled": return "crm.contract.cancelled.v1";
+    case "validated": return "crm.sale.validated.v1";
+    default: { const unknown: never = state; throw new Error("Unknown bridge status: " + String(unknown)); }
+  }
 }
 
 function safeEndpoint(endpoint: string, target: ContractStateTarget) {
@@ -157,7 +190,14 @@ export type ContractLineage = NonNullable<Awaited<ReturnType<typeof lineageForCo
 // WP5 (PRD v4 E0.3): corpo puro do evento de contrato. É a MESMA função usada na entrega e no export do contrato
 // (shared/contracts/tgr-events.snapshot.json), então o snapshot dos consumidores não deriva do código real.
 export function buildContractStateBody(lineage: ContractLineage, status: BridgeStatus, contractId: number, occurredAt: Date, includeCustomer: boolean) {
-  const eventName = status === "active" ? "crm.contract.activated.v1" : "crm.contract.cancelled.v1";
+  // Exaustivo de propósito: "validated" tem builder próprio (buildSaleValidatedBody) e NUNCA pode sair como cancelado.
+  let eventName: "crm.contract.activated.v1" | "crm.contract.cancelled.v1";
+  switch (status) {
+    case "active": eventName = "crm.contract.activated.v1"; break;
+    case "cancelled": eventName = "crm.contract.cancelled.v1"; break;
+    case "validated": throw new Error("buildContractStateBody não emite 'validated': use buildSaleValidatedBody (crm.sale.validated.v1).");
+    default: { const unknown: never = status; throw new Error("Unknown bridge status: " + String(unknown)); }
+  }
   const correlationId = lineage.correlationId ?? ("crm-rel-" + contractId + "-" + status);
   return {
     eventId: "crm-contract-" + contractId + "-" + status,
@@ -256,7 +296,7 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
     },
     body: JSON.stringify(body),
   }, 8_000);
-  if (!response.ok) throw new DeliveryRejectedError(target.label, response.status);
+  if (!response.ok) throw new DeliveryRejectedError(target.label, response.status, target.codedRejections ? await readRejectionCode(response) : null);
   await recordAudit(null, "contract", contractId, actions.delivered, eventName + " entregue ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
   return "delivered";
 }
@@ -281,7 +321,7 @@ function startContractStatePump(
   // ponytail: zera no restart (reler é seguro, a entrega é idempotente pelo recibo); para no 1º evento com
   // falha para tentar de novo. Teto: 500 eventos seguidos falhando sempre ainda travam a fila.
   let cursor = 0;
-  const rejections = createRejectionTracker<string>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS);
+  const rejections = createRejectionTracker<string>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: target.codedRejections });
 
   async function tick() {
     if (running || stopped) return 0;
@@ -313,7 +353,7 @@ function startContractStatePump(
             options.onError?.(error);
             if (rejections.record(receiptKey, error)) {
               await recordAudit(null, "contract", contractId, actionsFor(target, state).rejected,
-                eventNameFor(state) + " recusado pelo TGR " + target.label + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
+                rejectionReceiptSummary(eventNameFor(state), target.label, error as DeliveryRejectedError),
                 { idempotencyKey: receiptKey });
             } else {
               blocked = true;
