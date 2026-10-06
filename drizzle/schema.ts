@@ -250,6 +250,11 @@ export const captureRecords = mysqlTable(
     qualificationStatus: mysqlEnum("qualificationStatus", ["pending", "qualified", "disqualified"]).default("pending").notNull(),
     qualificationReason: text("qualificationReason"),
     noTourReason: text("noTourReason"),
+    // ADR-007 (V6): resultado comercial da sala (VENDEU | CAIU EM MESA). Imutável depois de gravado; NÃO é venda validada.
+    commercialOutcome: mysqlEnum("commercialOutcome", ["vendeu", "caiu_em_mesa"]),
+    commercialOutcomeReason: text("commercialOutcomeReason"),
+    commercialOutcomeAt: timestamp("commercialOutcomeAt"),
+    commercialOutcomeByUserId: int("commercialOutcomeByUserId").references(() => users.id),
     partnerName: varchar("partnerName", { length: 255 }),
     partnerAge: int("partnerAge"),
     partnerProfession: varchar("partnerProfession", { length: 120 }),
@@ -418,6 +423,45 @@ export const contractDocuments = mysqlTable("contract_documents", {
   uploadedByUserId: int("uploadedByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+// ADR-007 (V6): fato da venda VALIDADA. Uma linha por contrato; contrato `active` só nasce da validação final.
+export const saleValidations = mysqlTable("sale_validations", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull(),
+  paymentConfirmedAt: timestamp("paymentConfirmedAt"),
+  paymentConfirmedByUserId: int("paymentConfirmedByUserId"),
+  paymentConfirmationNote: text("paymentConfirmationNote"),
+  paymentEvidenceRef: varchar("paymentEvidenceRef", { length: 512 }),
+  validatedAt: timestamp("validatedAt"),
+  validatedByUserId: int("validatedByUserId"),
+  signedDocumentId: int("signedDocumentId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("sale_validations_contract_unique").on(table.contractId),
+  foreignKey({ name: "sv_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+  foreignKey({ name: "sv_payment_user_fk", columns: [table.paymentConfirmedByUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: "sv_validated_user_fk", columns: [table.validatedByUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: "sv_signed_document_fk", columns: [table.signedDocumentId], foreignColumns: [contractDocuments.id] }),
+]);
+
+// Trilha append-only (triggers na migration 0044 recusam UPDATE/DELETE). documentRef = storageKey, nunca o arquivo.
+export const saleValidationEvents = mysqlTable("sale_validation_events", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull(),
+  step: mysqlEnum("step", ["payment_confirmed", "final_validated", "validation_rejected"]).notNull(),
+  actorUserId: int("actorUserId").notNull(),
+  occurredAt: timestamp("occurredAt").defaultNow().notNull(),
+  beforeJson: text("beforeJson"),
+  afterJson: text("afterJson"),
+  reason: text("reason"),
+  documentRef: varchar("documentRef", { length: 512 }),
+  correlationId: varchar("correlationId", { length: 120 }).notNull(),
+}, table => [
+  index("sve_contract_idx").on(table.contractId, table.occurredAt),
+  foreignKey({ name: "sve_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+  foreignKey({ name: "sve_actor_fk", columns: [table.actorUserId], foreignColumns: [users.id] }),
+]);
 
 export const contractCancellationRequests = mysqlTable("contract_cancellation_requests", {
   id: int("id").autoincrement().primaryKey(),
