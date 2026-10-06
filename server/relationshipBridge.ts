@@ -28,13 +28,19 @@ interface ContractStateTarget {
 export const MAX_CONTENT_REJECTIONS = 5;
 export const MIN_REJECTION_WINDOW_MS = 10 * 60_000; // e há pelo menos 10 min desde a 1ª (um 400 passageiro não esvazia a fila)
 
-/** Contador de recusas de conteúdo seguidas por chave. Qualquer outra falha ou sucesso zera. */
-export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now) {
+/**
+ * Contador de recusas de conteúdo seguidas por chave. Qualquer outra falha ou sucesso zera.
+ * PIL-008 (R7): recusa TIPADA (4xx + code) desiste na 1ª. `conflictIsTransient`: 409 sem code é ordem de chegada
+ * (Financial: comissão paga antes do sale.validated) e nunca desiste.
+ */
+export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now, options: { conflictIsTransient?: boolean } = {}) {
   const seen = new Map<K, { count: number; firstAt: number }>();
   return {
     /** true = desistir agora (gravar recibo terminal). */
     record(key: K, error: unknown) {
-      if (!(error instanceof DeliveryRejectedError) || !isContentRejection(error.status)) { seen.delete(key); return false; }
+      if (error instanceof DeliveryRejectedError && error.code) { seen.delete(key); return true; }
+      if (!(error instanceof DeliveryRejectedError) || !isContentRejection(error.status)
+        || (options.conflictIsTransient && error.status === 409)) { seen.delete(key); return false; }
       const entry = seen.get(key) ?? { count: 0, firstAt: now() };
       entry.count += 1;
       if (entry.count >= MAX_CONTENT_REJECTIONS && now() - entry.firstAt >= windowMs) { seen.delete(key); return true; }
@@ -49,9 +55,32 @@ export function isContentRejection(status: number) {
 }
 
 export class DeliveryRejectedError extends Error {
-  constructor(readonly label: string, readonly status: number) {
-    super(label + " delivery failed with HTTP " + status);
+  constructor(readonly label: string, readonly status: number, readonly code?: string) {
+    super(label + " delivery failed with HTTP " + status + (code ? " " + code : ""));
   }
+  /** "HTTP 422 SALE_..." ou "HTTP 503": o motivo que vai para o recibo terminal (DLQ). */
+  get reason() { return "HTTP " + this.status + (this.code ? " " + this.code : ""); }
+}
+
+const TRANSIENT_4XX = new Set([408, 425, 429]);
+/** PIL-008 (R7): só 4xx de conteúdo (fora 408/425/429) com `code` [A-Z0-9_] é recusa tipada; o resto não tem code. */
+export async function refusalFromResponse(label: string, response: Response) {
+  let code: string | undefined;
+  if (response.status >= 400 && response.status < 500 && !TRANSIENT_4XX.has(response.status)) {
+    try {
+      const body = await response.json() as { code?: unknown };
+      if (typeof body?.code === "string" && /^[A-Z0-9_]{1,120}$/.test(body.code)) code = body.code;
+    } catch { /* corpo não-JSON: sem code */ }
+  }
+  return new DeliveryRejectedError(label, response.status, code);
+}
+
+/** Texto do recibo terminal: recusa tipada cita o code; a tolerância de 5 recusas sem code mantém o texto antigo. */
+export function rejectionSummary(eventName: string, label: string, error: unknown) {
+  const rejected = error as DeliveryRejectedError;
+  return rejected.code
+    ? eventName + " recusado pelo TGR " + label + " (" + rejected.reason + ")."
+    : eventName + " recusado pelo TGR " + label + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + rejected.status + ").";
 }
 
 const RELATIONSHIP_TARGET: ContractStateTarget = {
@@ -285,7 +314,7 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
     },
     body: JSON.stringify(body),
   }, 8_000);
-  if (!response.ok) throw new DeliveryRejectedError(target.label, response.status);
+  if (!response.ok) throw await refusalFromResponse(target.label, response);
   await recordAudit(null, "contract", contractId, actions.delivered, eventName + " entregue ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
   return "delivered";
 }
@@ -342,8 +371,7 @@ function startContractStatePump(
             options.onError?.(error);
             if (rejections.record(receiptKey, error)) {
               await recordAudit(null, "contract", contractId, actionsFor(target, state).rejected,
-                eventNameFor(state) + " recusado pelo TGR " + target.label + " " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
-                { idempotencyKey: receiptKey });
+                rejectionSummary(eventNameFor(state), target.label, error), { idempotencyKey: receiptKey });
             } else {
               blocked = true;
             }

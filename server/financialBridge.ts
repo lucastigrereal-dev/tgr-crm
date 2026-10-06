@@ -4,7 +4,7 @@ import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { createRejectionTracker, DeliveryRejectedError, MAX_CONTENT_REJECTIONS, MIN_REJECTION_WINDOW_MS } from "./relationshipBridge";
+import { createRejectionTracker, MIN_REJECTION_WINDOW_MS, refusalFromResponse, rejectionSummary } from "./relationshipBridge";
 
 export const FINANCIAL_EVENT_NAMES = [
   "contract.created",
@@ -84,7 +84,8 @@ export function startFinancialBridgePump(
   const intervalMs = options.intervalMs ?? 5_000;
   let running = false;
   let stopped = false;
-  const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS);
+  // 409 sem code no Financial = ordem de chegada (ex.: comissão paga antes do sale.validated): tenta sempre, nunca DLQ.
+  const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { conflictIsTransient: true });
 
   async function tick() {
     if (running || stopped) return 0;
@@ -108,6 +109,13 @@ export function startFinancialBridgePump(
         if (await alreadyHandled(db, event.id)) continue;
         try {
           const body = financialBridgeEnvelope(event, project);
+          // KAN-31 V6: o Financial exige saleId em sale.validated. Contrato sem linhagem Sales Command não tem venda a
+          // ligar: recibo not_applicable (nunca inventar saleId). Limitação registrada no receipt.
+          if (event.eventName === "sale.validated" && !(typeof body.event.payload.saleId === "string" && body.event.payload.saleId.trim())) {
+            await recordAudit(null, "integration_event", event.id, "financial_not_applicable",
+              "sale.validated sem saleId (contrato fora do Sales Command); não enviado ao TGR Financial Layer.", { idempotencyKey: "financial-event:" + event.id });
+            continue;
+          }
           const contractIdRaw = body.event.payload.contractId;
           const contractId = typeof contractIdRaw === "number"
             ? contractIdRaw
@@ -129,7 +137,7 @@ export function startFinancialBridgePump(
             },
             body: JSON.stringify(body),
           }, 8_000);
-          if (!response.ok) throw new DeliveryRejectedError("Financial", response.status);
+          if (!response.ok) throw await refusalFromResponse("Financial", response);
           await recordAudit(
             null,
             "integration_event",
@@ -145,8 +153,7 @@ export function startFinancialBridgePump(
           // Mesma regra do bridge de contrato: só recusa de conteúdo repetida (e por tempo mínimo) vira recibo terminal.
           if (rejections.record(event.id, error)) {
             await recordAudit(null, "integration_event", event.id, "financial_rejected",
-              event.eventName + " recusado pelo TGR Financial Layer " + MAX_CONTENT_REJECTIONS + "x seguidas (HTTP " + (error as DeliveryRejectedError).status + ").",
-              { idempotencyKey: "financial-event:" + event.id });
+              rejectionSummary(event.eventName, "Financial Layer", error), { idempotencyKey: "financial-event:" + event.id });
           }
         }
       }
