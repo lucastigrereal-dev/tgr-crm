@@ -28,6 +28,7 @@ CREATE TABLE `sale_validations` (
 	CONSTRAINT `sale_validations_contract_unique` UNIQUE(`contractId`)
 );
 --> statement-breakpoint
+ALTER TABLE `contract_documents` ADD `signedArtifact` boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcome` enum('vendeu','caiu_em_mesa');--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcomeReason` text;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcomeAt` timestamp;--> statement-breakpoint

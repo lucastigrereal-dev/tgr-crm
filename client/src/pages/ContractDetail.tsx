@@ -145,7 +145,7 @@ function DocumentsCard({
             <a href={`/manus-storage/${document.storageKey}`} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center justify-between rounded-lg hover:bg-[#f3efe6]">
               <div className="min-w-0">
                 <p className="truncate font-medium text-[#1d2b2a]">{document.filename}</p>
-                <p className="mt-1 text-[11px] text-muted-foreground">{document.category} · {document.signed ? "assinado e confirmado" : "aguardando assinatura"}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{document.category} · {document.signedArtifact ? "arquivo assinado enviado" : document.signed ? "assinatura confirmada (falta enviar o arquivo assinado)" : "aguardando assinatura"}</p>
               </div>
               <Paperclip className="ml-2 h-4 w-4 shrink-0 text-[#b18f4b]" />
             </a>

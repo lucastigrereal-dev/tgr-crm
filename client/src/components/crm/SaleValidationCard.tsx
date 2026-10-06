@@ -11,12 +11,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 // ADR-007 (V6): os cinco portões da venda validada. O servidor decide; aqui só mostramos e oferecemos as ações ao gerente (admin).
-const GATE_LABELS: Array<{ key: "paymentConfirmed" | "contractGenerated" | "contractSigned" | "signedDocumentStored" | "noOpenCancellation" | "managerValidated"; label: string }> = [
+const GATE_LABELS: Array<{ key: "paymentConfirmed" | "contractGenerated" | "contractSigned" | "signedDocumentStored" | "noOpenCancellation" | "noOpenSignatureEnvelope" | "managerValidated"; label: string }> = [
   { key: "paymentConfirmed", label: "Pagamento confirmado" },
   { key: "contractGenerated", label: "Contrato gerado" },
   { key: "contractSigned", label: "Contrato assinado" },
-  { key: "signedDocumentStored", label: "Documento assinado armazenado" },
+  { key: "signedDocumentStored", label: "Contrato assinado armazenado (arquivo assinado enviado)" },
   { key: "noOpenCancellation", label: "Sem pedido de distrato em aberto" },
+  { key: "noOpenSignatureEnvelope", label: "Sem envelope de assinatura em andamento" },
   { key: "managerValidated", label: "Validação final do gerente" },
 ];
 

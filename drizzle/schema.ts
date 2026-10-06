@@ -420,6 +420,8 @@ export const contractDocuments = mysqlTable("contract_documents", {
   filename: varchar("filename", { length: 255 }).notNull(),
   storageKey: text("storageKey").notNull(),
   signed: boolean("signed").default(false).notNull(),
+  // ADR-007 (V6): true só quando o arquivo ASSINADO real está no storage (upload de admin com signed:true). `signed` é só exibição.
+  signedArtifact: boolean("signedArtifact").default(false).notNull(),
   uploadedByUserId: int("uploadedByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });

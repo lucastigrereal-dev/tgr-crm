@@ -15,6 +15,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { evaluateSaleValidationGates } from "./saleValidation";
 
 // Reconciliação Clicksign local: webhook assinado por HMAC processado contra MySQL
 // descartável. Nenhuma chamada de rede ao provedor; segredo gerado só para o teste.
@@ -102,6 +103,8 @@ describe.skipIf(!integrationUrl)("Clicksign webhook em MySQL real: reconciliaç�
     expect(signer.status).toBe("signed");
     const [crmDocument] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, seeded.documentId));
     expect(crmDocument.signed).toBe(true);
+    // RED TEAM P1: `signed` do webhook é só exibição; sem arquivo assinado no storage não há signedArtifact.
+    expect(crmDocument.signedArtifact).toBe(false);
     let [contract] = await db.select().from(contracts).where(eq(contracts.id, seeded.contractId));
     expect(contract.status).toBe("pending_signature");
 
@@ -116,6 +119,10 @@ describe.skipIf(!integrationUrl)("Clicksign webhook em MySQL real: reconciliaç�
     expect(contract.status).toBe("pending_signature");
     expect(contract.activatedAt).toBeNull();
     expect(contract.signedAt).toBeInstanceOf(Date);
+    // signedAt vem do occurred_at do webhook (não do createdAt do rascunho).
+    expect(contract.signedAt?.toISOString()).toBe("2026-10-04T15:00:00.000Z");
+    const [afterClose] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, seeded.documentId));
+    expect(afterClose.signedArtifact).toBe(false);
 
     expect(await db.select().from(signatureWebhookEvents).where(eq(signatureWebhookEvents.externalEnvelopeId, seeded.externalEnvelopeId))).toHaveLength(2);
     const signedEvents = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "contract.document.signed"), eq(domainEvents.aggregateId, String(seeded.documentId))));
@@ -155,5 +162,34 @@ describe.skipIf(!integrationUrl)("Clicksign webhook em MySQL real: reconciliaç�
     expect(envelope).toMatchObject({ status: "canceled", activeKey: null });
     const [contract] = await db.select().from(contracts).where(eq(contracts.id, seeded.contractId));
     expect(contract.status).toBe("pending_signature");
+  });
+
+  it("PoC red team: um único `sign` não satisfaz os portões; só o arquivo assinado enviado pelo admin + envelope fechado validam", async () => {
+    const svc = await import("./saleValidationService");
+    const seeded = await seedEnvelope("poc");
+    const [admin] = await db.insert(users).values({ openId: `kan31-poc-admin-${runId}`, name: "Admin PoC", role: "admin" }).$returningId();
+    await svc.confirmPayment(admin.id, { contractId: seeded.contractId, note: "Pagamento conferido no extrato" });
+
+    // 1) Apenas o signer assina: rascunho vira signed=true (exibição), envelope segue running.
+    const signBody = payload("sign", seeded);
+    await expect(processClicksignWebhook(sign(signBody), signBody)).resolves.toMatchObject({ status: 200 });
+    let facts = await svc.loadSaleValidationFacts(db as never, seeded.contractId);
+    let gates = evaluateSaleValidationGates({ contract: facts.contract, documents: facts.documents, envelopes: facts.envelopes, validation: facts.validation });
+    expect(gates.signedDocumentStored).toBe(false);
+    expect(gates.noOpenSignatureEnvelope).toBe(false);
+    expect(gates.ready).toBe(false);
+    await expect(svc.validateSale(admin.id, { contractId: seeded.contractId })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", cause: expect.objectContaining({ code: "SALE_VALIDATION_GATES_MISSING" }) });
+
+    // 2) Envelope fecha (signedAt = occurred_at), mas NÃO há arquivo assinado: continua recusado por signedDocumentStored.
+    const closeBody = Buffer.from(JSON.stringify({ event: { id: randomUUID(), name: "envelope_closed", occurred_at: "2026-10-05T10:30:00Z" }, envelope: { id: seeded.externalEnvelopeId }, document: { id: seeded.externalDocumentId }, signer: { id: seeded.externalSignerId } }));
+    await expect(processClicksignWebhook(sign(closeBody), closeBody)).resolves.toMatchObject({ status: 200 });
+    await expect(svc.validateSale(admin.id, { contractId: seeded.contractId })).rejects.toMatchObject({ cause: expect.objectContaining({ code: "SALE_VALIDATION_GATES_MISSING", missing: ["signedDocumentStored"] }) });
+
+    // 3) Admin envia o PDF assinado (o router grava signed=true, signedArtifact=true): agora valida; signedAt = occurred_at do webhook.
+    const [artifact] = await db.insert(contractDocuments).values({ contractId: seeded.contractId, category: "contrato_assinado", filename: "assinado.pdf", storageKey: `kan31/poc-signed-${runId}.pdf`, signed: true, signedArtifact: true, uploadedByUserId: admin.id }).$returningId();
+    await expect(svc.validateSale(admin.id, { contractId: seeded.contractId })).resolves.toMatchObject({ success: true, alreadyValidated: false, signedDocumentId: artifact.id });
+    const [contract] = await db.select().from(contracts).where(eq(contracts.id, seeded.contractId));
+    expect(contract.status).toBe("active");
+    expect(contract.signedAt?.toISOString()).toBe("2026-10-05T10:30:00.000Z");
   });
 });
