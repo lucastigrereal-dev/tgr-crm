@@ -23,15 +23,16 @@ function query(rows: unknown[]) {
 const policy = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
 const billingRow = { billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 2, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } };
 
-function run(validation: Array<{ validatedAt: Date | null }>) {
+function run(validation: Array<{ validatedAt: Date | null }>, commissionPolicy = policy) {
   const inserted: Array<{ table: unknown }> = [];
   const tx = {
     insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { inserted.push({ table }); return Object.assign(Promise.resolve(undefined), { $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, i) => ({ id: 700 + i })) }); }) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
     select: vi.fn()
+      .mockReturnValueOnce(query([{ id: 61, status: "active" }]))
       .mockReturnValueOnce(query([billingRow]))
       .mockReturnValueOnce(query([{ contract: { id: 61, customerId: 5, status: "active", totalAmount: "10000.00" }, proposal: { id: 41, downPaymentAmount: "1000.00" }, opportunity: { id: 51 }, capture: { id: 100, resortId: 2, campaignId: 8, linerId: 10, closerId: 11 } }]))
-      .mockReturnValueOnce(query([{ commissionPolicy: policy }]))
+      .mockReturnValueOnce(query([{ commissionPolicy: commissionPolicy }]))
       .mockReturnValueOnce(query(validation))
       .mockReturnValue(query([])),
   };
@@ -52,6 +53,14 @@ describe("webhook Asaas: comissão automática exige venda validada", () => {
     expect(inserted.filter(entry => entry.table === salesCommissions)).toHaveLength(0);
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ source: "asaas" }) }));
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+  });
+
+  it("motivo do bloqueio é a causa real (venda não validada x política incompleta)", async () => {
+    await run([]).result;
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ reason: "sale_not_validated", source: "asaas" }) }));
+    vi.clearAllMocks();
+    await run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }], JSON.stringify({ linerRate: 0.02 })).result;
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ reason: "incomplete_project_policy", source: "asaas" }) }));
   });
 
   it("venda validada: comissão é lançada", async () => {

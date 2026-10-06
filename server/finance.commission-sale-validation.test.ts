@@ -15,10 +15,15 @@ function query(rows: unknown[]) {
 }
 const completePolicy = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
 
-function scenario(contractStatus: string, validation: Array<{ validatedAt: Date | null }>) {
+function scenario(contractStatus: string, validation: Array<{ validatedAt: Date | null }>, policy: string | null = completePolicy) {
   const inserted: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
-    select: vi.fn().mockReturnValueOnce(query([{ id: 91, status: "open", amount: "1000.00", paidAmount: "0.00" }])).mockReturnValue(query([])),
+    // ordem na transação: trava do contrato, trava da parcela, leitura da validação (corrente, após a trava) e o resto vazio.
+    select: vi.fn()
+      .mockReturnValueOnce(query([{ id: 61, status: contractStatus }]))
+      .mockReturnValueOnce(query([{ id: 91, status: "open", amount: "1000.00", paidAmount: "0.00" }]))
+      .mockReturnValueOnce(query(validation))
+      .mockReturnValue(query([])),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
     insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { inserted.push({ table, values }); return { $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, index) => ({ id: 500 + index })) }; }) })),
   };
@@ -29,8 +34,7 @@ function scenario(contractStatus: string, validation: Array<{ validatedAt: Date 
       .mockReturnValueOnce(query([{ id: 41, opportunityId: 51, downPaymentAmount: "1000.00" }]))
       .mockReturnValueOnce(query([{ id: 51 }]))
       .mockReturnValueOnce(query([{ id: 100, opportunityId: 51, resortId: 2, campaignId: 8, linerId: 10, closerId: 11 }]))
-      .mockReturnValueOnce(query(validation))
-      .mockReturnValueOnce(query([{ commissionPolicy: completePolicy }])),
+      .mockReturnValueOnce(query([{ commissionPolicy: policy }])),
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
   };
   dbMocks.getDb.mockResolvedValue(db);
@@ -52,6 +56,18 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     expect(commissionInserts(inserted)).toHaveLength(0);
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+  });
+
+  it.each([
+    ["sem validação (política completa)", "pending_signature", [], completePolicy, "sale_not_validated"],
+    ["contrato active sem validação (política completa)", "active", [{ validatedAt: null }], completePolicy, "sale_not_validated"],
+    ["sem validação e sem política: a causa primária é a venda", "pending_signature", [], JSON.stringify({ linerRate: 0.02 }), "sale_not_validated"],
+    ["validada mas política incompleta", "active", [{ validatedAt: new Date("2026-10-06T12:00:00Z") }], JSON.stringify({ linerRate: 0.02 }), "incomplete_project_policy"],
+  ] as const)("motivo do bloqueio é a causa real: %s => %s", async (_label, status, validation, policy, reason) => {
+    const { caller } = scenario(status, [...validation], policy);
+    await caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ reason, source: "manual" }) }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(expect.anything(), "installment", 91, "commission_blocked", expect.stringContaining(reason === "sale_not_validated" ? "venda ainda não foi validada" : "política completa"));
   });
 
   it("contrato active + venda validada + política completa: comissão é lançada", async () => {

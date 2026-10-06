@@ -8,7 +8,7 @@ import { assertCapability, financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
 import { buildCampaignDre } from "../financeDre";
 import { isSaleValidated } from "../saleValidationService";
-import { buildInstallmentCommissions, canCommissionBecomeDue } from "../commissionAutomation";
+import { COMMISSION_BLOCKED_MESSAGE, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, type CommissionBlockReason, type CreatedCommissionFact } from "../installmentCommissions";
 import { parseCompleteCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
@@ -354,10 +354,13 @@ export const financeRouter = router({
       const opportunity = proposal?.opportunityId ? ((await db.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
       const capture = opportunity?.id ? ((await db.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).orderBy(desc(captureRecords.createdAt)).limit(1))[0] ?? null) : null;
       const commissionContext = contract ? { contract, proposal, opportunity, capture } : null;
-      const saleValidated = commissionContext?.proposal && commissionContext.capture ? await isSaleValidated(db, contract?.id) : false;
-      const policyRow = commissionContext?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, commissionContext.capture.resortId)).limit(1))[0] : null; const commissionPolicy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy); const commissionNeedsPolicy = Boolean(commissionContext?.proposal && commissionContext.capture && Number(commissionContext.proposal.downPaymentAmount) > 0); const commissionBlocked = commissionNeedsPolicy && !canCommissionBecomeDue(commissionContext?.contract?.status, commissionPolicy, saleValidated);
-      const createdCommissionFacts: Array<{ id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number }> = [];
+      // ADR-007: a validação da venda é lida DENTRO da transação, depois da trava do contrato (mesma ordem de trava da validação final).
+      const policyRow = commissionContext?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, commissionContext.capture.resortId)).limit(1))[0] : null; const commissionPolicy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy); const commissionNeedsPolicy = commissionApplies(commissionContext);
+      let blockedReason: CommissionBlockReason | null = null;
+      const createdCommissionFacts: CreatedCommissionFact[] = [];
       const settled = await db.transaction(async tx => {
+        // Trava o contrato ANTES da parcela (mesma ordem do distrato e da validação final): a decisão do gate de comissão não corre contra a validação.
+        const lockedContract = (await tx.select({ id: contracts.id, status: contracts.status }).from(contracts).where(eq(contracts.id, item.contractId)).limit(1).for("update"))[0];
         const lockedItem = (await tx.select({ id: installments.id, status: installments.status, amount: installments.amount, paidAmount: installments.paidAmount }).from(installments).where(eq(installments.id, input.id)).limit(1).for("update"))[0];
         if (!lockedItem) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela não encontrada." });
         if (lockedItem.status === "paid") return false;
@@ -368,14 +371,18 @@ export const financeRouter = router({
         if (affectedRows(updateResult) === 0) return false;
         await tx.update(billingRecords).set({ status: "paid" }).where(and(eq(billingRecords.installmentId, input.id), inArray(billingRecords.status, ["pending", "generated"])));
         await tx.insert(financialTransactions).values({ contractId: item.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: remainingAmount.toFixed(2), dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });
-        if (commissionContext?.proposal && commissionContext.capture && Number(commissionContext.proposal.downPaymentAmount) > 0 && commissionPolicy && canCommissionBecomeDue(commissionContext.contract.status, commissionPolicy, saleValidated)) { const exists = await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, item.id)).limit(1); if (!exists.length) { const method = (["pix", "debit", "credit", "boleto", "cash", "cheque"].includes((input.paymentMethod || "").toLowerCase()) ? (input.paymentMethod || "").toLowerCase() : "other") as Parameters<typeof buildInstallmentCommissions>[0]["paymentMethod"]; const rows = buildInstallmentCommissions({ installmentId: item.id, installmentAmount: Number(item.amount), entryTotal: Number(commissionContext.proposal.downPaymentAmount), contractTotal: Number(commissionContext.contract.totalAmount), paymentMethod: method, compensatedAt: new Date(), linerId: commissionContext.capture.linerId, closerId: commissionContext.capture.closerId, rates: { liner: commissionPolicy.linerRate, closer: commissionPolicy.closerRate, ftb: commissionPolicy.ftbRate }, calendar: { cancellationDeadlineDay: commissionPolicy.cancellationDeadlineDay, expectedPaymentDay: commissionPolicy.expectedPaymentDay } }); if (rows.length) { const commissionValues = rows.map(row => ({ ...row, contractId: item.contractId, opportunityId: commissionContext.opportunity?.id ?? null, campaignId: commissionContext.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod })); const insertedCommissions = await tx.insert(salesCommissions).values(commissionValues).$returningId(); insertedCommissions.forEach((inserted, index) => { const row = commissionValues[index]; if (row && inserted?.id) createdCommissionFacts.push({ id: inserted.id, sellerId: row.sellerId, campaignId: row.campaignId, opportunityId: row.opportunityId, contractId: row.contractId, sourceInstallmentId: row.sourceInstallmentId, commissionRole: row.commissionRole, amount: Number(row.amount), rate: Number(row.rate) }); }); } } }
+        if (commissionContext && commissionNeedsPolicy) {
+          blockedReason = commissionBlockReason(lockedContract?.status, commissionPolicy, await isSaleValidated(tx, item.contractId));
+          if (!blockedReason && commissionPolicy) createdCommissionFacts.push(...await insertInstallmentCommissions(tx, { installment: { id: item.id, amount: item.amount, contractId: item.contractId }, context: { contract: { ...commissionContext.contract, status: lockedContract?.status ?? commissionContext.contract.status }, proposal: commissionContext.proposal, opportunity: commissionContext.opportunity, capture: commissionContext.capture }, policy: commissionPolicy, paymentMethod: normalizePaymentMethod(input.paymentMethod), compensatedAt: new Date() }));
+        }
         return true;
       });
       if (!settled) return { success: true, alreadyPaid: true, commissionBlocked: false };
       await recordAudit(ctx.user.id, "installment", input.id, "paid", `Parcela ${item.sequence} baixada como paga.`);
-      if (commissionBlocked) {
-        await recordAudit(ctx.user.id, "installment", input.id, "commission_blocked", "Comissão automática bloqueada: a política completa do empreendimento não está configurada, o contrato não está ativo ou a venda não foi validada.");
-        await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, reason: "incomplete_project_policy", source: "manual" } });
+      const commissionBlocked = blockedReason !== null;
+      if (blockedReason) {
+        await recordAudit(ctx.user.id, "installment", input.id, "commission_blocked", COMMISSION_BLOCKED_MESSAGE[blockedReason]);
+        await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, reason: blockedReason, source: "manual" } });
       }
       await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { installmentId: input.id, paidAmount: Number((Number(item.amount) - Number(item.paidAmount ?? 0)).toFixed(2)).toFixed(2), contractId: item.contractId, sequence: item.sequence, amount: item.amount, source: "manual", gatewayPaymentId: null, commissionBlocked } });
       for (const commission of createdCommissionFacts) { await recordAudit(ctx.user.id, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: ctx.user.id, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }
