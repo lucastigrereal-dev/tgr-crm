@@ -30,12 +30,19 @@ import { logger } from "./logger";
 
 // PIL-008: recusa de DOMÍNIO (não vale a pena o Sales reenviar) vs falha de INFRAESTRUTURA (transitória, 503).
 // O Sales lê o código, para de tentar e deixa a venda visível para revisão (PRD v4, resposta 7: REJECTED_BY_CRM com motivo).
-export type SalesIngestRejectionCode =
-  | "INSUFFICIENT_INVENTORY" | "SALE_TERMS_POLICY_MISSING" | "SALE_TERMS_POLICY_AMBIGUOUS"
-  | "PROJECT_NOT_MAPPED" | "PROJECT_MAPPING_CONFLICT" | "INVALID_COMMERCIAL_SNAPSHOT" | "INSTALLMENT_LIMIT_EXCEEDED";
+export const SALES_INGEST_REJECTION_CODES = [
+  "INSUFFICIENT_INVENTORY", "SALE_TERMS_POLICY_MISSING", "SALE_TERMS_POLICY_AMBIGUOUS",
+  "PROJECT_NOT_MAPPED", "PROJECT_MAPPING_CONFLICT", "INVALID_COMMERCIAL_SNAPSHOT", "INSTALLMENT_LIMIT_EXCEEDED",
+] as const;
+export type SalesIngestRejectionCode = (typeof SALES_INGEST_REJECTION_CODES)[number];
 export class SalesIngestRejection extends Error {
   constructor(readonly code: SalesIngestRejectionCode, message: string) { super(message); this.name = "SalesIngestRejection"; }
 }
+// Corpo da resposta do ingest quando a venda NÃO é aceita (rota e export do contrato usam esta função).
+export function salesIngestFailureBody(mapped: { status: 422 | 503; code: string }, error: unknown) {
+  return { accepted: false as const, code: mapped.code, error: mapped.status === 422 && error instanceof Error ? error.message : "Event processing failed" };
+}
+
 export function mapSalesIngestError(error: unknown): { status: 422 | 503; code: string } {
   if (error instanceof SalesIngestRejection) return { status: 422, code: error.code };
   return { status: 503, code: "EVENT_PROCESSING_FAILED" };
@@ -461,7 +468,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
     if (mapped.status === 422) logger.warn("Sales Command sale rejected by a domain rule", context);
     else logger.error("Sales Command ingest failed", { ...context, errorName: error instanceof Error ? error.name : "non-Error" });
     // 422 traz a razão (texto de domínio, sem PII); 503 continua genérico.
-    response.status(mapped.status).json({ accepted: false, code: mapped.code, error: mapped.status === 422 && error instanceof Error ? error.message : "Event processing failed" });
+    response.status(mapped.status).json(salesIngestFailureBody(mapped, error));
     return;
   }
 
