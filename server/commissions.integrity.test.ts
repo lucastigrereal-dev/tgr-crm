@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { salesCommissions } from "../drizzle/schema";
+import { saleValidations, salesCommissions } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn(async () => ({})) }));
 
 import { commissionsRouter } from "./routers/commissions";
 
 function makeDb(rows: unknown[], affectedRows = 1) {
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => {
+      // KAN-31 V6: approved/paid exigem venda validada; o contrato 61 dos fixtures tem validatedAt.
+      if (table === saleValidations) return { where: vi.fn(() => ({ limit: vi.fn(async () => [{ validatedAt: new Date("2026-10-06T12:00:00Z") }]) })) };
       if (table !== salesCommissions) throw new Error("Tabela não prevista neste teste");
       return { where: vi.fn(() => ({ limit: vi.fn(async () => rows) })) };
     }),
@@ -37,7 +40,7 @@ describe("integridade do status de comissão", () => {
   });
 
   it("rejeita corrida perdida sem auditar alteração falsa", async () => {
-    const fixture = makeDb([{ contractId: null, status: "pending" }], 0);
+    const fixture = makeDb([{ contractId: 61, status: "pending" }], 0);
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: "approved" })).rejects.toMatchObject({ code: "CONFLICT" });
@@ -45,16 +48,16 @@ describe("integridade do status de comissão", () => {
   });
 
   it("atualiza comissão existente e audita uma única vez", async () => {
-    const fixture = makeDb([{ contractId: null, status: "pending" }]);
+    const fixture = makeDb([{ contractId: 61, status: "pending" }]);
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: "approved" })).resolves.toEqual({ success: true });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "approved", "Comissão marcada como approved.");
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: null } });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: 61 } });
   });
 
   it("sincroniza lifecycle e datas quando a comissão é paga", async () => {
-    const fixture = makeDb([{ contractId: null, status: "approved" }]);
+    const fixture = makeDb([{ contractId: 61, status: "approved" }]);
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: "paid" })).resolves.toEqual({ success: true });
