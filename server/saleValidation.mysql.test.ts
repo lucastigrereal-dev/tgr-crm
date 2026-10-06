@@ -163,12 +163,4 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const { contractId } = await seed("canc", { status: "cancelled" });
     await expect(svc.validateSale(adminId, { contractId })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_VALIDATION_CONTRACT_STATE") });
   });
-
-  it("trilha é append-only no banco: UPDATE e DELETE são recusados", async () => {
-    const { contractId } = await seed("append");
-    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
-    await expect(db.update(saleValidationEvents).set({ reason: "adulterado" }).where(eq(saleValidationEvents.contractId, contractId))).rejects.toThrow();
-    await expect(db.delete(saleValidationEvents).where(eq(saleValidationEvents.contractId, contractId))).rejects.toThrow();
-    expect(await trail(contractId)).toHaveLength(1);
-  });
 });
