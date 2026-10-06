@@ -20,11 +20,13 @@ describe("CRM event contract export", () => {
 
   it("ADR-007: crm.sale.validated.v1 to Sales has no PII; Financial sale.* samples carry only whitelisted fields", () => {
     const { sales, financial } = exportEventContract();
-    expect(Object.keys(sales.saleValidatedSampleBody).sort()).toEqual(["contractId", "correlationId", "eventId", "eventName", "occurredAt", "paymentConfirmedAt", "project", "saleId", "signedAt", "source", "validatedAt"]);
-    expect(JSON.stringify(sales.saleValidatedSampleBody)).not.toMatch(/customer|phone|document/i);
-    expect(Object.keys(financial.saleValidatedSampleEnvelope.event.payload).sort()).toEqual(["contractId", "paymentConfirmedAt", "saleId", "signedAt", "validatedAt", "validatedByUserId"]);
-    expect(Object.keys(financial.paymentConfirmedSampleEnvelope.event.payload).sort()).toEqual(["confirmedAt", "confirmedByUserId", "contractId", "saleId"]);
-    expect(financial.forwardedEventNames).toEqual(expect.arrayContaining(["sale.payment.confirmed", "sale.validated"]));
+    expect(Object.keys(sales.saleValidatedSampleBody).sort()).toEqual(["contractId", "correlationId", "eventId", "eventName", "gates", "occurredAt", "project", "saleId", "source", "validatedAt", "validatedBy"]);
+    expect(Object.keys(sales.saleValidatedSampleBody.gates).sort()).toEqual(["contractGeneratedAt", "contractSignedAt", "documentRef", "documentStoredAt", "paymentConfirmedAt", "paymentConfirmedBy"]);
+    expect(JSON.stringify(sales.saleValidatedSampleBody)).not.toMatch(/customer|phone|\.pdf|storageKey/i);
+    // KAN-31 V6: payload ESTRITO do Financial (z.strictObject): exatamente estes quatro campos, contractId como texto.
+    expect(financial.saleValidatedSampleEnvelope.event.payload).toEqual({ contractId: "9001", saleId: expect.any(String), validatedAt: "2026-10-05T12:00:00.000Z", validatedBy: "1" });
+    expect(financial.forwardedEventNames).not.toContain("sale.payment.confirmed");
+    expect(financial.forwardedEventNames).toEqual(expect.arrayContaining(["sale.validated"]));
   });
 
   it("rejection codes are machine-readable for the Sales outbox classifier", () => {

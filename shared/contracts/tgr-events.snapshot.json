@@ -6,7 +6,6 @@
       "contract.created.v2",
       "contract.status.updated",
       "contract.cancellation.executed",
-      "sale.payment.confirmed",
       "sale.validated",
       "installment.paid",
       "commission.created",
@@ -41,19 +40,11 @@
         "cancelledCommissions",
         "financialEntries"
       ],
-      "sale.payment.confirmed": [
-        "contractId",
-        "saleId",
-        "confirmedAt",
-        "confirmedByUserId"
-      ],
       "sale.validated": [
         "contractId",
         "saleId",
         "validatedAt",
-        "validatedByUserId",
-        "paymentConfirmedAt",
-        "signedAt"
+        "validatedBy"
       ],
       "installment.paid": [
         "installmentId",
@@ -150,38 +141,10 @@
         "actorUserId": 1,
         "occurredAt": "2026-10-05T12:00:00.000Z",
         "payload": {
-          "contractId": 9001,
+          "contractId": "9001",
           "saleId": "00000000-0000-4000-8000-000000000001",
           "validatedAt": "2026-10-05T12:00:00.000Z",
-          "validatedByUserId": 1,
-          "paymentConfirmedAt": "2026-10-04T12:00:00.000Z",
-          "signedAt": "2026-10-04T18:00:00.000Z"
-        }
-      }
-    },
-    "paymentConfirmedSampleEnvelope": {
-      "source": "crm",
-      "correlationId": "crm-fin-4244",
-      "project": {
-        "externalKey": "SYN-PONTA-NEGRA",
-        "name": "SYN Ponta Negra",
-        "timezone": "America/Recife"
-      },
-      "event": {
-        "contractVersion": "tgr.events.v1",
-        "eventId": 4244,
-        "eventName": "sale.payment.confirmed",
-        "aggregate": {
-          "type": "contract",
-          "id": "9001"
-        },
-        "actorUserId": 1,
-        "occurredAt": "2026-10-05T12:00:00.000Z",
-        "payload": {
-          "contractId": 9001,
-          "saleId": "00000000-0000-4000-8000-000000000001",
-          "confirmedAt": "2026-10-04T12:00:00.000Z",
-          "confirmedByUserId": 1
+          "validatedBy": "1"
         }
       }
     }
@@ -253,8 +216,15 @@
       "saleId": "00000000-0000-4000-8000-000000000001",
       "contractId": "9001",
       "validatedAt": "2026-10-05T12:00:00.000Z",
-      "paymentConfirmedAt": "2026-10-04T12:00:00.000Z",
-      "signedAt": "2026-10-04T18:00:00.000Z"
+      "validatedBy": "1",
+      "gates": {
+        "paymentConfirmedAt": "2026-10-04T12:00:00.000Z",
+        "paymentConfirmedBy": "1",
+        "contractGeneratedAt": "2026-10-03T12:00:00.000Z",
+        "contractSignedAt": "2026-10-04T18:00:00.000Z",
+        "documentStoredAt": "2026-10-04T18:05:00.000Z",
+        "documentRef": "crm-doc:9001:77"
+      }
     },
     "cancellationSampleBody": {
       "eventId": "crm-contract-9001-cancelled",

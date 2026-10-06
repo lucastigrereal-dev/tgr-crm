@@ -11,7 +11,8 @@ export const FINANCIAL_EVENT_NAMES = [
   "contract.created.v2",
   "contract.status.updated",
   "contract.cancellation.executed",
-  "sale.payment.confirmed",
+  // KAN-31 V6: só `sale.validated` vai ao Financial (enum do receptor). `sale.payment.confirmed` é fato interno do CRM:
+  // o Financial recusaria com 400 e o evento acabaria em recibo terminal.
   "sale.validated",
   "installment.paid",
   "commission.created",
@@ -47,11 +48,16 @@ export function financialBridgeEnvelope(event: {
   occurredAt: Date;
 }, project: FinancialBridgeProject) {
   if (!isKnownDomainEvent(event.eventName)) throw new Error("Unknown CRM domain event");
+  const integrationEvent = toIntegrationEvent({ ...event, eventName: event.eventName });
+  // KAN-31 V6: o Financial valida sale.validated com z.strictObject {contractId: texto, saleId, validatedAt, validatedBy}.
+  if (event.eventName === "sale.validated" && integrationEvent.payload.contractId != null) {
+    integrationEvent.payload.contractId = String(integrationEvent.payload.contractId);
+  }
   return {
     source: "crm" as const,
     correlationId: "crm-fin-" + event.id,
     project,
-    event: toIntegrationEvent({ ...event, eventName: event.eventName }),
+    event: integrationEvent,
   };
 }
 
@@ -108,7 +114,8 @@ export function startFinancialBridgePump(
             : typeof contractIdRaw === "string" && /^\d+$/.test(contractIdRaw)
               ? Number(contractIdRaw)
               : null;
-          if (contractId && body.event.payload.customerId == null) {
+          // sale.validated tem payload estrito no Financial: nenhum enriquecimento (customerId lá seria 400).
+          if (contractId && body.event.payload.customerId == null && event.eventName !== "sale.validated") {
             const [contract] = await db.select({ customerId: contracts.customerId }).from(contracts)
               .where(eq(contracts.id, contractId)).limit(1);
             if (contract?.customerId) body.event.payload.customerId = contract.customerId;
