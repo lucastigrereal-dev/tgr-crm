@@ -11,6 +11,8 @@ export const FINANCIAL_EVENT_NAMES = [
   "contract.created.v2",
   "contract.status.updated",
   "contract.cancellation.executed",
+  "sale.payment.confirmed",
+  "sale.validated",
   "installment.paid",
   "commission.created",
   "commission.status.updated",

@@ -6,6 +6,8 @@
       "contract.created.v2",
       "contract.status.updated",
       "contract.cancellation.executed",
+      "sale.payment.confirmed",
+      "sale.validated",
       "installment.paid",
       "commission.created",
       "commission.status.updated",
@@ -38,6 +40,20 @@
         "cancelledInstallments",
         "cancelledCommissions",
         "financialEntries"
+      ],
+      "sale.payment.confirmed": [
+        "contractId",
+        "saleId",
+        "confirmedAt",
+        "confirmedByUserId"
+      ],
+      "sale.validated": [
+        "contractId",
+        "saleId",
+        "validatedAt",
+        "validatedByUserId",
+        "paymentConfirmedAt",
+        "signedAt"
       ],
       "installment.paid": [
         "installmentId",
