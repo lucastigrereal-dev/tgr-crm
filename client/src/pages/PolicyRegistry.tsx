@@ -15,6 +15,8 @@ const TYPE_LABEL: Record<string, string> = {
   commission: "Comissão", cancellation_terms: "Distrato / multa / devolução", monetary_index: "Índice de correção",
   delinquency: "Inadimplência", retention: "Retenção", messaging: "Mensagens", consent_final: "Consentimento final", contact_hours: "Horários de contato",
 };
+// superjson entrega Date; a vigência é um dia de calendário (UTC), sem fuso.
+const isoDay = (value: Date | string | null) => (value ? new Date(value).toISOString().slice(0, 10) : "—");
 const NEXT: Record<string, string[]> = { DRAFT: ["UNAPPROVED", "RETIRED"], UNAPPROVED: ["DRAFT", "APPROVED", "RETIRED"], APPROVED: ["RETIRED"], RETIRED: [] };
 
 export default function PolicyRegistry() {
@@ -47,7 +49,7 @@ export default function PolicyRegistry() {
           return <tr key={row.id} className="border-t align-top">
             <td className="py-2 font-medium">{TYPE_LABEL[row.policyType] ?? row.policyType}</td><td>{row.version}</td>
             <td><span className={row.status === "APPROVED" ? "font-semibold text-emerald-700" : row.status === "RETIRED" ? "text-muted-foreground" : "font-semibold text-amber-700"}>{row.status === "UNAPPROVED" ? "NÃO APROVADO" : row.status}</span></td>
-            <td>{row.validFrom ? String(row.validFrom).slice(0, 10) : "—"} → {row.validTo ? String(row.validTo).slice(0, 10) : "—"}</td>
+            <td>{isoDay(row.validFrom)} → {isoDay(row.validTo)}</td>
             <td>{row.approver ?? "—"}</td><td>{row.receiptRef ?? "—"}</td>
             {isAdmin && <td className="space-y-1">{NEXT[row.status]?.length ? <>
               <Select value={d.to} onValueChange={to => set({ to })}><SelectTrigger className="h-8 w-40" aria-label={`Novo status de ${row.policyType}`}><SelectValue placeholder="Mudar status" /></SelectTrigger>

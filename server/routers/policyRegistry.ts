@@ -84,7 +84,8 @@ export const policyRegistryRouter = router({
     // Compare-and-set no status lido: duas transições concorrentes não passam as duas.
     const result = await db.update(policyRegistry).set({ status: input.to, ...approval })
       .where(and(eq(policyRegistry.id, input.id), eq(policyRegistry.status, current.status)));
-    if (affectedRows(result) === 0) throw new TRPCError({ code: "CONFLICT", message: "A política mudou de status em outra operação. Atualize e tente de novo." });
+    // Falha fechada: só segue se exatamente 1 linha mudou (null = formato desconhecido do driver também recusa).
+    if (affectedRows(result) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A política mudou de status em outra operação. Atualize e tente de novo." });
     await recordAudit(ctx.user.id, "policy_registry", input.id, "status_changed",
       `Política ${current.policyType} ${current.version}: ${current.status} → ${input.to}` + (input.to === "APPROVED" ? ` (aprovador: ${approval.approver}; recibo: ${approval.receiptRef})` : "") + ".");
     return { id: input.id, status: input.to };
