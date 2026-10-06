@@ -59,6 +59,7 @@ export default function PolicyRegistry() {
             </> : <span className="text-xs text-muted-foreground">final</span>}</td>}
           </tr>;
         })}</tbody></table>
+      {list.error && <p role="alert" className="py-6 text-sm text-destructive">{list.error.data?.code === "FORBIDDEN" ? "Seu perfil não tem acesso ao registro de políticas." : "Não foi possível carregar o registro de políticas."}</p>}
       {list.data?.length === 0 && <p className="py-6 text-sm text-muted-foreground">Nenhuma política registrada para este empreendimento.{isAdmin ? " Use “Registrar políticas abertas”." : ""}</p>}
     </CardContent></Card>
   </div>;
