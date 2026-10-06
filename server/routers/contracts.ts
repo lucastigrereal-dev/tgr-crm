@@ -12,6 +12,8 @@ import { planCancellationExecution } from "../cancellationExecution";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
+import { canCapability } from "../../shared/permissions";
+import { saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
 
@@ -41,7 +43,11 @@ export const contractsRouter = router({
     installmentCount: z.coerce.number().int().min(1).max(360),
     notes: z.string().trim().max(5000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
-    if (input.status === "active") assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
+    if (input.status === "active") {
+      assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
+      // ADR-007 (V6): `active` = venda VALIDADA; nasce só de saleValidation.validateSale.
+      throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "Contrato não pode ser criado já ativo. Crie em rascunho/aguardando assinatura e use a validação final da venda (saleValidation.validateSale).");
+    }
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const duplicate = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.number, input.number)).limit(1))[0];
@@ -90,7 +96,7 @@ export const contractsRouter = router({
         usageModel: input.usageModel,
         status: input.status,
         totalAmount: input.totalAmount.toFixed(2),
-        activatedAt: input.status === "active" ? new Date() : null,
+        activatedAt: null,
         notes: input.notes?.trim() || null,
       }).$returningId();
       const contractId = created[0]?.id;
@@ -287,6 +293,8 @@ export const contractsRouter = router({
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
     const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active (o contrato já foi validado).
+    if (input.status === "active" && current.status !== "overdue") throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "A ativação do contrato só ocorre pela validação final da venda (saleValidation.validateSale): pagamento confirmado, contrato assinado, documento assinado armazenado e confirmação do gerente.");
     if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
     const updateResult = await db.update(contracts).set({
       status: input.status,
@@ -315,6 +323,8 @@ export const contractsRouter = router({
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do documento não encontrado." });
     const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    // ADR-007: só quem tem document.sign (admin) pode registrar documento já assinado; para os demais a flag é ignorada.
+    const signed = input.signed && canCapability(ctx.user.role, "document.sign");
     let upload: { key: string; url: string };
     try {
       upload = await storagePut(`contracts/${input.contractId}/${Date.now()}-${safeName}`, buffer, input.contentType);
@@ -326,13 +336,17 @@ export const contractsRouter = router({
       category: input.category,
       filename: input.filename,
       storageKey: upload.key,
-      signed: false,
+      signed,
       uploadedByUserId: ctx.user.id,
     }).$returningId();
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento." });
     await recordAudit(ctx.user.id, "contract_document", id, "uploaded", `Documento ${input.filename} anexado.`);
-    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed: false, filename: input.filename } });
+    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed, filename: input.filename } });
+    if (signed) {
+      await recordAudit(ctx.user.id, "contract_document", id, "signed", `Documento assinado ${input.filename} registrado pela administração.`);
+      await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId } });
+    }
     return { id, url: upload.url };
   }),
 
