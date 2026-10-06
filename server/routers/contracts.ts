@@ -37,7 +37,9 @@ export const contractsRouter = router({
     fractionId: z.number().int().positive().optional().nullable(),
     sellerId: z.number().int().positive().optional().nullable(),
     usageModel: z.enum(["fixed_week", "flexible_week", "points"]).default("fixed_week"),
-    status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).default("draft"),
+    // Red Team P0-1 (KAN-31 V6): contrato nasce só em rascunho/aguardando assinatura. `active` fica no enum só para devolver
+    // a recusa explicativa abaixo; overdue/closed/cancelled na criação abririam caminho para ativar sem validação.
+    status: z.enum(["draft", "pending_signature", "active"]).default("draft"),
     totalAmount: z.coerce.number().positive().max(999999999),
     firstDueDate: z.string().date(),
     installmentCount: z.coerce.number().int().min(1).max(360),
@@ -291,10 +293,11 @@ export const contractsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
-    const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
+    const current = (await db.select({ status: contracts.status, activatedAt: contracts.activatedAt }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-    // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active (o contrato já foi validado).
-    if (input.status === "active" && current.status !== "overdue") throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "A ativação do contrato só ocorre pela validação final da venda (saleValidation.validateSale): pagamento confirmado, contrato assinado, documento assinado armazenado e confirmação do gerente.");
+    // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active de contrato que JÁ foi ativado
+    // (activatedAt: validação final ou carga histórica). Red Team P0-1: overdue sem ativação prévia não vira active.
+    if (input.status === "active" && (current.status !== "overdue" || !current.activatedAt)) throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "A ativação do contrato só ocorre pela validação final da venda (saleValidation.validateSale): pagamento confirmado, contrato assinado, documento assinado armazenado e confirmação do gerente.");
     if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
     const updateResult = await db.update(contracts).set({
       status: input.status,

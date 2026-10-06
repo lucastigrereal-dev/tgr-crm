@@ -9,10 +9,10 @@ vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn() 
 
 import { contractsRouter } from "./routers/contracts";
 
-function makeDb(currentStatus: string | null) {
+function makeDb(currentStatus: string | null, extra: Record<string, unknown> = {}) {
   const inserted: Array<Record<string, unknown>> = [];
   const updates: Array<Record<string, unknown>> = [];
-  const select = vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => (currentStatus ? [{ id: 701, status: currentStatus }] : [])) })) })) }));
+  const select = vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => (currentStatus ? [{ id: 701, status: currentStatus, ...extra }] : [])) })) })) }));
   const update = vi.fn(() => ({ set: vi.fn((values: Record<string, unknown>) => { updates.push(values); return { where: vi.fn(async () => [{ affectedRows: 1 }]) }; }) }));
   const insert = vi.fn(() => ({ values: vi.fn((values: Record<string, unknown>) => { inserted.push(values); return { $returningId: async () => [{ id: 702 }] }; }) }));
   return { db: { select, update, insert, transaction: vi.fn() }, inserted, updates };
@@ -48,8 +48,26 @@ describe("bypasses de ativação fechados (ADR-007)", () => {
     await expect(caller("seller").updateStatus({ id: 701, status: "active" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("regularização overdue -> active segue permitida (contrato já foi validado; não é nova venda)", async () => {
-    const fixture = makeDb("overdue");
+  it.each(["overdue", "closed", "cancelled"] as const)("Red Team P0-1: create com status %s é recusado (só rascunho/aguardando assinatura), sem inserir", async status => {
+    for (const role of ["admin", "seller"] as const) {
+      const fixture = makeDb(null);
+      dbMocks.getDb.mockResolvedValue(fixture.db);
+      await expect(caller(role).create({ number: "TS-ODUE-1", customerId: 11, status, totalAmount: 1000, firstDueDate: "2026-11-10", installmentCount: 1 } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(fixture.db.insert).not.toHaveBeenCalled();
+    }
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("Red Team P0-1: overdue -> active de contrato que nunca foi ativado (sem activatedAt) é recusado, sem gravar nem emitir", async () => {
+    const fixture = makeDb("overdue", { activatedAt: null });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(caller().updateStatus({ id: 701, status: "active" })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_VALIDATION_REQUIRED") });
+    expect(fixture.updates).toEqual([]);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("regularização overdue -> active segue permitida para contrato que já foi ativado (não é nova venda)", async () => {
+    const fixture = makeDb("overdue", { activatedAt: new Date("2026-10-06T12:00:00Z") });
     dbMocks.getDb.mockResolvedValue(fixture.db);
     await expect(caller().updateStatus({ id: 701, status: "active" })).resolves.toEqual({ success: true });
   });
