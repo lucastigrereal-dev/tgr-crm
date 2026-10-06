@@ -302,6 +302,13 @@
       "when": 1790600000000,
       "tag": "0042_tse_cutover_esign",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "5",
+      "when": 1791249033340,
+      "tag": "0043_policy_registry",
+      "breakpoints": true
     }
   ]
 }

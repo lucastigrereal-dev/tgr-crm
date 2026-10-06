@@ -22,6 +22,7 @@ import { aiRouter } from "./routers/ai";
 import { capturesRouter } from "./routers/captures";
 import { projectSettingsRouter } from "./routers/projectSettings";
 import { commercialPoliciesRouter } from "./routers/commercialPolicies";
+import { policyRegistryRouter } from "./routers/policyRegistry";
 import { intelligenceRouter } from "./routers/intelligence";
 import { inventoryRouter } from "./routers/inventory";
 import { monetaryAdjustmentsRouter } from "./routers/monetaryAdjustments";
@@ -83,6 +84,7 @@ export const appRouter = router({
   captures: capturesRouter,
   projectSettings: projectSettingsRouter,
   commercialPolicies: commercialPoliciesRouter,
+  policyRegistry: policyRegistryRouter,
   intelligence: intelligenceRouter,
   inventory: inventoryRouter,
   monetaryAdjustments: monetaryAdjustmentsRouter,

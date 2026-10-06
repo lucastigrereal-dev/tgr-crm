@@ -26,6 +26,7 @@ const ProjectSettings = lazy(() => import("./pages/ProjectSettings"));
 const Intelligence = lazy(() => import("./pages/Intelligence"));
 const CommercialInventory = lazy(() => import("./pages/CommercialInventory"));
 const MonetaryAdjustments = lazy(() => import("./pages/MonetaryAdjustments"));
+const PolicyRegistry = lazy(() => import("./pages/PolicyRegistry"));
 
 function PageFallback() {
   return <div className="flex min-h-[40vh] items-center justify-center p-8 text-sm text-muted-foreground">Carregando área do TGR CRM…</div>;
@@ -53,6 +54,7 @@ function Router() {
     <Route path="/inteligencia" component={Intelligence} />
     <Route path="/estoque-comercial" component={CommercialInventory} />
     <Route path="/reajustes" component={MonetaryAdjustments} />
+    <Route path="/politicas" component={PolicyRegistry} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
   </Switch></Suspense></DashboardLayout>;
