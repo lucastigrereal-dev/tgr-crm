@@ -3,12 +3,12 @@
 // (sale_validation_events), audit_logs e domain_events. Rejeições também deixam trilha (validation_rejected).
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { auditLogs, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations } from "../drizzle/schema";
+import { auditLogs, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
 import { canTransitionContractStatus } from "../shared/contractLifecycle";
 import type { DomainEventName } from "../shared/domainEvents";
 import { getDb, recordAudit } from "./db";
 import { affectedRows } from "./mysqlErrors";
-import { COMMISSION_BLOCKED_MESSAGE, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, type CompleteCommissionPolicy } from "./installmentCommissions";
+import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { evaluateSaleValidationGates, pickSignedDocument, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
@@ -126,26 +126,47 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
   return { success: true as const, ...outcome };
 }
 
-/**
- * Reavalia as parcelas JÁ PAGAS do contrato recém-validado e lança as comissões que o gate bloqueou na baixa (parcela paga
- * antes da validação). Mesmo construtor e mesmo portão da baixa manual/gateway (installmentCommissions.ts); idempotente por
- * parcela+papel (reentrega nunca duplica). Política incompleta: emite o evento `commission.automatic.blocked` com o motivo.
- * Roda DENTRO da transação da validação (venda ativa + comissões nascem juntas).
- */
-export async function releaseCommissionsForValidatedContract(tx: Tx, input: { contractId: number; actorUserId: number | null }) {
-  const paid = await tx.select({ id: installments.id, contractId: installments.contractId, amount: installments.amount, paidAt: installments.paidAt, paymentMethod: installments.paymentMethod }).from(installments).where(and(eq(installments.contractId, input.contractId), eq(installments.status, "paid"))).orderBy(asc(installments.sequence)).for("update");
-  const result = { created: 0, blocked: 0 };
-  if (!paid.length) return result;
-  const contract = (await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
-  if (!contract) return result;
+async function loadCommissionContext(tx: Reader, contractId: number) {
+  const contract = (await tx.select().from(contracts).where(eq(contracts.id, contractId)).limit(1))[0];
+  if (!contract) return null;
   const proposal = contract.proposalId ? ((await tx.select().from(proposals).where(eq(proposals.id, contract.proposalId)).limit(1))[0] ?? null) : null;
   const opportunity = proposal?.opportunityId ? ((await tx.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
   const capture = opportunity?.id ? ((await tx.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).orderBy(desc(captureRecords.createdAt)).limit(1))[0] ?? null) : null;
   const context = { contract, proposal, opportunity, capture };
-  if (!commissionApplies(context)) return result;
   const policyRow = capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, capture.resortId)).limit(1))[0] : null;
-  const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
-  const reason = commissionBlockReason(contract.status, policy, await isSaleValidated(tx, input.contractId));
+  return { context, policy: parseCompleteCommissionPolicy(policyRow?.commissionPolicy), resortId: capture?.resortId ?? null };
+}
+
+/** ADR-010: registro rastreável (auditoria + evento interno) de parcela paga sem lançamento porque todos os papéis estão a 0%. Idempotente por parcela. */
+async function recordZeroRateSkip(tx: Tx, input: { installmentId: number; contractId: number; resortId: number | null; roles: string[]; actorUserId: number | null; source: string }) {
+  const key = `commission-skipped:${input.installmentId}:${COMMISSION_SKIPPED_REASON}`;
+  await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: input.installmentId, action: "commission_skipped", summary: COMMISSION_SKIPPED_MESSAGE, idempotencyKey: key });
+  await txEvent(tx, { eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: input.installmentId, actorUserId: input.actorUserId, payload: { contractId: input.contractId, installmentId: input.installmentId, resortId: input.resortId, reason: COMMISSION_SKIPPED_REASON, roles: input.roles, source: input.source }, idempotencyKey: key });
+}
+
+async function recordCreatedCommissions(tx: Tx, facts: Awaited<ReturnType<typeof insertInstallmentCommissions>>, actorUserId: number | null, summarySuffix: string) {
+  for (const commission of facts) {
+    await txAudit(tx, { actorUserId, entityType: "sales_commission", entityId: commission.id, action: "created", summary: `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada ${summarySuffix}.`, idempotencyKey: `commission-created:${commission.id}` });
+    await txEvent(tx, { eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate }, idempotencyKey: `commission-created:${commission.id}` });
+  }
+}
+
+/**
+ * Reavalia as parcelas JÁ PAGAS do contrato recém-validado e lança as comissões que o gate bloqueou na baixa (parcela paga
+ * antes da validação). Mesmo construtor e mesmo portão da baixa manual/gateway (installmentCommissions.ts); idempotente por
+ * parcela+papel (reentrega nunca duplica). Política incompleta: emite o evento `commission.automatic.blocked` com o motivo.
+ * Portão aberto mas todos os papéis a 0%: emite `commission.automatic.skipped` (zero_rate) para reprocesso futuro.
+ * Roda DENTRO da transação da validação (venda ativa + comissões nascem juntas).
+ */
+export async function releaseCommissionsForValidatedContract(tx: Tx, input: { contractId: number; actorUserId: number | null }) {
+  const paid = await tx.select({ id: installments.id, contractId: installments.contractId, amount: installments.amount, paidAt: installments.paidAt, paymentMethod: installments.paymentMethod }).from(installments).where(and(eq(installments.contractId, input.contractId), eq(installments.status, "paid"))).orderBy(asc(installments.sequence)).for("update");
+  const result = { created: 0, blocked: 0, skipped: 0 };
+  if (!paid.length) return result;
+  const loaded = await loadCommissionContext(tx, input.contractId);
+  if (!loaded) return result;
+  const { context, policy, resortId } = loaded;
+  if (!commissionApplies(context)) return result;
+  const reason = commissionBlockReason(context.contract.status, policy, await isSaleValidated(tx, input.contractId));
   for (const installment of paid) {
     if (reason || !policy) {
       const why = reason ?? "incomplete_project_policy";
@@ -154,14 +175,63 @@ export async function releaseCommissionsForValidatedContract(tx: Tx, input: { co
       result.blocked += 1;
       continue;
     }
-    const facts = await insertInstallmentCommissions(tx, { installment, context, policy: policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
-    for (const commission of facts) {
-      await txAudit(tx, { actorUserId: input.actorUserId, entityType: "sales_commission", entityId: commission.id, action: "created", summary: `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada na validação da venda.`, idempotencyKey: `commission-created:${commission.id}` });
-      await txEvent(tx, { eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: input.actorUserId, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate }, idempotencyKey: `commission-created:${commission.id}` });
-      result.created += 1;
+    const zeroRoles = zeroRateSkippedRoles(context.capture, policy);
+    if (zeroRoles) {
+      await recordZeroRateSkip(tx, { installmentId: installment.id, contractId: input.contractId, resortId, roles: zeroRoles, actorUserId: input.actorUserId, source: "sale_validation" });
+      result.skipped += 1;
+      continue;
     }
+    const facts = await insertInstallmentCommissions(tx, { installment, context, policy: policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
+    await recordCreatedCommissions(tx, facts, input.actorUserId, "na validação da venda");
+    result.created += facts.length;
   }
   return result;
+}
+
+const SKIPPED_SCAN_LIMIT = 5000;
+
+/**
+ * ADR-010: reprocessa parcelas pagas durante a janela de 0% (têm registro `commission.automatic.skipped` e NENHUMA linha
+ * de comissão) depois que as taxas por papel mudaram. Só em contrato ATIVO com venda VALIDADA e política completa (mesmo portão
+ * da baixa); lê taxa/política atuais; idempotente (parcela que já ganhou comissão sai do conjunto; reexecução é no-op);
+ * cada lançamento é auditado + `commission.created`; parcela que continua a 0% permanece pendente de reprocesso.
+ */
+export async function reprocessSkippedCommissions(db: Db, input: { contractId?: number; resortId?: number; actorUserId: number }) {
+  const events = await db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents).where(eq(domainEvents.eventName, "commission.automatic.skipped")).orderBy(desc(domainEvents.id)).limit(SKIPPED_SCAN_LIMIT + 1);
+  const truncated = events.length > SKIPPED_SCAN_LIMIT;
+  const byContract = new Map<number, Set<number>>();
+  for (const event of events.slice(0, SKIPPED_SCAN_LIMIT)) {
+    let payload: Record<string, unknown> = {};
+    try { payload = JSON.parse(event.payload ?? "{}") as Record<string, unknown>; } catch { continue; }
+    const contractId = Number(payload.contractId); const installmentId = Number(event.aggregateId);
+    if (!Number.isInteger(contractId) || !Number.isInteger(installmentId)) continue;
+    if (input.contractId !== undefined && contractId !== input.contractId) continue;
+    if (input.resortId !== undefined && Number(payload.resortId) !== input.resortId) continue;
+    const set = byContract.get(contractId) ?? new Set<number>(); set.add(installmentId); byContract.set(contractId, set);
+  }
+  const summary = { candidates: 0, created: 0, stillZeroRate: 0, ineligible: 0, alreadyCommissioned: 0, truncated, createdInstallmentIds: [] as number[] };
+  for (const [contractId, installmentIds] of Array.from(byContract.entries()).sort((a, b) => a[0] - b[0])) {
+    await db.transaction(async tx => {
+      const locked = (await tx.select({ id: contracts.id, status: contracts.status }).from(contracts).where(eq(contracts.id, contractId)).limit(1).for("update"))[0];
+      const paid = locked ? await tx.select({ id: installments.id, contractId: installments.contractId, amount: installments.amount, paidAt: installments.paidAt, paymentMethod: installments.paymentMethod }).from(installments).where(and(eq(installments.contractId, contractId), eq(installments.status, "paid"), inArray(installments.id, Array.from(installmentIds)))).orderBy(asc(installments.sequence)).for("update") : [];
+      summary.candidates += installmentIds.size;
+      const loaded = locked && paid.length ? await loadCommissionContext(tx, contractId) : null;
+      const gateOpen = loaded && commissionApplies(loaded.context) && loaded.policy && commissionBlockReason(locked!.status, loaded.policy, await isSaleValidated(tx, contractId)) === null;
+      if (!loaded || !gateOpen || !loaded.policy) { summary.ineligible += installmentIds.size; return; }
+      summary.ineligible += installmentIds.size - paid.length;
+      for (const installment of paid) {
+        const existing = await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installment.id)).limit(1);
+        if (existing.length) { summary.alreadyCommissioned += 1; continue; }
+        if (zeroRateSkippedRoles(loaded.context.capture, loaded.policy)) { summary.stillZeroRate += 1; continue; }
+        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: loaded.policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
+        if (!facts.length) { summary.stillZeroRate += 1; continue; }
+        await recordCreatedCommissions(tx, facts, input.actorUserId, "pelo reprocessamento da janela de 0%");
+        await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: installment.id, action: "commission_skipped_reprocessed", summary: `Parcela paga na janela de 0% reprocessada: ${facts.length} comissão(ões) criada(s) com as taxas atuais.`, idempotencyKey: `commission-skipped-reprocessed:${installment.id}` });
+        summary.created += facts.length; summary.createdInstallmentIds.push(installment.id);
+      }
+    });
+  }
+  return summary;
 }
 
 class GatesNotReady extends Error {

@@ -8,6 +8,12 @@ import {
 
 export type CommissionRates = Partial<Record<"liner" | "closer" | "ftb", number>>;
 
+// ADR-010: papel sem taxa (ou 0%) vale 0 e não gera lançamento.
+export const commissionRoleRate = (rates: CommissionRates | undefined, role: "liner" | "closer" | "ftb") => {
+  const rate = rates?.[role];
+  return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : 0;
+};
+
 export function buildInstallmentCommissions(input: {
   installmentId: number;
   installmentAmount: number;
@@ -30,10 +36,7 @@ export function buildInstallmentCommissions(input: {
 
   // ADR-010: percentual é parâmetro por papel com padrão 0%. Papel sem taxa (ou 0%) NÃO gera lançamento — nada é inventado.
   // Não há taxa histórica de fallback.
-  const rateOf = (role: "liner" | "closer" | "ftb") => {
-    const rate = input.rates?.[role];
-    return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : 0;
-  };
+  const rateOf = (role: "liner" | "closer" | "ftb") => commissionRoleRate(input.rates, role);
   const payable = assignments.filter((assignee) => rateOf(assignee.role) > 0);
   if (!payable.length) return [];
 

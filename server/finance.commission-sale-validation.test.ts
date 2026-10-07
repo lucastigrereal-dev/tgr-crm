@@ -76,4 +76,34 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     expect(commissionInserts(inserted).length).toBeGreaterThan(0);
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
   });
+
+  // ADR-010: 0% = sem lançamento, mas nunca em silêncio.
+  const zeroRatePolicy = JSON.stringify({ cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
+  const validated = [{ validatedAt: new Date("2026-10-06T12:00:00Z") }];
+
+  it("portão aberto com todos os papéis a 0%: nada lançado, mas auditoria + evento commission.automatic.skipped (zero_rate)", async () => {
+    const { inserted, caller } = scenario("active", validated, zeroRatePolicy);
+    await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).resolves.toEqual({ success: true, alreadyPaid: false, commissionBlocked: false });
+    expect(commissionInserts(inserted)).toHaveLength(0);
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: 91, idempotencyKey: "commission-skipped:91:zero_rate", payload: { contractId: 61, installmentId: 91, resortId: 2, reason: "zero_rate", roles: ["liner", "closer"], source: "manual" } }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(71, "installment", 91, "commission_skipped", expect.stringContaining("0%"), { idempotencyKey: "commission-skipped:91:zero_rate" });
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
+  });
+
+  it("o salto é registrado uma única vez por baixa", async () => {
+    const { caller } = scenario("active", validated, zeroRatePolicy);
+    await caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
+    expect(dbMocks.recordDomainEvent.mock.calls.filter(([event]) => event.eventName === "commission.automatic.skipped")).toHaveLength(1);
+  });
+
+  it("com taxa > 0 em algum papel ou com portão fechado não há evento de salto", async () => {
+    const { caller } = scenario("active", validated);
+    await caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
+    vi.clearAllMocks();
+    const blocked = scenario("pending_signature", [], zeroRatePolicy);
+    await blocked.caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
+  });
 });

@@ -2,8 +2,8 @@
 // venda (ADR-007). Parcela paga ANTES da validação fica bloqueada; ao validar, as parcelas já pagas são reavaliadas aqui.
 import { eq } from "drizzle-orm";
 import { salesCommissions } from "../drizzle/schema";
-import { buildInstallmentCommissions, canCommissionBecomeDue } from "./commissionAutomation";
-import type { PaymentMethod } from "./commissionLifecycle";
+import { buildInstallmentCommissions, canCommissionBecomeDue, commissionRoleRate } from "./commissionAutomation";
+import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
 import type { getDb } from "./db";
 import type { parseCompleteCommissionPolicy } from "./projectPolicy";
 
@@ -27,6 +27,22 @@ export const COMMISSION_BLOCKED_MESSAGE: Record<CommissionBlockReason, string> =
   incomplete_project_policy: "Comissão automática bloqueada: a política completa de comissão do empreendimento não está configurada.",
   contract_not_active: "Comissão automática bloqueada: o contrato não está ativo.",
 };
+
+/** Motivo do `commission.automatic.skipped`: o portão passou mas nenhum papel da parcela tem percentual > 0 (janela de 0%). */
+export const COMMISSION_SKIPPED_REASON = "zero_rate" as const;
+export const COMMISSION_SKIPPED_MESSAGE = "Comissão automática não lançada: nenhum papel da venda tem percentual maior que 0% na política do empreendimento (0% = sem lançamento).";
+
+/**
+ * ADR-010: papéis atribuídos à venda quando NENHUM deles tem taxa > 0 (a parcela paga fica sem comissão e precisa ficar
+ * rastreável para reprocesso após ajuste das taxas). `null` quando algum papel é pagável ou não há papel atribuído.
+ */
+export function zeroRateSkippedRoles(capture: { linerId: number | null; closerId: number | null } | null | undefined, policy: Pick<CompleteCommissionPolicy, "linerRate" | "closerRate" | "ftbRate">): string[] | null {
+  if (!capture) return null;
+  const assignments = commissionAssignments({ linerId: capture.linerId, closerId: capture.closerId });
+  if (!assignments.length) return null;
+  const rates = { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate };
+  return assignments.some(assignee => commissionRoleRate(rates, assignee.role) > 0) ? null : assignments.map(assignee => assignee.role);
+}
 
 export const KNOWN_PAYMENT_METHODS = ["pix", "debit", "credit", "boleto", "cash", "cheque"] as const;
 export const normalizePaymentMethod = (raw: string | null | undefined): PaymentMethod => {

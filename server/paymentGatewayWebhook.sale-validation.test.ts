@@ -69,4 +69,19 @@ describe("webhook Asaas: comissão automática exige venda validada", () => {
     expect(inserted.filter(entry => entry.table === salesCommissions).length).toBeGreaterThan(0);
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
   });
+
+  it("ADR-010: portão aberto com todos os papéis a 0% registra commission.automatic.skipped (zero_rate) em vez de silêncio", async () => {
+    const zeroRatePolicy = JSON.stringify({ cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
+    const { inserted, result } = run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }], zeroRatePolicy);
+    await expect(result).resolves.toMatchObject({ status: 200, installmentPaid: true });
+    expect(inserted.filter(entry => entry.table === salesCommissions)).toHaveLength(0);
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped", aggregateId: 91, idempotencyKey: "commission-skipped:91:zero_rate", payload: { contractId: 61, installmentId: 91, resortId: 2, reason: "zero_rate", roles: ["liner", "closer"], source: "asaas" } }));
+    expect(dbMocks.recordAudit).toHaveBeenCalledWith(null, "installment", 91, "commission_skipped", expect.any(String), { idempotencyKey: "commission-skipped:91:zero_rate" });
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+  });
+
+  it("com taxa > 0 não há evento de salto", async () => {
+    await run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }]).result;
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
+  });
 });
