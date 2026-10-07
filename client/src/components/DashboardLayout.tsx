@@ -29,6 +29,7 @@ import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { canOpenMenuPath } from "@shared/permissions";
 
 const menuGroups = [
   { label: "Hoje", items: [{ icon: LayoutDashboard, label: "Visão geral", path: "/" }, { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" }] },
@@ -255,7 +256,7 @@ function DashboardLayoutContent({
               <div key={group.label} className="px-3 pt-4 first:pt-2">
                 {!isCollapsed ? <p className="px-2 pb-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-white/35">{group.label}</p> : null}
                 <SidebarMenu className="gap-0">
-                  {group.items.filter(item => (!["/importar", "/configuracoes-projeto"].includes(item.path) || user?.role === "admin") && (item.path !== "/politicas" || user?.role === "admin" || user?.role === "finance")).map(item => {
+                  {group.items.filter(item => canOpenMenuPath(user?.role, item.path)).map(item => {
                     const isActive = matchesMenuPath(location, item.path);
                     return (
                       <SidebarMenuItem key={item.path}>
@@ -328,7 +329,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main id="conteudo-principal" tabIndex={-1} className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{children}</main>
+        <main id="conteudo-principal" tabIndex={-1} className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{canOpenMenuPath(user?.role, location) ? children : <div role="alert" className="mx-auto mt-16 max-w-md rounded-xl border border-[#e9e4da] bg-white p-6 text-center"><p className="font-serif text-xl text-[#1d2b2a]">Sem permissão para esta área</p><p className="mt-2 text-sm text-muted-foreground">Seu perfil não acessa esta tela. Se precisar, peça à administração.</p></div>}</main>
       </SidebarInset>
     </>
   );

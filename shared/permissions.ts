@@ -49,3 +49,26 @@ export function canCapability(role: InternalPermissionRole | "user", capability:
   if (role === "user") return false;
   return (capabilityMatrix[capability] as readonly InternalPermissionRole[]).includes(role);
 }
+
+// KAN-31 (teste de navegador): telas do menu seguem o RBAC do procedure principal de cada rota (server/routers/access.ts).
+// Rota ausente aqui = qualquer papel interno. A tela nunca mostra o que o servidor recusaria (403 virava R$ 0,00 na UI).
+export const menuPathRoles: Record<string, readonly InternalPermissionRole[]> = {
+  "/sala-de-vendas": ["admin", "seller", "service"],
+  "/captacao": ["admin", "seller"],
+  "/vendas": ["admin", "seller"],
+  "/campanhas": ["admin", "seller"],
+  "/comissoes": ["admin", "seller", "finance"],
+  "/financeiro": ["admin", "finance"],
+  "/reajustes": ["admin", "finance"],
+  "/politicas": ["admin", "finance"],
+  "/reservas": ["admin", "service"],
+  "/equipe": ["admin"],
+  "/importar": ["admin"],
+  "/configuracoes-projeto": ["admin"],
+};
+
+export function canOpenMenuPath(role: InternalPermissionRole | "user" | null | undefined, path: string) {
+  if (!role || role === "user") return false;
+  const base = Object.keys(menuPathRoles).find(prefix => path === prefix || path.startsWith(prefix + "/"));
+  return base ? menuPathRoles[base].includes(role) : true;
+}

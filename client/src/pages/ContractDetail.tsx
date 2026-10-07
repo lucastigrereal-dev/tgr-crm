@@ -13,7 +13,7 @@ import { ChangeEvent, FormEvent, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { canCapability } from "@shared/permissions";
+import { canAccess, canCapability } from "@shared/permissions";
 
 type ContractStatus = "draft" | "pending_signature" | "active" | "overdue" | "cancelled" | "closed";
 
@@ -54,8 +54,10 @@ export default function ContractDetail() {
   const requestCancellation = trpc.contracts.requestCancellation.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); setCancellationOpen(false); setCancellationReason(""); toast.success("Distrato enviado para aprovação humana."); }, onError: error => toast.error(error.message) });
   const decideCancellation = trpc.contracts.decideCancellation.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); toast.success("Decisão de distrato registrada."); }, onError: error => toast.error(error.message) });
   const executeCancellation = trpc.contracts.executeCancellation.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); utils.contracts.list.invalidate(); toast.success("Distrato aprovado executado com trilha auditável."); }, onError: error => toast.error(error.message) });
-  const portfolioAssignments = trpc.finance.portfolioAssignments.useQuery({ contractId: id }, { enabled: Boolean(id) });
-  const portfolioCandidates = trpc.finance.portfolioCandidates.useQuery();
+  // KAN-31: carteira financeira é financeProcedure; só admin/finance consultam (os demais recebiam 403 e card vazio).
+  const canSeeFinance = Boolean(user && user.role !== "user" && canAccess(user.role, "finance"));
+  const portfolioAssignments = trpc.finance.portfolioAssignments.useQuery({ contractId: id }, { enabled: Boolean(id) && canSeeFinance });
+  const portfolioCandidates = trpc.finance.portfolioCandidates.useQuery(undefined, { enabled: canSeeFinance });
   const portfolioCandidateRows = portfolioCandidates.data?.rows ?? [];
   const assignPortfolioOwner = trpc.finance.assignPortfolioOwner.useMutation({ onSuccess: () => { utils.finance.portfolioAssignments.invalidate({ contractId: id }); setPortfolioOwnerId(""); setPortfolioNotes(""); toast.success("Carteira financeira atribuída com trilha de responsabilidade."); }, onError: error => toast.error(error.message) });
 
@@ -84,8 +86,8 @@ export default function ContractDetail() {
       <div className="space-y-5">
         <Card className="rounded-xl border-[#e9e4da] shadow-none"><CardHeader className="border-b border-[#eee9df] pb-4"><p className="tgr-data-label text-[#94702e]">Contrato e associado</p><CardTitle className="mt-1 font-serif text-xl text-[#1d2b2a]">Resumo</CardTitle></CardHeader><CardContent className="space-y-3 pt-5 text-sm"><div className="flex items-center justify-between"><span className="text-muted-foreground">Status</span><StatusPill value={contract.status} /></div><div className="flex justify-between gap-4"><span className="text-muted-foreground">Associado</span><span className="text-right font-medium">{customerName}</span></div><div className="flex justify-between gap-4"><span className="text-muted-foreground">E-mail</span><span className="text-right">{customerEmail || "—"}</span></div><div className="flex justify-between gap-4"><span className="text-muted-foreground">Telefone</span><span>{customerPhone || "—"}</span></div><div className="border-t border-[#eee9df] pt-3"><p className="tgr-data-label">Valor contratado</p><p className="mt-1 font-serif text-3xl tabular-nums text-[#1d2b2a]">{money(contract.totalAmount)}</p></div></CardContent></Card>
         <SaleValidationCard contractId={id} />
-        <RevenueQualityCard contractId={id} />
-        <PortfolioOwnerCard assignments={portfolioAssignments.data ?? []} candidates={portfolioCandidateRows} candidateTruncated={portfolioCandidates.data?.truncated ?? false} candidateTruncatedSources={portfolioCandidates.data?.truncatedSources ?? []} selectedOwnerId={portfolioOwnerId} notes={portfolioNotes} pending={assignPortfolioOwner.isPending} onOwnerChange={setPortfolioOwnerId} onNotesChange={setPortfolioNotes} onAssign={() => assignPortfolioOwner.mutate({ contractId: id, ownerUserId: Number(portfolioOwnerId), notes: portfolioNotes || null })} />
+        {canSeeFinance ? <RevenueQualityCard contractId={id} /> : null}
+        {canSeeFinance ? <PortfolioOwnerCard assignments={portfolioAssignments.data ?? []} candidates={portfolioCandidateRows} candidateTruncated={portfolioCandidates.data?.truncated ?? false} candidateTruncatedSources={portfolioCandidates.data?.truncatedSources ?? []} selectedOwnerId={portfolioOwnerId} notes={portfolioNotes} pending={assignPortfolioOwner.isPending} onOwnerChange={setPortfolioOwnerId} onNotesChange={setPortfolioNotes} onAssign={() => assignPortfolioOwner.mutate({ contractId: id, ownerUserId: Number(portfolioOwnerId), notes: portfolioNotes || null })} /> : null}
         <CancellationCard simulation={cancellationSimulation.data} request={latestCancellation} open={cancellationOpen} setOpen={setCancellationOpen} reason={cancellationReason} setReason={setCancellationReason} isCancelled={contract.status === "cancelled"} canRequest={!!user && canCapability(user.role, "contract.cancel.request")} canDecide={!!user && canCapability(user.role, "contract.cancel.decide")} canExecute={!!user && canCapability(user.role, "contract.cancel.execute")} requestPending={requestCancellation.isPending} decisionPending={decideCancellation.isPending} executionPending={executeCancellation.isPending} onRequest={() => requestCancellation.mutate({ contractId: id, reason: cancellationReason })} onDecision={(decision) => decideCancellation.mutate({ requestId: latestCancellation.id, decision })} onExecute={() => executeCancellation.mutate({ requestId: latestCancellation.id })} />
         <DocumentsCard
           documents={documents}
