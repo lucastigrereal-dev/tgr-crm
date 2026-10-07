@@ -21,3 +21,13 @@ describe("SaleValidationCard", () => {
     expect(card).toMatch(/noOpenCancellation/);
   });
 });
+
+describe("Anexo de contrato assinado", () => {
+  it("envia signed=true só na categoria Contrato assinado e só para quem tem document.sign", () => {
+    expect(page).toMatch(/const canUploadSigned = Boolean\(user && canCapability\(user\.role, "document\.sign"\)\)/);
+    expect(page).toMatch(/const signed = category === "Contrato assinado" && canUploadSigned;/);
+    expect(page).toMatch(/base64, signed \}\)/);
+    expect(page).not.toMatch(/signed: false \}\)/);
+    expect(page).toMatch(/uploadDocument\.useMutation\(\{ onSuccess: \(\) => \{ utils\.contracts\.detail\.invalidate\(\{ id \}\); utils\.saleValidation\.getValidationStatus\.invalidate\(\{ contractId: id \}\);/);
+  });
+});
