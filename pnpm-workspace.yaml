@@ -16,6 +16,9 @@ overrides:
   'brace-expansion@^2': 2.1.7
   browserslist: 4.28.7
   baseline-browser-mapping: 2.11.0
+  proxy-addr: 2.0.8
+  source-map-js: 1.2.2
+  tinypool: 2.1.2
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

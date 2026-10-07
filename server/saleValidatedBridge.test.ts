@@ -12,6 +12,14 @@ const mockedGetDb = vi.mocked(getDb);
 const mockedRecordAudit = vi.mocked(recordAudit);
 const mockedFetch = vi.mocked(fetchWithTimeout);
 
+// Backoff por evento (RED TEAM P2): cada tick de teste avança o relógio além do teto (10 min), então todo evento em retry está vencido.
+const pumpClock = { t: 0 };
+function eagerPump<P extends { tick(): Promise<number>; stop(): void }>(start: (...args: any[]) => P, ...args: any[]): P {
+  const last = args.length - 1;
+  const pump = start(...args.slice(0, last), { ...args[last], now: () => pumpClock.t });
+  return { ...pump, tick: async () => { pumpClock.t += 11 * 60_000; return pump.tick(); } };
+}
+
 function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, unknown>;
   for (const method of ["from", "where", "orderBy", "limit", "innerJoin", "leftJoin"]) promise[method] = () => promise;
@@ -87,7 +95,7 @@ describe("pump: seleção de eventos sale.validated", () => {
     dbWith([[activatedEvent, validatedEvent(12)], [], ...lineageRows()]);
     mockedFetch.mockResolvedValue(new Response("{}", { status: 201 }));
     mockedRecordAudit.mockResolvedValue(undefined);
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "sales-key", { autoStart: false });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "sales-key", { autoStart: false });
     try { expect(await pump.tick()).toBe(1); } finally { pump.stop(); }
     expect(mockedFetch).toHaveBeenCalledTimes(1);
     const [target, init] = mockedFetch.mock.calls[0]!;
@@ -102,7 +110,7 @@ describe("pump: seleção de eventos sale.validated", () => {
   it("o pump do Relationship NÃO recebe sale.validated (só ativação/cancelamento)", async () => {
     dbWith([[validatedEvent(12)], [], ...lineageRows()]);
     mockedRecordAudit.mockResolvedValue(undefined);
-    const pump = startRelationshipBridgePump("http://127.0.0.1:3200", "rel-key", { autoStart: false });
+    const pump = eagerPump(startRelationshipBridgePump, "http://127.0.0.1:3200", "rel-key", { autoStart: false });
     try { expect(await pump.tick()).toBe(0); } finally { pump.stop(); }
     expect(mockedFetch).not.toHaveBeenCalled();
     expect(mockedRecordAudit).not.toHaveBeenCalled();
@@ -111,7 +119,7 @@ describe("pump: seleção de eventos sale.validated", () => {
   it("contrato sem linhagem sales-command: recibo not_applicable, nada enviado", async () => {
     dbWith([[validatedEvent(12)], [], ...lineageRows(false)]);
     mockedRecordAudit.mockResolvedValue(undefined);
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "sales-key", { autoStart: false });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "sales-key", { autoStart: false });
     try { expect(await pump.tick()).toBe(0); } finally { pump.stop(); }
     expect(mockedFetch).not.toHaveBeenCalled();
     expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_not_applicable", expect.stringContaining("sem linhagem"), { idempotencyKey: "sales-contract:303:validated" });
@@ -119,7 +127,7 @@ describe("pump: seleção de eventos sale.validated", () => {
 
   it("evento já entregue (recibo existe) não é reenviado", async () => {
     dbWith([[validatedEvent(12)], [{ id: 5 }]]);
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "sales-key", { autoStart: false });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "sales-key", { autoStart: false });
     try { expect(await pump.tick()).toBe(0); } finally { pump.stop(); }
     expect(mockedFetch).not.toHaveBeenCalled();
   });
@@ -127,7 +135,7 @@ describe("pump: seleção de eventos sale.validated", () => {
   it("payload sem os portões: recibo de recusa visível (DLQ), não trava a fila nem inventa data", async () => {
     dbWith([[validatedEvent(12, { contractId: 303, validatedAt: facts.validatedAt })], [], ...lineageRows()]);
     mockedRecordAudit.mockResolvedValue(undefined);
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "sales-key", { autoStart: false });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "sales-key", { autoStart: false });
     try { await pump.tick(); } finally { pump.stop(); }
     expect(mockedFetch).not.toHaveBeenCalled();
     expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_rejected", expect.stringContaining("sale.validated sem os portões"), { idempotencyKey: "sales-contract:303:validated" });
@@ -139,7 +147,7 @@ describe("pump: seleção de eventos sale.validated", () => {
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sequence[i++ % sequence.length])) } as never);
     mockedFetch.mockImplementation(async () => new Response("{}", { status: 409 }));
     mockedRecordAudit.mockResolvedValue(undefined);
-    const pump = startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, rejectionWindowMs: 0, onError: vi.fn() });
+    const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "k", { autoStart: false, rejectionWindowMs: 0, onError: vi.fn() });
     try { for (let n = 0; n < 5; n += 1) await pump.tick(); } finally { pump.stop(); }
     expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_rejected", "crm.sale.validated.v1 recusado pelo TGR Sales Command 5x seguidas (HTTP 409).", { idempotencyKey: "sales-contract:303:validated" });
 
@@ -147,7 +155,7 @@ describe("pump: seleção de eventos sale.validated", () => {
     i = 0;
     mockedGetDb.mockResolvedValue({ select: vi.fn(() => chain(sequence[i++ % sequence.length])) } as never);
     mockedFetch.mockImplementation(async () => new Response("{}", { status: 503 }));
-    const transient = startSalesCancellationBridgePump("http://127.0.0.1:3100", "k", { autoStart: false, rejectionWindowMs: 0, onError: vi.fn() });
+    const transient = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "k", { autoStart: false, rejectionWindowMs: 0, onError: vi.fn() });
     try { for (let n = 0; n < 8; n += 1) await transient.tick(); } finally { transient.stop(); }
     expect(mockedRecordAudit).not.toHaveBeenCalled();
   });

@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "9953c016-3677-48ce-b396-aaad148724f5",
-  "prevId": "b37c5211-01d2-43d9-afb4-6d3ec56c6c79",
+  "id": "6ac3fd3b-b587-448b-ba12-38a2dc2006cd",
+  "prevId": "31653b3f-ef35-4f4b-b68a-6ee282106ee9",
   "tables": {
     "audit_logs": {
       "name": "audit_logs",
@@ -6369,6 +6369,13 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "externalSaleId": {
+          "name": "externalSaleId",
+          "type": "varchar(120)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -6482,6 +6489,34 @@
         "signedDocumentId": {
           "name": "signedDocumentId",
           "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "contractGeneratedAt": {
+          "name": "contractGeneratedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "contractSignedAt": {
+          "name": "contractSignedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "documentStoredAt": {
+          "name": "documentStoredAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "documentRef": {
+          "name": "documentRef",
+          "type": "varchar(200)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -6894,6 +6929,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "reversalReviewDecision": {
+          "name": "reversalReviewDecision",
+          "type": "enum('reversed','offset','waived')",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "reversalReviewFinancialTransactionId": {
+          "name": "reversalReviewFinancialTransactionId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -7024,6 +7073,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "reversalReviewResolvedByUserId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "sc_reversal_fin_tx_fk": {
+          "name": "sc_reversal_fin_tx_fk",
+          "tableFrom": "sales_commissions",
+          "tableTo": "financial_transactions",
+          "columnsFrom": [
+            "reversalReviewFinancialTransactionId"
           ],
           "columnsTo": [
             "id"

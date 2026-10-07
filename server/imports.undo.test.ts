@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -9,7 +9,7 @@ import { importsRouter } from "./routers/imports";
 type Batch = { id: number; kind: "customers" | "contracts" | "units"; status: "completed" | "reverted" };
 type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
 
-function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }> } = {}) {
+function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }> } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
@@ -22,6 +22,8 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
           if (table === contracts) return contractDependencies;
           if (table === installments) return options.installments ?? [];
           if (table === contractDocuments) return options.documents ?? [];
+          if (table === saleValidations) return options.saleValidations ?? [];
+          if (table === saleValidationEvents) return options.saleValidationEvents ?? [];
           if (table === reservations) return options.reservations ?? [];
           if (table === tasks) return options.tasks ?? [];
           if (table === financialTransactions) return options.financial ?? [];
@@ -142,6 +144,23 @@ describe("imports.undoLast", () => {
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(fixture.deletes).toEqual([]);
+    expect(fixture.updates).toEqual([]);
+  });
+
+  it.each([
+    ["fato sale_validations", { saleValidations: [{ id: 1 }] }],
+    ["trilha sale_validation_events", { saleValidationEvents: [{ id: 2 }] }],
+  ] as const)("recusa reverter lote cujo contrato já tem %s, com erro de domínio claro (não FK 500) e sem apagar nada", async (_label, options) => {
+    const fixture = makeDb(
+      { id: 88, kind: "contracts", status: "completed" },
+      [{ entityType: "contract", entityId: 704, action: "created", beforeSnapshot: null }],
+      [],
+      { ...options },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("validação de venda") });
     expect(fixture.deletes).toEqual([]);
     expect(fixture.updates).toEqual([]);
   });

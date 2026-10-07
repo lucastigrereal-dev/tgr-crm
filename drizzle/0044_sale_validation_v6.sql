@@ -28,6 +28,7 @@ CREATE TABLE `sale_validations` (
 	CONSTRAINT `sale_validations_contract_unique` UNIQUE(`contractId`)
 );
 --> statement-breakpoint
+ALTER TABLE `contract_documents` ADD `signedArtifact` boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcome` enum('vendeu','caiu_em_mesa');--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcomeReason` text;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcomeAt` timestamp;--> statement-breakpoint
@@ -39,7 +40,4 @@ ALTER TABLE `sale_validations` ADD CONSTRAINT `sv_payment_user_fk` FOREIGN KEY (
 ALTER TABLE `sale_validations` ADD CONSTRAINT `sv_validated_user_fk` FOREIGN KEY (`validatedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `sale_validations` ADD CONSTRAINT `sv_signed_document_fk` FOREIGN KEY (`signedDocumentId`) REFERENCES `contract_documents`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX `sve_contract_idx` ON `sale_validation_events` (`contractId`,`occurredAt`);--> statement-breakpoint
-ALTER TABLE `capture_records` ADD CONSTRAINT `capture_records_commercialOutcomeByUserId_users_id_fk` FOREIGN KEY (`commercialOutcomeByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE TRIGGER `sale_validation_events_no_update` BEFORE UPDATE ON `sale_validation_events` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sale_validation_events is append-only';
---> statement-breakpoint
-CREATE TRIGGER `sale_validation_events_no_delete` BEFORE DELETE ON `sale_validation_events` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sale_validation_events is append-only';
+ALTER TABLE `capture_records` ADD CONSTRAINT `capture_records_commercialOutcomeByUserId_users_id_fk` FOREIGN KEY (`commercialOutcomeByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;

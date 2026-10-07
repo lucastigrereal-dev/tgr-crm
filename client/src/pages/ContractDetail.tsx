@@ -85,7 +85,7 @@ export default function ContractDetail() {
     <div className="grid gap-5 xl:grid-cols-[1.1fr_1.9fr]">
       <div className="space-y-5">
         <Card className="rounded-xl border-[#e9e4da] shadow-none"><CardHeader className="border-b border-[#eee9df] pb-4"><p className="tgr-data-label text-[#94702e]">Contrato e associado</p><CardTitle className="mt-1 font-serif text-xl text-[#1d2b2a]">Resumo</CardTitle></CardHeader><CardContent className="space-y-3 pt-5 text-sm"><div className="flex items-center justify-between"><span className="text-muted-foreground">Status</span><StatusPill value={contract.status} /></div><div className="flex justify-between gap-4"><span className="text-muted-foreground">Associado</span><span className="text-right font-medium">{customerName}</span></div><div className="flex justify-between gap-4"><span className="text-muted-foreground">E-mail</span><span className="text-right">{customerEmail || "—"}</span></div><div className="flex justify-between gap-4"><span className="text-muted-foreground">Telefone</span><span>{customerPhone || "—"}</span></div><div className="border-t border-[#eee9df] pt-3"><p className="tgr-data-label">Valor contratado</p><p className="mt-1 font-serif text-3xl tabular-nums text-[#1d2b2a]">{money(contract.totalAmount)}</p></div></CardContent></Card>
-        <SaleValidationCard contractId={id} />
+        {user && canCapability(user.role, "sale.validation.view") ? <SaleValidationCard contractId={id} /> : null}
         {canSeeFinance ? <RevenueQualityCard contractId={id} /> : null}
         {canSeeFinance ? <PortfolioOwnerCard assignments={portfolioAssignments.data ?? []} candidates={portfolioCandidateRows} candidateTruncated={portfolioCandidates.data?.truncated ?? false} candidateTruncatedSources={portfolioCandidates.data?.truncatedSources ?? []} selectedOwnerId={portfolioOwnerId} notes={portfolioNotes} pending={assignPortfolioOwner.isPending} onOwnerChange={setPortfolioOwnerId} onNotesChange={setPortfolioNotes} onAssign={() => assignPortfolioOwner.mutate({ contractId: id, ownerUserId: Number(portfolioOwnerId), notes: portfolioNotes || null })} /> : null}
         <CancellationCard simulation={cancellationSimulation.data} request={latestCancellation} open={cancellationOpen} setOpen={setCancellationOpen} reason={cancellationReason} setReason={setCancellationReason} isCancelled={contract.status === "cancelled"} canRequest={!!user && canCapability(user.role, "contract.cancel.request")} canDecide={!!user && canCapability(user.role, "contract.cancel.decide")} canExecute={!!user && canCapability(user.role, "contract.cancel.execute")} requestPending={requestCancellation.isPending} decisionPending={decideCancellation.isPending} executionPending={executeCancellation.isPending} onRequest={() => requestCancellation.mutate({ contractId: id, reason: cancellationReason })} onDecision={(decision) => decideCancellation.mutate({ requestId: latestCancellation.id, decision })} onExecute={() => executeCancellation.mutate({ requestId: latestCancellation.id })} />
@@ -119,7 +119,7 @@ function PortfolioOwnerCard({ assignments, candidates, candidateTruncated, candi
 function DocumentsCard({
   documents, canSign, signPending, onSign, electronicConfigured, electronicEnvironment, envelopes, electronicPending, onStartElectronic, onReconcile,
 }: {
-  documents: Array<{ id: number; storageKey: string; filename: string; category: string; signed: boolean }>;
+  documents: Array<{ id: number; storageKey: string; filename: string; category: string; signed: boolean; signedArtifact: boolean }>;
   canSign: boolean;
   signPending: boolean;
   onSign: (documentId: number) => void;
@@ -147,7 +147,7 @@ function DocumentsCard({
             <a href={`/manus-storage/${document.storageKey}`} target="_blank" rel="noreferrer" className="flex min-w-0 flex-1 items-center justify-between rounded-lg hover:bg-[#f3efe6]">
               <div className="min-w-0">
                 <p className="truncate font-medium text-[#1d2b2a]">{document.filename}</p>
-                <p className="mt-1 text-[11px] text-muted-foreground">{document.category} · {document.signed ? "assinado e confirmado" : "aguardando assinatura"}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{document.category} · {document.signedArtifact ? "arquivo assinado enviado" : document.signed ? "assinatura confirmada (falta enviar o arquivo assinado)" : "aguardando assinatura"}</p>
               </div>
               <Paperclip className="ml-2 h-4 w-4 shrink-0 text-[#b18f4b]" />
             </a>

@@ -1,0 +1,3 @@
+ALTER TABLE `sales_commissions` ADD `reversalReviewDecision` enum('reversed','offset','waived');--> statement-breakpoint
+ALTER TABLE `sales_commissions` ADD `reversalReviewFinancialTransactionId` int;--> statement-breakpoint
+ALTER TABLE `sales_commissions` ADD CONSTRAINT `sc_reversal_fin_tx_fk` FOREIGN KEY (`reversalReviewFinancialTransactionId`) REFERENCES `financial_transactions`(`id`) ON DELETE no action ON UPDATE no action;

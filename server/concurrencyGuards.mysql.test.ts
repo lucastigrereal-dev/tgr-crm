@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { billingRecords, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments } from "../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Prova em MySQL real de que os guards por affectedRows disparam com o formato de
@@ -16,6 +16,7 @@ const webhookToken = `kan31-${randomUUID()}`;
 describe.skipIf(!integrationUrl)("guards de concorrência em MySQL real", () => {
   let pool: mysql.Pool;
   let db: ReturnType<typeof drizzle>;
+  let adminId: number;
   let contractsRouter: typeof import("./routers/contracts").contractsRouter;
   let processAsaasWebhook: typeof import("./paymentGatewayWebhook").processAsaasWebhook;
   const previousEnv = { ...process.env };
@@ -30,6 +31,8 @@ describe.skipIf(!integrationUrl)("guards de concorrência em MySQL real", () => 
     ({ processAsaasWebhook } = await import("./paymentGatewayWebhook"));
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
+    // O audit_logs/domain_events referenciam users: não dependa de a linha id=1 existir (banco novo = FK quebrada, flake por ordem).
+    [{ id: adminId }] = await db.insert(users).values({ openId: `guard-admin-${runId}`, name: "Admin Guard", role: "admin" }).$returningId();
   });
 
   afterAll(async () => {
@@ -46,7 +49,7 @@ describe.skipIf(!integrationUrl)("guards de concorrência em MySQL real", () => 
   it("markDocumentSigned repetido devolve alreadySigned e emite um único evento", async () => {
     const contractId = await seedContract("doc");
     const [document] = await db.insert(contractDocuments).values({ contractId, category: "contrato", filename: "c.pdf", storageKey: `guard/${runId}.pdf` }).$returningId();
-    const caller = contractsRouter.createCaller({ user: { id: 1, role: "admin" } } as never);
+    const caller = contractsRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
 
     const results = await Promise.all([
       caller.markDocumentSigned({ documentId: document.id }),

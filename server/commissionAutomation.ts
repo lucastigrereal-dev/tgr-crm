@@ -8,6 +8,12 @@ import {
 
 export type CommissionRates = Partial<Record<"liner" | "closer" | "ftb", number>>;
 
+// ADR-010: papel sem taxa (ou 0%) vale 0 e não gera lançamento.
+export const commissionRoleRate = (rates: CommissionRates | undefined, role: "liner" | "closer" | "ftb") => {
+  const rate = rates?.[role];
+  return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : 0;
+};
+
 export function buildInstallmentCommissions(input: {
   installmentId: number;
   installmentAmount: number;
@@ -28,14 +34,11 @@ export function buildInstallmentCommissions(input: {
     closerId: input.closerId,
   });
 
-  // Automatic commission must fail closed. Legacy rates are not a production fallback.
-  if (
-    assignments.some(
-      (assignee) => typeof input.rates?.[assignee.role] !== "number",
-    )
-  ) {
-    return [];
-  }
+  // ADR-010: percentual é parâmetro por papel com padrão 0%. Papel sem taxa (ou 0%) NÃO gera lançamento — nada é inventado.
+  // Não há taxa histórica de fallback.
+  const rateOf = (role: "liner" | "closer" | "ftb") => commissionRoleRate(input.rates, role);
+  const payable = assignments.filter((assignee) => rateOf(assignee.role) > 0);
+  if (!payable.length) return [];
 
   const base = Math.max(0, input.contractTotal - input.entryTotal);
   const dates = commissionDates(
@@ -44,8 +47,8 @@ export function buildInstallmentCommissions(input: {
     input.calendar,
   );
 
-  return assignments.map((assignee) => {
-    const rate = input.rates![assignee.role]!;
+  return payable.map((assignee) => {
+    const rate = rateOf(assignee.role);
     const total = Math.round(base * rate * 100) / 100;
     const amount = releasedCommission(
       input.installmentAmount,

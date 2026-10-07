@@ -378,10 +378,20 @@ export const salesCommissions = mysqlTable(
     notes: text("notes"),
     approvedAt: timestamp("approvedAt"),
     paidAt: timestamp("paidAt"),
+    // ADR-010: comissão já paga em contrato distratado NÃO é estornada automaticamente; fica na fila manual (gerente/financeiro).
+    reversalReviewStatus: mysqlEnum("reversalReviewStatus", ["pending", "resolved"]),
+    reversalReviewReason: text("reversalReviewReason"),
+    reversalReviewRequestedAt: timestamp("reversalReviewRequestedAt"),
+    reversalReviewResolvedAt: timestamp("reversalReviewResolvedAt"),
+    reversalReviewResolvedByUserId: int("reversalReviewResolvedByUserId").references(() => users.id),
+    reversalReviewNote: text("reversalReviewNote"),
+    // Decisão da revisão manual: estornada, compensada em outro lançamento ou dispensada (com lançamento financeiro opcional de referência).
+    reversalReviewDecision: mysqlEnum("reversalReviewDecision", ["reversed", "offset", "waived"]),
+    reversalReviewFinancialTransactionId: int("reversalReviewFinancialTransactionId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
+  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status), foreignKey({ name: "sc_reversal_fin_tx_fk", columns: [table.reversalReviewFinancialTransactionId], foreignColumns: [financialTransactions.id] })],
 );
 
 export const contracts = mysqlTable(
@@ -420,6 +430,8 @@ export const contractDocuments = mysqlTable("contract_documents", {
   filename: varchar("filename", { length: 255 }).notNull(),
   storageKey: text("storageKey").notNull(),
   signed: boolean("signed").default(false).notNull(),
+  // ADR-007 (V6): true só quando o arquivo ASSINADO real está no storage (upload de admin com signed:true). `signed` é só exibição.
+  signedArtifact: boolean("signedArtifact").default(false).notNull(),
   uploadedByUserId: int("uploadedByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -435,7 +447,7 @@ export const saleValidations = mysqlTable("sale_validations", {
   validatedAt: timestamp("validatedAt"),
   validatedByUserId: int("validatedByUserId"),
   signedDocumentId: int("signedDocumentId"),
-  // KAN-31 V6 (0045): instantes de cada portão congelados na validação final + referência opaca do documento
+  // KAN-31 V6 (0047): instantes de cada portão congelados na validação final + referência opaca do documento
   // (crm-doc:<contrato>:<documento>; nunca URL, token, storageKey ou dado do cliente).
   contractGeneratedAt: timestamp("contractGeneratedAt"),
   contractSignedAt: timestamp("contractSignedAt"),
@@ -451,8 +463,8 @@ export const saleValidations = mysqlTable("sale_validations", {
   foreignKey({ name: "sv_signed_document_fk", columns: [table.signedDocumentId], foreignColumns: [contractDocuments.id] }),
 ]);
 
-// Trilha append-only (triggers na migration 0044 recusam UPDATE/DELETE). documentRef = referência opaca crm-doc:<c>:<d>
-// na validação final (KAN-31 V6) ou a referência de evidência informada pelo gerente na confirmação do pagamento.
+// Trilha append-only POR CÓDIGO (sem triggers: MySQL gerenciado com binlog pode recusar CREATE TRIGGER); server/saleValidationAppendOnly.test.ts
+// garante que nenhum caminho faz UPDATE/DELETE. documentRef = referência opaca (crm-doc:<contrato>:<documento>), nunca storageKey/filename.
 export const saleValidationEvents = mysqlTable("sale_validation_events", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull(),
@@ -464,7 +476,7 @@ export const saleValidationEvents = mysqlTable("sale_validation_events", {
   reason: text("reason"),
   documentRef: varchar("documentRef", { length: 512 }),
   correlationId: varchar("correlationId", { length: 120 }).notNull(),
-  externalSaleId: varchar("externalSaleId", { length: 64 }), // KAN-31 V6 (0045): venda do Sales Command, quando houver
+  externalSaleId: varchar("externalSaleId", { length: 120 }), // KAN-31 V6 (0047): venda do Sales Command (mesmo tamanho de contracts.externalSaleId)
 }, table => [
   index("sve_contract_idx").on(table.contractId, table.occurredAt),
   foreignKey({ name: "sve_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { buildInstallmentCommissions } from "./commissionAutomation";
+import { commissionBlockReason } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 
 const completePolicy = JSON.stringify({
@@ -53,6 +54,14 @@ it("PRD Apêndice B #17 + ADR-007: comissão só vira devida com contrato ativo,
   for (const status of ["draft", "pending_signature"]) expect(canCommissionBecomeDue(status, policy, false), `${status} sem validação`).toBe(false);
   const { readFileSync } = await import("node:fs");
   for (const file of ["routers/finance.ts", "paymentGatewayWebhook.ts"]) {
-    expect(readFileSync(new URL(`./${file}`, import.meta.url), "utf8"), `${file} usa a regra única`).toMatch(/canCommissionBecomeDue\([^)]*, saleValidated\)/);
+    expect(readFileSync(new URL(`./${file}`, import.meta.url), "utf8"), `${file} usa a regra única`).toMatch(/commissionBlockReason\([^)]*, [^)]*[sS]aleValidated[^)]*\)/);
   }
+  // O motivo do bloqueio sai da MESMA regra: nulo exatamente quando canCommissionBecomeDue é verdadeiro.
+  for (const status of ["draft", "pending_signature", "active", "overdue"]) for (const pol of [null, policy]) for (const validated of [false, true]) {
+    expect(commissionBlockReason(status, pol, validated) === null, `${status}/${pol ? "policy" : "nopolicy"}/${validated}`).toBe(canCommissionBecomeDue(status, pol, validated));
+  }
+  expect(commissionBlockReason("active", policy, false)).toBe("sale_not_validated");
+  expect(commissionBlockReason("pending_signature", null, false)).toBe("sale_not_validated");
+  expect(commissionBlockReason("active", null, true)).toBe("incomplete_project_policy");
+  expect(commissionBlockReason("overdue", policy, true)).toBe("contract_not_active");
 });

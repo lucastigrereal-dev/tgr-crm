@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, contractDocuments, contracts, customers, domainEvents, saleValidationEvents, saleValidations, users } from "../drizzle/schema";
+import { auditLogs, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, domainEvents, installments, opportunities, proposals, resorts, saleValidationEvents, saleValidations, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { saleValidatedFactsFrom } from "./relationshipBridge";
 
@@ -28,12 +28,12 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
   });
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
-  async function seed(label: string, opts: { status?: "draft" | "pending_signature" | "cancelled"; signedAt?: Date | null; documents?: Array<{ signed: boolean; storageKey: string }>; saleId?: string } = {}) {
+  async function seed(label: string, opts: { status?: "draft" | "pending_signature" | "cancelled"; signedAt?: Date | null; documents?: Array<{ signed: boolean; storageKey: string; category?: string }>; saleId?: string } = {}) {
     const [customer] = await db.insert(customers).values({ fullName: `Cliente SYN ${label} ${runId}`, status: "active" }).$returningId();
     const [contract] = await db.insert(contracts).values({ number: `SV-${label}-${runId}`, customerId: customer.id, status: opts.status ?? "pending_signature", totalAmount: "1000.00", signedAt: opts.signedAt ?? null, externalSource: opts.saleId ? "sales-command" : null, externalSaleId: opts.saleId ?? null }).$returningId();
     const documentIds: number[] = [];
     for (const [index, doc] of (opts.documents ?? []).entries()) {
-      const [row] = await db.insert(contractDocuments).values({ contractId: contract.id, category: "contrato", filename: `c${index}.pdf`, storageKey: doc.storageKey, signed: doc.signed }).$returningId();
+      const [row] = await db.insert(contractDocuments).values({ contractId: contract.id, category: doc.category ?? "contrato", filename: `c${index}.pdf`, storageKey: doc.storageKey, signed: doc.signed, signedArtifact: doc.signed }).$returningId();
       documentIds.push(row.id);
     }
     return { contractId: contract.id, documentIds };
@@ -52,7 +52,7 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     expect(row).toMatchObject({ paymentConfirmedByUserId: adminId, paymentConfirmationNote: "Comprovante conferido", paymentEvidenceRef: "evidence/pay.png", validatedAt: null });
     const steps = await trail(contractId);
     expect(steps).toHaveLength(1);
-    expect(steps[0]).toMatchObject({ step: "payment_confirmed", actorUserId: adminId, reason: "Comprovante conferido", documentRef: "evidence/pay.png", correlationId: `crm-sale-${contractId}` });
+    expect(steps[0]).toMatchObject({ step: "payment_confirmed", actorUserId: adminId, reason: "Comprovante conferido", documentRef: null, correlationId: `crm-sale-${contractId}` });
     expect(JSON.parse(String(steps[0].beforeJson))).toEqual({ paymentConfirmedAt: null });
     const events = await eventsOf(contractId, "sale.payment.confirmed");
     expect(events).toHaveLength(1);
@@ -159,29 +159,16 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const { contractId } = await seed("okcc", { signedAt: new Date(), documents: [{ signed: true, storageKey: "contracts/cc/assinado.pdf" }] });
     await svc.confirmPayment(adminId, { contractId, note: "conferido" });
     const results = await Promise.allSettled([1, 2, 3].map(() => svc.validateSale(adminId, { contractId })));
+    // Segunda/terceira chamada concorrente = sucesso idempotente (nada de CONFLICT nem linha validation_rejected).
+    expect(results.map(r => r.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    expect(results.filter(r => r.status === "fulfilled" && !r.value.alreadyValidated)).toHaveLength(1);
+    expect((await trail(contractId)).filter(step => step.step === "validation_rejected")).toHaveLength(0);
     expect(await eventsOf(contractId, "sale.validated")).toHaveLength(1);
     expect(await eventsOf(contractId, "contract.status.updated")).toHaveLength(1);
     expect((await contractRow(contractId)).status).toBe("active");
     // Red Team P1-2: perder a corrida não é recusa: todas resolvem e nenhuma grava validation_rejected.
     expect(results.every(r => r.status === "fulfilled")).toBe(true);
     expect((await trail(contractId)).filter(step => step.step === "validation_rejected")).toHaveLength(0);
-  });
-
-  it("Red Team P1-3: confirmPayment trava o contrato e recheca o estado dentro da transação", async () => {
-    const { contractId } = await seed("paylock");
-    const conn = await pool.getConnection();
-    try {
-      await conn.beginTransaction();
-      await conn.query("SELECT id FROM contracts WHERE id = ? FOR UPDATE", [contractId]);
-      const pending = svc.confirmPayment(adminId, { contractId, note: "conferido" });
-      await new Promise(resolve => setTimeout(resolve, 300));
-      await conn.query("UPDATE contracts SET status = 'cancelled' WHERE id = ?", [contractId]);
-      await conn.commit();
-      await expect(pending).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_PAYMENT_CONTRACT_STATE") });
-    } finally { conn.release(); }
-    const [row] = await db.select().from(saleValidations).where(eq(saleValidations.contractId, contractId));
-    expect(row?.paymentConfirmedAt ?? null).toBeNull();
-    expect(await eventsOf(contractId, "sale.payment.confirmed")).toHaveLength(0);
   });
 
   it("Red Team P2: trilha append-only guarda a referência opaca, nunca o storageKey (nome de arquivo pode ter dado do cliente)", async () => {
@@ -205,12 +192,167 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const { contractId } = await seed("canc", { status: "cancelled" });
     await expect(svc.validateSale(adminId, { contractId })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_VALIDATION_CONTRACT_STATE") });
   });
+  // ---------------------------------------------------------------- revisão KAN-31
+  const rejections = async (contractId: number) => (await trail(contractId)).filter(step => step.step === "validation_rejected");
+  async function holdContractLock<T>(contractId: number, whileHeld: () => Promise<T>, mutate: string) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query("SELECT id FROM contracts WHERE id = ? FOR UPDATE", [contractId]);
+      const pending = whileHeld();
+      pending.catch(() => undefined);
+      await new Promise(resolve => setTimeout(resolve, 400));
+      await conn.query(mutate, [contractId]);
+      await conn.commit();
+      return await pending;
+    } finally { conn.release(); }
+  }
 
-  it("trilha é append-only no banco: UPDATE e DELETE são recusados", async () => {
-    const { contractId } = await seed("append");
+  it("documentos assinados de outra categoria (cópia de RG) não satisfazem os portões de assinatura", async () => {
+    const { contractId } = await seed("rg", { documents: [{ signed: true, storageKey: "customers/1/rg.pdf", category: "Documento pessoal" }] });
     await svc.confirmPayment(adminId, { contractId, note: "conferido" });
-    await expect(db.update(saleValidationEvents).set({ reason: "adulterado" }).where(eq(saleValidationEvents.contractId, contractId))).rejects.toThrow();
-    await expect(db.delete(saleValidationEvents).where(eq(saleValidationEvents.contractId, contractId))).rejects.toThrow();
-    expect(await trail(contractId)).toHaveLength(1);
+    await expect(svc.validateSale(adminId, { contractId })).rejects.toMatchObject({ cause: expect.objectContaining({ code: "SALE_VALIDATION_GATES_MISSING", missing: ["contractSigned", "signedDocumentStored"] }) });
+    expect((await contractRow(contractId)).status).toBe("pending_signature");
+    expect(await rejections(contractId)).toHaveLength(1);
+  });
+
+  it("documento indicado de outra categoria é recusado mesmo assinado", async () => {
+    const { contractId, documentIds } = await seed("rgpick", { signedAt: new Date(), documents: [{ signed: true, storageKey: "rg.pdf", category: "Comprovante" }, { signed: true, storageKey: "ok.pdf", category: "Contrato assinado" }] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await expect(svc.validateSale(adminId, { contractId, signedDocumentId: documentIds[0] })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("SALE_SIGNED_DOCUMENT_INVALID") });
+    await expect(svc.validateSale(adminId, { contractId, signedDocumentId: documentIds[1] })).resolves.toMatchObject({ success: true, alreadyValidated: false });
+  });
+
+  it("pedido de distrato aberto (requested|approved) fecha o portão noOpenCancellation e deixa rejeição", async () => {
+    for (const status of ["requested", "approved"] as const) {
+      const { contractId } = await seed(`cx-${status}`, { signedAt: new Date(), documents: [{ signed: true, storageKey: `s-${status}.pdf` }] });
+      await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+      await db.insert(contractCancellationRequests).values({ contractId, status, reason: "cliente desistiu", simulationSnapshot: "{}", requestedByUserId: adminId });
+      await expect(svc.validateSale(adminId, { contractId })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", cause: expect.objectContaining({ code: "SALE_VALIDATION_GATES_MISSING", missing: ["noOpenCancellation"] }) });
+      expect((await contractRow(contractId)).status).toBe("pending_signature");
+      expect(await rejections(contractId)).toHaveLength(1);
+      expect((await svc.getValidationStatus(contractId)).gates).toMatchObject({ noOpenCancellation: false, ready: false });
+    }
+  });
+
+  it("pedido de distato rejeitado/cancelado/executado não bloqueia a validação", async () => {
+    const { contractId } = await seed("cx-closed", { signedAt: new Date(), documents: [{ signed: true, storageKey: "s-closed.pdf" }] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await db.insert(contractCancellationRequests).values([{ contractId, status: "rejected", reason: "a", simulationSnapshot: "{}", requestedByUserId: adminId }, { contractId, status: "cancelled", reason: "b", simulationSnapshot: "{}", requestedByUserId: adminId }]);
+    await expect(svc.validateSale(adminId, { contractId })).resolves.toMatchObject({ success: true });
+  });
+
+  it("validar/confirmar pagamento em contrato cancelado, fechado ou vencido: CONFLICT, nada gravado, rejeição de validação auditada", async () => {
+    for (const status of ["cancelled", "closed", "overdue"] as const) {
+      const { contractId } = await seed(`st-${status}`, { status: status as never, signedAt: new Date(), documents: [{ signed: true, storageKey: `${status}.pdf` }] });
+      await expect(svc.confirmPayment(adminId, { contractId, note: "conferido" })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_PAYMENT_CONTRACT_STATE") });
+      await expect(svc.validateSale(adminId, { contractId })).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_VALIDATION_CONTRACT_STATE") });
+      expect((await contractRow(contractId)).status).toBe(status);
+      expect((await trail(contractId)).filter(step => step.step === "payment_confirmed")).toHaveLength(0);
+      expect(await rejections(contractId)).toHaveLength(1);
+    }
+  });
+
+  it("confirmPayment trava o contrato: cancelamento concorrente depois da pré-checagem derruba a confirmação", async () => {
+    const { contractId } = await seed("paylock");
+    await expect(holdContractLock(contractId, () => svc.confirmPayment(adminId, { contractId, note: "conferido" }), "UPDATE contracts SET status = 'cancelled' WHERE id = ?")).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_PAYMENT_CONTRACT_STATE") });
+    expect((await db.select().from(saleValidations).where(eq(saleValidations.contractId, contractId)))[0]?.paymentConfirmedAt ?? null).toBeNull();
+    expect((await trail(contractId)).filter(step => step.step === "payment_confirmed")).toHaveLength(0);
+  });
+
+  it("CONFLICT dentro da transação (contrato cancelado entre a pré-checagem e a trava) também deixa validation_rejected", async () => {
+    const { contractId } = await seed("vallock", { signedAt: new Date(), documents: [{ signed: true, storageKey: "vl.pdf" }] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await expect(holdContractLock(contractId, () => svc.validateSale(adminId, { contractId }), "UPDATE contracts SET status = 'cancelled' WHERE id = ?")).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("SALE_VALIDATION_CONTRACT_STATE") });
+    expect(await rejections(contractId)).toHaveLength(1);
+    expect(await svc.isSaleValidated(db, contractId)).toBe(false);
+  });
+
+  it("PII: documentRef = crm-doc:<contrato>:<documento> (a mesma referência opaca do Sales); sem storageKey/filename/evidência nas trilhas e audits", async () => {
+    const { contractId, documentIds } = await seed("pii", { signedAt: new Date(), documents: [{ signed: true, storageKey: "contracts/pii/Joao-Silva-CPF-123.pdf" }] });
+    await svc.confirmPayment(adminId, { contractId, note: "Joao Silva pagou via PIX CPF 123", evidenceRef: "evidence/joao-silva-rg.png" });
+    await svc.validateSale(adminId, { contractId });
+    const steps = await trail(contractId);
+    expect(steps.find(step => step.step === "final_validated")?.documentRef).toBe(`crm-doc:${contractId}:${documentIds[0]}`);
+    for (const step of steps) expect(JSON.stringify([step.documentRef, step.beforeJson, step.afterJson])).not.toMatch(/Joao-Silva|joao-silva|c0\.pdf|\.pdf|evidence\//);
+    const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "sale_validation"), eq(auditLogs.entityId, String(contractId))));
+    for (const audit of audits) expect(audit.summary).not.toMatch(/Joao|CPF|\.pdf/);
+  });
+
+  // ---- comissão de parcelas pagas ANTES da validação
+  const policyJson = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
+  async function seedCommissionSale(label: string, opts: { policy?: string | null; paidSequences?: number[] } = {}) {
+    const [liner] = await db.insert(users).values({ openId: `sv-liner-${label}-${runId}`, name: "Liner SYN", role: "seller" }).$returningId();
+    const [closer] = await db.insert(users).values({ openId: `sv-closer-${label}-${runId}`, name: "Closer SYN", role: "seller" }).$returningId();
+    const [resort] = await db.insert(resorts).values({ name: `Resort SYN ${label} ${runId}` } as never).$returningId();
+    if (opts.policy !== null) await db.insert(commercialProjectSettings).values({ resortId: resort.id, commissionPolicy: opts.policy ?? policyJson });
+    const [customer] = await db.insert(customers).values({ fullName: `Cliente COM ${label} ${runId}`, status: "active" }).$returningId();
+    const [opportunity] = await db.insert(opportunities).values({ customerId: customer.id, title: `Opp ${label}`, sellerId: closer.id } as never).$returningId();
+    const [proposal] = await db.insert(proposals).values({ opportunityId: opportunity.id, reference: `P-${label}-${runId}`, productDescription: "Semana fixa", totalAmount: "10000.00", downPaymentAmount: "1000.00", installmentCount: 3 }).$returningId();
+    await db.insert(captureRecords).values({ customerId: customer.id, resortId: resort.id, opportunityId: opportunity.id, linerId: liner.id, closerId: closer.id } as never);
+    const [contract] = await db.insert(contracts).values({ number: `COM-${label}-${runId}`, customerId: customer.id, proposalId: proposal.id, status: "pending_signature", totalAmount: "10000.00", signedAt: new Date() }).$returningId();
+    await db.insert(contractDocuments).values({ contractId: contract.id, category: "Contrato assinado", filename: "c.pdf", storageKey: `contracts/com-${label}.pdf`, signed: true, signedArtifact: true });
+    const installmentIds: number[] = [];
+    for (const sequence of [1, 2, 3]) {
+      const paid = (opts.paidSequences ?? [1]).includes(sequence);
+      const [row] = await db.insert(installments).values({ contractId: contract.id, sequence, dueDate: new Date("2026-10-10T12:00:00Z"), amount: sequence === 1 ? "1000.00" : "4500.00", status: paid ? "paid" : "open", paidAmount: paid ? (sequence === 1 ? "1000.00" : "4500.00") : "0.00", paidAt: paid ? new Date("2026-10-02T12:00:00Z") : null, paymentMethod: paid ? "pix" : null }).$returningId();
+      installmentIds.push(row.id);
+    }
+    return { contractId: contract.id, installmentIds, linerId: liner.id, closerId: closer.id };
+  }
+  const commissionsOf = (contractId: number) => db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+
+  it("entrada paga ANTES da validação: a comissão nasce na validação, na mesma transação, uma por papel", async () => {
+    const { contractId, installmentIds, linerId, closerId } = await seedCommissionSale("pre");
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    expect(await commissionsOf(contractId)).toHaveLength(0);
+    await svc.validateSale(adminId, { contractId });
+    const rows = await commissionsOf(contractId);
+    expect(rows.map(row => [row.commissionRole, row.sellerId, row.sourceInstallmentId]).sort()).toEqual([["closer", closerId, installmentIds[0]], ["liner", linerId, installmentIds[0]]].sort());
+    expect(rows.every(row => row.status === "pending" && Number(row.amount) > 0)).toBe(true);
+    expect(rows.find(row => row.commissionRole === "liner")!.amount).toBe("180.00");
+    const created = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.created"), eq(domainEvents.aggregateType, "sales_commission")));
+    expect(created.filter(event => rows.some(row => String(row.id) === event.aggregateId))).toHaveLength(2);
+    expect(await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.automatic.blocked"), eq(domainEvents.aggregateId, String(installmentIds[0]))))).toHaveLength(0);
+  });
+
+  it("validar de novo / reentrega da reavaliação nunca duplica comissão (idempotente por parcela+papel)", async () => {
+    const { contractId } = await seedCommissionSale("dup", { paidSequences: [1, 2] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await svc.validateSale(adminId, { contractId });
+    const before = await commissionsOf(contractId);
+    expect(before.length).toBe(4);
+    await svc.validateSale(adminId, { contractId });
+    await db.transaction(tx => svc.releaseCommissionsForValidatedContract(tx, { contractId, actorUserId: adminId }));
+    await db.transaction(tx => svc.releaseCommissionsForValidatedContract(tx, { contractId, actorUserId: adminId }));
+    expect((await commissionsOf(contractId)).map(row => row.id).sort()).toEqual(before.map(row => row.id).sort());
+  });
+
+  it("política incompleta no momento da validação: venda valida, nada de comissão, evento blocked com incomplete_project_policy", async () => {
+    const { contractId, installmentIds } = await seedCommissionSale("pol", { policy: JSON.stringify({ linerRate: 0.02 }) });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await expect(svc.validateSale(adminId, { contractId })).resolves.toMatchObject({ success: true });
+    expect(await commissionsOf(contractId)).toHaveLength(0);
+    const blocked = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.automatic.blocked"), eq(domainEvents.aggregateId, String(installmentIds[0]))));
+    expect(blocked).toHaveLength(1);
+    expect(JSON.parse(String(blocked[0].payload))).toMatchObject({ contractId, reason: "incomplete_project_policy", source: "sale_validation" });
+    // reentrega: o mesmo bloqueio não é emitido duas vezes
+    await db.transaction(tx => svc.releaseCommissionsForValidatedContract(tx, { contractId, actorUserId: adminId }));
+    expect(await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.automatic.blocked"), eq(domainEvents.aggregateId, String(installmentIds[0]))))).toHaveLength(1);
+  });
+
+  it("sem política cadastrada para o empreendimento também bloqueia com incomplete_project_policy", async () => {
+    const { contractId, installmentIds } = await seedCommissionSale("nopol", { policy: null });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await svc.validateSale(adminId, { contractId });
+    const blocked = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.automatic.blocked"), eq(domainEvents.aggregateId, String(installmentIds[0]))));
+    expect(JSON.parse(String(blocked[0].payload)).reason).toBe("incomplete_project_policy");
+  });
+
+  it("parcelas ainda abertas na validação não geram comissão nem bloqueio", async () => {
+    const { contractId } = await seedCommissionSale("open", { paidSequences: [] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await svc.validateSale(adminId, { contractId });
+    expect(await commissionsOf(contractId)).toHaveLength(0);
   });
 });

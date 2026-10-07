@@ -1958,6 +1958,14 @@
           "autoincrement": false,
           "default": false
         },
+        "signedArtifact": {
+          "name": "signedArtifact",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "uploadedByUserId": {
           "name": "uploadedByUserId",
           "type": "int",

@@ -28,7 +28,7 @@ describe("integridade do importador de contratos", () => {
     const caller = importsRouter.createCaller({ user: { id: 9, role: "admin" } } as never);
     const csv = [
       "numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento;email_vendedor",
-      "CT-2026-001;12345678900;semana_flexivel;ativo;12500;12;2026-09-10;finance@example.com",
+      "CT-2026-001;12345678900;semana_flexivel;pendente_assinatura;12500;12;2026-09-10;finance@example.com",
     ].join("\n");
 
     const result = await caller.commit({ kind: "contracts", csv });
@@ -37,5 +37,22 @@ describe("integridade do importador de contratos", () => {
     expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ field: "email_vendedor" })]));
     expect(fixture.transaction).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("RED TEAM: CSV com contrato ativo/legado é recusado por linha sem abrir lote nem gravar", async () => {
+    const fixture = makeDb();
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    const caller = importsRouter.createCaller({ user: { id: 9, role: "admin" } } as never);
+    const csv = [
+      "numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento",
+      "CT-2026-010;12345678900;semana_flexivel;ativo;12500;12;2026-09-10",
+      "CT-2026-011;12345678900;semana_flexivel;inadimplente;12500;12;2026-09-10",
+      "CT-2026-012;12345678900;semana_flexivel;encerrado;12500;12;2026-09-10",
+    ].join("\n");
+    const result = await caller.commit({ kind: "contracts", csv });
+    expect(result).toMatchObject({ valid: false, committed: false, created: 0 });
+    expect(result.issues.filter(issue => issue.field === "status").map(issue => issue.line)).toEqual([2, 3, 4]);
+    expect(result.issues.find(issue => issue.field === "status")?.message).toContain("LEGACY_ACTIVE_BACKFILL");
+    expect(fixture.transaction).not.toHaveBeenCalled();
   });
 });
