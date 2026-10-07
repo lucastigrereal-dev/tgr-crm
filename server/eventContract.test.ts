@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,7 +7,21 @@ import { exportEventContract } from "./eventContract";
 // WP5: o snapshot que os consumidores copiam tem de ser exatamente o que o código do CRM emite hoje.
 const snapshot = JSON.parse(readFileSync(path.join(__dirname, "../shared/contracts/tgr-events.snapshot.json"), "utf8"));
 
+// KAN-30: o CRM #35 mudou crm.sale.validated.v1 sem a suite acompanhar e quebrou 5 jornadas em silêncio.
+// Esta trava faz a mudança de contrato falhar AQUI, no PR que muda o emissor, até a suite estar pronta.
+const consumersLock = JSON.parse(readFileSync(path.join(__dirname, "../shared/contracts/consumers.lock.json"), "utf8"));
+const canonical = (v: unknown): unknown =>
+  Array.isArray(v) ? v.map(canonical) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical((v as Record<string, unknown>)[k])])) : v;
+const sectionHash = (section: unknown) => createHash("sha256").update(JSON.stringify(canonical(section))).digest("hex");
+
 describe("CRM event contract export", () => {
+  it("contract consumed by tgr-commercial-suite is locked (change = suite first, then shared/contracts/consumers.lock.json)", () => {
+    expect(snapshot.contractVersion).toBe(consumersLock.contractVersion);
+    for (const section of ["financial", "relationship", "sales"] as const) {
+      expect(sectionHash(snapshot[section]), `contrato CRM -> ${section} mudou: veja o _doc de shared/contracts/consumers.lock.json`).toBe(consumersLock.sections[section]);
+    }
+  });
+
   it("committed snapshot matches what the bridges build (regenerate with scripts/export-event-contract.ts)", () => {
     expect(JSON.parse(JSON.stringify(exportEventContract()))).toEqual(snapshot);
   });
