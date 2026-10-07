@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, revenueQualityLedger, salesCommissions, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, revenueQualityLedger, saleValidationEvents, saleValidations, salesCommissions, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
@@ -164,7 +164,7 @@ export const importsRouter = router({
         if (contractIds.length) {
           const installmentRows = await tx.select({ id: installments.id }).from(installments).where(inArray(installments.contractId, contractIds));
           const installmentIds = installmentRows.map(item => item.id);
-          const [docs, bookings, taskRows, financial, billings, entitlements, waitlistRows, renegotiations, portfolioAssignments, transfers, commissions, revenueLedger] = await Promise.all([
+          const [docs, bookings, taskRows, financial, billings, entitlements, waitlistRows, renegotiations, portfolioAssignments, transfers, commissions, revenueLedger, saleValidationRows, saleValidationTrail] = await Promise.all([
             tx.select({ id: contractDocuments.id }).from(contractDocuments).where(inArray(contractDocuments.contractId, contractIds)),
             tx.select({ id: reservations.id }).from(reservations).where(inArray(reservations.contractId, contractIds)),
             tx.select({ id: tasks.id }).from(tasks).where(inArray(tasks.contractId, contractIds)),
@@ -177,7 +177,11 @@ export const importsRouter = router({
             tx.select({ id: financialTransfers.id }).from(financialTransfers).where(inArray(financialTransfers.contractId, contractIds)),
             tx.select({ id: salesCommissions.id }).from(salesCommissions).where(inArray(salesCommissions.contractId, contractIds)),
             tx.select({ id: revenueQualityLedger.id }).from(revenueQualityLedger).where(inArray(revenueQualityLedger.contractId, contractIds)),
+            tx.select({ id: saleValidations.id }).from(saleValidations).where(inArray(saleValidations.contractId, contractIds)),
+            tx.select({ id: saleValidationEvents.id }).from(saleValidationEvents).where(inArray(saleValidationEvents.contractId, contractIds)),
           ]);
+          // ADR-007: validação da venda e sua trilha append-only nunca são apagadas; sem esta checagem o DELETE do contrato viraria erro de FK (500).
+          if (saleValidationRows.length || saleValidationTrail.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: um contrato importado já tem validação de venda ou trilha de validação registrada (a trilha é imutável)." });
           if (docs.length || bookings.length || taskRows.length || financial.length || billings.length || entitlements.length || waitlistRows.length || renegotiations.length || portfolioAssignments.length || transfers.length || commissions.length || revenueLedger.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança, lançamento, direito, fila, renegociação, carteira, repasse, comissão ou ledger vinculado." });
           await tx.delete(installments).where(inArray(installments.contractId, contractIds));
           await tx.delete(contracts).where(inArray(contracts.id, contractIds));

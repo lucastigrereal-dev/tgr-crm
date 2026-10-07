@@ -75,18 +75,18 @@ describe("eventos e auditoria de contratos", () => {
 
   it("registra criação contratual com valor, parcelas e ator", async () => {
     dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
-    await expect(caller().create({ number: "TS-2026-701", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "active", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 })).resolves.toEqual({ id: 701 });
+    await expect(caller().create({ number: "TS-2026-701", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 })).resolves.toEqual({ id: 701 });
 
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract", 701, "created", expect.stringContaining("TS-2026-701"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "active", totalAmount: 12000, installmentCount: 12 }) }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, installmentCount: 12 }) }));
   });
 
   it("emite contract.created.v2 com valor total em BRL e mantém o v1 intacto (ADR-004)", async () => {
     dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
-    await caller().create({ number: "TS-2026-702", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "active", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 });
+    await caller().create({ number: "TS-2026-702", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 });
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created" }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created.v2", aggregateType: "contract", aggregateId: 701,
-      payload: { contractId: 701, saleId: null, customerId: 11, totalAmount: "12000.00", currency: "BRL", status: "active", usageModel: "flexible_week", source: "manual" } }));
+      payload: { contractId: 701, saleId: null, customerId: 11, totalAmount: "12000.00", currency: "BRL", status: "pending_signature", usageModel: "flexible_week", source: "manual" } }));
   });
 
   it("exige cota quando o estoque comercial está materializado", async () => {
@@ -114,7 +114,7 @@ describe("eventos e auditoria de contratos", () => {
 
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "closed", cancellationReason: null } }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_document", 702, "uploaded", expect.stringContaining("contrato.pdf"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: false, filename: "contrato.pdf" } }));
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: true, filename: "contrato.pdf" } }));
   });
 
   it("bloqueia cancelamento direto fora do workflow de distrato", async () => {

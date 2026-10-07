@@ -19,10 +19,26 @@ describe("importação CSV", () => {
   });
 
   it("lê contrato, converte moeda brasileira e normaliza modelo de uso", () => {
-    const csv = "numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento\nTS-2026-001;12345678900;semana_flexivel;ativo;12.500,00;12;2026-09-10";
+    const csv = "numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento\nTS-2026-001;12345678900;semana_flexivel;pendente_assinatura;12.500,00;12;2026-09-10";
     const result = parseContractsCsv(csv);
     expect(result.issues).toEqual([]);
-    expect(result.records).toMatchObject([{ number: "TS-2026-001", customerDocument: "12345678900", usageModel: "flexible_week", status: "active", totalAmount: 12500, installmentCount: 12, firstDueDate: "2026-09-10" }]);
+    expect(result.records).toMatchObject([{ number: "TS-2026-001", customerDocument: "12345678900", usageModel: "flexible_week", status: "pending_signature", totalAmount: 12500, installmentCount: 12, firstDueDate: "2026-09-10" }]);
+  });
+
+  it("RED TEAM: contrato ativo/inadimplente/encerrado exige decisão LEGACY_ACTIVE_BACKFILL (erro por linha)", () => {
+    const header = "numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento";
+    for (const [status, line] of [["ativo", 2], ["active", 3], ["inadimplente", 4], ["overdue", 5], ["encerrado", 6], ["closed", 7]] as const) {
+      const csv = `${header}\n` + Array.from({ length: line - 2 }, (_, i) => `OK-${status}-${i};12345678900;pontos;rascunho;1000;2;2026-09-10`).join("\n") + (line > 2 ? "\n" : "") + `TS-${status};12345678900;pontos;${status};1000;2;2026-09-10`;
+      const result = parseContractsCsv(csv);
+      expect(result.issues, status).toEqual([expect.objectContaining({ line, field: "status", message: expect.stringContaining("LEGACY_ACTIVE_BACKFILL") })]);
+    }
+  });
+
+  it("rascunho, pendente_assinatura e cancelado continuam importáveis", () => {
+    const csv = ["numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento", "A-1;12345678900;pontos;rascunho;1000;2;2026-09-10", "A-2;12345678900;pontos;pending_signature;1000;2;2026-09-10", "A-3;12345678900;pontos;cancelado;1000;2;2026-09-10"].join("\n");
+    const result = parseContractsCsv(csv);
+    expect(result.issues).toEqual([]);
+    expect(result.records.map(record => record.status)).toEqual(["draft", "pending_signature", "cancelled"]);
   });
 
   it("lê empreendimento e unidade com capacidade, camas e status", () => {

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, like, lt, lte, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
@@ -355,6 +355,44 @@ export const capturesRouter = router({
     await recordDomainEvent({ eventName: "capture.presentation.ended", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable, durationMinutes } });
     publishSalesRoomEvent({ type: "capture.presentation.ended", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, presentationEndedAt, durationMinutes };
+  }),
+
+  // ADR-007 (V6): resultado comercial da sala. VENDEU = aceite comercial; CAIU EM MESA = motivo obrigatório. Nenhum dos dois
+  // é venda validada: não marca oportunidade ganha, não cria contrato nem comissão. Imutável depois de gravado (idempotente se idêntico).
+  recordCommercialOutcome: salesProcedure.input(z.object({
+    id: z.number().int().positive(),
+    outcome: z.enum(["vendeu", "caiu_em_mesa"]),
+    reason: z.string().trim().max(5000).optional().nullable(),
+  }).superRefine((value, issueContext) => {
+    if (value.outcome === "caiu_em_mesa" && (value.reason?.trim().length ?? 0) < 3) {
+      issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres) para CAIU EM MESA." });
+    }
+  })).mutation(async ({ ctx, input }) => {
+    const { db, capture } = await findCaptureOrThrow(input.id);
+    // O closer designado grava o próprio resultado; admin (gerente) pode registrar por qualquer ficha.
+    if (ctx.user.role !== "admin" && capture.closerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o closer designado da ficha (ou a administração) registra o resultado comercial." });
+    const reason = nullIfBlank(input.reason);
+    const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || (existing.commercialOutcomeReason ?? null) === reason);
+    const rejectChange = () => new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
+    if (capture.commercialOutcome) {
+      if (sameAs(capture)) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
+      throw rejectChange();
+    }
+    if (capture.presentationStatus !== "presented" && capture.presentationStatus !== "closed") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `COMMERCIAL_OUTCOME_REQUIRES_PRESENTATION: o resultado comercial só pode ser registrado depois que a apresentação começou (atual: ${capture.presentationStatus}).` });
+    }
+    const recordedAt = new Date();
+    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id })
+      .where(and(eq(captureRecords.id, input.id), isNull(captureRecords.commercialOutcome)));
+    if (affectedRows(updateResult) === 0) {
+      const current = (await db.select().from(captureRecords).where(eq(captureRecords.id, input.id)).limit(1))[0];
+      if (current?.commercialOutcome && sameAs(current)) return { success: true as const, alreadyRecorded: true as const, outcome: current.commercialOutcome };
+      throw rejectChange();
+    }
+    const label = input.outcome === "vendeu" ? "VENDEU" : "CAIU EM MESA";
+    await recordAudit(ctx.user.id, "capture", input.id, "commercial_outcome_recorded", `Resultado comercial ${label} registrado.`);
+    await recordDomainEvent({ eventName: "capture.commercial_outcome.recorded", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { outcome: input.outcome } });
+    return { success: true as const, alreadyRecorded: false as const, outcome: input.outcome, recordedAt };
   }),
 
   markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(3).max(5000), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {

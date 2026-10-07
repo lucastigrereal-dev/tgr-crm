@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
   contractDocuments,
@@ -24,7 +24,6 @@ import {
 } from "./clicksign";
 import { storageReadBytes } from "./storage";
 import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
-import { syncRevenueQualityForContract } from "./revenueQualitySync";
 
 function contentTypeFor(filename: string) {
   const lower = filename.toLowerCase();
@@ -226,8 +225,8 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
 
   let linkedEnvelopeId: number | null = null;
   let linkedContractId: number | null = null;
-  let contractActivated = false;
-  let signedContractDocumentId: number | null = null;
+  let contractSigned = false;
+  const signedContractDocumentIds: number[] = [];
 
   try {
     await db.transaction(async tx => {
@@ -270,7 +269,7 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
         }).where(eq(contractSignatureDocuments.id, signatureDocument.id));
         const documentUpdate = await tx.update(contractDocuments).set({ signed: true })
           .where(and(eq(contractDocuments.id, signatureDocument.contractDocumentId), eq(contractDocuments.signed, false)));
-        if (affectedRows(documentUpdate) !== 0) signedContractDocumentId = signatureDocument.contractDocumentId;
+        if (affectedRows(documentUpdate) !== 0) signedContractDocumentIds.push(signatureDocument.contractDocumentId);
       } else if (signatureDocument && canceledEvents.has(eventName)) {
         await tx.update(contractSignatureDocuments).set({ status: "canceled" }).where(eq(contractSignatureDocuments.id, signatureDocument.id));
       }
@@ -294,9 +293,18 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
         }).where(eq(contractSignatureEnvelopes.id, envelope.id));
 
         if (nextStatus === "closed") {
-          const activation = await tx.update(contracts).set({ status: "active", signedAt: now, activatedAt: now })
-            .where(and(eq(contracts.id, envelope.contractId), eq(contracts.status, "pending_signature")));
-          contractActivated = affectedRows(activation) !== 0;
+          // ADR-007 (V6): envelope fechado = contrato ASSINADO. Não ativa: `active` (venda validada) só nasce da validação
+          // final do gerente (saleValidationService.validateSale), que exige pagamento conferido e documento assinado armazenado.
+          const signedMark = await tx.update(contracts).set({ signedAt: now })
+            .where(and(eq(contracts.id, envelope.contractId), eq(contracts.status, "pending_signature"), isNull(contracts.signedAt)));
+          contractSigned = affectedRows(signedMark) !== 0;
+          // Envelope fechado: todos os documentos do envelope estão assinados (o gate "documento assinado armazenado" depende disso).
+          const envelopeDocuments = await tx.select({ contractDocumentId: contractSignatureDocuments.contractDocumentId }).from(contractSignatureDocuments)
+            .where(and(eq(contractSignatureDocuments.envelopeId, envelope.id), inArray(contractSignatureDocuments.status, ["pending", "signed", "closed"])));
+          for (const item of envelopeDocuments) {
+            const marked = await tx.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, item.contractDocumentId), eq(contractDocuments.signed, false)));
+            if (affectedRows(marked) !== 0) signedContractDocumentIds.push(item.contractDocumentId);
+          }
         }
       }
     });
@@ -305,20 +313,11 @@ export async function processClicksignWebhook(signatureHeader: string | undefine
     throw error;
   }
 
-  if (contractActivated && linkedContractId) {
-    // Primeiro, antes de qualquer outra escrita: reentrega do webhook vira duplicata, então este evento não pode ficar
-    // atrás de um await que falhe. Mesmo efeito da troca manual de status: sem este evento Relationship (D1–D7) e Financial não veem a ativação.
-    await recordAudit(null, "contract", linkedContractId, "status_updated", "Status alterado para active (assinatura eletrônica concluída).");
-    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: linkedContractId, actorUserId: null, payload: { status: "active", cancellationReason: null } });
-    try {
-      await syncRevenueQualityForContract({ contractId: linkedContractId, actorUserId: null, trigger: "assinatura eletrônica concluída" });
-    } catch (error) {
-      // O webhook já foi aplicado (reentrega vira duplicata); registrar para reprocessar em vez de devolver 500.
-      await recordAudit(null, "contract", linkedContractId, "revenue_quality_sync_failed", "Sincronização da qualidade de receita falhou após a assinatura: " + (error instanceof Error ? error.message : "erro desconhecido"));
-    }
+  if (contractSigned && linkedContractId) {
+    await recordAudit(null, "contract", linkedContractId, "signed", "Contrato assinado eletronicamente; permanece pending_signature até a validação final da venda.");
   }
   if (linkedEnvelopeId) await recordAudit(null, "contract_signature_envelope", linkedEnvelopeId, `webhook_${eventName}`, `Webhook Clicksign processado: ${eventName}.`);
-  if (signedContractDocumentId) await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: signedContractDocumentId, actorUserId: null, payload: { contractId: linkedContractId } });
+  for (const signedContractDocumentId of signedContractDocumentIds) await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: signedContractDocumentId, actorUserId: null, payload: { contractId: linkedContractId } });
   if (linkedContractId && (eventName === "envelope_closed" || eventName === "document_closed" || eventName === "close")) {
     await recordDomainEvent({ eventName: "contract.signature.completed", aggregateType: "contract", aggregateId: linkedContractId, actorUserId: null, payload: { contractId: linkedContractId, provider: "clicksign", eventName } });
   }

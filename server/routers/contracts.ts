@@ -12,6 +12,8 @@ import { planCancellationExecution } from "../cancellationExecution";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { decodeUpload } from "../uploadValidation";
 import { canTransitionContractStatus } from "../../shared/contractLifecycle";
+import { canCapability } from "../../shared/permissions";
+import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
 
@@ -41,7 +43,11 @@ export const contractsRouter = router({
     installmentCount: z.coerce.number().int().min(1).max(360),
     notes: z.string().trim().max(5000).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
-    if (input.status === "active") assertCapability(ctx.user.role, "contract.activate", "Somente a administração registra a ativação do contrato.");
+    // ADR-007 (V6): contrato nasce SÓ em rascunho ou aguardando assinatura (qualquer papel). `active` = venda VALIDADA e só
+    // nasce de saleValidation.validateSale; overdue/cancelled/closed na criação seriam estados históricos sem venda validada.
+    if (input.status !== "draft" && input.status !== "pending_signature") {
+      throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", `Contrato não pode ser criado como ${input.status}. Crie em rascunho/aguardando assinatura e use a validação final da venda (saleValidation.validateSale).`);
+    }
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const duplicate = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.number, input.number)).limit(1))[0];
@@ -90,7 +96,7 @@ export const contractsRouter = router({
         usageModel: input.usageModel,
         status: input.status,
         totalAmount: input.totalAmount.toFixed(2),
-        activatedAt: input.status === "active" ? new Date() : null,
+        activatedAt: null,
         notes: input.notes?.trim() || null,
       }).$returningId();
       const contractId = created[0]?.id;
@@ -237,6 +243,8 @@ export const contractsRouter = router({
       await tx.update(contracts).set({ status: "cancelled", cancelledAt: new Date(), cancellationReason: request.reason }).where(eq(contracts.id, contract.id));
       const cancelledInstallments = impact.cancelInstallmentIds.length ? await tx.update(installments).set({ status: "cancelled" }).where(inArray(installments.id, impact.cancelInstallmentIds)) : [{ affectedRows: 0 }];
       const cancelledCommissions = impact.cancelCommissionIds.length ? await tx.update(salesCommissions).set({ status: "cancelled", lifecycleStatus: "cancelled", cancelledAt: new Date(), notes: input.executionNotes?.trim() || "Cancelada por distrato aprovado" }).where(inArray(salesCommissions.id, impact.cancelCommissionIds)) : [{ affectedRows: 0 }];
+      // ADR-010: comissão já paga NÃO é estornada; entra na fila de revisão manual (gerente/financeiro).
+      if (impact.manualReviewCommissionIds.length) await tx.update(salesCommissions).set({ reversalReviewStatus: "pending", reversalReviewRequestedAt: new Date(), reversalReviewReason: `Contrato distratado (distrato #${request.id}) com comissão já paga: estorno/compensação exige decisão manual.` }).where(inArray(salesCommissions.id, impact.manualReviewCommissionIds));
       await tx.update(financialTransactions).set({ status: "cancelled" }).where(and(eq(financialTransactions.contractId, contract.id), eq(financialTransactions.status, "open")));
       await tx.update(financialTransfers).set({ status: "cancelled" }).where(and(eq(financialTransfers.contractId, contract.id), eq(financialTransfers.status, "pending")));
       await tx.update(ownershipEntitlements).set({ status: "cancelled" }).where(and(eq(ownershipEntitlements.contractId, contract.id), ne(ownershipEntitlements.status, "cancelled")));
@@ -261,12 +269,13 @@ export const contractsRouter = router({
       if (moneyFromPolicy && Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
       if (financialImpact.length) { const insertedFinancialEntries = await tx.insert(financialTransactions).values(financialImpact).$returningId(); insertedFinancialEntries.forEach((inserted, index) => { const entry = financialImpact[index]; if (entry && inserted?.id) createdFinancialEntryFacts.push({ id: inserted.id, contractId: entry.contractId, type: entry.type, category: entry.category, amount: Number(entry.amount) }); }); }
       await tx.update(contractCancellationRequests).set({ status: "executed", executedAt: new Date(), decisionNotes: [request.decisionNotes, input.executionNotes?.trim()].filter(Boolean).join("\n") || null }).where(eq(contractCancellationRequests.id, request.id));
-      return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
+      return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, manualReviewCommissionIds: impact.manualReviewCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
     });
     await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId} (política de distrato ${outcome.policyConfigured ? "configurada" : "NÃO configurada: nenhum lançamento de multa/devolução"}); parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
     await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
     await recordDomainEvent({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, cancelledInstallments: outcome.cancelledInstallments, cancelledCommissions: outcome.cancelledCommissions, financialEntries: outcome.financialEntries } });
     for (const commissionId of outcome.cancelledCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "cancelled", `Comissão cancelada pelo distrato do contrato ${outcome.contractId}.`); await recordDomainEvent({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { status: "cancelled", contractId: outcome.contractId } }); }
+    for (const commissionId of outcome.manualReviewCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "reversal_review_pending", `Comissão já paga NÃO estornada automaticamente; enviada à fila manual (distrato do contrato ${outcome.contractId}).`); await recordDomainEvent({ eventName: "commission.reversal_review.requested", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, commissionId, distratoRequestId: input.requestId }, idempotencyKey: `commission-reversal-review-requested:${commissionId}` }); }
     for (const entry of createdFinancialEntryFacts) { await recordAudit(ctx.user.id, "financial_transaction", entry.id, "created", `Lançamento ${entry.type} de ${entry.amount.toFixed(2)} criado pelo distrato.`); await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: entry.id, actorUserId: ctx.user.id, payload: { type: entry.type, category: entry.category, amount: entry.amount, contractId: entry.contractId, campaignId: null } }); }
     for (const fractionId of outcome.returnedFractionIds) {
       await recordAudit(ctx.user.id, "commercial_fraction", fractionId, "returned_to_inventory", `Cota retornou ao estoque após distrato do contrato ${outcome.contractId}.`);
@@ -287,6 +296,10 @@ export const contractsRouter = router({
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
     const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+    // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active (exige venda já validada, abaixo).
+    if (input.status === "active" && current.status !== "overdue") throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "A ativação do contrato só ocorre pela validação final da venda (saleValidation.validateSale): pagamento confirmado, contrato assinado, documento assinado armazenado e confirmação do gerente.");
+    // overdue -> active só para contrato cuja venda foi validada (inclui importado em CSV como overdue: sem validação não ativa).
+    if (input.status === "active" && !(await isSaleValidated(db, input.id))) throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "Contrato vencido só volta a ativo se a venda foi validada (saleValidation.validateSale). Valide a venda antes de regularizar.");
     if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
     const updateResult = await db.update(contracts).set({
       status: input.status,
@@ -315,6 +328,8 @@ export const contractsRouter = router({
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do documento não encontrado." });
     const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    // ADR-007: só quem tem document.sign (admin) pode registrar documento já assinado; para os demais a flag é ignorada.
+    const signed = input.signed && canCapability(ctx.user.role, "document.sign");
     let upload: { key: string; url: string };
     try {
       upload = await storagePut(`contracts/${input.contractId}/${Date.now()}-${safeName}`, buffer, input.contentType);
@@ -326,13 +341,19 @@ export const contractsRouter = router({
       category: input.category,
       filename: input.filename,
       storageKey: upload.key,
-      signed: false,
+      signed,
+      // Único caminho que cria arquivo assinado real (bytes acabaram de ir ao storage via storagePut, por quem tem document.sign).
+      signedArtifact: signed,
       uploadedByUserId: ctx.user.id,
     }).$returningId();
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento." });
     await recordAudit(ctx.user.id, "contract_document", id, "uploaded", `Documento ${input.filename} anexado.`);
-    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed: false, filename: input.filename } });
+    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed, filename: input.filename } });
+    if (signed) {
+      await recordAudit(ctx.user.id, "contract_document", id, "signed", `Documento assinado ${input.filename} registrado pela administração.`);
+      await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId } });
+    }
     return { id, url: upload.url };
   }),
 

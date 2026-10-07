@@ -8,5 +8,6 @@ export function planCancellationExecution(input: { requestStatus: "requested" | 
   const preservedInstallmentIds = input.installments.filter(item => item.status === "paid").map(item => item.id);
   const cancelCommissionIds = input.commissions.filter(item => item.status !== "paid" && item.status !== "cancelled").map(item => item.id);
   const preservedCommissionIds = input.commissions.filter(item => item.status === "paid").map(item => item.id);
-  return { cancelInstallmentIds, preservedInstallmentIds, cancelCommissionIds, preservedCommissionIds };
+  // ADR-010: comissão já paga não é estornada automaticamente; vai para a fila manual (gerente/financeiro), auditada.
+  return { cancelInstallmentIds, preservedInstallmentIds, cancelCommissionIds, preservedCommissionIds, manualReviewCommissionIds: [...preservedCommissionIds] };
 }

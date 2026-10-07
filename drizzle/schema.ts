@@ -250,6 +250,11 @@ export const captureRecords = mysqlTable(
     qualificationStatus: mysqlEnum("qualificationStatus", ["pending", "qualified", "disqualified"]).default("pending").notNull(),
     qualificationReason: text("qualificationReason"),
     noTourReason: text("noTourReason"),
+    // ADR-007 (V6): resultado comercial da sala (VENDEU | CAIU EM MESA). Imutável depois de gravado; NÃO é venda validada.
+    commercialOutcome: mysqlEnum("commercialOutcome", ["vendeu", "caiu_em_mesa"]),
+    commercialOutcomeReason: text("commercialOutcomeReason"),
+    commercialOutcomeAt: timestamp("commercialOutcomeAt"),
+    commercialOutcomeByUserId: int("commercialOutcomeByUserId").references(() => users.id),
     partnerName: varchar("partnerName", { length: 255 }),
     partnerAge: int("partnerAge"),
     partnerProfession: varchar("partnerProfession", { length: 120 }),
@@ -373,10 +378,20 @@ export const salesCommissions = mysqlTable(
     notes: text("notes"),
     approvedAt: timestamp("approvedAt"),
     paidAt: timestamp("paidAt"),
+    // ADR-010: comissão já paga em contrato distratado NÃO é estornada automaticamente; fica na fila manual (gerente/financeiro).
+    reversalReviewStatus: mysqlEnum("reversalReviewStatus", ["pending", "resolved"]),
+    reversalReviewReason: text("reversalReviewReason"),
+    reversalReviewRequestedAt: timestamp("reversalReviewRequestedAt"),
+    reversalReviewResolvedAt: timestamp("reversalReviewResolvedAt"),
+    reversalReviewResolvedByUserId: int("reversalReviewResolvedByUserId").references(() => users.id),
+    reversalReviewNote: text("reversalReviewNote"),
+    // Decisão da revisão manual: estornada, compensada em outro lançamento ou dispensada (com lançamento financeiro opcional de referência).
+    reversalReviewDecision: mysqlEnum("reversalReviewDecision", ["reversed", "offset", "waived"]),
+    reversalReviewFinancialTransactionId: int("reversalReviewFinancialTransactionId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
+  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status), foreignKey({ name: "sc_reversal_fin_tx_fk", columns: [table.reversalReviewFinancialTransactionId], foreignColumns: [financialTransactions.id] })],
 );
 
 export const contracts = mysqlTable(
@@ -415,9 +430,50 @@ export const contractDocuments = mysqlTable("contract_documents", {
   filename: varchar("filename", { length: 255 }).notNull(),
   storageKey: text("storageKey").notNull(),
   signed: boolean("signed").default(false).notNull(),
+  // ADR-007 (V6): true só quando o arquivo ASSINADO real está no storage (upload de admin com signed:true). `signed` é só exibição.
+  signedArtifact: boolean("signedArtifact").default(false).notNull(),
   uploadedByUserId: int("uploadedByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
+
+// ADR-007 (V6): fato da venda VALIDADA. Uma linha por contrato; contrato `active` só nasce da validação final.
+export const saleValidations = mysqlTable("sale_validations", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull(),
+  paymentConfirmedAt: timestamp("paymentConfirmedAt"),
+  paymentConfirmedByUserId: int("paymentConfirmedByUserId"),
+  paymentConfirmationNote: text("paymentConfirmationNote"),
+  paymentEvidenceRef: varchar("paymentEvidenceRef", { length: 512 }),
+  validatedAt: timestamp("validatedAt"),
+  validatedByUserId: int("validatedByUserId"),
+  signedDocumentId: int("signedDocumentId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("sale_validations_contract_unique").on(table.contractId),
+  foreignKey({ name: "sv_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+  foreignKey({ name: "sv_payment_user_fk", columns: [table.paymentConfirmedByUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: "sv_validated_user_fk", columns: [table.validatedByUserId], foreignColumns: [users.id] }),
+  foreignKey({ name: "sv_signed_document_fk", columns: [table.signedDocumentId], foreignColumns: [contractDocuments.id] }),
+]);
+
+// Trilha append-only POR CÓDIGO (sem triggers: MySQL gerenciado com binlog pode recusar CREATE TRIGGER); server/saleValidationAppendOnly.test.ts garante que nenhum caminho faz UPDATE/DELETE. documentRef = `contract_document:<id>`, nunca storageKey/filename.
+export const saleValidationEvents = mysqlTable("sale_validation_events", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull(),
+  step: mysqlEnum("step", ["payment_confirmed", "final_validated", "validation_rejected"]).notNull(),
+  actorUserId: int("actorUserId").notNull(),
+  occurredAt: timestamp("occurredAt").defaultNow().notNull(),
+  beforeJson: text("beforeJson"),
+  afterJson: text("afterJson"),
+  reason: text("reason"),
+  documentRef: varchar("documentRef", { length: 512 }),
+  correlationId: varchar("correlationId", { length: 120 }).notNull(),
+}, table => [
+  index("sve_contract_idx").on(table.contractId, table.occurredAt),
+  foreignKey({ name: "sve_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),
+  foreignKey({ name: "sve_actor_fk", columns: [table.actorUserId], foreignColumns: [users.id] }),
+]);
 
 export const contractCancellationRequests = mysqlTable("contract_cancellation_requests", {
   id: int("id").autoincrement().primaryKey(),
