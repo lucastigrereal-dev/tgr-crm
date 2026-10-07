@@ -9,7 +9,7 @@ export function PageHeader({ eyebrow, title, description, action }: { eyebrow: s
   return <div className="tgr-page-divider flex flex-col gap-5 pb-6 sm:flex-row sm:items-end sm:justify-between">
     <div className="min-w-0">
       <p className="tgr-data-label text-[#94702e]">{eyebrow}</p>
-      <h1 className="mt-2 font-serif text-[2rem] leading-none tracking-tight text-[#1d2b2a] sm:text-[2.35rem]">{title}</h1>
+      <h1 className="mt-2 break-words font-serif text-[2rem] leading-none tracking-tight text-[#1d2b2a] [overflow-wrap:anywhere] sm:text-[2.35rem]">{title}</h1>
       <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>
     </div>
     {action}
