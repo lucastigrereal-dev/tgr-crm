@@ -1,6 +1,6 @@
 # Receipt: KAN-31, CRM V6 VENDA VALIDADA
 
-**Estado do CRM: IN REVIEW.** O CRM está tecnicamente pronto. Para ir a piloto ainda faltam dois HUMAN_GATEs (abaixo) e a jornada integrada CRM + suite (NOT_RUN). **Não está HOMOLOGATED.**
+**Estado do CRM: IN REVIEW.** O CRM está tecnicamente pronto e a jornada integrada CRM + suite **rodou** (addendum de 2026-10-07 no fim). Para ir a piloto faltam os HUMAN_GATEs listados abaixo. **Não está HOMOLOGATED.**
 
 | Item | Valor |
 |---|---|
@@ -33,7 +33,7 @@
 | 7 | Regressão: ativação, distrato, RBAC, cancelled (Sales + Relationship), `contract.created.v2` | PROVED | Suite completa 676/676 com MySQL (abaixo). |
 | 8 | Migration 0043 (e 0044/0045) só em banco descartável | PROVED | Migradas do zero até a 0045 em `crm_v6_rc_test`: 52 tabelas, 2 triggers, 46 entradas no journal. `drizzle-kit generate` respondeu "No schema changes". |
 | — | Backfill de contratos `active` anteriores à V6 | HUMAN_GATE | Ver abaixo. |
-| — | Jornada integrada CRM + suite | NOT_RUN | Ver abaixo. |
+| — | Jornada integrada CRM + suite | PROVED (2026-10-07) | Linux, 5 apps, bancos descartáveis: 44/44 passos (A 19, B 9, C 6, E 4, V 6). D e S: NOT_RUN (harness só Windows). Ver addendum. |
 
 ## Commits (`d5d6880..HEAD`, deste branch)
 | SHA | O que muda |
@@ -103,7 +103,7 @@ Feito por um agente separado, só leitura, depois da implementação: 2 P0, 4 P1
 5. Reprocessar um evento na DLQ significa apagar a linha de `audit_logs` com o `idempotencyKey` do recibo (roteiro do piloto, já existente).
 6. Nenhum documento assinado, PII ou segredo foi commitado. Os fixtures são sintéticos (`SYN`).
 
-## Jornada integrada CRM + suite: NOT_RUN
+## Jornada integrada CRM + suite (plano original; executada no addendum)
 Não rodou aqui porque esta sessão não sobe Sales, Financial e Relationship da suite com bancos próprios. É uma jornada multi-serviço; o destino é o KRATOS ou uma sessão com os dois repos e Postgres/MySQL descartáveis.
 
 Passo exato: estender a jornada 1 de `apps/sales-command/scripts/pilot-journeys.mts` (suite) com:
@@ -114,3 +114,61 @@ Passo exato: estender a jornada 1 de `apps/sales-command/scripts/pilot-journeys.
 5. Assert no Financial: `financial_contracts.validatedAt` preenchido.
 6. Comissão: `commission.status.updated paid` antes do passo 3 é recusado (CRM `COMMISSION_REQUIRES_VALIDATED_SALE`; Financial 409 sem code) e é aceito depois.
 7. Relationship: `crm.contract.activated.v1` só depois do passo 3.
+
+
+---
+
+## Addendum 2026-10-07: jornada integrada + teste no navegador
+
+### Ambiente
+Tudo em Linux, nesta sessão, só com recursos descartáveis em 127.0.0.1:
+- 5 apps no ar: Sales 43501, Relationship 43502, Recovery 43503, Financial 43504 e CRM 43505 (este branch).
+- MySQL de piloto efêmero em 43410 e banco do Sales no MySQL de teste em 43316.
+- Personas e chaves geradas só para a rodada (`pilot-personas.mts env`). Nenhuma foi commitada.
+
+O harness da suite (`pilot.sh`) é Windows: caminhos `C:/`, `tasklist`, `netstat` e `python`. Usei um wrapper Linux equivalente, fora dos repos, que cobre `env`, MySQL, migrations, `setup` com 60 frações, `provision`, `servers` e `verify`. Na 1ª subida esqueci `F5_CRM_FRACTIONS=60`: o CRM ficou com 5 frações e recusou 8 vendas com `422 INSUFFICIENT_INVENTORY` (DLQ correta). O ambiente foi recriado do zero e a contagem final vem da rodada limpa.
+
+A mudança na suite está em `suite-pilot-journeys-v6.patch`. Ela não foi empurrada para a suite porque o branch é de outro writer.
+- **Jornada A:** o passo 4 (ativação direta, agora recusada por design) virou o fluxo V6 completo. Foram adicionados a comissão antes/depois da validação e o helper `crmValidateSale`.
+- **Jornadas S e V e `f5-crm.mjs activate`:** passam a validar a venda em vez de ativar direto.
+
+### Resultado das jornadas (ambiente limpo)
+| Jornada | Resultado |
+|---|---|
+| A: VENDEU → CRM `pending_signature` → bypass recusado (`CONFLICT`) → seller/finance/service `FORBIDDEN` → validar sem portões `PRECONDITION_FAILED` → comissão antes da validação `PRECONDITION_FAILED` → gerente confirma pagamento → contrato assinado anexado → antes da validação: Relationship 0 passos, Sales e Financial sem validação → gerente valida → Sales `sale_validations` (`crm-sale-<id>-validated`, `documentRef crm-doc:<c>:<d>`) → Financial `validated_at` → Relationship D1/D3/D5/D7 → baixa de parcela → comissão depois: lança, aprova, paga → Financial `COMMISSION SETTLED` | **19/19 PASS** |
+| B: distrato (RBAC, cancelamento no Sales e no Financial, Relationship ENDED com os passos preservados) | **9/9 PASS** |
+| C: NO_SALE → Recovery → reativação → venda de retorno CONVERTED | **6/6 PASS** |
+| E: segurança (403 do agent, `strictObject` do Financial, replay 409, sessões inválidas 401) | **4/4 PASS** |
+| V: volume (10 vendas, correlação 10/10 nos três consumidores, 2 distratos, 2 recuperações, zero duplicidade, cockpit = fatos do banco) | **6/6 PASS** |
+| D (Relationship fora do ar) e S (standalone) | **NOT_RUN**: derrubam e sobem servidores via `netstat`/`tasklist` do Windows |
+
+RED da jornada A original contra este CRM:
+- A4 (`contracts.updateStatus active`) falhou com `409 CONFLICT`.
+- A6 confirmou que o Relationship não inicia D1–D7 sem validação.
+
+Esse é o comportamento V6 esperado e é o motivo da mudança na jornada.
+
+### Teste no navegador (Chromium headless; 4 agentes em paralelo + verificação própria)
+| Frente | Resultado |
+|---|---|
+| CRM gerente (syn.admin) | **PASS**: login, "Novo contrato" sem "Ativo", 5 portões pendentes, "Validar venda" desabilitado, confirmar pagamento, anexar e confirmar assinatura, validar, toast "Venda validada. Contrato ativo.", 5 portões ok, ACTIVE |
+| CRM RBAC (seller/finance/service) | **PASS** no servidor: só 403, zero 5xx, nenhum `pageerror`; nenhum papel vê "Confirmar pagamento"/"Validar venda". Achado P2 de UI corrigido (abaixo) |
+| Sales (4 personas) | **PASS**: venda completa pela UI; venda validada aparece como "Venda validada (oficial, CRM)"; distrato como "Cancelada pós-contrato" |
+| Relationship (admin/agent) | **PASS**: D1/D3/D5/D7 só em venda validada; agent sem "Criar jornada" e com 403 no manual |
+| Financial + Recovery (API, sem UI) | **PASS**: todas as rotas de operador, 401 sem token ou com token inválido, 403 do agent; CRM ↔ Financial 3/3 validações; a única comissão liquidada é de contrato validado |
+
+### Correções vindas do teste no navegador (CRM, este branch)
+| Commit | Achado | Correção | Prova |
+|---|---|---|---|
+| `b7787bf` | P2: número longo do contrato (`SC-<hex>`) passava por cima de "Anexar documento" e do seletor de status, que cortava "Ativo (só pela validação da venda)" | Título quebra em qualquer ponto; ações não encolhem; seletor cresce com o texto | Playwright: `overlap=false` nos contratos ativo e pendente |
+| `80cd023` | P2: seller/service viam Financeiro, Reajustes, Equipe etc.; 403 virava R$ 0,00 enganoso ou "Carregando..." eterno; o detalhe do contrato chamava rotas do financeiro | `menuPathRoles`/`canOpenMenuPath` (`shared/permissions.ts`) espelham o procedure de cada rota; menu filtrado; rota proibida mostra "Sem permissão para esta área"; cards financeiros só para admin/finance | RED `red-8` (14 testes) → GREEN; Playwright nas 4 personas: menus corretos e **0 respostas 403** no detalhe do contrato |
+
+### Achados fora do CRM (não corrigidos aqui)
+- **Suite, Relationship (P2):** `listCases` (`apps/relationship/server/src/service.ts`) lista só ACTIVE. Um caso ENDED por distrato não abre pela tela, só por `GET /api/cases/:id`. É gap de produto da suite.
+- **Política de negócio (HUMAN_GATE):** se uma comissão foi paga antes de um distrato, ela continua paga (caso do contrato 1). Estorno de comissão está em `COMMISSION_POLICY = NOT_APPROVED`; não foi inventado.
+
+### Testes do CRM depois das correções
+- `pnpm check`: PASS.
+- `pnpm test` com MySQL (banco novo, 0001..0045): 167 arquivos, **690 passed**.
+- Sem MySQL: 655 passed, 35 skipped (os 8 arquivos `*.mysql`, que nesse modo contam como NOT_RUN).
+- **Intermitente não identificado:** 2 rodadas falharam 1 teste cada, em cerca de 25 rodadas. A primeira rodou ao mesmo tempo que o build e o restart do CRM; a segunda foi a 1ª rodada após migrar um banco novo. Não reproduziu em cerca de 21 tentativas seguidas (cache frio, banco novo, com e sem MySQL), e o nome do teste não foi capturado. Fica registrado como pendência aberta, não como "flake resolvido". Próximo passo: rodar com `--reporter=junit` no CI para capturar o nome.
