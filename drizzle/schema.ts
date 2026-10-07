@@ -385,10 +385,13 @@ export const salesCommissions = mysqlTable(
     reversalReviewResolvedAt: timestamp("reversalReviewResolvedAt"),
     reversalReviewResolvedByUserId: int("reversalReviewResolvedByUserId").references(() => users.id),
     reversalReviewNote: text("reversalReviewNote"),
+    // Decisão da revisão manual: estornada, compensada em outro lançamento ou dispensada (com lançamento financeiro opcional de referência).
+    reversalReviewDecision: mysqlEnum("reversalReviewDecision", ["reversed", "offset", "waived"]),
+    reversalReviewFinancialTransactionId: int("reversalReviewFinancialTransactionId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status)],
+  table => [uniqueIndex("sales_commissions_idempotency_unique").on(table.idempotencyKey), index("commissions_seller_idx").on(table.sellerId, table.status), index("commissions_campaign_idx").on(table.campaignId), index("commissions_source_installment_idx").on(table.sourceInstallmentId, table.status), index("commissions_contract_status_idx").on(table.contractId, table.status), foreignKey({ name: "sc_reversal_fin_tx_fk", columns: [table.reversalReviewFinancialTransactionId], foreignColumns: [financialTransactions.id] })],
 );
 
 export const contracts = mysqlTable(

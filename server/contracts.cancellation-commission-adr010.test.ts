@@ -37,4 +37,12 @@ describe("ADR-010 distrato: comissão", () => {
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 2, "reversal_review_pending", expect.stringContaining("fila manual"));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 1, "cancelled", expect.any(String));
   });
+
+  it("emite commission.reversal_review.requested (idempotente) para cada comissão paga enfileirada, só interno", async () => {
+    const { db } = makeDb();
+    dbMocks.getDb.mockResolvedValue(db);
+    await contractsRouter.createCaller({ user: { id: 55, role: "admin" } } as never).executeCancellation({ requestId: 5 });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.reversal_review.requested", aggregateType: "sales_commission", aggregateId: 2, actorUserId: 55, payload: { contractId: 9, commissionId: 2, distratoRequestId: 5 }, idempotencyKey: "commission-reversal-review-requested:2" });
+    expect(dbMocks.recordDomainEvent.mock.calls.filter(([event]) => event.eventName === "commission.reversal_review.requested")).toHaveLength(1);
+  });
 });
