@@ -98,7 +98,7 @@ Feito por um agente separado, só leitura, depois da implementação: 2 P0, 4 P1
 ## HUMAN_GATEs e limitações
 1. **`LEGACY_ACTIVE_BACKFILL`**: contratos `active` de antes da V6 (inclui importação CSV e seed e2e) não têm `sale_validations`. A comissão deles fica bloqueada até o Lucas decidir se haverá validação histórica e com que regra.
 2. **`CRM_MANAGER_ROLE`**: gerente = `admin` até existir papel próprio. Só `shared/permissions.ts` muda.
-3. Contrato sem linhagem Sales Command: `sale.validated` não é enviado ao Financial (recibo `financial_not_applicable`, porque o Financial exige `saleId`). A comissão desses contratos no Financial fica aguardando (409 sem code).
+3. Contrato sem linhagem Sales Command: `sale.validated` não é enviado ao Financial (recibo `financial_not_applicable`, porque o Financial exige `saleId`). A comissão desses contratos no Financial fica aguardando (409 sem code). **Superado em KAN-30 (tgr-crm #39):** o Financial aceita `saleId` nulo, então o evento passa a ser enviado com `saleId: null` e a venda validada entra no oficial.
 4. Migrations 0044 e 0045 **não** foram aplicadas em banco real (HARD GATE).
 5. Reprocessar um evento na DLQ significa apagar a linha de `audit_logs` com o `idempotencyKey` do recibo (roteiro do piloto, já existente).
 6. Nenhum documento assinado, PII ou segredo foi commitado. Os fixtures são sintéticos (`SYN`).
