@@ -11,7 +11,8 @@ export const FINANCIAL_EVENT_NAMES = [
   "contract.created.v2",
   "contract.status.updated",
   "contract.cancellation.executed",
-  "sale.payment.confirmed",
+  // KAN-31 V6: só `sale.validated` vai ao Financial (enum do receptor). `sale.payment.confirmed` é fato interno do CRM:
+  // o Financial recusaria com 400 e o evento acabaria em recibo terminal.
   "sale.validated",
   "installment.paid",
   "commission.created",
@@ -47,11 +48,16 @@ export function financialBridgeEnvelope(event: {
   occurredAt: Date;
 }, project: FinancialBridgeProject) {
   if (!isKnownDomainEvent(event.eventName)) throw new Error("Unknown CRM domain event");
+  const integrationEvent = toIntegrationEvent({ ...event, eventName: event.eventName });
+  // KAN-31 V6: o Financial valida sale.validated com z.strictObject {contractId: texto, saleId, validatedAt, validatedBy}.
+  if (event.eventName === "sale.validated" && integrationEvent.payload.contractId != null) {
+    integrationEvent.payload.contractId = String(integrationEvent.payload.contractId);
+  }
   return {
     source: "crm" as const,
     correlationId: "crm-fin-" + event.id,
     project,
-    event: toIntegrationEvent({ ...event, eventName: event.eventName }),
+    event: integrationEvent,
   };
 }
 
@@ -98,19 +104,29 @@ export function startFinancialBridgePump(
   // e escondiam os eventos novos. ponytail: zera no restart (os sem recibo são relidos; a entrega é idempotente pelo recibo).
   let cursor = 0;
   const retry = createRetryBackoff<number, DomainEventRow>(now);
-  const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: true });
+  // 409 sem code no Financial = ordem de chegada (ex.: comissão paga antes do sale.validated): tenta sempre, nunca DLQ.
+  const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: true, conflictIsTransient: true });
 
   async function attempt(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, event: DomainEventRow): Promise<boolean> {
     try {
       if (await alreadyHandled(db, event.id)) { retry.remove(event.id); return false; }
       const body = financialBridgeEnvelope(event, project);
+      // KAN-31 V6: o Financial exige saleId em sale.validated. Contrato sem linhagem Sales Command não tem venda a ligar:
+      // recibo not_applicable (nunca inventar saleId).
+      if (event.eventName === "sale.validated" && !(typeof body.event.payload.saleId === "string" && body.event.payload.saleId.trim())) {
+        await recordAudit(null, "integration_event", event.id, "financial_not_applicable",
+          "sale.validated sem saleId (contrato fora do Sales Command); não enviado ao TGR Financial Layer.", { idempotencyKey: "financial-event:" + event.id });
+        retry.remove(event.id);
+        return false;
+      }
       const contractIdRaw = body.event.payload.contractId;
       const contractId = typeof contractIdRaw === "number"
         ? contractIdRaw
         : typeof contractIdRaw === "string" && /^\d+$/.test(contractIdRaw)
           ? Number(contractIdRaw)
           : null;
-      if (contractId && body.event.payload.customerId == null) {
+      // sale.validated tem payload estrito no Financial: nenhum enriquecimento (customerId lá seria 400).
+      if (contractId && body.event.payload.customerId == null && event.eventName !== "sale.validated") {
         const [contract] = await db.select({ customerId: contracts.customerId }).from(contracts)
           .where(eq(contracts.id, contractId)).limit(1);
         if (contract?.customerId) body.event.payload.customerId = contract.customerId;

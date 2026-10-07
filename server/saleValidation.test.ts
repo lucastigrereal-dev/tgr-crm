@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateSaleValidationGates, pickSignedDocument, SALE_GATE_KEYS } from "./saleValidation";
+import { evaluateSaleValidationGates, gatesNotAfter, pickSignedDocument, SALE_GATE_KEYS, saleGateTimestamps } from "./saleValidation";
 
 const T = new Date("2026-10-06T12:00:00.000Z");
 const contract = { id: 1, signedAt: null as Date | null };
@@ -143,6 +143,28 @@ describe("pickSignedDocument", () => {
   it("sem documento assinado armazenado => null", () => {
     expect(pickSignedDocument([doc({ signedArtifact: false })])).toBeNull();
     expect(pickSignedDocument([])).toBeNull();
+  });
+});
+
+describe("saleGateTimestamps (KAN-31 V6)", () => {
+  const at = (iso: string) => new Date(iso);
+  it("contrato gerado = primeiro documento ou envelope; assinado e armazenado vêm dos fatos", () => {
+    const stamps = saleGateTimestamps({
+      documents: [{ createdAt: at("2026-10-05T10:00:00Z") }, { createdAt: at("2026-10-05T18:05:00Z") }],
+      envelopes: [{ createdAt: at("2026-10-04T09:00:00Z") }],
+      contractSignedAt: at("2026-10-05T18:00:00Z"),
+      storedDocument: { createdAt: at("2026-10-05T18:05:00Z") },
+    });
+    expect(stamps).toEqual({ contractGeneratedAt: at("2026-10-04T09:00:00Z"), contractSignedAt: at("2026-10-05T18:00:00Z"), documentStoredAt: at("2026-10-05T18:05:00Z") });
+  });
+  it("sem envelope usa o documento mais antigo", () => {
+    const stamps = saleGateTimestamps({ documents: [{ createdAt: at("2026-10-05T10:00:00Z") }], envelopes: [], contractSignedAt: at("2026-10-05T11:00:00Z"), storedDocument: { createdAt: at("2026-10-05T10:00:00Z") } });
+    expect(stamps.contractGeneratedAt).toEqual(at("2026-10-05T10:00:00Z"));
+  });
+  it("gatesNotAfter: nenhum portão pode ser posterior à validação (o Sales recusaria com 422)", () => {
+    const stamps = { contractGeneratedAt: at("2026-10-05T10:00:00Z"), contractSignedAt: at("2026-10-07T00:00:00Z"), documentStoredAt: at("2026-10-05T10:00:00Z") };
+    expect(gatesNotAfter({ ...stamps, paymentConfirmedAt: at("2026-10-05T10:00:00Z") }, at("2026-10-06T12:00:00Z"))).toBe(false);
+    expect(gatesNotAfter({ ...stamps, contractSignedAt: at("2026-10-05T11:00:00Z"), paymentConfirmedAt: at("2026-10-05T10:00:00Z") }, at("2026-10-06T12:00:00Z"))).toBe(true);
   });
 });
 

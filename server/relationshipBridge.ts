@@ -32,7 +32,7 @@ export const MAX_CONTENT_REJECTIONS = 5;
 export const MIN_REJECTION_WINDOW_MS = 10 * 60_000; // e há pelo menos 10 min desde a 1ª (um 400 passageiro não esvazia a fila)
 
 /** Contador de recusas de conteúdo seguidas por chave. Qualquer outra falha ou sucesso zera. */
-export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now, options: { codedRejections?: boolean } = {}) {
+export function createRejectionTracker<K>(windowMs: number, now: () => number = Date.now, options: { codedRejections?: boolean; conflictIsTransient?: boolean } = {}) {
   const seen = new Map<K, { count: number; firstAt: number }>();
   return {
     /** true = desistir agora (gravar recibo terminal). */
@@ -40,7 +40,9 @@ export function createRejectionTracker<K>(windowMs: number, now: () => number = 
       // PIL-008/R7: recusa de CONTEÚDO com `code` explícito (4xx exceto 408/425/429) é terminal já na 1ª vez e não segura a fila.
       // Só os alvos que falam esse contrato (Sales Command e Financial) ligam `codedRejections`; o Relationship segue a regra repetida.
       if (options.codedRejections && error instanceof DeliveryRejectedError && isCodedContentRejection(error.status, error.code)) { seen.delete(key); return true; }
-      if (!(error instanceof DeliveryRejectedError) || !isContentRejection(error.status)) { seen.delete(key); return false; }
+      // KAN-31 V6: no Financial, 409 SEM code é ordem de chegada (ex.: comissão paga antes do sale.validated): tenta sempre, nunca DLQ.
+      if (!(error instanceof DeliveryRejectedError) || !isContentRejection(error.status)
+        || (options.conflictIsTransient && error.status === 409 && !error.code)) { seen.delete(key); return false; }
       const entry = seen.get(key) ?? { count: 0, firstAt: now() };
       entry.count += 1;
       if (entry.count >= MAX_CONTENT_REJECTIONS && now() - entry.firstAt >= windowMs) { seen.delete(key); return true; }
@@ -294,9 +296,14 @@ export function buildContractStateBody(lineage: ContractLineage, status: BridgeS
   };
 }
 
-export type SaleValidatedFacts = { validatedAt: string; paymentConfirmedAt: string; signedAt: string };
+export type SaleValidatedFacts = {
+  validatedAt: string; validatedBy: string;
+  paymentConfirmedAt: string; paymentConfirmedBy: string;
+  contractGeneratedAt: string; contractSignedAt: string; documentStoredAt: string; documentRef: string;
+};
 
-// ADR-007 (V6): fato "venda validada" para o Sales Command. SEM dados pessoais do cliente e sem referência de documento.
+// KAN-31 V6: fato "venda validada" para o Sales Command, no formato exato que o intake do Sales aceita
+// (crm-sale-validation-intake.ts). SEM dados pessoais do cliente; documentRef é a chave opaca crm-doc:<contrato>:<doc>.
 export function buildSaleValidatedBody(lineage: ContractLineage, contractId: number, occurredAt: Date, facts: SaleValidatedFacts) {
   const correlationId = lineage.correlationId ?? ("crm-sale-" + contractId + "-validated");
   return {
@@ -313,16 +320,40 @@ export function buildSaleValidatedBody(lineage: ContractLineage, contractId: num
     saleId: lineage.saleId,
     contractId: String(contractId),
     validatedAt: facts.validatedAt,
-    paymentConfirmedAt: facts.paymentConfirmedAt,
-    signedAt: facts.signedAt,
+    validatedBy: facts.validatedBy,
+    gates: {
+      paymentConfirmedAt: facts.paymentConfirmedAt,
+      paymentConfirmedBy: facts.paymentConfirmedBy,
+      contractGeneratedAt: facts.contractGeneratedAt,
+      contractSignedAt: facts.contractSignedAt,
+      documentStoredAt: facts.documentStoredAt,
+      documentRef: facts.documentRef,
+    },
   };
 }
 
-/** Lê os três instantes do payload de sale.validated; null se algum faltar/for inválido. */
+const OPAQUE_ACTOR_ID = /^[A-Za-z0-9._:-]{1,120}$/;
+const OPAQUE_DOCUMENT_REF = /^crm-doc:\d{1,10}:\d{1,10}$/;
+
+/**
+ * Lê os fatos do payload de sale.validated; null se algum faltar, for inválido ou se um portão for posterior à
+ * validação. Mesmas regras do receptor do Sales: o CRM não envia o que o Sales recusaria (iria direto para a DLQ).
+ */
 export function saleValidatedFactsFrom(payload: Record<string, unknown>): SaleValidatedFacts | null {
-  const read = (key: string) => { const value = requiredText(payload, key); return value && !Number.isNaN(Date.parse(value)) ? value : null; };
-  const validatedAt = read("validatedAt"); const paymentConfirmedAt = read("paymentConfirmedAt"); const signedAt = read("signedAt");
-  return validatedAt && paymentConfirmedAt && signedAt ? { validatedAt, paymentConfirmedAt, signedAt } : null;
+  const instant = (key: string) => { const value = requiredText(payload, key); return value && !Number.isNaN(Date.parse(value)) ? value : null; };
+  const actor = (key: string) => { const value = requiredText(payload, key); return value && OPAQUE_ACTOR_ID.test(value) ? value : null; };
+  const documentRef = requiredText(payload, "documentRef");
+  const facts = {
+    validatedAt: instant("validatedAt"), validatedBy: actor("validatedBy"),
+    paymentConfirmedAt: instant("paymentConfirmedAt"), paymentConfirmedBy: actor("paymentConfirmedBy"),
+    contractGeneratedAt: instant("contractGeneratedAt"), contractSignedAt: instant("contractSignedAt"), documentStoredAt: instant("documentStoredAt"),
+    documentRef: documentRef && OPAQUE_DOCUMENT_REF.test(documentRef) ? documentRef : null,
+  };
+  if (Object.values(facts).some(value => value === null)) return null;
+  const complete = facts as SaleValidatedFacts;
+  const validated = Date.parse(complete.validatedAt);
+  if ([complete.paymentConfirmedAt, complete.contractGeneratedAt, complete.contractSignedAt, complete.documentStoredAt].some(value => Date.parse(value) > validated)) return null;
+  return complete;
 }
 
 export const CONTRACT_STATE_TARGETS = { relationship: RELATIONSHIP_TARGET, salesCancellation: SALES_CANCELLATION_TARGET } as const;
@@ -347,8 +378,9 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
   if (status === "validated") {
     const facts = saleValidatedFactsFrom(eventPayload);
     if (!facts) {
-      await recordAudit(null, "contract", contractId, actions.notApplicable, "sale.validated sem validatedAt/paymentConfirmedAt/signedAt válidos; entrega ao " + target.label + " não aplicável.", { idempotencyKey: receiptKey });
-      return "not_applicable";
+      // Fato inválido é recusa visível (DLQ), não "não aplicável": o payload é imutável, retry não ajudaria.
+      await recordAudit(null, "contract", contractId, actions.rejected, "sale.validated sem os portões válidos (instantes, atores opacos, documentRef opaco); não enviado ao TGR " + target.label + ".", { idempotencyKey: receiptKey });
+      return "rejected";
     }
     body = buildSaleValidatedBody(lineage, contractId, occurredAt, facts);
   } else {

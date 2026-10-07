@@ -69,3 +69,36 @@ export function pickSignedDocument(documents: readonly SaleGateDocument[], prefe
   if (preferredId !== undefined && preferredId !== null) return usable.find(document => document.id === preferredId) ?? null;
   return usable.slice().sort((a, b) => b.id - a.id)[0] ?? null;
 }
+
+/**
+ * KAN-31 V6: referência OPACA do documento assinado armazenado, a única que sai do CRM (Sales `gates.documentRef`).
+ * Só ids internos: nunca storageKey, nome de arquivo, URL, token ou dado do cliente. O PDF nunca vai para o Git.
+ */
+export function saleDocumentRef(contractId: number, documentId: number) {
+  return `crm-doc:${contractId}:${documentId}`;
+}
+
+export type SaleGateTimestamps = { contractGeneratedAt: Date; contractSignedAt: Date; documentStoredAt: Date };
+
+/**
+ * KAN-31 V6: instantes dos portões congelados na validação final. "Contrato gerado" = primeiro documento ou envelope
+ * do contrato; "assinado" = signedAt resolvido pelo chamador; "armazenado" = criação do documento assinado escolhido.
+ */
+export function saleGateTimestamps(input: {
+  documents: readonly { createdAt: Date }[];
+  envelopes: readonly { createdAt: Date }[];
+  contractSignedAt: Date;
+  storedDocument: { createdAt: Date };
+}): SaleGateTimestamps {
+  const generated = [...input.documents, ...input.envelopes].map(item => item.createdAt.getTime());
+  return {
+    contractGeneratedAt: new Date(Math.min(...generated, input.storedDocument.createdAt.getTime())),
+    contractSignedAt: input.contractSignedAt,
+    documentStoredAt: input.storedDocument.createdAt,
+  };
+}
+
+/** Nenhum portão pode ser posterior à validação final (o receptor do Sales recusaria com 422). */
+export function gatesNotAfter(gates: SaleGateTimestamps & { paymentConfirmedAt: Date }, validatedAt: Date) {
+  return [gates.paymentConfirmedAt, gates.contractGeneratedAt, gates.contractSignedAt, gates.documentStoredAt].every(stamp => stamp.getTime() <= validatedAt.getTime());
+}

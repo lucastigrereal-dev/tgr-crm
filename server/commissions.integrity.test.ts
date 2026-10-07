@@ -26,6 +26,7 @@ function caller() {
   return commissionsRouter.createCaller({ user: { id: 55, role: "admin" } } as never);
 }
 
+// KAN-31 V6 (decisão Lucas 2026-10-07): aprovar/pagar exige contrato com venda validada; os casos de aprovar/pagar usam o contrato 61 validado.
 describe("integridade do status de comissão", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -39,7 +40,7 @@ describe("integridade do status de comissão", () => {
   });
 
   it("rejeita corrida perdida sem auditar alteração falsa", async () => {
-    const fixture = makeDb([{ contractId: null, status: "pending" }], 0);
+    const fixture = makeDb([{ contractId: 61, status: "pending" }], 0, { contract: [{ status: "active" }], validation: [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] });
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: "approved" })).rejects.toMatchObject({ code: "CONFLICT" });
@@ -47,16 +48,16 @@ describe("integridade do status de comissão", () => {
   });
 
   it("atualiza comissão existente e audita uma única vez", async () => {
-    const fixture = makeDb([{ contractId: null, status: "pending" }]);
+    const fixture = makeDb([{ contractId: 61, status: "pending" }], 1, { contract: [{ status: "active" }], validation: [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] });
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: "approved" })).resolves.toEqual({ success: true });
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 901, "approved", "Comissão marcada como approved.");
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: null } });
+    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 901, actorUserId: 55, payload: { status: "approved", contractId: 61 } });
   });
 
   it("sincroniza lifecycle e datas quando a comissão é paga", async () => {
-    const fixture = makeDb([{ contractId: null, status: "approved" }]);
+    const fixture = makeDb([{ contractId: 61, status: "approved" }], 1, { contract: [{ status: "active" }], validation: [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] });
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: "paid" })).resolves.toEqual({ success: true });
@@ -86,7 +87,7 @@ describe("integridade do status de comissão", () => {
     { current: "paid" as const, next: "approved" as const },
     { current: "cancelled" as const, next: "paid" as const },
   ])("bloqueia reabertura de comissão $current para $next", async ({ current, next }) => {
-    const fixture = makeDb([{ contractId: null, status: current }]);
+    const fixture = makeDb([{ contractId: 61, status: current }], 1, { contract: [{ status: "active" }], validation: [{ validatedAt: new Date("2026-10-06T12:00:00Z") }] });
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(caller().setStatus({ id: 901, status: next })).rejects.toMatchObject({ code: "CONFLICT" });

@@ -30,7 +30,11 @@ const lineage: ContractLineage = {
   saleId: "44444444-4444-4444-4444-444444444444", projectExternalKey: "22222222-2222-2222-2222-222222222222", projectName: "SYN Resort",
   projectTimezone: "America/Recife", correlationId: "corr-sale-1", customerId: 101, customerName: "Ana & Bruno", customerPhone: "84999990000", cancellationReason: null,
 };
-const facts = { validatedAt: "2026-10-06T12:00:00.000Z", paymentConfirmedAt: "2026-10-05T12:00:00.000Z", signedAt: "2026-10-05T18:00:00.000Z" };
+// KAN-31 V6: fatos completos (instantes + atores opacos + documentRef opaco), no formato que o Sales aceita.
+const facts = {
+  validatedAt: "2026-10-06T12:00:00.000Z", validatedBy: "7", paymentConfirmedAt: "2026-10-05T12:00:00.000Z", paymentConfirmedBy: "7",
+  contractGeneratedAt: "2026-10-04T12:00:00.000Z", contractSignedAt: "2026-10-05T18:00:00.000Z", documentStoredAt: "2026-10-05T18:05:00.000Z", documentRef: "crm-doc:303:55",
+};
 const at = new Date("2026-10-06T12:00:01.000Z");
 
 describe("buildSaleValidatedBody", () => {
@@ -45,25 +49,29 @@ describe("buildSaleValidatedBody", () => {
       saleId: lineage.saleId,
       contractId: "303",
       validatedAt: facts.validatedAt,
-      paymentConfirmedAt: facts.paymentConfirmedAt,
-      signedAt: facts.signedAt,
+      validatedBy: "7",
+      gates: {
+        paymentConfirmedAt: facts.paymentConfirmedAt, paymentConfirmedBy: "7", contractGeneratedAt: facts.contractGeneratedAt,
+        contractSignedAt: facts.contractSignedAt, documentStoredAt: facts.documentStoredAt, documentRef: "crm-doc:303:55",
+      },
     });
   });
 
-  it("não carrega PII do cliente nem referência de documento", () => {
+  it("não carrega PII do cliente nem caminho/arquivo do documento (só a referência opaca)", () => {
     const body = buildSaleValidatedBody(lineage, 303, at, facts);
     const text = JSON.stringify(body);
-    for (const forbidden of ["customer", "Ana", "84999990000", "documentRef", "storageKey", "phone"]) expect(text).not.toContain(forbidden);
+    for (const forbidden of ["customer", "Ana", "84999990000", "storageKey", "phone", ".pdf", "contracts/"]) expect(text).not.toContain(forbidden);
   });
 
   it("sem correlationId na linhagem usa crm-sale-<id>-validated", () => {
     expect(buildSaleValidatedBody({ ...lineage, correlationId: null }, 303, at, facts).correlationId).toBe("crm-sale-303-validated");
   });
 
-  it("saleValidatedFactsFrom exige os três instantes válidos", () => {
+  it("saleValidatedFactsFrom exige todos os portões válidos", () => {
     expect(saleValidatedFactsFrom({ ...facts, contractId: 303 })).toEqual(facts);
-    expect(saleValidatedFactsFrom({ ...facts, signedAt: undefined })).toBeNull();
+    expect(saleValidatedFactsFrom({ ...facts, contractSignedAt: undefined })).toBeNull();
     expect(saleValidatedFactsFrom({ ...facts, paymentConfirmedAt: "ontem" })).toBeNull();
+    expect(saleValidatedFactsFrom({ ...facts, documentRef: "contracts/303/assinado.pdf" })).toBeNull();
     expect(saleValidatedFactsFrom({})).toBeNull();
   });
 });
@@ -124,13 +132,13 @@ describe("pump: seleção de eventos sale.validated", () => {
     expect(mockedFetch).not.toHaveBeenCalled();
   });
 
-  it("payload sem os três instantes: recibo not_applicable (não trava a fila nem inventa data)", async () => {
+  it("payload sem os portões: recibo de recusa visível (DLQ), não trava a fila nem inventa data", async () => {
     dbWith([[validatedEvent(12, { contractId: 303, validatedAt: facts.validatedAt })], [], ...lineageRows()]);
     mockedRecordAudit.mockResolvedValue(undefined);
     const pump = eagerPump(startSalesCancellationBridgePump, "http://127.0.0.1:3100", "sales-key", { autoStart: false });
     try { await pump.tick(); } finally { pump.stop(); }
     expect(mockedFetch).not.toHaveBeenCalled();
-    expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_not_applicable", expect.stringContaining("sale.validated"), { idempotencyKey: "sales-contract:303:validated" });
+    expect(mockedRecordAudit).toHaveBeenCalledWith(null, "contract", 303, "sales_sale_validated_rejected", expect.stringContaining("sale.validated sem os portões"), { idempotencyKey: "sales-contract:303:validated" });
   });
 
   it("recusa de conteúdo repetida (409 x5) vira recibo terminal próprio; 503 nunca descarta", async () => {

@@ -447,6 +447,12 @@ export const saleValidations = mysqlTable("sale_validations", {
   validatedAt: timestamp("validatedAt"),
   validatedByUserId: int("validatedByUserId"),
   signedDocumentId: int("signedDocumentId"),
+  // KAN-31 V6 (0047): instantes de cada portão congelados na validação final + referência opaca do documento
+  // (crm-doc:<contrato>:<documento>; nunca URL, token, storageKey ou dado do cliente).
+  contractGeneratedAt: timestamp("contractGeneratedAt"),
+  contractSignedAt: timestamp("contractSignedAt"),
+  documentStoredAt: timestamp("documentStoredAt"),
+  documentRef: varchar("documentRef", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [
@@ -457,7 +463,8 @@ export const saleValidations = mysqlTable("sale_validations", {
   foreignKey({ name: "sv_signed_document_fk", columns: [table.signedDocumentId], foreignColumns: [contractDocuments.id] }),
 ]);
 
-// Trilha append-only POR CÓDIGO (sem triggers: MySQL gerenciado com binlog pode recusar CREATE TRIGGER); server/saleValidationAppendOnly.test.ts garante que nenhum caminho faz UPDATE/DELETE. documentRef = `contract_document:<id>`, nunca storageKey/filename.
+// Trilha append-only POR CÓDIGO (sem triggers: MySQL gerenciado com binlog pode recusar CREATE TRIGGER); server/saleValidationAppendOnly.test.ts
+// garante que nenhum caminho faz UPDATE/DELETE. documentRef = referência opaca (crm-doc:<contrato>:<documento>), nunca storageKey/filename.
 export const saleValidationEvents = mysqlTable("sale_validation_events", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull(),
@@ -469,6 +476,7 @@ export const saleValidationEvents = mysqlTable("sale_validation_events", {
   reason: text("reason"),
   documentRef: varchar("documentRef", { length: 512 }),
   correlationId: varchar("correlationId", { length: 120 }).notNull(),
+  externalSaleId: varchar("externalSaleId", { length: 120 }), // KAN-31 V6 (0047): venda do Sales Command (mesmo tamanho de contracts.externalSaleId)
 }, table => [
   index("sve_contract_idx").on(table.contractId, table.occurredAt),
   foreignKey({ name: "sve_contract_fk", columns: [table.contractId], foreignColumns: [contracts.id] }),

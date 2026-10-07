@@ -14,6 +14,11 @@ const SYN_LINEAGE: ContractLineage = {
   customerPhone: "84900000000", cancellationReason: "SYN motivo",
 };
 const AT = new Date("2026-10-05T12:00:00.000Z");
+// KAN-31 V6: fatos de sale.validated (instantes, atores opacos e documentRef opaco crm-doc:<contrato>:<documento>).
+const SYN_SALE_VALIDATED = {
+  validatedAt: "2026-10-05T12:00:00.000Z", validatedBy: "1", paymentConfirmedAt: "2026-10-04T12:00:00.000Z", paymentConfirmedBy: "1",
+  contractGeneratedAt: "2026-10-03T12:00:00.000Z", contractSignedAt: "2026-10-04T18:00:00.000Z", documentStoredAt: "2026-10-04T18:05:00.000Z", documentRef: "crm-doc:9001:77",
+};
 
 function sampleFailure(error: unknown, codes: string[] | undefined) {
   const mapped = mapSalesIngestError(error);
@@ -32,11 +37,7 @@ export function exportEventContract() {
       }, SYN_PROJECT),
       saleValidatedSampleEnvelope: financialBridgeEnvelope({
         id: 4243, eventName: "sale.validated", aggregateType: "contract", aggregateId: "9001", actorUserId: 1, occurredAt: AT,
-        payload: JSON.stringify({ contractId: 9001, saleId: SYN_LINEAGE.saleId, validatedAt: "2026-10-05T12:00:00.000Z", validatedByUserId: 1, paymentConfirmedAt: "2026-10-04T12:00:00.000Z", signedAt: "2026-10-04T18:00:00.000Z", internalNote: "nunca sai" }),
-      }, SYN_PROJECT),
-      paymentConfirmedSampleEnvelope: financialBridgeEnvelope({
-        id: 4244, eventName: "sale.payment.confirmed", aggregateType: "contract", aggregateId: "9001", actorUserId: 1, occurredAt: AT,
-        payload: JSON.stringify({ contractId: 9001, saleId: SYN_LINEAGE.saleId, confirmedAt: "2026-10-04T12:00:00.000Z", confirmedByUserId: 1, note: "nunca sai" }),
+        payload: JSON.stringify({ ...SYN_SALE_VALIDATED, contractId: 9001, saleId: SYN_LINEAGE.saleId, validatedByUserId: 1, paymentConfirmedByUserId: 1, internalNote: "nunca sai" }),
       }, SYN_PROJECT),
     },
     relationship: {
@@ -46,7 +47,7 @@ export function exportEventContract() {
     },
     sales: {
       eventNames: ["crm.contract.cancelled.v1", "crm.sale.validated.v1"],
-      saleValidatedSampleBody: buildSaleValidatedBody(SYN_LINEAGE, 9001, AT, { validatedAt: "2026-10-05T12:00:00.000Z", paymentConfirmedAt: "2026-10-04T12:00:00.000Z", signedAt: "2026-10-04T18:00:00.000Z" }),
+      saleValidatedSampleBody: buildSaleValidatedBody(SYN_LINEAGE, 9001, AT, SYN_SALE_VALIDATED),
       cancellationSampleBody: buildContractStateBody(SYN_LINEAGE, "cancelled", 9001, AT, CONTRACT_STATE_TARGETS.salesCancellation.includeCustomer),
       ingestRejection: sampleFailure(new SalesIngestRejection("INSUFFICIENT_INVENTORY", "SYN estoque insuficiente"), [...SALES_INGEST_REJECTION_CODES]),
       ingestTransientFailure: sampleFailure(new Error("SYN falha interna com detalhe que nunca sai"), undefined),

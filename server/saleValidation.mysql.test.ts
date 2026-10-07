@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, domainEvents, installments, opportunities, proposals, resorts, saleValidationEvents, saleValidations, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { saleValidatedFactsFrom } from "./relationshipBridge";
 
 // ADR-007 (V6) contra MySQL descartável: venda VALIDADA em uma transação, trilha append-only, rejeição auditada.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
@@ -123,7 +124,7 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     const steps = await trail(contractId);
     expect(steps.map(step => step.step).sort()).toEqual(["final_validated", "payment_confirmed"]);
     const final = steps.find(step => step.step === "final_validated")!;
-    expect(final).toMatchObject({ actorUserId: adminId, documentRef: `contract_document:${documentIds[1]}`, correlationId: `crm-sale-${contractId}` });
+    expect(final).toMatchObject({ actorUserId: adminId, documentRef: `crm-doc:${contractId}:${documentIds[1]}`, correlationId: `crm-sale-${contractId}` });
     expect(JSON.parse(String(final.beforeJson))).toMatchObject({ contractStatus: "pending_signature", validatedAt: null });
     expect(JSON.parse(String(final.afterJson))).toMatchObject({ contractStatus: "active", signedDocumentId: documentIds[1] });
 
@@ -132,8 +133,21 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     expect(JSON.parse(String(statusEvents[0].payload))).toEqual({ status: "active", cancellationReason: null });
     const validated = await eventsOf(contractId, "sale.validated");
     expect(validated).toHaveLength(1);
-    expect(JSON.parse(String(validated[0].payload))).toMatchObject({ contractId, saleId, validatedByUserId: adminId, validatedAt: expect.any(String), paymentConfirmedAt: expect.any(String), signedAt: expect.any(String) });
+    expect(JSON.parse(String(validated[0].payload))).toMatchObject({ contractId, saleId, validatedByUserId: adminId, validatedAt: expect.any(String), paymentConfirmedAt: expect.any(String), contractSignedAt: expect.any(String) });
     expect(JSON.stringify(validated[0].payload)).not.toContain("assinado.pdf");
+    // KAN-31 V6: cada portão com instante e ator, documentRef opaco, e o payload passa nas regras do Sales.
+    const payload = JSON.parse(String(validated[0].payload));
+    expect(payload).toMatchObject({ validatedBy: String(adminId), paymentConfirmedBy: String(adminId), documentRef: `crm-doc:${contractId}:${documentIds[1]}` });
+    expect(saleValidatedFactsFrom(payload)).not.toBeNull();
+    expect(fact).toMatchObject({ documentRef: `crm-doc:${contractId}:${documentIds[1]}` });
+    for (const key of ["contractGeneratedAt", "contractSignedAt", "documentStoredAt"] as const) {
+      expect(fact[key]).toBeInstanceOf(Date);
+      expect(fact[key]!.getTime()).toBeLessThanOrEqual(fact.validatedAt!.getTime());
+      expect(payload[key]).toBe(fact[key]!.toISOString());
+    }
+    expect(fact.contractGeneratedAt!.getTime()).toBeLessThanOrEqual(fact.documentStoredAt!.getTime());
+    // trilha e audit carregam externalSaleId
+    for (const step of await trail(contractId)) expect(step.externalSaleId).toBe(saleId);
     expect(await svc.isSaleValidated(db, contractId)).toBe(true);
 
     expect(await svc.validateSale(adminId, { contractId })).toMatchObject({ success: true, alreadyValidated: true });
@@ -152,6 +166,18 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     expect(await eventsOf(contractId, "sale.validated")).toHaveLength(1);
     expect(await eventsOf(contractId, "contract.status.updated")).toHaveLength(1);
     expect((await contractRow(contractId)).status).toBe("active");
+    // Red Team P1-2: perder a corrida não é recusa: todas resolvem e nenhuma grava validation_rejected.
+    expect(results.every(r => r.status === "fulfilled")).toBe(true);
+    expect((await trail(contractId)).filter(step => step.step === "validation_rejected")).toHaveLength(0);
+  });
+
+  it("Red Team P2: trilha append-only guarda a referência opaca, nunca o storageKey (nome de arquivo pode ter dado do cliente)", async () => {
+    const { contractId, documentIds } = await seed("opaque", { signedAt: new Date(), documents: [{ signed: true, storageKey: "contracts/77/1700000000-Maria da Silva assinado.pdf" }] });
+    await svc.confirmPayment(adminId, { contractId, note: "conferido" });
+    await svc.validateSale(adminId, { contractId });
+    const final = (await trail(contractId)).find(step => step.step === "final_validated")!;
+    expect(final.documentRef).toBe(`crm-doc:${contractId}:${documentIds[0]}`);
+    expect(JSON.stringify(await trail(contractId))).not.toContain("Maria");
   });
 
   it("documento indicado inválido (não assinado) recusa com código próprio e não ativa", async () => {
@@ -242,12 +268,12 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     expect(await svc.isSaleValidated(db, contractId)).toBe(false);
   });
 
-  it("PII: documentRef = contract_document:<id>; sem storageKey/filename/evidência nas trilhas e audits", async () => {
+  it("PII: documentRef = crm-doc:<contrato>:<documento> (a mesma referência opaca do Sales); sem storageKey/filename/evidência nas trilhas e audits", async () => {
     const { contractId, documentIds } = await seed("pii", { signedAt: new Date(), documents: [{ signed: true, storageKey: "contracts/pii/Joao-Silva-CPF-123.pdf" }] });
     await svc.confirmPayment(adminId, { contractId, note: "Joao Silva pagou via PIX CPF 123", evidenceRef: "evidence/joao-silva-rg.png" });
     await svc.validateSale(adminId, { contractId });
     const steps = await trail(contractId);
-    expect(steps.find(step => step.step === "final_validated")?.documentRef).toBe(`contract_document:${documentIds[0]}`);
+    expect(steps.find(step => step.step === "final_validated")?.documentRef).toBe(`crm-doc:${contractId}:${documentIds[0]}`);
     for (const step of steps) expect(JSON.stringify([step.documentRef, step.beforeJson, step.afterJson])).not.toMatch(/Joao-Silva|joao-silva|c0\.pdf|\.pdf|evidence\//);
     const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "sale_validation"), eq(auditLogs.entityId, String(contractId))));
     for (const audit of audits) expect(audit.summary).not.toMatch(/Joao|CPF|\.pdf/);

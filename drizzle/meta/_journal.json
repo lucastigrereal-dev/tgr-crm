@@ -330,6 +330,13 @@
       "when": 1791377280362,
       "tag": "0046_commission_reversal_decision",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1791378804530,
+      "tag": "0047_sale_validation_gate_snapshot",
+      "breakpoints": true
     }
   ]
 }

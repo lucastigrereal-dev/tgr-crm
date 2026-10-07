@@ -10,7 +10,7 @@ import { getDb, recordAudit } from "./db";
 import { affectedRows } from "./mysqlErrors";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
-import { evaluateSaleValidationGates, pickSignedDocument, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
+import { evaluateSaleValidationGates, gatesNotAfter, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -23,6 +23,7 @@ export type SaleValidationErrorCode =
   | "SALE_VALIDATION_CONTRACT_STATE"
   | "SALE_VALIDATION_GATES_MISSING"
   | "SALE_SIGNED_DOCUMENT_INVALID"
+  | "SALE_GATE_TIMESTAMP_INVALID"
   | "SALE_VALIDATION_REQUIRED"
   | "COMMISSION_REQUIRES_VALIDATED_SALE";
 
@@ -52,7 +53,7 @@ const iso = (value: Date | null | undefined) => (value ? value.toISOString() : n
 export async function loadSaleValidationFacts(reader: Reader, contractId: number) {
   const contract = (await reader.select({ id: contracts.id, status: contracts.status, signedAt: contracts.signedAt, externalSource: contracts.externalSource, externalSaleId: contracts.externalSaleId }).from(contracts).where(eq(contracts.id, contractId)).limit(1))[0] ?? null;
   const documents = contract ? await reader.select({ id: contractDocuments.id, signedArtifact: contractDocuments.signedArtifact, storageKey: contractDocuments.storageKey, category: contractDocuments.category, filename: contractDocuments.filename, createdAt: contractDocuments.createdAt }).from(contractDocuments).where(eq(contractDocuments.contractId, contractId)) : [];
-  const envelopes = contract ? await reader.select({ status: contractSignatureEnvelopes.status }).from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.contractId, contractId)) : [];
+  const envelopes = contract ? await reader.select({ status: contractSignatureEnvelopes.status, createdAt: contractSignatureEnvelopes.createdAt }).from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.contractId, contractId)) : [];
   const validation = (await reader.select().from(saleValidations).where(eq(saleValidations.contractId, contractId)).limit(1))[0] ?? null;
   const openCancellations = contract ? await reader.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))) : [];
   return { contract, documents, envelopes, validation, openCancellationRequests: openCancellations.length };
@@ -117,7 +118,7 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
       contractId: input.contractId, step: "payment_confirmed", actorUserId, occurredAt: confirmedAt,
       beforeJson: JSON.stringify({ paymentConfirmedAt: null }),
       afterJson: JSON.stringify({ paymentConfirmedAt: confirmedAt.toISOString(), paymentConfirmedByUserId: actorUserId }),
-      reason: input.note, documentRef: null, correlationId,
+      reason: input.note, documentRef: null, correlationId, externalSaleId: saleId,
     });
     await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "payment_confirmed", summary: `Pagamento da venda do contrato ${input.contractId} confirmado pelo gerente.`, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
     await txEvent(tx, { eventName: "sale.payment.confirmed", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { contractId: input.contractId, saleId, confirmedAt: confirmedAt.toISOString(), confirmedByUserId: actorUserId }, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
@@ -235,7 +236,7 @@ export async function reprocessSkippedCommissions(db: Db, input: { contractId?: 
 }
 
 class GatesNotReady extends Error {
-  constructor(readonly reason: "gates" | "document" | "state", readonly missing: SaleGateKey[], readonly detail: string) { super(detail); }
+  constructor(readonly reason: "gates" | "document" | "state" | "timestamps", readonly missing: SaleGateKey[], readonly detail: string) { super(detail); }
 }
 
 export async function validateSale(actorUserId: number, input: { contractId: number; signedDocumentId?: number | null }) {
@@ -251,7 +252,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
     await db!.insert(saleValidationEvents).values({
       contractId: input.contractId, step: "validation_rejected", actorUserId, occurredAt,
       beforeJson: JSON.stringify({ contractStatus: status, gates: gates ? { paymentConfirmed: gates.paymentConfirmed, contractGenerated: gates.contractGenerated, contractSigned: gates.contractSigned, signedDocumentStored: gates.signedDocumentStored, noOpenCancellation: gates.noOpenCancellation, noOpenSignatureEnvelope: gates.noOpenSignatureEnvelope } : null }),
-      afterJson: JSON.stringify({ contractStatus: status, missing }), reason, documentRef: null, correlationId,
+      afterJson: JSON.stringify({ contractStatus: status, missing }), reason, documentRef: null, correlationId, externalSaleId: pre.contract?.externalSaleId ?? null,
     });
     await recordAudit(actorUserId, "sale_validation", input.contractId, "validation_rejected", `Validação final recusada para o contrato ${input.contractId}: ${reason}`);
   }
@@ -263,7 +264,9 @@ export async function validateSale(actorUserId: number, input: { contractId: num
   }
 
   const saleId = pre.contract.externalSaleId ?? null;
-  const validatedAt = new Date();
+  // KAN-31 V6: MySQL `timestamp` guarda segundos ARREDONDADOS; um portão gravado no mesmo segundo ficaria "depois" da
+  // validação e o Sales recusaria (422). Teto do segundo: todo portão já gravado (<= agora) fica <= validatedAt.
+  const validatedAt = new Date(Math.ceil(Date.now() / 1000) * 1000);
   try {
     const result = await db.transaction(async tx => {
       const locked = (await tx.select({ id: contracts.id, status: contracts.status, signedAt: contracts.signedAt }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
@@ -281,23 +284,35 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       // do armazenamento do assinado). Nunca o createdAt do rascunho.
       const signedAt = locked.signedAt ?? documentRow.createdAt;
       const paymentConfirmedAt = facts.validation!.paymentConfirmedAt!;
+      const paymentConfirmedByUserId = facts.validation!.paymentConfirmedByUserId!;
+      // KAN-31 V6: instantes de cada portão congelados aqui; nenhum pode ser posterior à validação (o Sales recusaria).
+      const stamps = saleGateTimestamps({ documents: facts.documents, envelopes: facts.envelopes, contractSignedAt: signedAt, storedDocument: documentRow });
+      if (!gatesNotAfter({ ...stamps, paymentConfirmedAt }, validatedAt)) throw new GatesNotReady("timestamps", [], "Instante de portão posterior à validação (relógio ou dado inconsistente); confira a assinatura e o documento.");
+      // Referência OPACA do documento assinado: a mesma vai para a trilha, para sale_validations e para o Sales (gates.documentRef).
+      const documentRef = saleDocumentRef(input.contractId, document.id);
 
-      const validationUpdate = await tx.update(saleValidations).set({ validatedAt, validatedByUserId: actorUserId, signedDocumentId: document.id }).where(eq(saleValidations.contractId, input.contractId));
+      const validationUpdate = await tx.update(saleValidations).set({ validatedAt, validatedByUserId: actorUserId, signedDocumentId: document.id, ...stamps, documentRef }).where(eq(saleValidations.contractId, input.contractId));
       if (affectedRows(validationUpdate) === 0) throw new TRPCError({ code: "CONFLICT", message: "Validação da venda alterada por outra operação. Recarregue." });
       const contractUpdate = await tx.update(contracts).set({ status: "active", activatedAt: validatedAt, signedAt, cancelledAt: undefined, cancellationReason: null }).where(and(eq(contracts.id, input.contractId), eq(contracts.status, locked.status)));
       if (affectedRows(contractUpdate) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
       await tx.insert(saleValidationEvents).values({
         contractId: input.contractId, step: "final_validated", actorUserId, occurredAt: validatedAt,
         beforeJson: JSON.stringify({ contractStatus: locked.status, validatedAt: null }),
-        afterJson: JSON.stringify({ contractStatus: "active", validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, signedDocumentId: document.id, paymentConfirmedAt: paymentConfirmedAt.toISOString(), signedAt: signedAt.toISOString() }),
-        // Referência estável ao registro, nunca storageKey/filename (podem carregar nome/CPF do cliente).
-        reason: null, documentRef: `contract_document:${document.id}`, correlationId,
+        afterJson: JSON.stringify({ contractStatus: "active", validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, signedDocumentId: document.id, paymentConfirmedAt: paymentConfirmedAt.toISOString(), paymentConfirmedByUserId, contractGeneratedAt: stamps.contractGeneratedAt.toISOString(), contractSignedAt: stamps.contractSignedAt.toISOString(), documentStoredAt: stamps.documentStoredAt.toISOString(), documentRef }),
+        // Referência opaca, nunca storageKey/filename (podem carregar nome/CPF do cliente).
+        reason: null, documentRef, correlationId, externalSaleId: saleId,
       });
       await txAudit(tx, { actorUserId, entityType: "contract", entityId: input.contractId, action: "status_updated", summary: "Status alterado para active (venda validada pelo gerente)." });
       await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "validated", summary: `Venda do contrato ${input.contractId} validada (pagamento, contrato assinado e documento armazenado conferidos).`, idempotencyKey: `sale-validated:${input.contractId}` });
       // Mesmo evento da ativação de sempre: Relationship (crm.contract.activated.v1) e Financial (status) continuam dependendo dele.
       await txEvent(tx, { eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { status: "active", cancellationReason: null } });
-      await txEvent(tx, { eventName: "sale.validated", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { contractId: input.contractId, saleId, validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, paymentConfirmedAt: paymentConfirmedAt.toISOString(), signedAt: signedAt.toISOString() }, idempotencyKey: `sale-validated:${input.contractId}` });
+      await txEvent(tx, { eventName: "sale.validated", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: {
+        contractId: input.contractId, saleId,
+        validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, validatedBy: String(actorUserId),
+        paymentConfirmedAt: paymentConfirmedAt.toISOString(), paymentConfirmedByUserId, paymentConfirmedBy: String(paymentConfirmedByUserId),
+        contractGeneratedAt: stamps.contractGeneratedAt.toISOString(), contractSignedAt: stamps.contractSignedAt.toISOString(),
+        documentStoredAt: stamps.documentStoredAt.toISOString(), documentRef,
+      }, idempotencyKey: `sale-validated:${input.contractId}` });
       // Parcelas pagas ANTES da validação (ex.: entrada) ficaram sem comissão pelo gate: reavalia agora, na mesma transação.
       await releaseCommissionsForValidatedContract(tx, { contractId: input.contractId, actorUserId });
       return { alreadyValidated: false as const, validatedAt, signedDocumentId: document.id };
@@ -319,6 +334,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
     await recordRejection(detail, isGate ? error.missing : [], facts.contract?.status ?? "unknown", gates);
     if (!isGate) throw error;
     if (error.reason === "state") throw saleValidationError("CONFLICT", "SALE_VALIDATION_CONTRACT_STATE", error.detail);
+    if (error.reason === "timestamps") throw saleValidationError("PRECONDITION_FAILED", "SALE_GATE_TIMESTAMP_INVALID", error.detail);
     if (error.reason === "document") throw saleValidationError("PRECONDITION_FAILED", "SALE_SIGNED_DOCUMENT_INVALID", error.detail);
     throw saleValidationError("PRECONDITION_FAILED", "SALE_VALIDATION_GATES_MISSING", error.detail, { missing: error.missing });
   }

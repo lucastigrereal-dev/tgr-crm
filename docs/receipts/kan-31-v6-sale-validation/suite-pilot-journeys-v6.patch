@@ -1,0 +1,109 @@
+diff --git a/apps/sales-command/scripts/f5-crm.mjs b/apps/sales-command/scripts/f5-crm.mjs
+index 2db2f74..64efe97 100644
+--- a/apps/sales-command/scripts/f5-crm.mjs
++++ b/apps/sales-command/scripts/f5-crm.mjs
+@@ -69,10 +69,14 @@ async function provision() {
+ const contractId = Number(process.argv[3]);
+ const commands = {
+   provision,
+-  // Ativação pela rota real (admin). A assinatura Clicksign real depende da API externa (não disponível).
++  // KAN-31 V6: ativação = VENDA VALIDADA pelas rotas reais do gerente (admin): pagamento conferido, contrato assinado anexado
++  // (armazenamento canônico) e validação final. A assinatura Clicksign real depende da API externa (não disponível).
+   async activate() {
+     const admin = await adminSession();
+-    console.log(JSON.stringify({ activate: await call(admin, "mutation", "contracts.updateStatus", { id: contractId, status: "active" }) }));
++    await call(admin, "mutation", "saleValidation.confirmPayment", { contractId, note: "SYN pagamento conferido pelo gerente (F5)" });
++    const pdf = Buffer.from("%PDF-1.4\n% SYN contrato assinado F5\n%%EOF\n").toString("base64");
++    await call(admin, "mutation", "contracts.uploadDocument", { contractId, category: "Contrato assinado", filename: "syn-contrato-assinado.pdf", contentType: "application/pdf", base64: `data:application/pdf;base64,${pdf}`, signed: true });
++    console.log(JSON.stringify({ activate: await call(admin, "mutation", "saleValidation.validateSale", { contractId }) }));
+   },
+   // Baixa da 1ª parcela em aberto pela rota real do financeiro (papel finance). Gateway Asaas = externo.
+   async pay() {
+diff --git a/apps/sales-command/scripts/pilot-journeys.mts b/apps/sales-command/scripts/pilot-journeys.mts
+index 9d79989..6020898 100644
+--- a/apps/sales-command/scripts/pilot-journeys.mts
++++ b/apps/sales-command/scripts/pilot-journeys.mts
+@@ -128,6 +128,15 @@ async function salesConfirm(label: string, coupleId?: string) {
+   state.sales[label] = { saleId: draft.id, encounter: enc.encounterId, couple: coupleId }; saveState();
+   return { saleId: draft.id, encounterId: enc.encounterId, coupleId, status: confirmed.status };
+ }
++// KAN-31 V6: a única forma de um contrato virar active é a VENDA VALIDADA pelo gerente (CRM admin) com os 4 portões.
++// Usado por jornadas que só precisam de um contrato ativo (S, V); a jornada A prova cada portão passo a passo.
++async function crmValidateSale(cid: number) {
++  const admin = await crmSession("syn.admin");
++  await crmCall(admin, "saleValidation.confirmPayment", { contractId: cid, note: "Synthetic pagamento conferido pelo gerente" });
++  const pdf = Buffer.from("%PDF-1.4\n% Synthetic contrato assinado KAN-31 V6\n%%EOF\n").toString("base64");
++  await crmCall(admin, "contracts.uploadDocument", { contractId: cid, category: "Contrato assinado", filename: "synthetic-contrato-assinado.pdf", contentType: "application/pdf", base64: `data:application/pdf;base64,${pdf}`, signed: true });
++  return crmCall(admin, "saleValidation.validateSale", { contractId: cid });
++}
+ const crmContractBySale = (saleId: string) => poll(async () => (await sql("f5_crm_e2e", "SELECT id, status, totalAmount FROM contracts WHERE externalSaleId = ?", [saleId]))[0]);
+ // O /api/cases lista só casos ATIVOS: o id do caso é descoberto por SQL (só-leitura) e o detalhe vem pela rota real.
+ async function relCase(saleId: string) {
+@@ -148,9 +157,27 @@ async function A() {
+   await step(J, "2", "sistema", "Sales → CRM cria contrato", "pending_signature, 28900.00", async () => { const c = await crmContractBySale(saleId); return { observed: c ? `${c.status} ${c.totalAmount}` : "sem contrato", ok: c?.status === "pending_signature" && String(c.totalAmount) === "28900.00", evidence: `contractId=${c?.id}` }; });
+   await step(J, "3", "syn.rel.admin (Relationship)", "pré-onboarding (detalhe pela rota)", "caso com 0 passos", async () => { const r = await poll(() => relCase(saleId)); return { observed: r ? `status=${r.status} passos=${r.steps} http=${r.http}` : "sem caso", ok: Boolean(r) && r?.steps === 0 && r?.http === 200 }; });
+   const contract = await crmContractBySale(saleId); const cid = Number(contract?.id);
+-  await step(J, "4", "syn.admin (CRM)", "ativa o contrato (contracts.updateStatus)", "active", async () => { const admin = await crmSession("syn.admin"); await crmCall(admin, "contracts.updateStatus", { id: cid, status: "active" }); const row = (await sql("f5_crm_e2e", "SELECT status FROM contracts WHERE id = ?", [cid]))[0]; return { observed: String(row?.status), ok: row?.status === "active" }; });
++  // KAN-31 V6 (CRM fonte de verdade da VENDA VALIDADA): VENDEU (A1) é só aceite comercial. A ativação direta morreu; o contrato
++  // só vira active pela validação final do GERENTE (CRM admin) com os 4 portões: pagamento conferido, contrato gerado,
++  // contrato assinado e documento assinado armazenado. Antes disso: sem D1–D7 no Relationship e sem comissão.
++  const refused = async (fn: () => Promise<unknown>) => { try { await fn(); return "permitido"; } catch (e) { return e instanceof HttpError ? e.code : "ERRO"; } };
++  const relSteps = async () => (await relCase(saleId))?.steps ?? -1;
++  await step(J, "4a", "syn.admin (CRM)", "tenta ativar direto (contracts.updateStatus active)", "CONFLICT (SALE_VALIDATION_REQUIRED); segue pending_signature", async () => { const admin = await crmSession("syn.admin"); const code = await refused(() => crmCall(admin, "contracts.updateStatus", { id: cid, status: "active" })); const row = (await sql("f5_crm_e2e", "SELECT status FROM contracts WHERE id = ?", [cid]))[0]; return { observed: `${code} status=${row?.status}`, ok: code === "CONFLICT" && row?.status === "pending_signature" }; });
++  for (const who of ["syn.seller", "syn.finance", "syn.service"] as const) {
++    await step(J, "4b", `${who} (CRM)`, "tenta confirmar pagamento e validar a venda", "FORBIDDEN nas duas", async () => { const token = await crmSession(who); const pay = await refused(() => crmCall(token, "saleValidation.confirmPayment", { contractId: cid, note: "Synthetic tentativa sem papel" })); const val = await refused(() => crmCall(token, "saleValidation.validateSale", { contractId: cid })); return { observed: `confirmPayment=${pay} validateSale=${val}`, ok: pay === "FORBIDDEN" && val === "FORBIDDEN" }; });
++  }
++  await step(J, "4c", "syn.admin (CRM)", "valida sem os portões", "PRECONDITION_FAILED; segue pending_signature", async () => { const admin = await crmSession("syn.admin"); const code = await refused(() => crmCall(admin, "saleValidation.validateSale", { contractId: cid })); const row = (await sql("f5_crm_e2e", "SELECT status FROM contracts WHERE id = ?", [cid]))[0]; return { observed: `${code} status=${row?.status}`, ok: code === "PRECONDITION_FAILED" && row?.status === "pending_signature" }; });
++  // Contrato vindo do Sales pode não ter sellerId: a comissão sintética vai para um vendedor válido do CRM (admin/seller).
++  const sellerId = n((await sql("f5_crm_e2e", "SELECT COALESCE((SELECT sellerId FROM contracts WHERE id = ?), (SELECT id FROM users WHERE role IN ('seller','admin') ORDER BY role = 'seller' DESC, id LIMIT 1)) AS id", [cid]))[0]?.id);
++  await step(J, "4d", "syn.finance (CRM)", "lança comissão ANTES da validação (commissions.record)", "PRECONDITION_FAILED (COMMISSION_REQUIRES_VALIDATED_SALE); 0 comissões", async () => { const finance = await crmSession("syn.finance"); const code = await refused(() => crmCall(finance, "commissions.record", { sellerId, contractId: cid, baseAmount: 1000, rate: 1, notes: "Synthetic antes da validação" })); const c = (await sql("f5_crm_e2e", "SELECT COUNT(*) AS n FROM sales_commissions WHERE contractId = ?", [cid]))[0]; return { observed: `${code} comissões=${c?.n}`, ok: code === "PRECONDITION_FAILED" && n(c?.n) === 0 }; });
++  await step(J, "4e", "syn.admin (CRM)", "gerente confere o pagamento (saleValidation.confirmPayment)", "pagamento confirmado; contrato NÃO ativa", async () => { const admin = await crmSession("syn.admin"); const r = await crmCall(admin, "saleValidation.confirmPayment", { contractId: cid, note: "Synthetic comprovante PIX conferido pelo gerente" }) as { alreadyConfirmed?: boolean }; const row = (await sql("f5_crm_e2e", "SELECT c.status, v.paymentConfirmedAt FROM contracts c JOIN sale_validations v ON v.contractId = c.id WHERE c.id = ?", [cid]))[0]; return { observed: `alreadyConfirmed=${r?.alreadyConfirmed} status=${row?.status} paymentConfirmedAt=${row?.paymentConfirmedAt ? "sim" : "não"}`, ok: row?.status === "pending_signature" && Boolean(row?.paymentConfirmedAt) }; });
++  await step(J, "4f", "syn.admin (CRM)", "anexa o contrato assinado (uploadDocument signed:true → armazenamento canônico)", "documento assinado armazenado; contrato NÃO ativa", async () => { const admin = await crmSession("syn.admin"); const pdf = Buffer.from("%PDF-1.4\n% Synthetic contrato assinado KAN-31 V6\n%%EOF\n").toString("base64"); await crmCall(admin, "contracts.uploadDocument", { contractId: cid, category: "Contrato assinado", filename: "synthetic-contrato-assinado.pdf", contentType: "application/pdf", base64: `data:application/pdf;base64,${pdf}`, signed: true }); const d = (await sql("f5_crm_e2e", "SELECT COUNT(*) AS n FROM contract_documents WHERE contractId = ? AND signed = 1", [cid]))[0]; const row = (await sql("f5_crm_e2e", "SELECT status FROM contracts WHERE id = ?", [cid]))[0]; return { observed: `assinados=${d?.n} status=${row?.status}`, ok: n(d?.n) >= 1 && row?.status === "pending_signature" }; });
++  await step(J, "4g", "sistema", "antes da validação: Relationship sem D1–D7; Sales/Financial sem validação", "passos=0; sem sale_validations; validated_at nulo", async () => { await sleep(6000); const steps = await relSteps(); const sv = (await sql("sales", "SELECT COUNT(*) AS n FROM sale_validations WHERE sale_id = ?", [saleId]))[0]; const fc = (await sql("f5_fin_e2e", "SELECT validated_at FROM fin_contracts WHERE sale_id = ?", [saleId]))[0]; return { observed: `passos=${steps} sales_validations=${sv?.n} fin.validated_at=${fc?.validated_at ?? "null"}`, ok: steps === 0 && n(sv?.n) === 0 && !fc?.validated_at }; });
++  await step(J, "4h", "syn.admin (CRM)", "GERENTE confirma o gate final (saleValidation.validateSale)", "venda VALIDADA; contrato active", async () => { const admin = await crmSession("syn.admin"); const r = await crmCall(admin, "saleValidation.validateSale", { contractId: cid }) as { alreadyValidated?: boolean }; const row = (await sql("f5_crm_e2e", "SELECT c.status, v.validatedAt, v.documentRef FROM contracts c JOIN sale_validations v ON v.contractId = c.id WHERE c.id = ?", [cid]))[0]; return { observed: `alreadyValidated=${r?.alreadyValidated} status=${row?.status} documentRef=${row?.documentRef}`, ok: row?.status === "active" && Boolean(row?.validatedAt) && /^crm-doc:\d+:\d+$/.test(String(row?.documentRef)) }; });
++  await step(J, "4i", "sistema", "CRM → Sales: crm.sale.validated.v1 (estado derivado VALIDATED)", "1 sale_validations com source_event_id crm-sale-<cid>-validated; sales.status inalterado", async () => { const v = await poll(async () => (await sql("sales", "SELECT source_event_id, document_ref FROM sale_validations WHERE sale_id = ?", [saleId]))[0]); const s = (await sql("sales", "SELECT status FROM sales WHERE id = ?", [saleId]))[0]; return { observed: `evento=${v?.source_event_id} documentRef=${v?.document_ref} status=${s?.status}`, ok: v?.source_event_id === `crm-sale-${cid}-validated` && s?.status === "SALE_CONFIRMED" }; });
++  await step(J, "4j", "sistema", "CRM → Financial: sale.validated (venda OFICIAL)", "fin_contracts.validated_at preenchido", async () => { const fc = await poll(async () => { const r = (await sql("f5_fin_e2e", "SELECT validated_at, validated_by FROM fin_contracts WHERE sale_id = ?", [saleId]))[0]; return r?.validated_at ? r : null; }); return { observed: `validated_at=${fc?.validated_at ? "sim" : "não"} validated_by=${fc?.validated_by}`, ok: Boolean(fc?.validated_at) }; });
+   await step(J, "5", "syn.fin.cfo (Financial)", "contract.created.v2 chegou; contratado separado do caixa", "fin_contracts 2890000 BRL; dashboard 200", async () => { const row = await poll(async () => (await sql("f5_fin_e2e", "SELECT total_amount_cents AS cents, currency, crm_status AS crm FROM fin_contracts WHERE sale_id = ?", [saleId]))[0]); const dash = await fin("syn.fin.cfo", "/api/dashboard"); const b = (dash.body ?? {}) as Record<string, unknown>; return { observed: row ? `${row.cents} ${row.currency} crm=${row.crm} contratado=${b.contractedTotalCents} caixa=${JSON.stringify(b.settledInflows ?? b.settledInflowsCents ?? "")}` : "sem linha", ok: n(row?.cents) === VGV && row?.currency === "BRL" && dash.status === 200 }; });
+-  await step(J, "6", "sistema", "ativação → Relationship inicia D1–D7 no MESMO caso", "4 passos, 1 caso", async () => { const r = await poll(async () => { const x = await relCase(saleId); return x && x.steps > 0 ? x : null; }); const count = (await sql("f5_rel_e2e", "SELECT COUNT(*) AS n FROM rel_cases WHERE external_sale_id = ?", [saleId]))[0]; return { observed: `passos=${r?.steps ?? 0} casos=${count?.n}`, ok: r?.steps === 4 && n(count?.n) === 1 }; });
++  await step(J, "6", "sistema", "validação (= ativação, V6) → Relationship inicia D1–D7 no MESMO caso", "4 passos, 1 caso", async () => { const r = await poll(async () => { const x = await relCase(saleId); return x && x.steps > 0 ? x : null; }); const count = (await sql("f5_rel_e2e", "SELECT COUNT(*) AS n FROM rel_cases WHERE external_sale_id = ?", [saleId]))[0]; return { observed: `passos=${r?.steps ?? 0} casos=${count?.n}`, ok: r?.steps === 4 && n(count?.n) === 1 }; });
+   await step(J, "7", "syn.finance (CRM)", "dá baixa na 1ª parcela (finance.markInstallmentPaid)", "ledger SETTLED; Relationship recebe interação de pagamento", async () => {
+     const admin = await crmSession("syn.admin"); const finance = await crmSession("syn.finance");
+     const before = (await relCase(saleId))?.interactions ?? 0;
+@@ -163,6 +190,13 @@ async function A() {
+     const after = await poll(async () => { const x = await relCase(saleId); return x && x.interactions > before ? x : null; }, 15);
+     return { observed: `settled=${settled?.n ?? 0} interações ${before}→${after?.interactions ?? before}`, ok: n(settled?.n) >= 1 && Boolean(after) };
+   });
++  await step(J, "8", "syn.finance (CRM)", "comissão DEPOIS da validação: lança, aprova e paga", "CRM aceita; Financial liquida (COMMISSION SETTLED)", async () => {
++    const finance = await crmSession("syn.finance");
++    const created = await crmCall(finance, "commissions.record", { sellerId, contractId: cid, baseAmount: 1000, rate: 1, notes: "Synthetic depois da validação (valor sintético; COMMISSION_POLICY = NOT_APPROVED)" }) as { id: number };
++    await crmCall(finance, "commissions.setStatus", { id: created.id, status: "approved" }); await crmCall(finance, "commissions.setStatus", { id: created.id, status: "paid" });
++    const e = await poll(async () => { const r = (await sql("f5_fin_e2e", "SELECT status FROM fin_entries WHERE kind = 'COMMISSION' AND contract_id = ? ORDER BY id DESC LIMIT 1", [String(cid)]))[0]; return r?.status === "SETTLED" ? r : null; });
++    return { observed: `commissionId=${created.id} financial=${e?.status ?? "não liquidada"}`, ok: e?.status === "SETTLED" };
++  });
+ }
+ 
+ async function B() {
+@@ -315,12 +349,12 @@ async function S() {
+     const out = await sql("sales", "SELECT status FROM outbox_messages WHERE payload LIKE ?", [`%${s.sale}%`]);
+     return { observed: `venda=${row?.status} outbox da venda=${out.map(r => r.status).join(",")} outboxHealth PENDING=${h.PENDING} DEAD=${h.DEAD} (login de novo OK)`, ok: row?.status === "SALE_CONFIRMED" && out.length === 2 && out.every(r => r.status === "PENDING") && n(h.PENDING) >= 2 };
+   });
+-  await alone(J, "crm", "syn.admin (CRM)", "ativa um contrato sem Financial, Relationship e Sales", "active; evento de domínio gravado (guardado para os vizinhos)", async () => {
++  await alone(J, "crm", "syn.admin (CRM)", "valida a venda (V6: pagamento, assinado, armazenado, gerente) sem Financial, Relationship e Sales", "active; evento de domínio gravado (guardado para os vizinhos)", async () => {
+     const c = (await sql("f5_crm_e2e", "SELECT id, externalSaleId FROM contracts WHERE status = 'pending_signature' AND externalSaleId IS NOT NULL ORDER BY id LIMIT 1"))[0];
+     if (!c) return { observed: "nenhum contrato pending_signature com saleId no banco", ok: false };
+     s.crmContract = String(c.id); s.crmSale = String(c.externalSaleId);
+     const evBefore = await count("f5_crm_e2e", "SELECT COUNT(*) AS n FROM domain_events");
+-    const admin = await crmSession("syn.admin"); await crmCall(admin, "contracts.updateStatus", { id: Number(c.id), status: "active" });
++    await crmValidateSale(Number(c.id)); // V6: ativação = validação final do gerente
+     const row = (await sql("f5_crm_e2e", "SELECT status FROM contracts WHERE id = ?", [c.id]))[0];
+     const evAfter = await count("f5_crm_e2e", "SELECT COUNT(*) AS n FROM domain_events");
+     // "nenhum lançamento inventado" é provado na volta (int.3: exatamente 1 fin_contract, com o status do CRM)
+@@ -430,7 +464,7 @@ async function openNoSale(label: string) {
+ async function distrato(saleId: string) {
+   const contract = await crmContractBySale(saleId); const cid = Number(contract?.id); if (!cid) return false;
+   const admin = await crmSession("syn.admin"), finance = await crmSession("syn.finance");
+-  if (contract?.status !== "active") await crmCall(admin, "contracts.updateStatus", { id: cid, status: "active" });
++  if (contract?.status !== "active") await crmValidateSale(cid); // V6: ativação = validação final do gerente
+   const r = await crmCall(finance, "contracts.requestCancellation", { contractId: cid, reason: "Synthetic distrato (volume)" }) as { id: number };
+   await crmCall(admin, "contracts.decideCancellation", { requestId: r.id, decision: "approved", notes: "Synthetic aprovado" });
+   await crmCall(admin, "contracts.executeCancellation", { requestId: r.id, executionNotes: "Synthetic executado" });
