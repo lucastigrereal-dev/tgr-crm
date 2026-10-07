@@ -28,5 +28,6 @@ describe("Anexo de contrato assinado", () => {
     expect(page).toMatch(/const signed = category === "Contrato assinado" && canUploadSigned;/);
     expect(page).toMatch(/base64, signed \}\)/);
     expect(page).not.toMatch(/signed: false \}\)/);
+    expect(page).toMatch(/uploadDocument\.useMutation\(\{ onSuccess: \(\) => \{ utils\.contracts\.detail\.invalidate\(\{ id \}\); utils\.saleValidation\.getValidationStatus\.invalidate\(\{ contractId: id \}\);/);
   });
 });
