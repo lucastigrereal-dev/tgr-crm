@@ -111,14 +111,9 @@ export function startFinancialBridgePump(
     try {
       if (await alreadyHandled(db, event.id)) { retry.remove(event.id); return false; }
       const body = financialBridgeEnvelope(event, project);
-      // KAN-31 V6: o Financial exige saleId em sale.validated. Contrato sem linhagem Sales Command não tem venda a ligar:
-      // recibo not_applicable (nunca inventar saleId).
-      if (event.eventName === "sale.validated" && !(typeof body.event.payload.saleId === "string" && body.event.payload.saleId.trim())) {
-        await recordAudit(null, "integration_event", event.id, "financial_not_applicable",
-          "sale.validated sem saleId (contrato fora do Sales Command); não enviado ao TGR Financial Layer.", { idempotencyKey: "financial-event:" + event.id });
-        retry.remove(event.id);
-        return false;
-      }
+      // KAN-30: sale.validated vai ao Financial mesmo sem saleId (contrato criado direto no CRM, sem linhagem Sales Command).
+      // O Financial aceita saleId nulo e reconhece pelo contractId; segurar o evento deixava venda validada fora do oficial.
+      // saleId nunca é inventado: vai null.
       const contractIdRaw = body.event.payload.contractId;
       const contractId = typeof contractIdRaw === "number"
         ? contractIdRaw

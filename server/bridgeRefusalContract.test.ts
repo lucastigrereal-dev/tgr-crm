@@ -151,11 +151,15 @@ describe("Financial: sale.validated e comissão reagem às respostas do receptor
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
-  it("sale.validated sem saleId (contrato fora do Sales Command): recibo not_applicable, nada enviado", async () => {
+  it("sale.validated sem saleId (contrato fora do Sales Command): vai ao Financial com saleId null, sem inventar", async () => {
     oneEvent("sale.validated", { ...validated, saleId: null });
+    vi.mocked(fetchWithTimeout).mockImplementation(async () => json(200, { accepted: true }));
     const p = eagerPump(startFinancialBridgePump, "http://127.0.0.1:3400", "k", project, { autoStart: false, onError: vi.fn() });
     try { await p.tick(); } finally { p.stop(); }
-    expect(fetchWithTimeout).not.toHaveBeenCalled();
-    expect(recordAudit).toHaveBeenCalledWith(null, "integration_event", 601, "financial_not_applicable", expect.stringContaining("saleId"), { idempotencyKey: "financial-event:601" });
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(String(vi.mocked(fetchWithTimeout).mock.calls[0]![1]!.body));
+    expect(sent.event.eventName).toBe("sale.validated");
+    expect(sent.event.payload.saleId).toBeNull();
+    expect(recordAudit).not.toHaveBeenCalledWith(null, "integration_event", 601, "financial_not_applicable", expect.anything(), expect.anything());
   });
 });

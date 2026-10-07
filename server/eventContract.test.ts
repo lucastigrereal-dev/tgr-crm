@@ -17,7 +17,10 @@ const sectionHash = (section: unknown) => createHash("sha256").update(JSON.strin
 describe("CRM event contract export", () => {
   it("contract consumed by tgr-commercial-suite is locked (change = suite first, then shared/contracts/consumers.lock.json)", () => {
     expect(snapshot.contractVersion).toBe(consumersLock.contractVersion);
-    for (const section of ["financial", "relationship", "sales"] as const) {
+    // Seção nova no export também precisa entrar na trava (senão ela muda sem ninguém ver).
+    const sections = Object.keys(snapshot).filter((key) => key !== "contractVersion").sort();
+    expect(sections).toEqual(Object.keys(consumersLock.sections).sort());
+    for (const section of sections) {
       expect(sectionHash(snapshot[section]), `contrato CRM -> ${section} mudou: veja o _doc de shared/contracts/consumers.lock.json`).toBe(consumersLock.sections[section]);
     }
   });
