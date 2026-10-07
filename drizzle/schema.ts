@@ -378,6 +378,13 @@ export const salesCommissions = mysqlTable(
     notes: text("notes"),
     approvedAt: timestamp("approvedAt"),
     paidAt: timestamp("paidAt"),
+    // ADR-010: comissão já paga em contrato distratado NÃO é estornada automaticamente; fica na fila manual (gerente/financeiro).
+    reversalReviewStatus: mysqlEnum("reversalReviewStatus", ["pending", "resolved"]),
+    reversalReviewReason: text("reversalReviewReason"),
+    reversalReviewRequestedAt: timestamp("reversalReviewRequestedAt"),
+    reversalReviewResolvedAt: timestamp("reversalReviewResolvedAt"),
+    reversalReviewResolvedByUserId: int("reversalReviewResolvedByUserId").references(() => users.id),
+    reversalReviewNote: text("reversalReviewNote"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
