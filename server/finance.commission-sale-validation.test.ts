@@ -15,7 +15,7 @@ function query(rows: unknown[]) {
 }
 const completePolicy = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
 
-function scenario(contractStatus: string, validation: Array<{ validatedAt: Date | null }>, policy: string | null = completePolicy) {
+function scenario(contractStatus: string, validation: Array<{ validatedAt: Date | null }>, policy: string | null = completePolicy, failSkip = false) {
   const inserted: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
     // ordem na transação: trava do contrato, trava da parcela, leitura da validação (corrente, após a trava) e o resto vazio.
@@ -25,7 +25,7 @@ function scenario(contractStatus: string, validation: Array<{ validatedAt: Date 
       .mockReturnValueOnce(query(validation))
       .mockReturnValue(query([])),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
-    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { inserted.push({ table, values }); return { onDuplicateKeyUpdate: async () => undefined, $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, index) => ({ id: 500 + index })) }; }) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (failSkip && table === domainEvents && (values as { eventName?: string }).eventName === "commission.automatic.skipped") throw new Error("falha ao gravar o skip"); inserted.push({ table, values }); return { onDuplicateKeyUpdate: async () => undefined, $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, index) => ({ id: 500 + index })) }; }) })),
   };
   const db = {
     select: vi.fn()
@@ -92,6 +92,13 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
     expect(inserted.some(entry => entry.table === auditLogs && (entry.values as { action: string }).action === "commission_skipped")).toBe(true);
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
+  });
+
+  it("issue #38 (2): falha ao gravar o skip derruba a baixa inteira (nada de auditoria/evento pós-commit)", async () => {
+    const { caller } = scenario("active", validated, zeroRatePolicy, true);
+    await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).rejects.toThrow("falha ao gravar o skip");
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("o salto é registrado uma única vez por baixa", async () => {

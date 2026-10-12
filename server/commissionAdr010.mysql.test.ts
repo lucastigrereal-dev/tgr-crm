@@ -179,4 +179,31 @@ describe.skipIf(!integrationUrl)("ADR-010 comissão 0% e fila de estorno em MySQ
     expect((await finance().reversalQueue()).filter(row => sale.commissionIds.includes(row.id))).toHaveLength(0);
     expect((await finance().reversalQueue({ includeResolved: true })).filter(row => sale.commissionIds.includes(row.id))).toHaveLength(2);
   });
+
+  it("issue #38 (1): lançamento manual no contrato não reduz a comissão automática do papel", async () => {
+    const plain = await seedSale("capplain", { policy: rated, paidSequences: [1] });
+    const withManual = await seedSale("capmanual", { policy: rated, paidSequences: [1] });
+    await db.insert(salesCommissions).values({ sellerId: adminId, contractId: withManual.contractId, commissionRole: "closer", baseAmount: "100000.00", rate: "50.00", amount: "50000.00", notes: "manual" });
+    await validate(plain.contractId); await validate(withManual.contractId);
+    const auto = async (contractId: number) => (await commissionsOf(contractId)).filter(row => row.sourceInstallmentId !== null).map(row => [row.commissionRole, row.amount]).sort();
+    expect(await auto(withManual.contractId)).toEqual(await auto(plain.contractId));
+    expect((await auto(plain.contractId)).length).toBeGreaterThan(0);
+    expect((await commissionsOf(withManual.contractId)).filter(row => row.sourceInstallmentId === null)).toHaveLength(1);
+  });
+
+  it("issue #38 (3): reprocesso acha parcela antiga mesmo com mais de 5000 skipped mais novos", async () => {
+    const { contractId, resortId, installmentIds } = await seedSale("scan", { paidSequences: [1] });
+    await validate(contractId);
+    expect(await eventsFor("commission.automatic.skipped", installmentIds[0])).toHaveLength(1);
+    const dummies = Array.from({ length: 5100 }, (_, index) => ({ eventName: "commission.automatic.skipped" as const, aggregateType: "installment", aggregateId: `scan-dummy-${runId}-${index}`, actorUserId: null, payload: "{}" }));
+    for (let offset = 0; offset < dummies.length; offset += 1000) await db.insert(domainEvents).values(dummies.slice(offset, offset + 1000) as never);
+    try {
+      await setPolicy(resortId, rated);
+      const result = await finance().reprocessSkipped({ contractId });
+      expect(result).toMatchObject({ candidates: 1, created: 2, truncated: false });
+      expect(await commissionsOf(contractId)).toHaveLength(2);
+    } finally {
+      await pool.query("DELETE FROM domain_events WHERE aggregateId LIKE ?", [`scan-dummy-${runId}-%`]);
+    }
+  });
 });

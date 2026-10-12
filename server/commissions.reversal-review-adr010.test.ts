@@ -51,6 +51,16 @@ describe("ADR-010 resolveReversalReview: decisão obrigatória", () => {
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
+  it("issue #38 (4): lançamento financeiro de OUTRO contrato (ou sem contrato) é recusado, sem gravar nada", async () => {
+    const other = makeDb({ transaction: [{ id: 34, contractId: 77 }] });
+    await expect(as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 34, note: "Compensado no lançamento 34" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(other.updates).toHaveLength(0);
+    const none = makeDb({ transaction: [{ id: 35, contractId: null }] });
+    await expect(as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 35, note: "Compensado no lançamento 35" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(none.updates).toHaveLength(0);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("não resolve duas vezes nem comissão inexistente; sem evento nem auditoria nesses casos", async () => {
     makeDb({ commission: { id: 7, contractId: 9, reversalReviewStatus: "resolved" } });
     await expect(as("finance").resolveReversalReview({ id: 7, decision: "waived", note: "Segunda tentativa" })).rejects.toMatchObject({ code: "CONFLICT" });
