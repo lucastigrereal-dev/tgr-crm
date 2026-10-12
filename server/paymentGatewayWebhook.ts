@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
-import { isSaleValidated } from "./saleValidationService";
+import { isSaleValidated, recordZeroRateSkip } from "./saleValidationService";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
@@ -48,7 +48,6 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   let blockedReason: CommissionBlockReason | null = null;
   let settledCustomerId: number | null = null;
   const createdCommissionFacts: CreatedCommissionFact[] = [];
-  const skipped: { roles: string[] | null; resortId: number | null } = { roles: null, resortId: null };
 
   try {
     await db.transaction(async tx => {
@@ -90,7 +89,11 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
             if (commissionContext && commissionApplies(commissionContext)) {
               blockedReason = commissionBlockReason(commissionContext.contract.status, policy, saleValidated);
               // ADR-010: portão passou, mas nenhum papel tem taxa > 0 (janela de 0%): rastreável (auditoria + evento) para reprocesso.
-              if (!blockedReason && policy) { skipped.roles = zeroRateSkippedRoles(commissionContext.capture, policy); skipped.resortId = commissionContext.capture.resortId ?? null; }
+              if (!blockedReason && policy) {
+                // Issue #38 (2): o registro do skip nasce na MESMA transação do pagamento (idempotente por parcela).
+                const zeroRoles = zeroRateSkippedRoles(commissionContext.capture, policy);
+                if (zeroRoles) await recordZeroRateSkip(tx, { installmentId: billing.installment.id, contractId: billing.installment.contractId, resortId: commissionContext.capture.resortId ?? null, roles: zeroRoles, actorUserId: null, source: "asaas" });
+              }
               if (!blockedReason && policy) createdCommissionFacts.push(...await insertInstallmentCommissions(tx, { installment: { id: billing.installment.id, amount: billing.installment.amount, contractId: billing.installment.contractId }, context: commissionContext, policy, paymentMethod: billing.billing.type === "pix" ? "pix" : "boleto", compensatedAt: paidAt }));
             }
           }
@@ -111,10 +114,6 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
     if (blockedReason) {
       await recordAudit(null, "installment", billing.installment.id, "commission_blocked", COMMISSION_BLOCKED_MESSAGE[blockedReason]);
       await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, reason: blockedReason, source: "asaas" } });
-    }
-    if (skipped.roles) {
-      await recordAudit(null, "installment", billing.installment.id, "commission_skipped", COMMISSION_SKIPPED_MESSAGE, { idempotencyKey: `commission-skipped:${billing.installment.id}:${COMMISSION_SKIPPED_REASON}` });
-      await recordDomainEvent({ eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, installmentId: billing.installment.id, resortId: skipped.resortId, reason: COMMISSION_SKIPPED_REASON, roles: skipped.roles, source: "asaas" }, idempotencyKey: `commission-skipped:${billing.installment.id}:${COMMISSION_SKIPPED_REASON}` });
     }
     await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: installmentPaymentAmount, contractId: billing.installment.contractId, ...(settledCustomerId ? { customerId: settledCustomerId } : {}), sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked: blockedReason !== null } });
     for (const commission of createdCommissionFacts) { await recordAudit(null, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: null, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }

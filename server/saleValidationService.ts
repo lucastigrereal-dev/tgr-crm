@@ -139,7 +139,7 @@ async function loadCommissionContext(tx: Reader, contractId: number) {
 }
 
 /** ADR-010: registro rastreável (auditoria + evento interno) de parcela paga sem lançamento porque todos os papéis estão a 0%. Idempotente por parcela. */
-async function recordZeroRateSkip(tx: Tx, input: { installmentId: number; contractId: number; resortId: number | null; roles: string[]; actorUserId: number | null; source: string }) {
+export async function recordZeroRateSkip(tx: Tx, input: { installmentId: number; contractId: number; resortId: number | null; roles: string[]; actorUserId: number | null; source: string }) {
   const key = `commission-skipped:${input.installmentId}:${COMMISSION_SKIPPED_REASON}`;
   await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: input.installmentId, action: "commission_skipped", summary: COMMISSION_SKIPPED_MESSAGE, idempotencyKey: key });
   await txEvent(tx, { eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: input.installmentId, actorUserId: input.actorUserId, payload: { contractId: input.contractId, installmentId: input.installmentId, resortId: input.resortId, reason: COMMISSION_SKIPPED_REASON, roles: input.roles, source: input.source }, idempotencyKey: key });
