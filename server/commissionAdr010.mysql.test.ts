@@ -163,6 +163,9 @@ describe.skipIf(!integrationUrl)("ADR-010 comissão 0% e fila de estorno em MySQ
     await expect(finance().resolveReversalReview({ id: first, decision: "offset", financialTransactionId: entry.id, note: "Compensado na próxima remessa" })).resolves.toEqual({ success: true });
     await expect(finance().resolveReversalReview({ id: first, decision: "waived", note: "Segunda tentativa" })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(finance().resolveReversalReview({ id: second, decision: "reversed", financialTransactionId: 99_999_999, note: "Lançamento inexistente" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // Issue #38 (4): lançamento de OUTRO contrato (ou sem contrato) não pode ser vinculado a esta revisão.
+    const [foreign] = await db.insert(financialTransactions).values({ contractId: null, type: "expense", category: "Estorno de comissão", description: "Lançamento de outro contrato", amount: "10.00", status: "open", createdByUserId: adminId }).$returningId();
+    await expect(finance().resolveReversalReview({ id: second, decision: "reversed", financialTransactionId: foreign.id, note: "Lançamento que não pertence ao contrato" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(finance().resolveReversalReview({ id: second, decision: "waived", note: "Dispensada pelo gerente" })).resolves.toEqual({ success: true });
 
     const [rowFirst] = await db.select().from(salesCommissions).where(eq(salesCommissions.id, first));

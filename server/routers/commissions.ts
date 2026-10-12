@@ -117,8 +117,10 @@ export const commissionsRouter = router({
     if (!commission) throw new TRPCError({ code: "NOT_FOUND", message: "Comissão não encontrada." });
     if (commission.reversalReviewStatus !== "pending") throw new TRPCError({ code: "CONFLICT", message: "Comissão não está pendente na fila de revisão manual." });
     if (input.financialTransactionId) {
-      const entry = (await db.select({ id: financialTransactions.id }).from(financialTransactions).where(eq(financialTransactions.id, input.financialTransactionId)).limit(1))[0];
+      const entry = (await db.select({ id: financialTransactions.id, contractId: financialTransactions.contractId }).from(financialTransactions).where(eq(financialTransactions.id, input.financialTransactionId)).limit(1))[0];
       if (!entry) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento financeiro informado não existe." });
+      // Issue #38 (4): o lançamento precisa pertencer ao contrato da comissão revisada.
+      if (entry.contractId !== commission.contractId) throw new TRPCError({ code: "BAD_REQUEST", message: "O lançamento financeiro informado não pertence ao contrato desta comissão." });
     }
     const result = await db.update(salesCommissions).set({ reversalReviewStatus: "resolved", reversalReviewResolvedAt: new Date(), reversalReviewResolvedByUserId: ctx.user.id, reversalReviewNote: input.note, reversalReviewDecision: input.decision, reversalReviewFinancialTransactionId: input.financialTransactionId ?? null }).where(and(eq(salesCommissions.id, input.id), eq(salesCommissions.reversalReviewStatus, "pending")));
     if (affectedRows(result) === 0) throw new TRPCError({ code: "CONFLICT", message: "Comissão não está pendente na fila de revisão manual." });
