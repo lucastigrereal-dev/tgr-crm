@@ -1,6 +1,6 @@
 // Comissão automática de parcela paga: UM só construtor/portão para baixa manual, webhook do gateway e validação final da
 // venda (ADR-007). Parcela paga ANTES da validação fica bloqueada; ao validar, as parcelas já pagas são reavaliadas aqui.
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, isNotNull } from "drizzle-orm";
 import { salesCommissions } from "../drizzle/schema";
 import { buildInstallmentCommissions, canCommissionBecomeDue, commissionRoleRate } from "./commissionAutomation";
 import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
@@ -78,9 +78,9 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   if (!context.proposal || !context.capture) return [];
   const existing = await tx.select({ id: salesCommissions.id, role: salesCommissions.commissionRole }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installment.id));
   const existingRoles = new Set(existing.map(row => row.role));
-  // Issue #38 (1): acumulado já lançado (não cancelado) por papel no contrato, para limitar a proração ao total devido.
+  // Issue #38 (1): acumulado automático (de parcela, não cancelado; lançamentos manuais ficam de fora) por papel no contrato, para limitar a proração ao total devido.
   const alreadyReleased: Partial<Record<"liner" | "closer" | "ftb", number>> = {};
-  const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled")));
+  const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId)));
   previous.forEach(row => { alreadyReleased[row.role] = Math.round(((alreadyReleased[row.role] ?? 0) + Number(row.amount)) * 100) / 100; });
   const rows = buildInstallmentCommissions({
     installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal: Number(context.proposal.downPaymentAmount),

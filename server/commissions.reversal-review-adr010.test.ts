@@ -41,7 +41,7 @@ describe("ADR-010 resolveReversalReview: decisão obrigatória", () => {
   });
 
   it("lançamento financeiro opcional: grava o vínculo quando existe e recusa quando não existe", async () => {
-    const ok = makeDb({ transaction: [{ id: 33 }] });
+    const ok = makeDb({ transaction: [{ id: 33, contractId: 9 }] });
     await as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 33, note: "Compensado no lançamento 33" });
     expect(ok.updates[0]).toMatchObject({ reversalReviewDecision: "offset", reversalReviewFinancialTransactionId: 33 });
     vi.clearAllMocks();
