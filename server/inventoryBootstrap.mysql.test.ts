@@ -113,13 +113,15 @@ describe.skipIf(!integrationUrl)("estoque 60 UHs x 52 cotas em MySQL real", () =
     const [{ id: otherResort }] = await db.insert(resorts).values({ name: `Resort Concorrente ${runId}`, status: "active" }).$returningId();
     await db.insert(units).values(Array.from({ length: 5 }, (_, index) => ({ resortId: otherResort, code: `CU${index + 1}` })));
 
-    await Promise.allSettled([
+    const outcomes = await Promise.allSettled([
       asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
       asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
     ]);
 
+    // Pelo menos um precisa vencer; senão o teste passaria com estoque vazio.
+    expect(outcomes.some(outcome => outcome.status === "fulfilled")).toBe(true);
     const [{ total }] = await db.select({ total: count() }).from(commercialFractions).where(eq(commercialFractions.resortId, otherResort));
-    expect(Number(total)).toBeLessThanOrEqual(50);
+    expect(Number(total)).toBe(50);
     const [{ uniq }] = await pool.query<mysql.RowDataPacket[]>(
       "SELECT COUNT(DISTINCT code) AS uniq FROM commercial_fractions WHERE resortId = ?", [otherResort],
     ).then(([r]) => r);
