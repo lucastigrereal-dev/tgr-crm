@@ -44,7 +44,7 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
   });
 
   it("3 eventos presos com lote de 2 não impedem o evento novo; retry só quando o backoff vence", async () => {
-    const { startFinancialBridgePump } = await import("./financialBridge");
+    const { startFinancialBridgePump, FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
     const mk = (n: number) => ({ eventName: "contract.status.updated" as const, aggregateType: "contract", aggregateId: String(950_000_000 + n), actorUserId: null, payload: JSON.stringify({ status: "active" }), occurredAt: new Date() });
     const ids: number[] = [];
     for (let n = 0; n < 4; n += 1) { const [row] = await db.insert(domainEvents).values(mk(n)).$returningId(); ids.push(row.id); }
@@ -54,7 +54,14 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
     const pump = startFinancialBridgePump(baseUrl, "syn-fin-key", { externalKey: randomUUID(), name: `SYN starvation ${runId}`, timezone: "America/Recife" }, { autoStart: false, now: () => clock.t, batchSize: 2, onError: () => undefined });
     try {
       // Varre a fila (eventos de outros testes no mesmo banco também passam, todos com 201) até o novo ser entregue.
-      for (let i = 0; i < 400 && !hits.get(newId); i += 1) await pump.tick();
+      // O limite vem do backlog real sem recibo até o evento novo: um limite fixo reprovava (flake) quando outros testes MySQL deixavam >800 eventos pendentes no mesmo banco.
+      const placeholders = FINANCIAL_EVENT_NAMES.map(() => "?").join(",");
+      const [backlogRows] = await pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(*) AS pending FROM domain_events d LEFT JOIN audit_logs a ON a.idempotencyKey = CONCAT('financial-event:', d.id) WHERE a.id IS NULL AND d.id <= ? AND d.eventName IN (${placeholders})`,
+        [newId, ...FINANCIAL_EVENT_NAMES],
+      );
+      const maxTicks = Math.ceil(Number(backlogRows[0]?.pending ?? 0) / 2) + 20;
+      for (let i = 0; i < maxTicks && !hits.get(newId); i += 1) await pump.tick();
       expect(hits.get(newId)).toBe(1);
       for (const id of ids.slice(0, 3)) expect(hits.get(id)).toBe(1); // cada preso tentado uma única vez até aqui
       for (let i = 0; i < 3; i += 1) await pump.tick();
