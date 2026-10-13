@@ -69,6 +69,63 @@ jobs:
       - name: Build pilot Docker image
         run: docker build -f infra/pilot/Dockerfile -t tgr-crm-pilot:ci .
 
+  mysql-integration:
+    name: Testes *.mysql.test.ts em MySQL descartável
+    if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: tgr-it-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptgr-it-root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      # Banco por run, sufixo _test (exigido por server/e2eSafety.ts). DATABASE_URL fica de fora: cada teste MySQL define a sua.
+      TGR_MYSQL_INTEGRATION_URL: mysql://root:tgr-it-root@127.0.0.1:3306/tgr_crm_ci_${{ github.run_id }}_test
+      JWT_SECRET: ci-only-it-secret-with-at-least-32-characters
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create the run-owned disposable database
+        run: >-
+          node --input-type=module -e "import mysql from 'mysql2/promise';
+          const url = new URL(process.env.TGR_MYSQL_INTEGRATION_URL);
+          const database = url.pathname.slice(1);
+          if (!/^tgr_crm_[a-z0-9_]+_test$/.test(database)) throw new Error('Banco de integração inválido: ' + database);
+          url.pathname = '/';
+          const conn = await mysql.createConnection(url.toString());
+          await conn.query('CREATE DATABASE \`' + database + '\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+          await conn.end();
+          console.log(JSON.stringify({ event: 'integration.database.prepared', database }));"
+
+      - name: Apply reviewed migrations
+        run: pnpm exec drizzle-kit migrate
+        env:
+          DATABASE_URL: ${{ env.TGR_MYSQL_INTEGRATION_URL }}
+
+      - name: MySQL integration tests (forks padrão, sem singleFork)
+        run: pnpm exec vitest run --reporter=dot --pool=forks .mysql.test.ts
+
   e2e:
     name: E2E autenticado em MySQL descartável
     if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft

@@ -321,7 +321,11 @@ describe.skipIf(!integrationUrl)("venda validada em MySQL real (ADR-007)", () =>
     await svc.confirmPayment(adminId, { contractId, note: "conferido" });
     await svc.validateSale(adminId, { contractId });
     const before = await commissionsOf(contractId);
-    expect(before.length).toBe(4);
+    // Issue #38 (1): a parcela 2 (4500) está fora da entrada (1000) e a entrada já liberou 100% do devido -> só 1 lançamento por papel.
+    expect(before.length).toBe(2);
+    const liner = before.find(row => row.commissionRole === "liner")!;
+    const total = Math.round(Number(liner.baseAmount) * Number(liner.rate)) / 100;
+    expect(before.filter(row => row.commissionRole === "liner").reduce((sum, row) => sum + Number(row.amount), 0)).toBeLessThanOrEqual(total + 0.005);
     await svc.validateSale(adminId, { contractId });
     await db.transaction(tx => svc.releaseCommissionsForValidatedContract(tx, { contractId, actorUserId: adminId }));
     await db.transaction(tx => svc.releaseCommissionsForValidatedContract(tx, { contractId, actorUserId: adminId }));

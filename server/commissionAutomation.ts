@@ -24,6 +24,8 @@ export function buildInstallmentCommissions(input: {
   linerId: number | null;
   closerId: number | null;
   rates?: CommissionRates;
+  /** Issue #38 (1): acumulado já lançado (não cancelado) por papel neste contrato; limita o liberado ao total devido. */
+  alreadyReleased?: Partial<Record<"liner" | "closer" | "ftb", number>>;
   calendar?: {
     cancellationDeadlineDay?: number;
     expectedPaymentDay?: number;
@@ -47,13 +49,14 @@ export function buildInstallmentCommissions(input: {
     input.calendar,
   );
 
-  return payable.map((assignee) => {
+  const rows = payable.map((assignee) => {
     const rate = rateOf(assignee.role);
     const total = Math.round(base * rate * 100) / 100;
     const amount = releasedCommission(
       input.installmentAmount,
       input.entryTotal,
       total,
+      input.alreadyReleased?.[assignee.role] ?? 0,
     );
     return {
       sellerId: assignee.userId,
@@ -74,6 +77,8 @@ export function buildInstallmentCommissions(input: {
       }),
     };
   });
+  // Issue #38 (1): papel que já recebeu o total devido não ganha lançamento extra nas parcelas seguintes.
+  return rows.filter((row) => !(row.amount <= 0 && (input.alreadyReleased?.[row.commissionRole] ?? 0) > 0));
 }
 
 // PRD Apêndice B #17 (PILOTO V1) + ADR-007 (V6): comissão só pode virar devida com contrato ATIVO, política completa do

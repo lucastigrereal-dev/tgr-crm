@@ -41,13 +41,23 @@ describe("ADR-010 resolveReversalReview: decisão obrigatória", () => {
   });
 
   it("lançamento financeiro opcional: grava o vínculo quando existe e recusa quando não existe", async () => {
-    const ok = makeDb({ transaction: [{ id: 33 }] });
+    const ok = makeDb({ transaction: [{ id: 33, contractId: 9 }] });
     await as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 33, note: "Compensado no lançamento 33" });
     expect(ok.updates[0]).toMatchObject({ reversalReviewDecision: "offset", reversalReviewFinancialTransactionId: 33 });
     vi.clearAllMocks();
     const missing = makeDb({ transaction: [] });
     await expect(as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 999, note: "Compensado no lançamento 999" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(missing.updates).toHaveLength(0);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
+  it("issue #38 (4): lançamento financeiro de OUTRO contrato (ou sem contrato) é recusado, sem gravar nada", async () => {
+    const other = makeDb({ transaction: [{ id: 34, contractId: 77 }] });
+    await expect(as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 34, note: "Compensado no lançamento 34" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(other.updates).toHaveLength(0);
+    const none = makeDb({ transaction: [{ id: 35, contractId: null }] });
+    await expect(as("admin").resolveReversalReview({ id: 7, decision: "offset", financialTransactionId: 35, note: "Compensado no lançamento 35" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(none.updates).toHaveLength(0);
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 

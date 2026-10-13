@@ -5,7 +5,7 @@ const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), record
 vi.mock("./db", () => dbMocks);
 vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn(async () => ({})) }));
 
-import { salesCommissions } from "../drizzle/schema";
+import { auditLogs, domainEvents, salesCommissions } from "../drizzle/schema";
 import { financeRouter } from "./routers/finance";
 
 function query(rows: unknown[]) {
@@ -15,7 +15,7 @@ function query(rows: unknown[]) {
 }
 const completePolicy = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
 
-function scenario(contractStatus: string, validation: Array<{ validatedAt: Date | null }>, policy: string | null = completePolicy) {
+function scenario(contractStatus: string, validation: Array<{ validatedAt: Date | null }>, policy: string | null = completePolicy, failSkip = false) {
   const inserted: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
     // ordem na transação: trava do contrato, trava da parcela, leitura da validação (corrente, após a trava) e o resto vazio.
@@ -25,7 +25,7 @@ function scenario(contractStatus: string, validation: Array<{ validatedAt: Date 
       .mockReturnValueOnce(query(validation))
       .mockReturnValue(query([])),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
-    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { inserted.push({ table, values }); return { $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, index) => ({ id: 500 + index })) }; }) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (failSkip && table === domainEvents && (values as { eventName?: string }).eventName === "commission.automatic.skipped") throw new Error("falha ao gravar o skip"); inserted.push({ table, values }); return { onDuplicateKeyUpdate: async () => undefined, $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, index) => ({ id: 500 + index })) }; }) })),
   };
   const db = {
     select: vi.fn()
@@ -40,6 +40,7 @@ function scenario(contractStatus: string, validation: Array<{ validatedAt: Date 
   dbMocks.getDb.mockResolvedValue(db);
   return { inserted, caller: financeRouter.createCaller({ user: { id: 71, role: "admin" } } as never) };
 }
+const skippedEvents = (inserted: Array<{ table: unknown; values: unknown }>) => inserted.filter(entry => entry.table === domainEvents && (entry.values as { eventName: string }).eventName === "commission.automatic.skipped");
 const commissionInserts = (inserted: Array<{ table: unknown }>) => inserted.filter(entry => entry.table === salesCommissions);
 
 describe("comissão automática exige venda validada (baixa manual)", () => {
@@ -85,15 +86,25 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     const { inserted, caller } = scenario("active", validated, zeroRatePolicy);
     await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).resolves.toEqual({ success: true, alreadyPaid: false, commissionBlocked: false });
     expect(commissionInserts(inserted)).toHaveLength(0);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: 91, idempotencyKey: "commission-skipped:91:zero_rate", payload: { contractId: 61, installmentId: 91, resortId: 2, reason: "zero_rate", roles: ["liner", "closer"], source: "manual" } }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(71, "installment", 91, "commission_skipped", expect.stringContaining("0%"), { idempotencyKey: "commission-skipped:91:zero_rate" });
+    // Issue #38 (2): o registro nasce DENTRO da transação da baixa (tx.insert), não depois do commit.
+    expect(skippedEvents(inserted)).toHaveLength(1);
+    expect(skippedEvents(inserted)[0].values).toMatchObject({ aggregateType: "installment", aggregateId: "91", idempotencyKey: "commission-skipped:91:zero_rate", actorUserId: 71 });
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
+    expect(inserted.some(entry => entry.table === auditLogs && (entry.values as { action: string }).action === "commission_skipped")).toBe(true);
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
   });
 
+  it("issue #38 (2): falha ao gravar o skip derruba a baixa inteira (nada de auditoria/evento pós-commit)", async () => {
+    const { caller } = scenario("active", validated, zeroRatePolicy, true);
+    await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).rejects.toThrow("falha ao gravar o skip");
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+  });
+
   it("o salto é registrado uma única vez por baixa", async () => {
-    const { caller } = scenario("active", validated, zeroRatePolicy);
+    const { inserted, caller } = scenario("active", validated, zeroRatePolicy);
     await caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
-    expect(dbMocks.recordDomainEvent.mock.calls.filter(([event]) => event.eventName === "commission.automatic.skipped")).toHaveLength(1);
+    expect(skippedEvents(inserted)).toHaveLength(1);
   });
 
   it("com taxa > 0 em algum papel ou com portão fechado não há evento de salto", async () => {

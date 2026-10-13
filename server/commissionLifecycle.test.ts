@@ -7,3 +7,25 @@ describe("commission lifecycle", () => {
   it("fecha crédito no mês seguinte e aplica dias 7 e 25", () => { const dates = commissionDates("credit", new Date("2026-08-13T12:00:00Z")); expect(dates.closingAt.toISOString()).toContain("2026-09-30"); expect(dates.cancellationDeadlineAt.toISOString()).toContain("2026-10-07"); expect(dates.expectedPaymentAt.toISOString()).toContain("2026-10-25"); });
   it("prioriza pagamento, bloqueia cancelamento na janela e consolida borderô", () => { const dates = commissionDates("pix", new Date("2026-08-13T12:00:00Z")); const cancelled = commissionStatus({ compensatedAt: new Date("2026-08-13T12:00:00Z"), receivedAt: null, cancelledAt: new Date("2026-09-05T12:00:00Z"), ...dates, now: new Date("2026-09-06T12:00:00Z") }); const paid = commissionStatus({ compensatedAt: new Date("2026-08-13T12:00:00Z"), receivedAt: new Date("2026-09-25T12:00:00Z"), cancelledAt: null, ...dates, now: new Date("2026-09-25T12:00:00Z") }); expect(cancelled).toBe("cancelled"); expect(paid).toBe("paid"); expect(borderoSummary([{ amount: 100, status: cancelled, expectedPaymentAt: dates.expectedPaymentAt }, { amount: 50, status: paid, expectedPaymentAt: dates.expectedPaymentAt }])).toMatchObject({ expected: 150, cancelled: 100, paid: 50, installments: 2 }); });
 });
+
+describe("issue #38 (1): proração com teto", () => {
+  it("parcelas além da entrada não liberam mais que o total devido (cenário do red team)", () => {
+    const total = totalCommission(9_000, "closer", 0.03); // base 9000, closer 3% = 270
+    const entry = releasedCommission(1_000, 1_000, total, 0);
+    expect(entry).toBe(270);
+    expect(releasedCommission(4_500, 1_000, total, entry)).toBe(0);
+    expect(releasedCommission(4_500, 1_000, total, entry + 0)).toBe(0);
+  });
+  it("entrada parcelada libera proporcionalmente e a soma nunca passa do total", () => {
+    const total = 1_000;
+    const a = releasedCommission(2_000, 8_000, total, 0);
+    const b = releasedCommission(6_000, 8_000, total, a);
+    const c = releasedCommission(5_000, 8_000, total, a + b);
+    expect([a, b]).toEqual([250, 750]);
+    expect(c).toBe(0);
+    expect(a + b + c).toBeLessThanOrEqual(total);
+  });
+  it("sem acumulado informado mantém o comportamento antigo", () => {
+    expect(releasedCommission(2_000, 8_000, 1_000)).toBe(250);
+  });
+});

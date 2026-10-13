@@ -8,7 +8,13 @@ const endOfMonth = (date: Date) => new Date(Date.UTC(date.getUTCFullYear(), date
 const nextMonthDay = (date: Date, day: number) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, day));
 
 export function totalCommission(baseAmount: number, _role: CommissionRole, rate: number) { return baseAmount > 0 && Number.isFinite(rate) && rate >= 0 ? money(baseAmount * rate) : 0; }
-export function releasedCommission(installmentAmount: number, entryTotal: number, commissionTotal: number) { return installmentAmount > 0 && entryTotal > 0 ? money(commissionTotal * installmentAmount / entryTotal) : 0; }
+// Issue #38 (1): a proporção da entrada nunca pode liberar mais que o total devido. `alreadyReleased` é o acumulado já lançado
+// (não cancelado) para o mesmo papel no contrato; parcelas além da entrada só recebem o que ainda faltar (normalmente 0).
+export function releasedCommission(installmentAmount: number, entryTotal: number, commissionTotal: number, alreadyReleased = 0) {
+  if (!(installmentAmount > 0 && entryTotal > 0)) return 0;
+  const remaining = Math.max(0, money(commissionTotal - (Number.isFinite(alreadyReleased) && alreadyReleased > 0 ? alreadyReleased : 0)));
+  return Math.min(money(commissionTotal * installmentAmount / entryTotal), remaining);
+}
 export function commissionDates(method: PaymentMethod, compensatedAt: Date, policy?: { cancellationDeadlineDay?: number; expectedPaymentDay?: number }) { const closing = endOfMonth(method === "credit" ? new Date(Date.UTC(compensatedAt.getUTCFullYear(), compensatedAt.getUTCMonth() + 1, 1)) : compensatedAt); const cancellationDay = policy?.cancellationDeadlineDay && policy.cancellationDeadlineDay >= 1 && policy.cancellationDeadlineDay <= 28 ? policy.cancellationDeadlineDay : 7; const paymentDay = policy?.expectedPaymentDay && policy.expectedPaymentDay >= 1 && policy.expectedPaymentDay <= 28 ? policy.expectedPaymentDay : 25; return { closingAt: closing, cancellationDeadlineAt: nextMonthDay(closing, cancellationDay), expectedPaymentAt: nextMonthDay(closing, paymentDay) }; }
 export function commissionStatus(input: { compensatedAt: Date | null; receivedAt: Date | null; cancelledAt: Date | null; closingAt: Date; cancellationDeadlineAt: Date; expectedPaymentAt: Date; now: Date }) : CommissionStatus {
   if (input.receivedAt) return "paid"; if (!input.compensatedAt) return "awaiting_customer_payment"; if (input.cancelledAt && input.cancelledAt <= input.cancellationDeadlineAt) return "cancelled"; if (input.now <= input.closingAt) return "closing"; if (input.now <= input.cancellationDeadlineAt) return "cancellation_window"; if (input.now > input.expectedPaymentAt) return "overdue"; return "payable";

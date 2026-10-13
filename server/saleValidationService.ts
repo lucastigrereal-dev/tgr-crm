@@ -2,7 +2,7 @@
 // confirmado. Tudo que muda estado grava, na MESMA transação: fato (sale_validations), trilha append-only
 // (sale_validation_events), audit_logs e domain_events. Rejeições também deixam trilha (validation_rejected).
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { auditLogs, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
 import { canTransitionContractStatus } from "../shared/contractLifecycle";
 import type { DomainEventName } from "../shared/domainEvents";
@@ -139,7 +139,7 @@ async function loadCommissionContext(tx: Reader, contractId: number) {
 }
 
 /** ADR-010: registro rastreável (auditoria + evento interno) de parcela paga sem lançamento porque todos os papéis estão a 0%. Idempotente por parcela. */
-async function recordZeroRateSkip(tx: Tx, input: { installmentId: number; contractId: number; resortId: number | null; roles: string[]; actorUserId: number | null; source: string }) {
+export async function recordZeroRateSkip(tx: Tx, input: { installmentId: number; contractId: number; resortId: number | null; roles: string[]; actorUserId: number | null; source: string }) {
   const key = `commission-skipped:${input.installmentId}:${COMMISSION_SKIPPED_REASON}`;
   await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: input.installmentId, action: "commission_skipped", summary: COMMISSION_SKIPPED_MESSAGE, idempotencyKey: key });
   await txEvent(tx, { eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: input.installmentId, actorUserId: input.actorUserId, payload: { contractId: input.contractId, installmentId: input.installmentId, resortId: input.resortId, reason: COMMISSION_SKIPPED_REASON, roles: input.roles, source: input.source }, idempotencyKey: key });
@@ -190,6 +190,7 @@ export async function releaseCommissionsForValidatedContract(tx: Tx, input: { co
 }
 
 const SKIPPED_SCAN_LIMIT = 5000;
+const SKIPPED_SCAN_MAX_PAGES = 200;
 
 /**
  * ADR-010: reprocessa parcelas pagas durante a janela de 0% (têm registro `commission.automatic.skipped` e NENHUMA linha
@@ -198,10 +199,21 @@ const SKIPPED_SCAN_LIMIT = 5000;
  * cada lançamento é auditado + `commission.created`; parcela que continua a 0% permanece pendente de reprocesso.
  */
 export async function reprocessSkippedCommissions(db: Db, input: { contractId?: number; resortId?: number; actorUserId: number }) {
-  const events = await db.select({ aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents).where(eq(domainEvents.eventName, "commission.automatic.skipped")).orderBy(desc(domainEvents.id)).limit(SKIPPED_SCAN_LIMIT + 1);
-  const truncated = events.length > SKIPPED_SCAN_LIMIT;
+  // Issue #38 (3): varre TODOS os `skipped` em páginas por cursor de id (antes: só os 5000 mais recentes, perdendo parcelas antigas).
+  // Teto de segurança em páginas; só marca `truncated` se estourar o teto.
+  const events: { aggregateId: string; payload: string | null }[] = [];
+  let cursor: number | null = null; let truncated = false;
+  for (let page = 0; ; page += 1) {
+    if (page >= SKIPPED_SCAN_MAX_PAGES) { truncated = true; break; }
+    const rows: { id: number; aggregateId: string; payload: string | null }[] = await db.select({ id: domainEvents.id, aggregateId: domainEvents.aggregateId, payload: domainEvents.payload }).from(domainEvents)
+      .where(cursor === null ? eq(domainEvents.eventName, "commission.automatic.skipped") : and(eq(domainEvents.eventName, "commission.automatic.skipped"), lt(domainEvents.id, cursor)))
+      .orderBy(desc(domainEvents.id)).limit(SKIPPED_SCAN_LIMIT);
+    events.push(...rows);
+    if (rows.length < SKIPPED_SCAN_LIMIT) break;
+    cursor = rows[rows.length - 1]!.id;
+  }
   const byContract = new Map<number, Set<number>>();
-  for (const event of events.slice(0, SKIPPED_SCAN_LIMIT)) {
+  for (const event of events) {
     let payload: Record<string, unknown> = {};
     try { payload = JSON.parse(event.payload ?? "{}") as Record<string, unknown>; } catch { continue; }
     const contractId = Number(payload.contractId); const installmentId = Number(event.aggregateId);

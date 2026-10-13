@@ -12,7 +12,7 @@ vi.mock("./db", () => dbMocks);
 vi.mock("./paymentGateway", () => paymentMocks);
 vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn(async () => ({})) }));
 
-import { salesCommissions } from "../drizzle/schema";
+import { auditLogs, domainEvents, salesCommissions } from "../drizzle/schema";
 import { processAsaasWebhook } from "./paymentGatewayWebhook";
 
 function query(rows: unknown[]) {
@@ -24,9 +24,9 @@ const policy = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04
 const billingRow = { billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 2, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } };
 
 function run(validation: Array<{ validatedAt: Date | null }>, commissionPolicy = policy) {
-  const inserted: Array<{ table: unknown }> = [];
+  const inserted: Array<{ table: unknown; values?: unknown }> = [];
   const tx = {
-    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { inserted.push({ table }); return Object.assign(Promise.resolve(undefined), { $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, i) => ({ id: 700 + i })) }); }) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { inserted.push({ table, values }); return Object.assign(Promise.resolve(undefined), { onDuplicateKeyUpdate: async () => undefined, $returningId: async () => (Array.isArray(values) ? values : [values]).map((_, i) => ({ id: 700 + i })) }); }) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
     select: vi.fn()
       .mockReturnValueOnce(query([{ id: 61, status: "active" }]))
@@ -75,8 +75,12 @@ describe("webhook Asaas: comissão automática exige venda validada", () => {
     const { inserted, result } = run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }], zeroRatePolicy);
     await expect(result).resolves.toMatchObject({ status: 200, installmentPaid: true });
     expect(inserted.filter(entry => entry.table === salesCommissions)).toHaveLength(0);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped", aggregateId: 91, idempotencyKey: "commission-skipped:91:zero_rate", payload: { contractId: 61, installmentId: 91, resortId: 2, reason: "zero_rate", roles: ["liner", "closer"], source: "asaas" } }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(null, "installment", 91, "commission_skipped", expect.any(String), { idempotencyKey: "commission-skipped:91:zero_rate" });
+    // Issue #38 (2): o registro nasce DENTRO da transação do pagamento (tx.insert), não depois do commit.
+    const skipEvents = inserted.filter(entry => entry.table === domainEvents && (entry.values as { eventName?: string }).eventName === "commission.automatic.skipped");
+    expect(skipEvents).toHaveLength(1);
+    expect(skipEvents[0].values).toMatchObject({ aggregateId: "91", idempotencyKey: "commission-skipped:91:zero_rate", actorUserId: null });
+    expect(JSON.parse((skipEvents[0].values as { payload: string }).payload)).toEqual({ contractId: 61, installmentId: 91, resortId: 2, reason: "zero_rate", roles: ["liner", "closer"], source: "asaas" });
+    expect(inserted.some(entry => entry.table === auditLogs && (entry.values as { action?: string }).action === "commission_skipped")).toBe(true);
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
   });
 
