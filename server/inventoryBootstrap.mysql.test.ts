@@ -53,6 +53,49 @@ describe.skipIf(!integrationUrl)("estoque 60 UHs x 52 cotas em MySQL real", () =
     return Number(row.total);
   }
 
+  // Barreira: uma transação trava as linhas de `lockSql` e só solta quando as duas
+  // chamadas concorrentes estão presas nela. Assim a corrida é forçada em todo run,
+  // em vez de depender de qual promessa o MySQL atende primeiro.
+  async function raceBehindBarrier<T>(lockSql: string, params: unknown[], calls: Array<() => Promise<T>>) {
+    const barrier = await pool.getConnection();
+    try {
+      await barrier.beginTransaction();
+      await barrier.query(lockSql, params);
+      const [[{ barrierThread }]] = await barrier.query<mysql.RowDataPacket[]>(
+        "SELECT THREAD_ID AS barrierThread FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID()",
+      );
+      const running = Promise.allSettled(calls.map(call => call()));
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        // Conta só quem espera, direta ou indiretamente, pela barreira (a fila do InnoDB pode
+        // registrar o segundo como preso no primeiro; outras suítes podem rodar no mesmo servidor).
+        // Compara por thread (estável); o id de transação do InnoDB pode mudar no meio do caminho.
+        const [rows] = await pool.query<mysql.RowDataPacket[]>(
+          "SELECT REQUESTING_THREAD_ID AS waiter, BLOCKING_THREAD_ID AS blocker FROM performance_schema.data_lock_waits",
+        );
+        const waiting = new Set<string>();
+        for (let grew = true; grew;) {
+          grew = false;
+          for (const { waiter, blocker } of rows) {
+            const key = String(waiter);
+            if (!waiting.has(key) && (String(blocker) === String(barrierThread) || waiting.has(String(blocker)))) {
+              waiting.add(key);
+              grew = true;
+            }
+          }
+        }
+        if (waiting.size >= calls.length) break;
+        if (Date.now() > deadline) throw new Error("as chamadas concorrentes não chegaram juntas à barreira");
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      await barrier.rollback();
+      return await running;
+    } finally {
+      await barrier.rollback().catch(() => undefined);
+      barrier.release();
+    }
+  }
+
   it("bootstrap gera exatamente 3.120 cotas, 52 por UH, sem código repetido", async () => {
     const result = await asUser(adminId, "admin").bootstrap({ resortId, fractionsPerUnit: FRACTIONS_PER_UNIT });
 
@@ -81,9 +124,10 @@ describe.skipIf(!integrationUrl)("estoque 60 UHs x 52 cotas em MySQL real", () =
   it("dois vendedores reservando a mesma cota ao mesmo tempo: só um ganha, sem venda dupla", async () => {
     const [fraction] = await db.select().from(commercialFractions).where(eq(commercialFractions.resortId, resortId)).limit(1);
 
-    const outcomes = await Promise.allSettled([
-      asUser(sellerA, "seller").createHold({ fractionId: fraction.id, ttlMinutes: 30 }),
-      asUser(sellerB, "seller").createHold({ fractionId: fraction.id, ttlMinutes: 30 }),
+    // Os dois vendedores chegam juntos ao lock da cota; o perdedor precisa ver a reserva do vencedor.
+    const outcomes = await raceBehindBarrier("SELECT id FROM commercial_fractions WHERE id = ? FOR UPDATE", [fraction.id], [
+      () => asUser(sellerA, "seller").createHold({ fractionId: fraction.id, ttlMinutes: 30 }),
+      () => asUser(sellerB, "seller").createHold({ fractionId: fraction.id, ttlMinutes: 30 }),
     ]);
 
     expect(outcomes.filter(outcome => outcome.status === "fulfilled")).toHaveLength(1);
@@ -113,37 +157,12 @@ describe.skipIf(!integrationUrl)("estoque 60 UHs x 52 cotas em MySQL real", () =
     const [{ id: otherResort }] = await db.insert(resorts).values({ name: `Resort Concorrente ${runId}`, status: "active" }).$returningId();
     await db.insert(units).values(Array.from({ length: 5 }, (_, index) => ({ resortId: otherResort, code: `CU${index + 1}` })));
 
-    // Barreira: uma transação segura o intervalo vazio do resort (gap lock). As leituras
-    // dos dois bootstraps passam (leitura não bloqueia) e ambos veem estoque vazio; os
-    // INSERTs ficam presos até a barreira cair. Assim o caminho do índice único é exercido.
-    const barrier = await pool.getConnection();
-    let outcomes: PromiseSettledResult<unknown>[];
-    try {
-      await barrier.beginTransaction();
-      await barrier.query("SELECT id FROM commercial_fractions WHERE resortId = ? FOR UPDATE", [otherResort]);
-      const [[{ trxId }]] = await barrier.query<mysql.RowDataPacket[]>(
-        "SELECT trx_id AS trxId FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = CONNECTION_ID()",
-      );
-      const running = Promise.allSettled([
-        asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
-        asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
-      ]);
-      const deadline = Date.now() + 20_000;
-      for (;;) {
-        const [rows] = await pool.query<mysql.RowDataPacket[]>(
-          // Conta só quem está preso na barreira (outras suítes podem rodar em paralelo no mesmo servidor).
-          "SELECT COUNT(DISTINCT REQUESTING_ENGINE_TRANSACTION_ID) AS waiting FROM performance_schema.data_lock_waits WHERE BLOCKING_ENGINE_TRANSACTION_ID = ?",
-          [trxId],
-        );
-        if (Number(rows[0].waiting) >= 2) break;
-        if (Date.now() > deadline) throw new Error("os dois bootstraps não chegaram juntos ao INSERT");
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      await barrier.rollback();
-      outcomes = await running;
-    } finally {
-      barrier.release();
-    }
+    // Gap lock no intervalo vazio do resort: as leituras dos dois bootstraps passam (leitura
+    // não bloqueia) e ambos veem estoque vazio; os INSERTs ficam presos até a barreira cair.
+    const outcomes = await raceBehindBarrier("SELECT id FROM commercial_fractions WHERE resortId = ? FOR UPDATE", [otherResort], [
+      () => asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
+      () => asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
+    ]);
 
     // Os dois leram estoque vazio, então só um pode gravar; o outro esbarra no índice único.
     expect(outcomes.filter(outcome => outcome.status === "fulfilled")).toHaveLength(1);
