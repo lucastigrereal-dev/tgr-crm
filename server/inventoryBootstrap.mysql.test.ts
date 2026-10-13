@@ -113,13 +113,41 @@ describe.skipIf(!integrationUrl)("estoque 60 UHs x 52 cotas em MySQL real", () =
     const [{ id: otherResort }] = await db.insert(resorts).values({ name: `Resort Concorrente ${runId}`, status: "active" }).$returningId();
     await db.insert(units).values(Array.from({ length: 5 }, (_, index) => ({ resortId: otherResort, code: `CU${index + 1}` })));
 
-    const outcomes = await Promise.allSettled([
-      asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
-      asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
-    ]);
+    // Barreira: uma transação segura o intervalo vazio do resort (gap lock). As leituras
+    // dos dois bootstraps passam (leitura não bloqueia) e ambos veem estoque vazio; os
+    // INSERTs ficam presos até a barreira cair. Assim o caminho do índice único é exercido.
+    const barrier = await pool.getConnection();
+    let outcomes: PromiseSettledResult<unknown>[];
+    try {
+      await barrier.beginTransaction();
+      await barrier.query("SELECT id FROM commercial_fractions WHERE resortId = ? FOR UPDATE", [otherResort]);
+      const [[{ trxId }]] = await barrier.query<mysql.RowDataPacket[]>(
+        "SELECT trx_id AS trxId FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = CONNECTION_ID()",
+      );
+      const running = Promise.allSettled([
+        asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
+        asUser(adminId, "admin").bootstrap({ resortId: otherResort, fractionsPerUnit: 10 }),
+      ]);
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const [rows] = await pool.query<mysql.RowDataPacket[]>(
+          // Conta só quem está preso na barreira (outras suítes podem rodar em paralelo no mesmo servidor).
+          "SELECT COUNT(DISTINCT REQUESTING_ENGINE_TRANSACTION_ID) AS waiting FROM performance_schema.data_lock_waits WHERE BLOCKING_ENGINE_TRANSACTION_ID = ?",
+          [trxId],
+        );
+        if (Number(rows[0].waiting) >= 2) break;
+        if (Date.now() > deadline) throw new Error("os dois bootstraps não chegaram juntos ao INSERT");
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      await barrier.rollback();
+      outcomes = await running;
+    } finally {
+      barrier.release();
+    }
 
-    // Pelo menos um precisa vencer; senão o teste passaria com estoque vazio.
-    expect(outcomes.some(outcome => outcome.status === "fulfilled")).toBe(true);
+    // Os dois leram estoque vazio, então só um pode gravar; o outro esbarra no índice único.
+    expect(outcomes.filter(outcome => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter(outcome => outcome.status === "rejected")).toHaveLength(1);
     const [{ total }] = await db.select({ total: count() }).from(commercialFractions).where(eq(commercialFractions.resortId, otherResort));
     expect(Number(total)).toBe(50);
     const [{ uniq }] = await pool.query<mysql.RowDataPacket[]>(
