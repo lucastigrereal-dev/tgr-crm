@@ -18,6 +18,9 @@ O script cria segredos locais, constrói a imagem, sobe MySQL, aplica migrations
 Credencial inicial: `infra/pilot/.pilot-credentials.local.txt`.
 URL atual: `infra/pilot/.pilot-url.local.txt`.
 
+### Ponte do Financial (opcional)
+Fica desligada enquanto `FINANCIAL_ENDPOINT` e `FINANCIAL_CRM_INTEGRATION_KEY` estiverem vazios. Para ligar, preencha também `FINANCIAL_PROJECT_EXTERNAL_KEY` e `FINANCIAL_PROJECT_NAME` (o fuso padrão é `America/Recife`): com só endpoint e chave, o app recusa subir ("Financial project identity incomplete").
+
 ## Status
 `pwsh ./infra/pilot/status-pilot.ps1`
 
