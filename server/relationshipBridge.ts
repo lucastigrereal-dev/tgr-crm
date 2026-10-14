@@ -99,7 +99,7 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
 const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
 /** Teto dos ids em retry excluídos da releitura: só os mais novos (são eles que ocupam o lote, que vem do mais novo para o mais velho).
- * Sem teto, uma queda longa do consumidor punha milhares de placeholders no SELECT e batia no limite de 65.535 do MySQL (Codex P2). */
+ * Sem teto, uma queda longa do consumidor punha dezenas de milhares de ids no SELECT de cada tick (Codex P2). */
 export const RETRY_EXCLUSION_CAP = 1000;
 export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL, inRetry: readonly number[] = []): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);

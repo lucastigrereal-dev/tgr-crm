@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, commercialFractionHistory, commercialFractions, contractCancellationRequests, contracts, customers, domainEvents, financialTransactions, installments, resorts, salesCommissions, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { runTriggerDdl } from "./mysqlTestDdl";
 
 // Seção 9 (INT-04/INT-07) em MySQL REAL: o distrato preserva a venda e o histórico, e os eventos que o Financial e o Sales
 // leem (`contract.status.updated`, `contract.cancellation.executed`, `commission.status.updated`, `financial.entry.created`)
@@ -29,9 +30,9 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real: preserva histórico e 
     db = drizzle({ client: pool });
     [{ id: adminId }] = await db.insert(users).values({ openId: `dist-admin-${runId}`, name: "Gerente distrato", role: "admin" }).$returningId();
   });
-  afterEach(async () => { for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); });
+  afterEach(async () => { for (const name of triggers.splice(0)) await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); });
   afterAll(async () => {
-    for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``);
+    for (const name of triggers.splice(0)) await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``);
     process.env = previousEnv;
     await pool?.end();
   });
@@ -57,11 +58,11 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real: preserva histórico e 
   /** Recusa no banco o INSERT em domain_events que casar com `condition` (SQL sobre NEW). */
   async function failEventInsert(label: string, condition: string) {
     const name = `dist_${label}_${runId}`;
-    await pool.query(`CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF ${condition} THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'distrato: falha injetada'; END IF; END`);
+    await runTriggerDdl(pool, `CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF ${condition} THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'distrato: falha injetada'; END IF; END`);
     triggers.push(name);
     return name;
   }
-  const dropTrigger = async (name: string) => { await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
+  const dropTrigger = async (name: string) => { await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
   const admin = () => contractsRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
   /** A recusa tem de ser a falha injetada pelo trigger (na mensagem ou na cadeia de causas), não qualquer erro do seed. */
   async function expectInjectedFailure(promise: Promise<unknown>) {

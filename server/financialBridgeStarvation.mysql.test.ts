@@ -122,7 +122,8 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
         `SELECT COUNT(*) AS pending FROM domain_events d LEFT JOIN audit_logs a ON a.idempotencyKey = CONCAT('financial-event:', d.id) WHERE a.id IS NULL AND d.eventName IN (${placeholders})`,
         [...FINANCIAL_EVENT_NAMES],
       );
-      const maxTicks = Math.ceil((Number(backlogRows[0]?.pending ?? 0) + 50) / 2) + 20;
+      // Folga para os ~500 eventos que contractBridgeCursor grava em paralelo (também sem recibo do Financial); tick vazio é barato.
+      const maxTicks = Math.ceil((Number(backlogRows[0]?.pending ?? 0) + 2000) / 2) + 20;
       // Drena o backlog ANTES de abrir a transação: segurar o INSERT aberto por muitos ticks enfileira o DDL de trigger de outro
       // arquivo (metadata lock) e trava a suíte inteira.
       const [marker] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate + 9), actorUserId: null, payload: JSON.stringify({ status: "active" }) }).$returningId();
