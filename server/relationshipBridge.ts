@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
@@ -86,8 +86,7 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * Outbox na transação (issue #43, distrato): o id do evento nasce no INSERT, mas a linha só fica visível no COMMIT. Um evento
  * de id MENOR pode aparecer depois que o cursor em memória já passou por ids maiores de outra transação. Por isso a leitura
  * de cada tick inclui também os eventos recentes (janela folgada, no relógio do banco) abaixo do cursor, ainda não tratados.
- * Os novos (acima do cursor) vêm primeiro no lote, então os relidos nunca escondem evento novo (sem inanição); o lote volta
- * a ser drenado em ordem de id. A releitura só traz o que AINDA NÃO foi tratado (`unhandled`, filtro de recibo no SQL), então
+ * O lote é escolhido e drenado em ordem global de id; a releitura é paginada, então os relidos não escondem os novos. A releitura só traz o que AINDA NÃO foi tratado (`unhandled`, filtro de recibo no SQL), então
  * os recentes já entregues não ocupam o lote. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
  * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez):
  * - transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes);
@@ -119,8 +118,10 @@ export function cursorRange(cursor: number, eventNames: readonly string[], unhan
       // uma faixa da chave primária do tamanho da janela, nunca a tabela inteira.
       sql`${domainEvents.id} > LEAST(${cursor}, COALESCE((SELECT MIN(recent_events.id) - 1 FROM ${domainEvents} AS recent_events WHERE recent_events.eventName IN (${names}) AND recent_events.occurredAt >= ${recent}), ${cursor}))`,
     )!,
-    // Novos primeiro (o cursor anda sem pular e os relidos nunca escondem evento novo); cada grupo em ordem crescente de id.
-    order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(domainEvents.id)],
+    // Ordem global por id, sem reservar lugar para os novos antes do LIMIT: tudo que fica fora do lote tem id maior que tudo que
+    // entrou, então nenhum evento de um contrato passa na frente de um mais velho do mesmo contrato (Codex P2). Os relidos não
+    // escondem os novos para sempre: a releitura pagina (`createRereadPager`) e os em retry ficam fora dela.
+    order: [asc(domainEvents.id)],
   };
 }
 

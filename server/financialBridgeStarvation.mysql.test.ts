@@ -155,7 +155,7 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
     }
   });
   // Codex P2: uma transação tardia com mais eventos que o lote (distrato com muitas comissões) sai em ordem de id, do mais velho.
-  it("commit tardio com mais eventos que o lote, mesmo contrato: entregues em ordem de id", async () => {
+  it("commit tardio com mais eventos que o lote e um evento novo do mesmo contrato: entregues em ordem de id", async () => {
     const { startFinancialBridgePump, FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
     const aggregate = 970_000_000 + Math.floor(Math.random() * 1_000_000);
     const conn = await pool.getConnection();
@@ -184,9 +184,12 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       expect(hits.get(early.id)).toBe(1); // cursor passou dos ids da transação aberta
 
       await conn.commit();
-      for (let i = 0; i < maxTicks && !lateIds.every(id => hits.get(id)); i += 1) await pump.tick();
-      for (const id of lateIds) expect(hits.get(id)).toBe(1);
-      expect(seen.filter(id => lateIds.includes(id))).toEqual(lateIds); // do mais velho para o mais novo
+      // Evento NOVO do mesmo contrato, acima do cursor, visível junto com os tardios: não pode passar na frente deles (Codex P2).
+      const [newer] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
+      const all = [...lateIds, newer.id];
+      for (let i = 0; i < maxTicks && !all.every(id => hits.get(id)); i += 1) await pump.tick();
+      for (const id of all) expect(hits.get(id)).toBe(1);
+      expect(seen.filter(id => all.includes(id))).toEqual(all); // do mais velho para o mais novo, o novo por último
     } finally {
       pump.stop();
       await conn.rollback().catch(() => undefined);
