@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
@@ -10,7 +11,19 @@ import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
 
-const inputSchema = z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000), mapping: z.record(z.string(), z.string()).optional() });
+// Origem do lote (Gate 2 da migração): sistema de origem (ex.: "tse", "planilha_comercial") e nome do arquivo, ambos opcionais.
+const inputSchema = z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000), mapping: z.record(z.string(), z.string()).optional(), sourceSystem: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,60}$/, "Sistema de origem: só letras, números, ponto, hífen e sublinhado (até 60).").optional(), sourceFileName: z.string().trim().min(1).max(255).optional() });
+const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
+/** Impressão digital da linha normalizada (registro já interpretado): a mesma linha gera o mesmo hash em qualquer lote. */
+const rowHash = (row: unknown) => sha256(JSON.stringify(row));
+const provenance = (index: number, sourceRecordId: string, row: unknown) => ({ sourceLine: index + 2, sourceRecordId: sourceRecordId.slice(0, 160), rowHash: rowHash(row) });
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+/** Lote concluído (não revertido) com o mesmo conteúdo: só avisa, não bloqueia (reimportar o mesmo arquivo atualiza os mesmos registros). */
+async function duplicateOfBatch(db: Db | null | undefined, kind: ImportKind, contentHash: string) {
+  if (!db) return null;
+  const rows = await db.select({ id: csvImportBatches.id }).from(csvImportBatches).where(and(eq(csvImportBatches.kind, kind), eq(csvImportBatches.contentHash, contentHash), eq(csvImportBatches.status, "completed"))).orderBy(desc(csvImportBatches.id)).limit(1);
+  return rows[0]?.id ?? null;
+}
 const parse = (kind: ImportKind, csv: string) => kind === "customers" ? parseCustomersCsv(csv) : kind === "contracts" ? parseContractsCsv(csv) : parseUnitsCsv(csv);
 const canonicalCsv = (input: { csv: string; mapping?: CsvColumnMapping }) => applyCsvMapping(input.csv, input.mapping);
 const importSummary = (totalRows: number, created: number, updated: number, issues: ImportIssue[]) => ({ processed: totalRows, created, updated, rejected: new Set(issues.map(issue => issue.line)).size, successful: created + updated, issuesByField: Object.entries(issues.reduce<Record<string, number>>((acc, issue) => ({ ...acc, [issue.field]: (acc[issue.field] ?? 0) + 1 }), {})).map(([field, count]) => ({ field, count })) });
@@ -23,7 +36,7 @@ const restoreUnitValues = (snapshot: Record<string, unknown>) => ({ code: String
 
 export const importsRouter = router({
   suggestMapping: adminProcedure.input(z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000) })).mutation(({ input }) => { assertCsvImportRowBudget(input.csv); return suggestCsvMapping(input.csv, input.kind); }),
-  preview: adminProcedure.input(inputSchema).mutation(({ input }) => { assertCsvImportRowBudget(input.csv); const parsed = parse(input.kind, canonicalCsv(input)); return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues) }; }),
+  preview: adminProcedure.input(inputSchema).mutation(async ({ input }) => { assertCsvImportRowBudget(input.csv); const csv = canonicalCsv(input); const parsed = parse(input.kind, csv); const contentHash = sha256(csv); return { valid: parsed.issues.length === 0, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: parsed.issues.slice(0, 100), sample: parsed.records.slice(0, 5), summary: importSummary(parsed.records.length, 0, 0, parsed.issues), contentHash, duplicateOfBatchId: await duplicateOfBatch(await getDb(), input.kind, contentHash) }; }),
   errorReport: adminProcedure.input(inputSchema).mutation(({ input }) => { assertCsvImportRowBudget(input.csv); const parsed = parse(input.kind, canonicalCsv(input)); return { filename: `erros-importacao-${input.kind}.csv`, content: buildImportErrorReport(parsed.issues), totalIssues: parsed.issues.length }; }),
   latestBatch: adminProcedure.query(async () => { const db = await getDb(); if (!db) return null; const batch = await db.select().from(csvImportBatches).orderBy(desc(csvImportBatches.createdAt)).limit(1); if (!batch[0]) return null; const itemCount = await db.select({ total: count() }).from(csvImportItems).where(eq(csvImportItems.batchId, batch[0].id)); return { ...batch[0], itemCount: Number(itemCount[0]?.total ?? 0), canUndo: batch[0].status === "completed" }; }),
   commit: adminProcedure.input(inputSchema).mutation(async ({ ctx, input }) => {
@@ -31,18 +44,25 @@ export const importsRouter = router({
     const csv = canonicalCsv(input); const parsed = parse(input.kind, csv); const issues: ImportIssue[] = [...parsed.issues];
     if (issues.length) return { valid: false, committed: false, totalRows: parsed.records.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(parsed.records.length, 0, 0, issues) };
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const contentHash = sha256(csv);
+    const origin = { sourceSystem: input.sourceSystem ?? "csv_manual", sourceFileName: input.sourceFileName ?? null, contentHash };
+    // Consultado só quando o arquivo passou na validação, logo antes de abrir o lote.
+    let duplicateOfBatchId: number | null = null;
+    const checkDuplicate = async () => { duplicateOfBatchId = await duplicateOfBatch(db, input.kind, contentHash); };
+    const originNote = () => ` Origem ${origin.sourceSystem}${origin.sourceFileName ? ` (${origin.sourceFileName})` : ""}, hash ${contentHash.slice(0, 12)}${duplicateOfBatchId ? `, mesmo conteúdo do lote ${duplicateOfBatchId}` : ""}.`;
     if (input.kind === "customers") {
       const rows = parseCustomersCsv(csv).records; const documents = rows.map(row => row.documentNumber).filter(Boolean); const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : []; const existingByDocument = new Map(existing.map(item => [item.documentNumber, item])); const duplicateCustomerRows = new Set(duplicateValueIndexes(rows.map(row => row.documentNumber)));
       rows.forEach((row, index) => { if (duplicateCustomerRows.has(index)) issues.push({ line: index + 2, field: "documentNumber", message: "Documento repetido dentro do próprio arquivo." }); });
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [], summary: importSummary(rows.length, 0, 0, issues) };
       let created = 0; let updated = 0; let batchId = 0;
+      await checkDuplicate();
       await db.transaction(async tx => {
-        const createdBatch = await tx.insert(csvImportBatches).values({ kind: "customers", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." });
-        for (const row of rows) { const values = customerValues(row); const before = existingByDocument.get(row.documentNumber); if (before) { await tx.update(customers).set(values).where(eq(customers.id, before.id)); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before) }); updated += 1; } else { const inserted = await tx.insert(customers).values(values).$returningId(); const entityId = inserted[0]?.id; if (!entityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o associado importado." }); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId, action: "created" }); created += 1; } }
+        const createdBatch = await tx.insert(csvImportBatches).values({ kind: "customers", actorUserId: ctx.user.id, totalRows: rows.length, ...origin }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." });
+        for (let index = 0; index < rows.length; index += 1) { const row = rows[index]!; const values = customerValues(row); const before = existingByDocument.get(row.documentNumber); const source = provenance(index, row.documentNumber, row); if (before) { await tx.update(customers).set(values).where(eq(customers.id, before.id)); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before), ...source }); updated += 1; } else { const inserted = await tx.insert(customers).values(values).$returningId(); const entityId = inserted[0]?.id; if (!entityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o associado importado." }); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId, action: "created", ...source }); created += 1; } }
         await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: updated, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId));
       });
-      await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: associados — ${created} criados e ${updated} atualizados.`);
-      return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
+      await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: associados — ${created} criados e ${updated} atualizados.${originNote()}`);
+      return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []), contentHash, duplicateOfBatchId };
     }
     if (input.kind === "units") {
       const rows = parseUnitsCsv(csv).records;
@@ -56,11 +76,12 @@ export const importsRouter = router({
       let created = 0; let updated = 0; let batchId = 0;
       rows.forEach((row, index) => { if (duplicateUnitRows.has(index)) issues.push({ line: index + 2, field: "codigo_unidade", message: "Código de unidade repetido no mesmo empreendimento dentro do arquivo." }); });
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
+      await checkDuplicate();
       await db.transaction(async tx => {
-        const createdBatch = await tx.insert(csvImportBatches).values({ kind: "units", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0;
+        const createdBatch = await tx.insert(csvImportBatches).values({ kind: "units", actorUserId: ctx.user.id, totalRows: rows.length, ...origin }).$returningId(); batchId = createdBatch[0]?.id ?? 0;
         if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de inventário." });
         const touchedResorts = new Set<number>();
-        for (const row of rows) {
+        for (let index = 0; index < rows.length; index += 1) { const row = rows[index]!;
           const resortKey = normalizedKey(row.resortName);
           let resort = resortsByName.get(resortKey);
           const resortValues = { name: row.resortName, city: row.resortCity, state: row.resortState, status: row.resortStatus };
@@ -70,10 +91,10 @@ export const importsRouter = router({
             if (!resortId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o empreendimento importado." });
             resort = { id: resortId, externalKey: null, ...resortValues, createdAt: new Date() };
             resortsByName.set(resortKey, resort);
-            await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resortId, action: "created" });
+            await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resortId, action: "created", ...provenance(index, row.resortName, row) });
           } else if (!touchedResorts.has(resort.id)) {
             await tx.update(resorts).set(resortValues).where(eq(resorts.id, resort.id));
-            await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resort.id, action: "updated", beforeSnapshot: JSON.stringify(resort) });
+            await tx.insert(csvImportItems).values({ batchId, entityType: "resort", entityId: resort.id, action: "updated", beforeSnapshot: JSON.stringify(resort), ...provenance(index, row.resortName, row) });
             touchedResorts.add(resort.id);
           }
           if (!resort) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Empreendimento importado indisponível." });
@@ -82,21 +103,21 @@ export const importsRouter = router({
           const values = unitValues(row);
           if (before) {
             await tx.update(units).set(values).where(eq(units.id, before.id));
-            await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before) });
+            await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before), ...provenance(index, `${row.resortName}/${row.code}`, row) });
             updated += 1;
           } else {
             const inserted = await tx.insert(units).values({ resortId: resort.id, ...values }).$returningId();
             const unitId = inserted[0]?.id;
             if (!unitId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a unidade importada." });
             unitsByKey.set(key, { id: unitId, resortId: resort.id, ...values, createdAt: new Date() });
-            await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: unitId, action: "created" });
+            await tx.insert(csvImportItems).values({ batchId, entityType: "unit", entityId: unitId, action: "created", ...provenance(index, `${row.resortName}/${row.code}`, row) });
             created += 1;
           }
         }
         await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: updated, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId));
       });
-      await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: inventário — ${created} unidades criadas e ${updated} atualizadas.`);
-      return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []) };
+      await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: inventário — ${created} unidades criadas e ${updated} atualizadas.${originNote()}`);
+      return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, updated, []), contentHash, duplicateOfBatchId };
     }
     const rows = parseContractsCsv(csv).records;
     const customerDocuments = Array.from(new Set(rows.map(row => row.customerDocument).filter(Boolean)));
@@ -114,9 +135,10 @@ export const importsRouter = router({
     rows.forEach((row, index) => { const line = index + 2; if (duplicateContractRows.has(index)) issues.push({ line, field: "numero_contrato", message: "Número de contrato repetido dentro do próprio arquivo." }); if (!customerByDocument.has(row.customerDocument)) issues.push({ line, field: "documento_associado", message: "Associado não encontrado; importe os associados antes dos contratos." }); if (existingNumbers.has(row.number)) issues.push({ line, field: "numero_contrato", message: "Este contrato já existe no sistema." }); if (row.sellerEmail && (!userByEmail.has(row.sellerEmail) || !["admin", "seller"].includes(userByEmail.get(row.sellerEmail)?.role ?? ""))) issues.push({ line, field: "email_vendedor", message: "Vendedor interno não encontrado por e-mail ou possui papel incompatível." }); });
     if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues: issues.slice(0, 100), sample: [], summary: importSummary(rows.length, 0, 0, issues) };
     let created = 0; let batchId = 0;
-    await db.transaction(async tx => { const createdBatch = await tx.insert(csvImportBatches).values({ kind: "contracts", actorUserId: ctx.user.id, totalRows: rows.length }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." }); for (const row of rows) { const customer = customerByDocument.get(row.customerDocument)!; const seller = row.sellerEmail ? userByEmail.get(row.sellerEmail) : undefined; const createdContract = await tx.insert(contracts).values({ number: row.number, customerId: customer.id, sellerId: seller?.id ?? ctx.user.id, usageModel: row.usageModel, status: row.status, totalAmount: row.totalAmount.toFixed(2), activatedAt: row.status === "active" ? new Date() : null, notes: row.notes }).$returningId(); const contractId = createdContract[0]?.id; if (!contractId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o contrato importado." }); const schedule = buildInstallmentSchedule(row.totalAmount, row.installmentCount, row.firstDueDate); await tx.insert(installments).values(schedule.map(item => ({ contractId, sequence: item.sequence, dueDate: item.dueDate, amount: item.amount, status: "open" as const }))); await tx.insert(csvImportItems).values({ batchId, entityType: "contract", entityId: contractId, action: "created" }); created += 1; } await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: 0, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId)); });
-    await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: ${created} contratos criados.`);
-    return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, 0, []) };
+    await checkDuplicate();
+    await db.transaction(async tx => { const createdBatch = await tx.insert(csvImportBatches).values({ kind: "contracts", actorUserId: ctx.user.id, totalRows: rows.length, ...origin }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." }); for (let index = 0; index < rows.length; index += 1) { const row = rows[index]!; const customer = customerByDocument.get(row.customerDocument)!; const seller = row.sellerEmail ? userByEmail.get(row.sellerEmail) : undefined; const createdContract = await tx.insert(contracts).values({ number: row.number, customerId: customer.id, sellerId: seller?.id ?? ctx.user.id, usageModel: row.usageModel, status: row.status, totalAmount: row.totalAmount.toFixed(2), activatedAt: row.status === "active" ? new Date() : null, notes: row.notes }).$returningId(); const contractId = createdContract[0]?.id; if (!contractId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o contrato importado." }); const schedule = buildInstallmentSchedule(row.totalAmount, row.installmentCount, row.firstDueDate); await tx.insert(installments).values(schedule.map(item => ({ contractId, sequence: item.sequence, dueDate: item.dueDate, amount: item.amount, status: "open" as const }))); await tx.insert(csvImportItems).values({ batchId, entityType: "contract", entityId: contractId, action: "created", ...provenance(index, row.number, row) }); created += 1; } await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: 0, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId)); });
+    await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: ${created} contratos criados.${originNote()}`);
+    return { valid: true, committed: true, batchId, totalRows: rows.length, created, updated: 0, issues: [] as ImportIssue[], sample: [], summary: importSummary(rows.length, created, 0, []), contentHash, duplicateOfBatchId };
   }),
   undoLast: adminProcedure.input(z.object({ confirm: z.literal(true) })).mutation(async ({ ctx }) => {
     const db = await getDb();
