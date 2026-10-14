@@ -172,16 +172,22 @@ export async function drainOrdered<E extends { id: number }>(opts: {
       return false;
     }
   };
-  for (const event of retry.due().sort((a, b) => a.id - b.id)) {
-    if (blocked(event)) continue;
-    if (await run(event)) delivered += 1;
-  }
-  for (const event of opts.fresh) {
-    if (!retry.scheduled(event.id)) {
+  // Retries vencidos e eventos do lote numa única ordem de id: um retry de id maior não passa na frente de um evento mais velho
+  // do mesmo contrato que acabou de aparecer (commit tardio) no mesmo tick (Codex P2). Se o mais velho falhar, entra no retry e
+  // passa a bloquear o mais novo pela regra de `blocked`.
+  const due = retry.due();
+  const dueIds = new Set(due.map(event => event.id));
+  const freshIds = new Set(opts.fresh.map(event => event.id));
+  const queue = [...due.map(event => ({ event, due: true })), ...opts.fresh.filter(event => !dueIds.has(event.id)).map(event => ({ event, due: false }))]
+    .sort((a, b) => a.event.id - b.event.id);
+  for (const { event, due: isDue } of queue) {
+    if (isDue) {
+      if (!blocked(event) && await run(event)) delivered += 1;
+    } else if (!retry.scheduled(event.id)) {
       if (blocked(event)) retry.defer(event.id, event);
       else if (await run(event)) delivered += 1;
     }
-    opts.advance(event.id);
+    if (freshIds.has(event.id)) opts.advance(event.id); // o cursor anda por tudo que veio no lote, como antes
   }
   return delivered;
 }

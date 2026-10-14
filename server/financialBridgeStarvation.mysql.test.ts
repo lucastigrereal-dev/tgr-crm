@@ -239,4 +239,42 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       conn.release();
     }
   });
+  // Codex P2: um retry vencido de id maior não passa na frente do evento tardio mais velho do mesmo contrato no mesmo tick.
+  it("commit tardio e retry vencido do mesmo contrato no mesmo tick: o mais velho vai primeiro", async () => {
+    const { startFinancialBridgePump, FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
+    const aggregate = 950_500_000 + Math.floor(Math.random() * 1_000_000);
+    const conn = await pool.getConnection();
+    await conn.query("SET SESSION lock_wait_timeout = 10");
+    const clock = { t: 17_000_000 };
+    const pump = startFinancialBridgePump(baseUrl, "syn-fin-key", { externalKey: randomUUID(), name: `SYN late due ${runId}`, timezone: "America/Recife" }, { autoStart: false, now: () => clock.t, onError: () => undefined });
+    try {
+      const placeholders = FINANCIAL_EVENT_NAMES.map(() => "?").join(",");
+      const [backlogRows] = await pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(*) AS pending FROM domain_events d LEFT JOIN audit_logs a ON a.idempotencyKey = CONCAT('financial-event:', d.id) WHERE a.id IS NULL AND d.eventName IN (${placeholders})`,
+        [...FINANCIAL_EVENT_NAMES],
+      );
+      const maxTicks = Math.ceil((Number(backlogRows[0]?.pending ?? 0) + 2000) / 500) + 20;
+      const [marker] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate + 9), actorUserId: null, payload: JSON.stringify({ status: "active" }) }).$returningId();
+      for (let i = 0; i < maxTicks && !hits.get(marker.id); i += 1) await pump.tick();
+      expect(hits.get(marker.id)).toBe(1);
+
+      await conn.beginTransaction();
+      const [result] = await conn.query<mysql.ResultSetHeader>("INSERT INTO domain_events (eventName, aggregateType, aggregateId, payload) VALUES ('contract.status.updated', 'contract', ?, ?)", [String(aggregate), JSON.stringify({ status: "active" })]);
+      const lateId = result.insertId;
+      const [newer] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
+      stuck.add(newer.id);
+      for (let i = 0; i < maxTicks && !hits.get(newer.id); i += 1) await pump.tick();
+      expect(hits.get(newer.id)).toBe(1); // tentado e foi para o retry
+
+      await conn.commit();
+      stuck.delete(newer.id); // o consumidor voltou
+      clock.t += 5_000; // o retry vence no mesmo tick em que o tardio aparece
+      for (let i = 0; i < maxTicks && !(hits.get(lateId) && hits.get(newer.id) === 2); i += 1) await pump.tick();
+      expect(seen.filter(id => id === lateId || id === newer.id)).toEqual([newer.id, lateId, newer.id]);
+    } finally {
+      pump.stop();
+      await conn.rollback().catch(() => undefined);
+      conn.release();
+    }
+  });
 });
