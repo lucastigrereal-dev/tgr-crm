@@ -180,7 +180,7 @@ describe("eventos e auditoria de contratos", () => {
     const audits = txAudits(db.inserted);
     const events = txEvents(db.inserted);
     expect(audits).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract_cancellation_request", entityId: "801", action: "executed", summary: expect.stringContaining("parcelas canceladas: 2") }));
-    expect(events).toContainEqual(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: "701", idempotencyKey: "contract-cancelled:701", payload: expect.objectContaining({ status: "cancelled" }) }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: "701", idempotencyKey: "contract-cancelled:701:801", payload: expect.objectContaining({ status: "cancelled" }) }));
     expect(events).toContainEqual({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: "801", actorUserId: 55, payload: { contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 }, idempotencyKey: "contract-cancellation-executed:801" });
     expect(audits).toContainEqual(expect.objectContaining({ entityType: "sales_commission", entityId: "91", action: "cancelled", summary: "Comissão cancelada pelo distrato do contrato 701." }));
     expect(audits).toContainEqual(expect.objectContaining({ entityType: "sales_commission", entityId: "93", action: "cancelled", summary: "Comissão cancelada pelo distrato do contrato 701." }));
@@ -195,9 +195,11 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("bloqueia pedido não aprovado e não registra execução", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ requestStatus: "requested" }));
+    const db = makeDb({ requestStatus: "requested" }); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801 })).rejects.toMatchObject({ message: "Somente distrato aprovado pode ser executado." });
-    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
+    expect(txAudits(db.inserted)).toEqual([]);
+    expect(txEvents(db.inserted)).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("bloqueia reexecução de pedido já executado", async () => {
@@ -206,8 +208,11 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("propaga falha intermediária e não registra execução concluída", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ failAtUpdate: 4 }));
+    const db = makeDb({ failAtUpdate: 4 }); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801 })).rejects.toThrow("rollback sentinel");
-    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
+    // A falha vem antes dos inserts de auditoria/evento; no banco real o rollback é provado em distratoOutbox.mysql.
+    expect(txAudits(db.inserted).filter(row => row.action === "executed")).toEqual([]);
+    expect(txEvents(db.inserted)).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });

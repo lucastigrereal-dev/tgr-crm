@@ -63,6 +63,14 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real: preserva histórico e 
   }
   const dropTrigger = async (name: string) => { await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
   const admin = () => contractsRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+  /** A recusa tem de ser a falha injetada pelo trigger (na mensagem ou na cadeia de causas), não qualquer erro do seed. */
+  async function expectInjectedFailure(promise: Promise<unknown>) {
+    const error = await promise.then(() => null, (caught: unknown) => caught);
+    expect(error).not.toBeNull();
+    const chain: string[] = [];
+    for (let current = error as { message?: string; cause?: unknown } | undefined; current && chain.length < 6; current = current.cause as typeof current) chain.push(String(current.message ?? current));
+    expect(chain.join(" | ")).toContain("distrato: falha injetada");
+  }
 
   async function distratoEvents(seed: Seed) {
     const byAggregate = (eventName: string, aggregateIds: number[]) => db.select().from(domainEvents).where(and(eq(domainEvents.eventName, eventName as never), inArray(domainEvents.aggregateId, aggregateIds.map(String))));
@@ -101,7 +109,7 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real: preserva histórico e 
     const seed = await seedApprovedDistrato("exec");
     const before = await snapshot(seed);
     const trigger = await failEventInsert("exec", `NEW.eventName = 'contract.cancellation.executed' AND NEW.aggregateId = '${seed.requestId}'`);
-    await expect(admin().executeCancellation({ requestId: seed.requestId })).rejects.toThrow();
+    await expectInjectedFailure(admin().executeCancellation({ requestId: seed.requestId }));
     // Nada mudou: nem o contrato, nem parcelas, comissões, cota, lançamentos, auditoria ou o evento do status (gravado antes da falha).
     expect(await snapshot(seed)).toEqual(before);
     expect(before.contract.status).toBe("active");
@@ -127,15 +135,18 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real: preserva histórico e 
     expect(await snapshot(seed)).toEqual(after);
   });
 
-  it("falha ao gravar financial.entry.created (no meio do laço) também desfaz tudo, inclusive os eventos já inseridos", async () => {
+  it("falha ao gravar financial.entry.created (no meio do laço) também desfaz tudo, inclusive os eventos já inseridos; depois grava uma vez só", async () => {
     const seed = await seedApprovedDistrato("entry");
     const before = await snapshot(seed);
-    await failEventInsert("entry", `NEW.eventName = 'financial.entry.created' AND NEW.payload LIKE '%"contractId":${seed.contractId},%'`);
-    await expect(admin().executeCancellation({ requestId: seed.requestId })).rejects.toThrow();
+    const trigger = await failEventInsert("entry", `NEW.eventName = 'financial.entry.created' AND NEW.payload LIKE '%"contractId":${seed.contractId},%'`);
+    await expectInjectedFailure(admin().executeCancellation({ requestId: seed.requestId }));
     expect(await snapshot(seed)).toEqual(before);
+    await dropTrigger(trigger);
+    await expect(admin().executeCancellation({ requestId: seed.requestId })).resolves.toMatchObject({ success: true, financialEntries: 2 });
+    expect((await snapshot(seed)).eventCounts).toEqual({ contractCancelled: 1, executed: 1, commissionCancelled: 1, reversalRequested: 1, entryCreated: 2, fractionReturned: 1 });
   });
 
-  it("entrega: os eventos do distrato ficam na fila do Financial com envelope válido; o cancelamento chega ao Sales pelo mesmo outbox", async () => {
+  it("entrega: os eventos do distrato ficam na fila do Financial com envelope válido (a entrega ao Sales do commit tardio é provada em bridgeLateCommit.mysql)", async () => {
     const seed = await seedApprovedDistrato("delivery");
     await admin().executeCancellation({ requestId: seed.requestId });
     const events = await distratoEvents(seed);
@@ -149,7 +160,7 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real: preserva histórico e 
       expect(String(envelope.event.eventId)).toBe(String(row.id));
       expect(envelope.correlationId).toBe(`crm-fin-${row.id}`);
     }
-    expect(events.contractCancelled[0]).toMatchObject({ idempotencyKey: `contract-cancelled:${seed.contractId}` });
+    expect(events.contractCancelled[0]).toMatchObject({ idempotencyKey: `contract-cancelled:${seed.contractId}:${seed.requestId}` });
     expect(JSON.parse(String(events.contractCancelled[0].payload))).toMatchObject({ status: "cancelled" });
   });
 });

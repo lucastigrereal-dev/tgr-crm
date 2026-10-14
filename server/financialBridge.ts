@@ -4,7 +4,7 @@ import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { createRejectionTracker, createRetryBackoff, drainOrdered, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
+import { createRejectionTracker, createRetryBackoff, cursorRange, drainOrdered, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
 
 export const FINANCIAL_EVENT_NAMES = [
   "contract.created",
@@ -169,6 +169,8 @@ export function startFinancialBridgePump(
     try {
       const db = await getDb();
       if (!db) return 0;
+      // Commit tardio (outbox na transação): relê também os recentes sem recibo abaixo do cursor (ver `cursorRange`).
+      const range = cursorRange(cursor);
       const events = await db.select({ event: domainEvents }).from(domainEvents)
         .leftJoin(
           auditLogs,
@@ -177,11 +179,11 @@ export function startFinancialBridgePump(
         .where(and(
           inArray(domainEvents.eventName, [...FINANCIAL_EVENT_NAMES]),
           isNull(auditLogs.id),
-          gt(domainEvents.id, cursor),
+          range.where,
         ))
-        .orderBy(asc(domainEvents.id)).limit(batchSize);
+        .orderBy(...range.order).limit(batchSize);
       delivered = await drainOrdered({
-        retry, fresh: events.map(row => row.event), onError: options.onError,
+        retry, fresh: events.map(row => row.event).sort((a, b) => a.id - b.id), onError: options.onError,
         orderKey: financialOrderKey,
         attempt: event => attempt(db, event),
         advance: id => { cursor = Math.max(cursor, id); },
