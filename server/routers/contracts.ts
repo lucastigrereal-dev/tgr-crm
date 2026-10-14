@@ -16,6 +16,7 @@ import { canCapability } from "../../shared/permissions";
 import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
+import { txAudit, txEvent } from "../txOutbox";
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -269,18 +270,31 @@ export const contractsRouter = router({
       if (moneyFromPolicy && Number(simulation.refund ?? 0) > 0) financialImpact.push({ contractId: contract.id, type: "expense", category: "Distrato · reembolso", description: `Reembolso previsto do distrato aprovado #${request.id}`, amount: Number(simulation.refund).toFixed(2), dueDate: settlementDate, status: "open", createdByUserId: ctx.user.id });
       if (financialImpact.length) { const insertedFinancialEntries = await tx.insert(financialTransactions).values(financialImpact).$returningId(); insertedFinancialEntries.forEach((inserted, index) => { const entry = financialImpact[index]; if (entry && inserted?.id) createdFinancialEntryFacts.push({ id: inserted.id, contractId: entry.contractId, type: entry.type, category: entry.category, amount: Number(entry.amount) }); }); }
       await tx.update(contractCancellationRequests).set({ status: "executed", executedAt: new Date(), decisionNotes: [request.decisionNotes, input.executionNotes?.trim()].filter(Boolean).join("\n") || null }).where(eq(contractCancellationRequests.id, request.id));
+      // Issue #43 (distrato): auditoria e eventos lidos pelo Financial e pelo Sales nascem na MESMA transação do distrato (outbox em domain_events).
+      const actor = ctx.user.id;
+      const cancelledInstallmentCount = Number(cancelledInstallments[0]?.affectedRows ?? 0);
+      const cancelledCommissionCount = Number(cancelledCommissions[0]?.affectedRows ?? 0);
+      await txAudit(tx, { actorUserId: actor, entityType: "contract_cancellation_request", entityId: request.id, action: "executed", summary: `Distrato executado para contrato ${contract.id} (política de distrato ${moneyFromPolicy ? "configurada" : "NÃO configurada: nenhum lançamento de multa/devolução"}); parcelas canceladas: ${cancelledInstallmentCount}; comissões canceladas: ${cancelledCommissionCount}; lançamentos financeiros: ${financialImpact.length}.` });
+      await txEvent(tx, { eventName: "contract.status.updated", aggregateType: "contract", aggregateId: contract.id, actorUserId: actor, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" }, idempotencyKey: `contract-cancelled:${contract.id}` });
+      await txEvent(tx, { eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: request.id, actorUserId: actor, payload: { contractId: contract.id, cancelledInstallments: cancelledInstallmentCount, cancelledCommissions: cancelledCommissionCount, financialEntries: financialImpact.length }, idempotencyKey: `contract-cancellation-executed:${request.id}` });
+      for (const commissionId of impact.cancelCommissionIds) {
+        await txAudit(tx, { actorUserId: actor, entityType: "sales_commission", entityId: commissionId, action: "cancelled", summary: `Comissão cancelada pelo distrato do contrato ${contract.id}.` });
+        await txEvent(tx, { eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: actor, payload: { status: "cancelled", contractId: contract.id }, idempotencyKey: `commission-cancelled:${commissionId}` });
+      }
+      for (const commissionId of impact.manualReviewCommissionIds) {
+        await txAudit(tx, { actorUserId: actor, entityType: "sales_commission", entityId: commissionId, action: "reversal_review_pending", summary: `Comissão já paga NÃO estornada automaticamente; enviada à fila manual (distrato do contrato ${contract.id}).` });
+        await txEvent(tx, { eventName: "commission.reversal_review.requested", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: actor, payload: { contractId: contract.id, commissionId, distratoRequestId: request.id }, idempotencyKey: `commission-reversal-review-requested:${commissionId}` });
+      }
+      for (const entry of createdFinancialEntryFacts) {
+        await txAudit(tx, { actorUserId: actor, entityType: "financial_transaction", entityId: entry.id, action: "created", summary: `Lançamento ${entry.type} de ${entry.amount.toFixed(2)} criado pelo distrato.` });
+        await txEvent(tx, { eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: entry.id, actorUserId: actor, payload: { type: entry.type, category: entry.category, amount: entry.amount, contractId: entry.contractId, campaignId: null }, idempotencyKey: `financial-entry-created:${entry.id}` });
+      }
+      for (const fractionId of returnedFractionIds) {
+        await txAudit(tx, { actorUserId: actor, entityType: "commercial_fraction", entityId: fractionId, action: "returned_to_inventory", summary: `Cota retornou ao estoque após distrato do contrato ${contract.id}.` });
+        await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: fractionId, actorUserId: actor, payload: { fractionId, status: "available", contractId: contract.id, reason: "Distrato executado" }, idempotencyKey: `fraction-returned:${fractionId}:${contract.id}` });
+      }
       return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, manualReviewCommissionIds: impact.manualReviewCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
     });
-    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, "executed", `Distrato executado para contrato ${outcome.contractId} (política de distrato ${outcome.policyConfigured ? "configurada" : "NÃO configurada: nenhum lançamento de multa/devolução"}); parcelas canceladas: ${outcome.cancelledInstallments}; comissões canceladas: ${outcome.cancelledCommissions}; lançamentos financeiros: ${outcome.financialEntries}.`);
-    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: outcome.contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Distrato aprovado executado" } });
-    await recordDomainEvent({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, cancelledInstallments: outcome.cancelledInstallments, cancelledCommissions: outcome.cancelledCommissions, financialEntries: outcome.financialEntries } });
-    for (const commissionId of outcome.cancelledCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "cancelled", `Comissão cancelada pelo distrato do contrato ${outcome.contractId}.`); await recordDomainEvent({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { status: "cancelled", contractId: outcome.contractId } }); }
-    for (const commissionId of outcome.manualReviewCommissionIds) { await recordAudit(ctx.user.id, "sales_commission", commissionId, "reversal_review_pending", `Comissão já paga NÃO estornada automaticamente; enviada à fila manual (distrato do contrato ${outcome.contractId}).`); await recordDomainEvent({ eventName: "commission.reversal_review.requested", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: ctx.user.id, payload: { contractId: outcome.contractId, commissionId, distratoRequestId: input.requestId }, idempotencyKey: `commission-reversal-review-requested:${commissionId}` }); }
-    for (const entry of createdFinancialEntryFacts) { await recordAudit(ctx.user.id, "financial_transaction", entry.id, "created", `Lançamento ${entry.type} de ${entry.amount.toFixed(2)} criado pelo distrato.`); await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: entry.id, actorUserId: ctx.user.id, payload: { type: entry.type, category: entry.category, amount: entry.amount, contractId: entry.contractId, campaignId: null } }); }
-    for (const fractionId of outcome.returnedFractionIds) {
-      await recordAudit(ctx.user.id, "commercial_fraction", fractionId, "returned_to_inventory", `Cota retornou ao estoque após distrato do contrato ${outcome.contractId}.`);
-      await recordDomainEvent({ eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: fractionId, actorUserId: ctx.user.id, payload: { fractionId, status: "available", contractId: outcome.contractId, reason: "Distrato executado" } });
-    }
     await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
     return { success: true, ...outcome };
   }),
