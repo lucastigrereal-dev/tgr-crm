@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
@@ -97,14 +97,16 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  */
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
 const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
-export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL): { where: SQL; order: SQL[] } {
+export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL, inRetry: readonly number[] = []): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
   const recent = sql`NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`;
   const names = sql.join(eventNames.map(name => sql`${name}`), sql`, `);
   return {
     where: and(
       // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
-      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled)),
+      // Quem já está no conjunto de retry é tentado pela memória (`retry.due()`), não pela releitura: fica fora dela, senão uma fila
+      // de retry do tamanho do lote esconde o evento de commit tardio a cada tick (Codex P1).
+      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled, inRetry.length ? notInArray(domainEvents.id, [...inRetry]) : undefined)),
       // Piso por id = menor id dentro da janela (subconsulta executada uma vez, pelo índice eventName+occurredAt): a varredura é
       // uma faixa da chave primária do tamanho da janela, nunca a tabela inteira.
       sql`${domainEvents.id} > LEAST(${cursor}, COALESCE((SELECT MIN(recent_events.id) - 1 FROM ${domainEvents} AS recent_events WHERE recent_events.eventName IN (${names}) AND recent_events.occurredAt >= ${recent}), ${cursor}))`,
@@ -501,7 +503,7 @@ function startContractStatePump(
     try {
       const db = await getDb();
       if (!db) return 0;
-      const range = cursorRange(cursor, CONTRACT_STATE_EVENT_NAMES, contractStateUnhandled(target));
+      const range = cursorRange(cursor, CONTRACT_STATE_EVENT_NAMES, contractStateUnhandled(target), retry.items().map(event => event.id));
       const events = await db.select().from(domainEvents)
         .where(and(
           inArray(domainEvents.eventName, [...CONTRACT_STATE_EVENT_NAMES]),
