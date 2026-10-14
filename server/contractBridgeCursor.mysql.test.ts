@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { commercialFractions, commercialPolicyVersions, domainEvents, resorts, units } from "../drizzle/schema";
+import { auditLogs, commercialFractions, commercialPolicyVersions, domainEvents, resorts, units } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { materializeSalesCommandSale } from "./salesCommandBridge";
 
@@ -92,5 +93,36 @@ describe.skipIf(!integrationUrl)("Bridge de contrato do CRM em MySQL real: curso
       auth: "Bearer syn-cancel-key",
       body: { eventName: "crm.contract.cancelled.v1", contractId: String(sale.contractId), source: "crm" },
     });
+  });
+
+  // Outbox na transação: o id nasce no INSERT e só aparece no COMMIT. Uma transação longa pode commitar um id MENOR depois que o
+  // cursor já passou por ids maiores; sem a releitura de recentes, o cancelamento só chegava ao Sales depois de reiniciar o CRM.
+  // (Fica neste arquivo de propósito: um único pump de cancelamento por vez no banco compartilhado.)
+  it("commit tardio: cancelamento com id menor que o cursor chega ao Sales sem reiniciar, uma vez só", async () => {
+    const salesReceipt = (contractId: number) => db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "contract"), eq(auditLogs.idempotencyKey, `sales-contract:${contractId}:cancelled`)));
+    const lateContract = 980_000_000 + Math.floor(Math.random() * 1_000_000);
+    const earlyContract = lateContract + 1;
+    const { startSalesCancellationBridgePump } = await import("./relationshipBridge");
+    const conn = await pool.getConnection();
+    const pump = startSalesCancellationBridgePump(baseUrl, "syn-cancel-key", { autoStart: false });
+    try {
+      await conn.beginTransaction();
+      const [result] = await conn.query<mysql.ResultSetHeader>("INSERT INTO domain_events (eventName, aggregateType, aggregateId, payload) VALUES ('contract.status.updated', 'contract', ?, ?)", [String(lateContract), JSON.stringify({ status: "cancelled" })]);
+      const [early] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(earlyContract), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
+      expect(early.id).toBeGreaterThan(result.insertId);
+      for (let i = 0; i < 50 && !(await salesReceipt(earlyContract)).length; i += 1) await pump.tick();
+      expect(await salesReceipt(earlyContract)).toHaveLength(1); // cursor já passou do id da transação aberta
+      expect(await salesReceipt(lateContract)).toHaveLength(0);
+
+      await conn.commit();
+      for (let i = 0; i < 50 && !(await salesReceipt(lateContract)).length; i += 1) await pump.tick();
+      expect(await salesReceipt(lateContract)).toHaveLength(1);
+      for (let i = 0; i < 3; i += 1) await pump.tick();
+      expect(await salesReceipt(lateContract)).toHaveLength(1);
+    } finally {
+      pump.stop();
+      await conn.rollback().catch(() => undefined);
+      conn.release();
+    }
   });
 });

@@ -72,4 +72,34 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       expect(hits.get(newId)).toBe(1); // entregue: recibo, não volta
     } finally { pump.stop(); }
   });
+  // Outbox na transação: o id nasce no INSERT e só aparece no COMMIT; uma transação longa (distrato, baixa) pode commitar um id
+  // MENOR depois que o cursor passou por ids maiores. Sem a releitura de recentes, o evento só ia ao Financial após reiniciar.
+  // (Fica neste arquivo de propósito: um único pump do Financial por vez no banco compartilhado.)
+  it("commit tardio: evento com id menor que o cursor é entregue sem reiniciar, uma vez só", async () => {
+    const { startFinancialBridgePump } = await import("./financialBridge");
+    const aggregate = 990_000_000 + Math.floor(Math.random() * 1_000_000);
+    const conn = await pool.getConnection();
+    const pump = startFinancialBridgePump(baseUrl, "syn-fin-key", { externalKey: randomUUID(), name: `SYN late ${runId}`, timezone: "America/Recife" }, { autoStart: false, onError: () => undefined });
+    try {
+      await conn.beginTransaction();
+      const [result] = await conn.query<mysql.ResultSetHeader>("INSERT INTO domain_events (eventName, aggregateType, aggregateId, payload) VALUES ('contract.status.updated', 'contract', ?, ?)", [String(aggregate), JSON.stringify({ status: "cancelled" })]);
+      const lateId = result.insertId;
+      const [early] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate + 1), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
+      expect(early.id).toBeGreaterThan(lateId);
+      for (let i = 0; i < 50 && !hits.get(early.id); i += 1) await pump.tick();
+      expect(hits.get(early.id)).toBe(1); // cursor já passou do id da transação aberta
+      expect(hits.get(lateId)).toBeUndefined();
+
+      await conn.commit();
+      for (let i = 0; i < 50 && !hits.get(lateId); i += 1) await pump.tick();
+      expect(hits.get(lateId)).toBe(1);
+      for (let i = 0; i < 3; i += 1) await pump.tick();
+      expect(hits.get(lateId)).toBe(1);
+      expect(hits.get(early.id)).toBe(1);
+    } finally {
+      pump.stop();
+      await conn.rollback().catch(() => undefined);
+      conn.release();
+    }
+  });
 });

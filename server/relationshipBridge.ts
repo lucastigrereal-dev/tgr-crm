@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
@@ -85,7 +85,7 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
 /**
  * Outbox na transação (issue #43, distrato): o id do evento nasce no INSERT, mas a linha só fica visível no COMMIT. Um evento
  * de id MENOR pode aparecer depois que o cursor em memória já passou por ids maiores de outra transação. Por isso a leitura
- * de cada tick inclui também os eventos recentes (janela folgada no relógio do banco) abaixo do cursor, ainda não tratados.
+ * de cada tick inclui também os eventos recentes (janela folgada, no relógio do banco) abaixo do cursor, ainda não tratados.
  * Os novos (acima do cursor) vêm primeiro no lote, então os relidos nunca escondem evento novo (sem inanição); o lote volta
  * a ser drenado em ordem de id. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
  */
@@ -93,7 +93,8 @@ export const LATE_COMMIT_WINDOW_MS = 120_000;
 export function cursorRange(cursor: number): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
   return {
-    where: or(isNew, gte(domainEvents.occurredAt, new Date(Date.now() - LATE_COMMIT_WINDOW_MS)))!,
+    // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
+    where: or(isNew, sql`${domainEvents.occurredAt} >= NOW() - INTERVAL ${Math.round(LATE_COMMIT_WINDOW_MS / 1000)} SECOND`)!,
     // Novos em ordem crescente (o cursor anda sem pular); relidos do mais novo para o mais velho: o de commit tardio fica logo
     // abaixo do cursor e não é empurrado para fora do lote pelos recentes já tratados.
     order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(sql`CASE WHEN ${domainEvents.id} > ${cursor} THEN ${domainEvents.id} ELSE -${domainEvents.id} END`)],
