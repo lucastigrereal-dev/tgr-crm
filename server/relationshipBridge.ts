@@ -89,15 +89,26 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * Os novos (acima do cursor) vêm primeiro no lote, então os relidos nunca escondem evento novo (sem inanição); o lote volta
  * a ser drenado em ordem de id. A releitura só traz o que AINDA NÃO foi tratado (`unhandled`, filtro de recibo no SQL), então
  * os recentes já entregues não ocupam o lote. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
- * Limite conhecido: transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes)
- * só é entregue quando o cursor zera (reinício do CRM relê tudo que não tem recibo).
+ * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez):
+ * - transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes);
+ * - backlog de novos que lote o lote por mais que a janela.
+ * O evento tardio pode chegar ao consumidor depois de um evento mais novo do mesmo contrato (o Financial trata 409 como
+ * transitório e tenta de novo).
  */
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
-export function cursorRange(cursor: number, unhandled: SQL): { where: SQL; order: SQL[] } {
+const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
+export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
+  const recent = sql`NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`;
+  const names = sql.join(eventNames.map(name => sql`${name}`), sql`, `);
   return {
-    // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
-    where: or(isNew, and(sql`${domainEvents.occurredAt} >= NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`, unhandled))!,
+    where: and(
+      // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
+      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled)),
+      // Piso por id = menor id dentro da janela (subconsulta executada uma vez, pelo índice eventName+occurredAt): a varredura é
+      // uma faixa da chave primária do tamanho da janela, nunca a tabela inteira.
+      sql`${domainEvents.id} > LEAST(${cursor}, COALESCE((SELECT MIN(recent_events.id) - 1 FROM ${domainEvents} AS recent_events WHERE recent_events.eventName IN (${names}) AND recent_events.occurredAt >= ${recent}), ${cursor}))`,
+    )!,
     // Novos em ordem crescente (o cursor anda sem pular); relidos do mais novo para o mais velho (o de commit tardio fica logo
     // abaixo do cursor).
     order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(sql`CASE WHEN ${domainEvents.id} > ${cursor} THEN ${domainEvents.id} ELSE -${domainEvents.id} END`)],
@@ -490,10 +501,10 @@ function startContractStatePump(
     try {
       const db = await getDb();
       if (!db) return 0;
-      const range = cursorRange(cursor, contractStateUnhandled(target));
+      const range = cursorRange(cursor, CONTRACT_STATE_EVENT_NAMES, contractStateUnhandled(target));
       const events = await db.select().from(domainEvents)
         .where(and(
-          inArray(domainEvents.eventName, ["contract.created", "contract.status.updated", "sale.validated"]),
+          inArray(domainEvents.eventName, [...CONTRACT_STATE_EVENT_NAMES]),
           range.where,
         ))
         .orderBy(...range.order).limit(batchSize);

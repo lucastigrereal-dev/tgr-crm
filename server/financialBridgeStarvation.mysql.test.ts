@@ -79,6 +79,11 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
     const { startFinancialBridgePump } = await import("./financialBridge");
     const aggregate = 990_000_000 + Math.floor(Math.random() * 1_000_000);
     const conn = await pool.getConnection();
+    // Espera de lock limitada: com DDL de trigger de outro arquivo na fila, falha em 10 s com erro claro em vez de travar até o timeout do vitest.
+    await conn.query("SET SESSION lock_wait_timeout = 10");
+    // Limite de ticks pelo tamanho real da fila (a ponte começa do cursor 0 e o banco do CI pode estar sujo de rodadas anteriores).
+    const [[{ total }]] = await pool.query("SELECT COUNT(*) AS total FROM domain_events") as unknown as [[{ total: number }]];
+    const maxTicks = Math.ceil((Number(total) + 600) / 500) + 10;
     const pump = startFinancialBridgePump(baseUrl, "syn-fin-key", { externalKey: randomUUID(), name: `SYN late ${runId}`, timezone: "America/Recife" }, { autoStart: false, onError: () => undefined });
     try {
       await conn.beginTransaction();
@@ -86,12 +91,12 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       const lateId = result.insertId;
       const [early] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate + 1), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
       expect(early.id).toBeGreaterThan(lateId);
-      for (let i = 0; i < 50 && !hits.get(early.id); i += 1) await pump.tick();
+      for (let i = 0; i < maxTicks && !hits.get(early.id); i += 1) await pump.tick();
       expect(hits.get(early.id)).toBe(1); // cursor já passou do id da transação aberta
       expect(hits.get(lateId)).toBeUndefined();
 
       await conn.commit();
-      for (let i = 0; i < 50 && !hits.get(lateId); i += 1) await pump.tick();
+      for (let i = 0; i < maxTicks && !hits.get(lateId); i += 1) await pump.tick();
       expect(hits.get(lateId)).toBe(1);
       for (let i = 0; i < 3; i += 1) await pump.tick();
       expect(hits.get(lateId)).toBe(1);

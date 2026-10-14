@@ -104,6 +104,11 @@ describe.skipIf(!integrationUrl)("Bridge de contrato do CRM em MySQL real: curso
     const earlyContract = lateContract + 1;
     const { startSalesCancellationBridgePump } = await import("./relationshipBridge");
     const conn = await pool.getConnection();
+    // Espera de lock limitada: com DDL de trigger de outro arquivo na fila, falha em 10 s com erro claro em vez de travar até o timeout do vitest.
+    await conn.query("SET SESSION lock_wait_timeout = 10");
+    // Limite de ticks pelo tamanho real da fila (a ponte começa do cursor 0 e o banco do CI pode estar sujo de rodadas anteriores).
+    const [[{ total }]] = await pool.query("SELECT COUNT(*) AS total FROM domain_events") as unknown as [[{ total: number }]];
+    const maxTicks = Math.ceil((Number(total) + 600) / 500) + 10;
     const pump = startSalesCancellationBridgePump(baseUrl, "syn-cancel-key", { autoStart: false });
     try {
       await conn.beginTransaction();
@@ -112,12 +117,12 @@ describe.skipIf(!integrationUrl)("Bridge de contrato do CRM em MySQL real: curso
       await db.insert(domainEvents).values(Array.from({ length: 501 }, (_, i) => ({ eventName: "contract.status.updated" as const, aggregateType: "contract", aggregateId: String(earlyContract + 1 + i), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) })));
       const [early] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(earlyContract), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
       expect(early.id).toBeGreaterThan(result.insertId);
-      for (let i = 0; i < 50 && !(await salesReceipt(earlyContract)).length; i += 1) await pump.tick();
+      for (let i = 0; i < maxTicks && !(await salesReceipt(earlyContract)).length; i += 1) await pump.tick();
       expect(await salesReceipt(earlyContract)).toHaveLength(1); // cursor já passou do id da transação aberta
       expect(await salesReceipt(lateContract)).toHaveLength(0);
 
       await conn.commit();
-      for (let i = 0; i < 50 && !(await salesReceipt(lateContract)).length; i += 1) await pump.tick();
+      for (let i = 0; i < maxTicks && !(await salesReceipt(lateContract)).length; i += 1) await pump.tick();
       expect(await salesReceipt(lateContract)).toHaveLength(1);
       for (let i = 0; i < 3; i += 1) await pump.tick();
       expect(await salesReceipt(lateContract)).toHaveLength(1);

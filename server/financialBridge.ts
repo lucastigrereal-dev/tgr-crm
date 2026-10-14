@@ -170,7 +170,7 @@ export function startFinancialBridgePump(
       const db = await getDb();
       if (!db) return 0;
       // Commit tardio (outbox na transação): relê também os recentes sem recibo abaixo do cursor (ver `cursorRange`).
-      const range = cursorRange(cursor, isNull(auditLogs.id));
+      const range = cursorRange(cursor, FINANCIAL_EVENT_NAMES, isNull(auditLogs.id));
       const events = await db.select({ event: domainEvents }).from(domainEvents)
         .leftJoin(
           auditLogs,
