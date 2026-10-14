@@ -91,22 +91,27 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * os recentes já entregues não ocupam o lote. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
  * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez):
  * - transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes);
- * - backlog de novos que lote o lote por mais que a janela.
+ * - backlog de novos que lota o lote por mais que a janela;
+ * - mais de RETRY_EXCLUSION_CAP eventos em retry, mais novos que o tardio, dentro da janela (queda longa do consumidor).
  * O evento tardio pode chegar ao consumidor depois de um evento mais novo do mesmo contrato (o Financial trata 409 como
  * transitório e tenta de novo).
  */
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
 const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
+/** Teto dos ids em retry excluídos da releitura: só os mais novos (são eles que ocupam o lote, que vem do mais novo para o mais velho).
+ * Sem teto, uma queda longa do consumidor punha milhares de placeholders no SELECT e batia no limite de 65.535 do MySQL (Codex P2). */
+export const RETRY_EXCLUSION_CAP = 1000;
 export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL, inRetry: readonly number[] = []): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
   const recent = sql`NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`;
   const names = sql.join(eventNames.map(name => sql`${name}`), sql`, `);
+  const skip = inRetry.filter(id => id <= cursor).sort((a, b) => b - a).slice(0, RETRY_EXCLUSION_CAP);
   return {
     where: and(
       // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
       // Quem já está no conjunto de retry é tentado pela memória (`retry.due()`), não pela releitura: fica fora dela, senão uma fila
       // de retry do tamanho do lote esconde o evento de commit tardio a cada tick (Codex P1).
-      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled, inRetry.length ? notInArray(domainEvents.id, [...inRetry]) : undefined)),
+      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled, skip.length ? notInArray(domainEvents.id, skip) : undefined)),
       // Piso por id = menor id dentro da janela (subconsulta executada uma vez, pelo índice eventName+occurredAt): a varredura é
       // uma faixa da chave primária do tamanho da janela, nunca a tabela inteira.
       sql`${domainEvents.id} > LEAST(${cursor}, COALESCE((SELECT MIN(recent_events.id) - 1 FROM ${domainEvents} AS recent_events WHERE recent_events.eventName IN (${names}) AND recent_events.occurredAt >= ${recent}), ${cursor}))`,
