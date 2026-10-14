@@ -21,6 +21,8 @@ function query(rows: unknown[]) {
   return promise;
 }
 const policy = JSON.stringify({ linerRate: 0.02, closerRate: 0.03, ftbRate: 0.04, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
+// Issue #43: bloqueio, `installment.paid` e `commission.created` nascem dentro da transação (tx.insert em domain_events).
+const txEvents = (inserted: Array<{ table: unknown; values?: unknown }>, eventName: string) => inserted.filter(entry => entry.table === domainEvents && (entry.values as { eventName?: string }).eventName === eventName).map(entry => { const values = entry.values as { payload: string }; return { ...values, payload: JSON.parse(values.payload) as Record<string, unknown> }; });
 const billingRow = { billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 2, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } };
 
 function run(validation: Array<{ validatedAt: Date | null }>, commissionPolicy = policy) {
@@ -51,23 +53,32 @@ describe("webhook Asaas: comissão automática exige venda validada", () => {
     const { inserted, result } = run([]);
     await expect(result).resolves.toMatchObject({ status: 200, installmentPaid: true });
     expect(inserted.filter(entry => entry.table === salesCommissions)).toHaveLength(0);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ source: "asaas" }) }));
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+    expect(txEvents(inserted, "commission.automatic.blocked")).toEqual([expect.objectContaining({ idempotencyKey: "commission-blocked:91:sale_not_validated:asaas", payload: expect.objectContaining({ source: "asaas" }) })]);
+    expect(txEvents(inserted, "commission.created")).toHaveLength(0);
+    expect(txEvents(inserted, "installment.paid")).toEqual([expect.objectContaining({ idempotencyKey: "installment-paid:91", payload: expect.objectContaining({ customerId: 5, commissionBlocked: true, gatewayPaymentId: "pay-91" }) })]);
+    expect(inserted.some(entry => entry.table === auditLogs && (entry.values as { action?: string }).action === "commission_blocked")).toBe(true);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("motivo do bloqueio é a causa real (venda não validada x política incompleta)", async () => {
-    await run([]).result;
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ reason: "sale_not_validated", source: "asaas" }) }));
+    const notValidated = run([]);
+    await notValidated.result;
+    expect(txEvents(notValidated.inserted, "commission.automatic.blocked")).toEqual([expect.objectContaining({ payload: expect.objectContaining({ reason: "sale_not_validated", source: "asaas" }) })]);
     vi.clearAllMocks();
-    await run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }], JSON.stringify({ linerRate: 0.02 })).result;
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ reason: "incomplete_project_policy", source: "asaas" }) }));
+    const incomplete = run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }], JSON.stringify({ linerRate: 0.02 }));
+    await incomplete.result;
+    expect(txEvents(incomplete.inserted, "commission.automatic.blocked")).toEqual([expect.objectContaining({ payload: expect.objectContaining({ reason: "incomplete_project_policy", source: "asaas" }) })]);
   });
 
   it("venda validada: comissão é lançada", async () => {
     const { inserted, result } = run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }]);
     await expect(result).resolves.toMatchObject({ status: 200, installmentPaid: true });
     expect(inserted.filter(entry => entry.table === salesCommissions).length).toBeGreaterThan(0);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+    const created = txEvents(inserted, "commission.created");
+    expect(created.length).toBe(inserted.filter(entry => entry.table === salesCommissions).flatMap(entry => Array.isArray(entry.values) ? entry.values : [entry.values]).length);
+    expect(created.map(event => event.idempotencyKey)).toEqual(created.map((_, index) => `commission-created:${700 + index}`));
+    expect(txEvents(inserted, "installment.paid")).toEqual([expect.objectContaining({ payload: expect.objectContaining({ commissionBlocked: false }) })]);
   });
 
   it("ADR-010: portão aberto com todos os papéis a 0% registra commission.automatic.skipped (zero_rate) em vez de silêncio", async () => {
@@ -81,11 +92,12 @@ describe("webhook Asaas: comissão automática exige venda validada", () => {
     expect(skipEvents[0].values).toMatchObject({ aggregateId: "91", idempotencyKey: "commission-skipped:91:zero_rate", actorUserId: null });
     expect(JSON.parse((skipEvents[0].values as { payload: string }).payload)).toEqual({ contractId: 61, installmentId: 91, resortId: 2, reason: "zero_rate", roles: ["liner", "closer"], source: "asaas" });
     expect(inserted.some(entry => entry.table === auditLogs && (entry.values as { action?: string }).action === "commission_skipped")).toBe(true);
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+    expect(txEvents(inserted, "commission.created")).toHaveLength(0);
   });
 
   it("com taxa > 0 não há evento de salto", async () => {
-    await run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }]).result;
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
+    const { inserted, result } = run([{ validatedAt: new Date("2026-10-06T12:00:00Z") }]);
+    await result;
+    expect(txEvents(inserted, "commission.automatic.skipped")).toHaveLength(0);
   });
 });

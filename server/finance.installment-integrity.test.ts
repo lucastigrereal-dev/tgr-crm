@@ -5,7 +5,7 @@ const syncMocks = vi.hoisted(() => ({ syncRevenueQualityForContract: vi.fn(async
 vi.mock("./db", () => dbMocks);
 vi.mock("./revenueQualitySync", () => syncMocks);
 
-import { billingRecords, installments } from "../drizzle/schema";
+import { auditLogs, billingRecords, domainEvents, installments } from "../drizzle/schema";
 import { financeRouter } from "./routers/finance";
 
 function query(rows: unknown[]) {
@@ -26,10 +26,12 @@ describe("idempotência concorrente de baixa de parcela", () => {
       { id: 100, opportunityId: 51, resortId: 2, campaignId: 8, linerId: 10, closerId: 11 },
       { id: 101, opportunityId: 51, resortId: 2, campaignId: 9, linerId: 12, closerId: 13 },
     ]);
+    const inserted: Array<{ table: unknown; values: Record<string, unknown> }> = [];
     const tx = {
-      select: vi.fn(() => query([{ id: 91, status: "open" }])),
+      // A trava da parcela devolve as colunas que a baixa usa (status, valor e já pago).
+      select: vi.fn(() => query([{ id: 91, status: "open", amount: "1000.00", paidAmount: "0.00" }])),
       update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) })),
-      insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+      insert: vi.fn((table: unknown) => ({ values: vi.fn((values: Record<string, unknown>) => { inserted.push({ table, values }); return Object.assign(Promise.resolve(undefined), { onDuplicateKeyUpdate: async () => undefined }); }) })),
     };
     const db = {
       select: vi.fn()
@@ -53,7 +55,12 @@ describe("idempotência concorrente de baixa de parcela", () => {
     expect(tx.update).toHaveBeenNthCalledWith(1, installments);
     expect(tx.update).toHaveBeenNthCalledWith(2, billingRecords);
     expect(syncMocks.syncRevenueQualityForContract).toHaveBeenCalledWith({ contractId: 61, actorUserId: 71, trigger: "baixa de parcela" });
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 2, amount: "1000.00", source: "manual", gatewayPaymentId: null, commissionBlocked: true } }));
+    // Issue #43: o evento nasce na transação da baixa (tx.insert em domain_events), nunca depois do commit.
+    const paidEvent = inserted.find(entry => entry.table === domainEvents && entry.values.eventName === "installment.paid");
+    expect(paidEvent?.values).toMatchObject({ aggregateType: "installment", aggregateId: "91", idempotencyKey: "installment-paid:91" });
+    expect(JSON.parse(paidEvent?.values.payload as string)).toEqual({ installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 2, amount: "1000.00", source: "manual", gatewayPaymentId: null, commissionBlocked: true });
+    expect(inserted.find(entry => entry.table === auditLogs && entry.values.action === "paid")?.values).toMatchObject({ entityType: "installment", entityId: "91", idempotencyKey: "installment-paid:91" });
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("não cria lançamento nem audita quando a atualização condicional perde a corrida", async () => {

@@ -1,12 +1,14 @@
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
-import { getDb, recordAudit, recordDomainEvent } from "./db";
+import { getDb } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
 import { isSaleValidated, recordZeroRateSkip } from "./saleValidationService";
-import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "./installmentCommissions";
+import { commissionApplies, commissionBlockReason, insertInstallmentCommissions, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
+import { recordInstallmentSettlementFacts } from "./installmentSettlementFacts";
+import { txAudit } from "./txOutbox";
 
 export type AsaasWebhookPayload = {
   id?: string;
@@ -44,14 +46,11 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
 
   let billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
-  let installmentPaymentAmount = "0.00";
-  let blockedReason: CommissionBlockReason | null = null;
-  let settledCustomerId: number | null = null;
-  const createdCommissionFacts: CreatedCommissionFact[] = [];
 
   try {
     await db.transaction(async tx => {
       await tx.insert(paymentGatewayWebhookEvents).values({ gatewayProvider: "asaas", gatewayEventId: eventId, eventType: event, billingRecordId: billing?.billing.id ?? null });
+      await txAudit(tx, { actorUserId: null, entityType: "billing_record", entityId: billing?.billing.id ?? paymentId, action: `gateway_${event.toLowerCase()}`, summary: `Webhook Asaas recebido para pagamento ${paymentId}.` });
       if (!billing) return;
       // Trava o contrato ANTES de cobrança/parcela (mesma ordem do distrato e da validação final): o gate de comissão lê a validação já serializada.
       await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, billing.installment.contractId)).limit(1).for("update");
@@ -76,12 +75,13 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
         const paymentRecorded = affectedRows(installmentUpdate) !== 0;
         if (paymentRecorded) {
-          installmentPaymentAmount = receivedNow.toFixed(2);
           installmentPaid = fullyPaid;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
           if (fullyPaid) {
             const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
-            settledCustomerId = context?.contract?.customerId ?? null;
+            const settledCustomerId = context?.contract?.customerId ?? null;
+            let blockedReason: CommissionBlockReason | null = null;
+            const createdCommissionFacts: CreatedCommissionFact[] = [];
             const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
             const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
             const saleValidated = await isSaleValidated(tx, context?.contract?.id);
@@ -96,6 +96,8 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
               }
               if (!blockedReason && policy) createdCommissionFacts.push(...await insertInstallmentCommissions(tx, { installment: { id: billing.installment.id, amount: billing.installment.amount, contractId: billing.installment.contractId }, context: commissionContext, policy, paymentMethod: billing.billing.type === "pix" ? "pix" : "boleto", compensatedAt: paidAt }));
             }
+            // Issue #43: fatos consumidos pelo Financial nascem na MESMA transação do pagamento (outbox em domain_events).
+            await recordInstallmentSettlementFacts(tx, { installmentId: billing.installment.id, contractId: billing.installment.contractId, sequence: billing.installment.sequence, amount: billing.installment.amount, paidAmount: receivedNow.toFixed(2), customerId: settledCustomerId, source: "asaas", gatewayPaymentId: paymentId, actorUserId: null, blockedReason, createdCommissions: createdCommissionFacts });
           }
         }
       } else if (isAsaasPaymentOverdue(event) && ["pending", "generated"].includes(billing.billing.status)) {
@@ -109,14 +111,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
     throw error;
   }
 
-  await recordAudit(null, "billing_record", billing?.billing.id ?? paymentId, `gateway_${event.toLowerCase()}`, `Webhook Asaas recebido para pagamento ${paymentId}.`);
   if (billing && installmentPaid) {
-    if (blockedReason) {
-      await recordAudit(null, "installment", billing.installment.id, "commission_blocked", COMMISSION_BLOCKED_MESSAGE[blockedReason]);
-      await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { contractId: billing.installment.contractId, reason: blockedReason, source: "asaas" } });
-    }
-    await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: billing.installment.id, actorUserId: null, payload: { installmentId: billing.installment.id, paidAmount: installmentPaymentAmount, contractId: billing.installment.contractId, ...(settledCustomerId ? { customerId: settledCustomerId } : {}), sequence: billing.installment.sequence, amount: billing.installment.amount, source: "asaas", gatewayPaymentId: paymentId, commissionBlocked: blockedReason !== null } });
-    for (const commission of createdCommissionFacts) { await recordAudit(null, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: null, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }
     await syncRevenueQualityForContract({ contractId: billing.installment.contractId, actorUserId: null, trigger: "webhook Asaas" });
   }
 
