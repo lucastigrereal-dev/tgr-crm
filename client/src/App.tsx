@@ -27,12 +27,21 @@ const Intelligence = lazy(() => import("./pages/Intelligence"));
 const CommercialInventory = lazy(() => import("./pages/CommercialInventory"));
 const MonetaryAdjustments = lazy(() => import("./pages/MonetaryAdjustments"));
 const PolicyRegistry = lazy(() => import("./pages/PolicyRegistry"));
+const OwnerPortal = lazy(() => import("./pages/OwnerPortal"));
 
 function PageFallback() {
   return <div className="flex min-h-[40vh] items-center justify-center p-8 text-sm text-muted-foreground">Carregando área do TGR CRM…</div>;
 }
 
 function Router() {
+  // Portal do Proprietário: página pública, fora do layout interno (sem login da equipe).
+  return <Switch>
+    <Route path="/portal/:token"><Suspense fallback={<PageFallback />}><OwnerPortal /></Suspense></Route>
+    <Route><InternalRouter /></Route>
+  </Switch>;
+}
+
+function InternalRouter() {
   return <DashboardLayout><Suspense fallback={<PageFallback />}><Switch>
     <Route path="/" component={Home} />
     <Route path="/clientes" component={Customers} />
