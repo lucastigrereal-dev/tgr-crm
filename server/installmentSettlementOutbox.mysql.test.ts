@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
@@ -10,8 +8,8 @@ import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Issue #43 em MySQL REAL: `installment.paid`, `commission.created` e `commission.automatic.blocked` nascem na MESMA
 // transação da baixa (manual e webhook Asaas). A falha é injetada no banco (trigger BEFORE INSERT em domain_events, só para
-// as linhas deste teste), então o rollback é do MySQL, não de mock. Depois do commit, a ponte do Financial entrega cada
-// evento uma vez e não reentrega após reinício (recibo), e a reentrega do webhook não duplica nada.
+// as linhas deste teste), então o rollback é do MySQL, não de mock. Depois do commit, os eventos ficam na fila que a ponte do
+// Financial drena (entrega 1× e recibo já provados em financialBridgeStarvation), e a reentrega do webhook não duplica nada.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const runId = randomUUID().slice(0, 8);
 
@@ -22,9 +20,6 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
   let financeRouter: typeof import("./routers/finance")["financeRouter"];
   let processAsaasWebhook: typeof import("./paymentGatewayWebhook")["processAsaasWebhook"];
   let adminId: number;
-  let server: Server;
-  let baseUrl = "";
-  const hits = new Map<number, number>();
   const previousEnv = { ...process.env };
   const triggers: string[] = [];
 
@@ -40,23 +35,11 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
     [{ id: adminId }] = await db.insert(users).values({ openId: `i43-admin-${runId}`, name: "Gerente #43", role: "admin" }).$returningId();
-    server = createServer((req, res) => {
-      let raw = "";
-      req.on("data", chunk => { raw += chunk; });
-      req.on("end", () => {
-        const eventId = Number(JSON.parse(raw).event.eventId);
-        hits.set(eventId, (hits.get(eventId) ?? 0) + 1);
-        res.writeHead(201, { "Content-Type": "application/json" }).end("{}");
-      });
-    });
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-    baseUrl = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
   });
   afterEach(async () => { for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); });
   afterAll(async () => {
     for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``);
     process.env = previousEnv;
-    await new Promise(resolve => server?.close(resolve));
     await pool?.end();
   });
 
@@ -196,30 +179,22 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
     expect(JSON.parse(paidEvent.payload ?? "{}")).toMatchObject({ commissionBlocked: true });
   });
 
-  it("entrega: a ponte do Financial leva installment.paid e commission.created da fila uma vez e não reentrega depois de reiniciar", async () => {
+  it("entrega: installment.paid e commission.created ficam na fila do Financial (outbox) prontos para a ponte, sem recibo e com envelope válido", async () => {
+    // A bomba em si (entrega 1×, recibo, sem reentrega após reinício) já é provada em financialBridgeStarvation.mysql.test.ts.
+    // Aqui não ligamos outra bomba: duas bombas no mesmo banco, em arquivos paralelos, roubariam eventos uma da outra.
     const { contractId, installmentId } = await seedSale("delivery", { validated: true });
     const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
     await caller.markInstallmentPaid({ id: installmentId, paymentMethod: "boleto" });
-    const ids = [...(await eventsFor("installment.paid", installmentId)), ...(await commissionEventsFor(contractId))].map(row => row.id);
-    expect(ids.length).toBeGreaterThan(1);
+    const rows = [...(await eventsFor("installment.paid", installmentId)), ...(await commissionEventsFor(contractId))];
+    expect(rows.length).toBeGreaterThan(1);
 
-    const { startFinancialBridgePump, FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
+    const { FINANCIAL_EVENT_NAMES, financialBridgeEnvelope } = await import("./financialBridge");
     const project = { externalKey: randomUUID(), name: `SYN #43 ${runId}`, timezone: "America/Recife" };
-    const delivered = () => ids.every(id => hits.get(id) === 1);
-    // Varre a fila do banco compartilhado (outros testes MySQL deixam eventos pendentes) até os eventos deste teste chegarem.
-    const placeholders = FINANCIAL_EVENT_NAMES.map(() => "?").join(",");
-    const [backlogRows] = await pool.query<mysql.RowDataPacket[]>(
-      `SELECT COUNT(*) AS pending FROM domain_events d LEFT JOIN audit_logs a ON a.idempotencyKey = CONCAT('financial-event:', d.id) WHERE a.id IS NULL AND d.id <= ? AND d.eventName IN (${placeholders})`,
-      [Math.max(...ids), ...FINANCIAL_EVENT_NAMES],
-    );
-    const maxTicks = Math.ceil(Number(backlogRows[0]?.pending ?? 0) / 25) + 20;
-    const first = startFinancialBridgePump(baseUrl, "syn-fin-key", project, { autoStart: false, batchSize: 25, onError: () => undefined });
-    try { for (let i = 0; i < maxTicks && !delivered(); i += 1) await first.tick(); } finally { first.stop(); }
-    for (const id of ids) expect(hits.get(id)).toBe(1);
-
-    // Reinício do processo: bomba nova, mesma fila. O recibo impede reentrega.
-    const restarted = startFinancialBridgePump(baseUrl, "syn-fin-key", project, { autoStart: false, batchSize: 25, onError: () => undefined });
-    try { for (let i = 0; i < 5; i += 1) await restarted.tick(); } finally { restarted.stop(); }
-    for (const id of ids) expect(hits.get(id)).toBe(1);
+    for (const row of rows) {
+      expect(FINANCIAL_EVENT_NAMES).toContain(row.eventName);
+      const envelope = financialBridgeEnvelope(row, project);
+      expect(String(envelope.event.eventId)).toBe(String(row.id));
+      expect(envelope.correlationId).toBe(`crm-fin-${row.id}`);
+    }
   });
 });

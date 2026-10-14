@@ -383,7 +383,7 @@ export const financeRouter = router({
           if (!blockedReason && commissionPolicy) createdCommissionFacts.push(...await insertInstallmentCommissions(tx, { installment: { id: item.id, amount: item.amount, contractId: item.contractId }, context: { contract: { ...commissionContext.contract, status: lockedContract?.status ?? commissionContext.contract.status }, proposal: commissionContext.proposal, opportunity: commissionContext.opportunity, capture: commissionContext.capture }, policy: commissionPolicy, paymentMethod: normalizePaymentMethod(input.paymentMethod), compensatedAt: new Date() }));
         }
         // Issue #43: auditoria e fatos consumidos pelo Financial nascem na MESMA transação da baixa (outbox em domain_events).
-        await recordInstallmentSettlementFacts(tx, { installmentId: input.id, contractId: item.contractId, sequence: item.sequence, amount: item.amount, paidAmount: remainingAmount.toFixed(2), source: "manual", gatewayPaymentId: null, actorUserId: ctx.user.id, blockedReason, createdCommissions: createdCommissionFacts });
+        await recordInstallmentSettlementFacts(tx, { installmentId: input.id, contractId: item.contractId, sequence: item.sequence, amount: lockedItem.amount, paidAmount: remainingAmount.toFixed(2), source: "manual", gatewayPaymentId: null, actorUserId: ctx.user.id, blockedReason, createdCommissions: createdCommissionFacts });
         return true;
       });
       if (!settled) return { success: true, alreadyPaid: true, commissionBlocked: false };
