@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, billingRecords, captureRecords, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { runTriggerDdl } from "./mysqlTestDdl";
 
 // Issue #38 (2) em MySQL REAL: o registro `commission.automatic.skipped` nasce na mesma transação da baixa (manual e webhook).
 // A falha é injetada no banco (trigger BEFORE INSERT em domain_events, só para a chave deste teste), então o rollback é do MySQL, não de mock.
@@ -34,8 +35,8 @@ describe.skipIf(!integrationUrl)("issue #38 (2): falha ao gravar o skip desfaz a
     db = drizzle({ client: pool });
     [{ id: adminId }] = await db.insert(users).values({ openId: `f2-admin-${runId}`, name: "Gerente F2", role: "admin" }).$returningId();
   });
-  afterEach(async () => { for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); });
-  afterAll(async () => { for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); process.env = previousEnv; await pool?.end(); });
+  afterEach(async () => { for (const name of triggers.splice(0)) await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); });
+  afterAll(async () => { for (const name of triggers.splice(0)) await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); process.env = previousEnv; await pool?.end(); });
 
   const zeroPolicy = JSON.stringify({ linerRate: 0, closerRate: 0, ftbRate: 0, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
 
@@ -59,11 +60,11 @@ describe.skipIf(!integrationUrl)("issue #38 (2): falha ao gravar o skip desfaz a
 
   async function failSkipInsertFor(installmentId: number) {
     const name = `f2_fail_skip_${runId}_${installmentId}`;
-    await pool.query(`CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF NEW.idempotencyKey = 'commission-skipped:${installmentId}:zero_rate' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'f2: falha injetada no skip'; END IF; END`);
+    await runTriggerDdl(pool, `CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF NEW.idempotencyKey = 'commission-skipped:${installmentId}:zero_rate' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'f2: falha injetada no skip'; END IF; END`);
     triggers.push(name);
     return name;
   }
-  const dropTrigger = async (name: string) => { await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
+  const dropTrigger = async (name: string) => { await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
 
   async function snapshot(contractId: number, installmentId: number) {
     const [inst] = await db.select().from(installments).where(eq(installments.id, installmentId));

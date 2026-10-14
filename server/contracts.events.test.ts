@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { commercialFractions, contractCancellationRequests, contracts, customers, installments, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks, users } from "../drizzle/schema";
+import { auditLogs, commercialFractions, contractCancellationRequests, domainEvents, contracts, customers, installments, proposals, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks, users } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -8,12 +8,18 @@ vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
 
+// Issue #43 (distrato): auditoria e eventos do distrato nascem na transação; conferimos os tx.insert.
+type Inserted = Array<{ table: unknown; values: Record<string, unknown> }>;
+const txAudits = (inserted: Inserted) => inserted.filter(entry => entry.table === auditLogs).map(entry => entry.values);
+const txEvents = (inserted: Inserted) => inserted.filter(entry => entry.table === domainEvents).map(entry => ({ ...entry.values, payload: JSON.parse(entry.values.payload as string) as unknown }));
+
 function makeDb(options: { legacySnapshot?: boolean; requestStatus?: "requested" | "approved" | "rejected" | "executed" | "cancelled"; failAtUpdate?: number; contractExists?: boolean; inventoryExists?: boolean; statusUpdateAffectedRows?: number; snapshotPaidAmount?: number } = {}) {
   let selectCall = 0;
   let contractSelectCall = 0;
   let ledgerSelectCall = 0;
   let updateCall = 0;
   const financialEntries: Array<{ type: string; category: string; amount: string }> = [];
+  const inserted: Array<{ table: unknown; values: Record<string, unknown> }> = [];
   const rows = (value: unknown[]) => { const chain = Object.assign(Promise.resolve(value), { for: async () => value }); return Object.assign(chain, { limit: () => Object.assign(Promise.resolve(value), { for: async () => value }) }); };
   const ledgerRows = (value: unknown[]) => {
     const chain = {
@@ -25,7 +31,7 @@ function makeDb(options: { legacySnapshot?: boolean; requestStatus?: "requested"
     return chain;
   };
   const tx = {
-    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); const insertedCount = Array.isArray(values) ? values.length : 1; return { $returningId: async () => table ? Array.from({ length: insertedCount }, (_, index) => ({ id: 701 + index })) : [] }; }) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); else inserted.push({ table, values: values as Record<string, unknown> }); const insertedCount = Array.isArray(values) ? values.length : 1; return { $returningId: async () => table ? Array.from({ length: insertedCount }, (_, index) => ({ id: 701 + index })) : [], onDuplicateKeyUpdate: async () => undefined }; }) })),
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
       const data = [
         [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80, policyConfigured: options.legacySnapshot ? undefined : true }) }],
@@ -59,6 +65,7 @@ function makeDb(options: { legacySnapshot?: boolean; requestStatus?: "requested"
     }) })),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 702 }], onDuplicateKeyUpdate: async () => undefined })) })),
     financialEntries,
+    inserted,
   };
 }
 
@@ -163,30 +170,36 @@ describe("eventos e auditoria de contratos", () => {
     const db = makeDb({ legacySnapshot: true }); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801 })).resolves.toMatchObject({ success: true, contractId: 701, policyConfigured: false, financialEntries: 0 });
     expect(db.financialEntries).toEqual([]);
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("NÃO configurada"));
+    expect(txAudits(db.inserted)).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract_cancellation_request", entityId: "801", action: "executed", summary: expect.stringContaining("NÃO configurada") }));
   });
 
   it("executa somente distrato aprovado e preserva a trilha do contrato", async () => {
     const db = makeDb(); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801, executionNotes: "Conferido pelo financeiro" })).resolves.toMatchObject({ success: true, contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 });
     expect(db.financialEntries).toEqual(expect.arrayContaining([expect.objectContaining({ type: "income", category: "Distrato · multa/retenção", amount: "120.00" }), expect.objectContaining({ type: "expense", category: "Distrato · reembolso", amount: "80.00" })]));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.stringContaining("parcelas canceladas: 2"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: 701, payload: expect.objectContaining({ status: "cancelled" }) }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: 801, actorUserId: 55, payload: { contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 } });
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 91, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "sales_commission", 93, "cancelled", "Comissão cancelada pelo distrato do contrato 701.");
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 91, payload: { status: "cancelled", contractId: 701 } }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: 93, payload: { status: "cancelled", contractId: 701 } }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "financial_transaction", 701, "created", "Lançamento income de 120.00 criado pelo distrato.");
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "financial_transaction", 702, "created", "Lançamento expense de 80.00 criado pelo distrato.");
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: 701, payload: { type: "income", category: "Distrato · multa/retenção", amount: 120, contractId: 701, campaignId: null } }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: 702, payload: { type: "expense", category: "Distrato · reembolso", amount: 80, contractId: 701, campaignId: null } }));
+    const audits = txAudits(db.inserted);
+    const events = txEvents(db.inserted);
+    expect(audits).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract_cancellation_request", entityId: "801", action: "executed", summary: expect.stringContaining("parcelas canceladas: 2") }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "contract.status.updated", aggregateId: "701", idempotencyKey: "contract-cancelled:701:801", payload: expect.objectContaining({ status: "cancelled" }) }));
+    expect(events).toContainEqual({ eventName: "contract.cancellation.executed", aggregateType: "contract_cancellation_request", aggregateId: "801", actorUserId: 55, payload: { contractId: 701, cancelledInstallments: 2, cancelledCommissions: 2, financialEntries: 2 }, idempotencyKey: "contract-cancellation-executed:801" });
+    expect(audits).toContainEqual(expect.objectContaining({ entityType: "sales_commission", entityId: "91", action: "cancelled", summary: "Comissão cancelada pelo distrato do contrato 701." }));
+    expect(audits).toContainEqual(expect.objectContaining({ entityType: "sales_commission", entityId: "93", action: "cancelled", summary: "Comissão cancelada pelo distrato do contrato 701." }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: "91", idempotencyKey: "commission-cancelled:91", payload: { status: "cancelled", contractId: 701 } }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: "93", payload: { status: "cancelled", contractId: 701 } }));
+    expect(audits).toContainEqual(expect.objectContaining({ entityType: "financial_transaction", entityId: "701", action: "created", summary: "Lançamento income de 120.00 criado pelo distrato." }));
+    expect(audits).toContainEqual(expect.objectContaining({ entityType: "financial_transaction", entityId: "702", action: "created", summary: "Lançamento expense de 80.00 criado pelo distrato." }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: "701", idempotencyKey: "financial-entry-created:701", payload: { type: "income", category: "Distrato · multa/retenção", amount: 120, contractId: 701, campaignId: null } }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: "702", payload: { type: "expense", category: "Distrato · reembolso", amount: 80, contractId: 701, campaignId: null } }));
+    // Depois do commit só resta a sincronização da qualidade de receita (fora do escopo do outbox).
+    expect(dbMocks.recordDomainEvent.mock.calls.map(([event]) => event.eventName)).toEqual(["revenue_quality_ledger.synced"]);
   });
 
   it("bloqueia pedido não aprovado e não registra execução", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ requestStatus: "requested" }));
+    const db = makeDb({ requestStatus: "requested" }); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801 })).rejects.toMatchObject({ message: "Somente distrato aprovado pode ser executado." });
-    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
+    expect(txAudits(db.inserted)).toEqual([]);
+    expect(txEvents(db.inserted)).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 
   it("bloqueia reexecução de pedido já executado", async () => {
@@ -195,8 +208,11 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("propaga falha intermediária e não registra execução concluída", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ failAtUpdate: 4 }));
+    const db = makeDb({ failAtUpdate: 4 }); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().executeCancellation({ requestId: 801 })).rejects.toThrow("rollback sentinel");
-    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract_cancellation_request", 801, "executed", expect.anything());
+    // A falha vem antes dos inserts de auditoria/evento; no banco real o rollback é provado em distratoOutbox.mysql.
+    expect(txAudits(db.inserted).filter(row => row.action === "executed")).toEqual([]);
+    expect(txEvents(db.inserted)).toEqual([]);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });

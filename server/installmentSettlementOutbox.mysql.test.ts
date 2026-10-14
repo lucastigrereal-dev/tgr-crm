@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, billingRecords, captureRecords, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { runTriggerDdl } from "./mysqlTestDdl";
 
 // Issue #43 em MySQL REAL: `installment.paid`, `commission.created` e `commission.automatic.blocked` nascem na MESMA
 // transação da baixa (manual e webhook Asaas). A falha é injetada no banco (trigger BEFORE INSERT em domain_events, só para
@@ -36,9 +37,9 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
     db = drizzle({ client: pool });
     [{ id: adminId }] = await db.insert(users).values({ openId: `i43-admin-${runId}`, name: "Gerente #43", role: "admin" }).$returningId();
   });
-  afterEach(async () => { for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); });
+  afterEach(async () => { for (const name of triggers.splice(0)) await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); });
   afterAll(async () => {
-    for (const name of triggers.splice(0)) await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``);
+    for (const name of triggers.splice(0)) await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``);
     process.env = previousEnv;
     await pool?.end();
   });
@@ -68,11 +69,11 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
   /** Recusa no banco o INSERT em domain_events que casar com `condition` (SQL sobre NEW). */
   async function failEventInsert(label: string, condition: string) {
     const name = `i43_${label}_${runId}`;
-    await pool.query(`CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF ${condition} THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'issue 43: falha injetada'; END IF; END`);
+    await runTriggerDdl(pool, `CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF ${condition} THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'issue 43: falha injetada'; END IF; END`);
     triggers.push(name);
     return name;
   }
-  const dropTrigger = async (name: string) => { await pool.query(`DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
+  const dropTrigger = async (name: string) => { await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``); triggers.splice(triggers.indexOf(name), 1); };
 
   const eventsFor = (eventName: string, aggregateId: number) => db.select().from(domainEvents).where(and(eq(domainEvents.eventName, eventName as never), eq(domainEvents.aggregateId, String(aggregateId))));
   const commissionEventsFor = (contractId: number) => db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.created" as never), like(domainEvents.payload, `%"contractId":${contractId},%`)));
