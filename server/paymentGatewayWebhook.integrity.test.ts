@@ -12,7 +12,7 @@ vi.mock("./db", () => dbMocks);
 vi.mock("./paymentGateway", () => paymentMocks);
 vi.mock("./revenueQualitySync", () => syncMocks);
 
-import { billingRecords, installments, paymentGatewayWebhookEvents } from "../drizzle/schema";
+import { auditLogs, billingRecords, domainEvents, installments, paymentGatewayWebhookEvents } from "../drizzle/schema";
 import { processAsaasWebhook } from "./paymentGatewayWebhook";
 
 function query(rows: unknown[]) {
@@ -27,11 +27,18 @@ function query(rows: unknown[]) {
   return promise;
 }
 
+// Issue #43: auditoria e eventos do webhook nascem na transação; o mock guarda cada tx.insert para a prova.
+function capturingInsert() {
+  const rows: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  const insert = vi.fn((table: unknown) => ({ values: vi.fn((values: Record<string, unknown>) => { rows.push({ table, values }); return Object.assign(Promise.resolve(undefined), { onDuplicateKeyUpdate: async () => undefined }); }) }));
+  return { rows, insert };
+}
+
 describe("idempotência financeira do webhook Asaas", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("emite payload completo quando o webhook liquida a parcela", async () => {
-    const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
+    const { rows, insert: txInsert } = capturingInsert();
     const txUpdate = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) }));
     const lockedBillingQuery = query([{ billing: { id: 301, type: "pix", status: "generated", gatewayPaymentId: "pay-91" }, installment: { id: 91, status: "open", contractId: 61, sequence: 1, amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z") } }]);
     const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => lockedBillingQuery) };
@@ -45,7 +52,14 @@ describe("idempotência financeira do webhook Asaas", () => {
 
     await expect(processAsaasWebhook("secret", { id: "evt-91", event: "PAYMENT_CONFIRMED", payment: { id: "pay-91", status: "CONFIRMED", billingType: "PIX" } })).resolves.toMatchObject({ status: 200, billingRecordId: 301, installmentPaid: true });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: null, payload: { installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 1, amount: "1000.00", source: "asaas", gatewayPaymentId: "pay-91", commissionBlocked: false } });
+    const paidEvents = rows.filter(row => row.table === domainEvents && row.values.eventName === "installment.paid");
+    expect(paidEvents).toHaveLength(1);
+    expect(paidEvents[0].values).toMatchObject({ aggregateType: "installment", aggregateId: "91", actorUserId: null, idempotencyKey: "installment-paid:91" });
+    expect(JSON.parse(paidEvents[0].values.payload as string)).toEqual({ installmentId: 91, paidAmount: "1000.00", contractId: 61, sequence: 1, amount: "1000.00", source: "asaas", gatewayPaymentId: "pay-91", commissionBlocked: false });
+    expect(rows.filter(row => row.table === auditLogs).map(row => row.values.action)).toEqual(["gateway_payment_confirmed"]);
+    // Nada de fato financeiro depois do commit.
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
     expect(lockedBillingQuery.for).toHaveBeenCalledWith("update");
     expect(lockedBillingQuery.orderBy).toHaveBeenCalled();
   });
@@ -67,7 +81,10 @@ describe("idempotência financeira do webhook Asaas", () => {
     await expect(processAsaasWebhook("secret", { id: "evt-92-cancelled", event: "PAYMENT_CONFIRMED", payment: { id: "pay-92", status: "CONFIRMED" } })).resolves.toMatchObject({ status: 200, billingRecordId: 302, installmentPaid: false });
 
     expect(txUpdate).not.toHaveBeenCalled();
-    expect(txInsert).toHaveBeenCalledTimes(1);
+    // Registro do evento recebido + auditoria do recebimento, ambos na transação; nenhum fato financeiro.
+    expect(txInsert).toHaveBeenCalledTimes(2);
+    expect(txInsert).toHaveBeenNthCalledWith(1, paymentGatewayWebhookEvents);
+    expect(txInsert).toHaveBeenNthCalledWith(2, auditLogs);
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
@@ -96,9 +113,10 @@ describe("idempotência financeira do webhook Asaas", () => {
     });
 
     expect(db.select).toHaveBeenCalledTimes(2);
-    expect(txInsert).toHaveBeenCalledTimes(1);
+    expect(txInsert).toHaveBeenCalledTimes(2);
+    expect(txInsert).toHaveBeenNthCalledWith(2, auditLogs);
     expect(txUpdate).toHaveBeenCalledTimes(2);
-    expect(dbMocks.recordAudit).toHaveBeenCalledTimes(1);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 });
@@ -139,7 +157,8 @@ describe("monotonicidade de estado do webhook", () => {
 
     expect(updated).toEqual([{ gatewayStatus: "OVERDUE" }]);
     expect(updated).not.toContainEqual(expect.objectContaining({ status: "expired" }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledTimes(1);
+    expect(txInsert).toHaveBeenCalledWith(auditLogs);
+    expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 });
 

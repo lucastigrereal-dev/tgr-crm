@@ -3,18 +3,17 @@
 // (sale_validation_events), audit_logs e domain_events. Rejeições também deixam trilha (validation_rejected).
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
-import { auditLogs, captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
+import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
 import { canTransitionContractStatus } from "../shared/contractLifecycle";
-import type { DomainEventName } from "../shared/domainEvents";
 import { getDb, recordAudit } from "./db";
 import { affectedRows } from "./mysqlErrors";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { evaluateSaleValidationGates, gatesNotAfter, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
+import { txAudit, txEvent, type Tx } from "./txOutbox";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type Reader = Db | Tx;
 
 export type SaleValidationErrorCode =
@@ -34,19 +33,6 @@ export function saleValidationError(trpcCode: TRPCError["code"], code: SaleValid
 
 export const correlationIdForContract = (contractId: number) => `crm-sale-${contractId}`;
 
-type AuditRow = typeof auditLogs.$inferInsert;
-type EventRow = { eventName: DomainEventName; aggregateType: string; aggregateId: number | string; actorUserId: number | null; payload: Record<string, unknown>; idempotencyKey?: string };
-
-async function txAudit(tx: Tx, row: Omit<AuditRow, "entityId"> & { entityId: number | string }) {
-  const values = { ...row, entityId: String(row.entityId) };
-  if (values.idempotencyKey) await tx.insert(auditLogs).values(values).onDuplicateKeyUpdate({ set: { idempotencyKey: sql`idempotencyKey` } });
-  else await tx.insert(auditLogs).values(values);
-}
-async function txEvent(tx: Tx, row: EventRow) {
-  const values = { eventName: row.eventName, aggregateType: row.aggregateType, aggregateId: String(row.aggregateId), actorUserId: row.actorUserId, payload: JSON.stringify(row.payload), idempotencyKey: row.idempotencyKey ?? null };
-  if (values.idempotencyKey) await tx.insert(domainEvents).values(values).onDuplicateKeyUpdate({ set: { idempotencyKey: sql`idempotencyKey` } });
-  else await tx.insert(domainEvents).values(values);
-}
 
 const iso = (value: Date | null | undefined) => (value ? value.toISOString() : null);
 

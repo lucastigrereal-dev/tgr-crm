@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { contractCancellationRequests, contracts, installmentRenegotiations, installments, opportunities, proposals, reservations, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
+import { contractCancellationRequests, contracts, domainEvents, installmentRenegotiations, installments, opportunities, proposals, reservations, revenueQualityLedger, salesCommissions, unitMaintenanceBlocks } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -8,6 +8,8 @@ import { financeRouter } from "./routers/finance";
 import { ownershipRouter } from "./routers/ownership";
 import { salesRouter } from "./routers/sales";
 
+// Issue #43: eventos da baixa nascem na transação; guardamos os tx.insert para conferir.
+const txInserted: Array<{ table: unknown; values: Record<string, unknown> }> = [];
 function makeDb() {
   const installment = { id: 91, contractId: 61, sequence: 2, totalAmount: "1000.00", amount: "1000.00", status: "open", dueDate: new Date("2026-09-10T12:00:00Z") };
   const queryRows = (value: unknown[]) => {
@@ -22,7 +24,7 @@ function makeDb() {
   };
   const tx = {
     select: vi.fn(() => ({ from: (table: unknown) => table === unitMaintenanceBlocks || table === installmentRenegotiations || table === proposals || table === reservations ? queryRows([]) : table === opportunities ? queryRows([{ id: 301, stage: "qualified" }]) : table === installments ? queryRows([installment]) : queryRows([{ id: 51 }]) })),
-    insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 901 }] })) })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: Record<string, unknown>) => { txInserted.push({ table, values }); return Object.assign(Promise.resolve(undefined), { $returningId: async () => [{ id: 901 }], onDuplicateKeyUpdate: async () => undefined }); }) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
   };
   let id = 300;
@@ -50,6 +52,7 @@ const serviceContext = { user: { id: 72, role: "service" } } as never;
 
 describe("emissores catalogados de comercial, financeiro e ownership", () => {
   beforeEach(() => {
+    txInserted.length = 0;
     vi.clearAllMocks();
     dbMocks.getDb.mockResolvedValue(makeDb());
   });
@@ -74,7 +77,10 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await caller.createTransfer({ beneficiaryName: "Parceiro Operacional", amount: 250, dueDate: "2026-09-20" });
 
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposalAmount: 900 } }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.paid", aggregateType: "installment", aggregateId: 91, actorUserId: 71, payload: expect.objectContaining({ contractId: 61, sequence: 2 }) }));
+    const paid = txInserted.filter(entry => entry.table === domainEvents && entry.values.eventName === "installment.paid");
+    expect(paid).toHaveLength(1);
+    expect(paid[0].values).toMatchObject({ aggregateType: "installment", aggregateId: "91", actorUserId: 71 });
+    expect(JSON.parse(paid[0].values.payload as string)).toMatchObject({ contractId: 61, sequence: 2 });
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", actorUserId: 71, payload: expect.objectContaining({ category: "Taxa", amount: 125 }) }));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ recipient: "Parceiro Operacional", amount: 250 }) }));
   });

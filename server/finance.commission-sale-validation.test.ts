@@ -42,6 +42,9 @@ function scenario(contractStatus: string, validation: Array<{ validatedAt: Date 
 }
 const skippedEvents = (inserted: Array<{ table: unknown; values: unknown }>) => inserted.filter(entry => entry.table === domainEvents && (entry.values as { eventName: string }).eventName === "commission.automatic.skipped");
 const commissionInserts = (inserted: Array<{ table: unknown }>) => inserted.filter(entry => entry.table === salesCommissions);
+// Issue #43: bloqueio, `installment.paid` e `commission.created` também nascem dentro da transação (tx.insert em domain_events).
+const txEvents = (inserted: Array<{ table: unknown; values: unknown }>, eventName: string) => inserted.filter(entry => entry.table === domainEvents && (entry.values as { eventName: string }).eventName === eventName).map(entry => { const values = entry.values as { payload: string }; return { ...values, payload: JSON.parse(values.payload) as Record<string, unknown> }; });
+const txAudits = (inserted: Array<{ table: unknown; values: unknown }>, action: string) => inserted.filter(entry => entry.table === auditLogs && (entry.values as { action: string }).action === action).map(entry => entry.values as Record<string, unknown>);
 
 describe("comissão automática exige venda validada (baixa manual)", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -55,8 +58,10 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     const { inserted, caller } = scenario(status, [...validation]);
     await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).resolves.toEqual({ success: true, alreadyPaid: false, commissionBlocked: true });
     expect(commissionInserts(inserted)).toHaveLength(0);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+    expect(txEvents(inserted, "commission.automatic.blocked")).toHaveLength(1);
+    expect(txEvents(inserted, "commission.created")).toHaveLength(0);
+    expect(txEvents(inserted, "installment.paid")).toEqual([expect.objectContaining({ idempotencyKey: "installment-paid:91", payload: expect.objectContaining({ commissionBlocked: true, source: "manual" }) })]);
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -65,17 +70,18 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     ["sem validação e sem política: a causa primária é a venda", "pending_signature", [], JSON.stringify({ linerRate: 0.02 }), "sale_not_validated"],
     ["validada mas política incompleta", "active", [{ validatedAt: new Date("2026-10-06T12:00:00Z") }], JSON.stringify({ linerRate: 0.02 }), "incomplete_project_policy"],
   ] as const)("motivo do bloqueio é a causa real: %s => %s", async (_label, status, validation, policy, reason) => {
-    const { caller } = scenario(status, [...validation], policy);
+    const { inserted, caller } = scenario(status, [...validation], policy);
     await caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked", payload: expect.objectContaining({ reason, source: "manual" }) }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(expect.anything(), "installment", 91, "commission_blocked", expect.stringContaining(reason === "sale_not_validated" ? "venda ainda não foi validada" : "política completa"));
+    expect(txEvents(inserted, "commission.automatic.blocked")).toEqual([expect.objectContaining({ idempotencyKey: `commission-blocked:91:${reason}:manual`, payload: expect.objectContaining({ reason, source: "manual" }) })]);
+    expect(txAudits(inserted, "commission_blocked")).toEqual([expect.objectContaining({ entityType: "installment", entityId: "91", summary: expect.stringContaining(reason === "sale_not_validated" ? "venda ainda não foi validada" : "política completa") })]);
   });
 
   it("contrato active + venda validada + política completa: comissão é lançada", async () => {
     const { inserted, caller } = scenario("active", [{ validatedAt: new Date("2026-10-06T12:00:00Z") }]);
     await expect(caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" })).resolves.toEqual({ success: true, alreadyPaid: false, commissionBlocked: false });
     expect(commissionInserts(inserted).length).toBeGreaterThan(0);
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.created" }));
+    expect(txEvents(inserted, "commission.created").length).toBeGreaterThan(0);
+    expect(txEvents(inserted, "commission.created")[0]).toMatchObject({ idempotencyKey: "commission-created:500" });
   });
 
   // ADR-010: 0% = sem lançamento, mas nunca em silêncio.
@@ -91,7 +97,7 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
     expect(skippedEvents(inserted)[0].values).toMatchObject({ aggregateType: "installment", aggregateId: "91", idempotencyKey: "commission-skipped:91:zero_rate", actorUserId: 71 });
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
     expect(inserted.some(entry => entry.table === auditLogs && (entry.values as { action: string }).action === "commission_skipped")).toBe(true);
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
+    expect(txEvents(inserted, "commission.automatic.blocked")).toHaveLength(0);
   });
 
   it("issue #38 (2): falha ao gravar o skip derruba a baixa inteira (nada de auditoria/evento pós-commit)", async () => {
@@ -108,13 +114,13 @@ describe("comissão automática exige venda validada (baixa manual)", () => {
   });
 
   it("com taxa > 0 em algum papel ou com portão fechado não há evento de salto", async () => {
-    const { caller } = scenario("active", validated);
+    const { inserted, caller } = scenario("active", validated);
     await caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
+    expect(skippedEvents(inserted)).toHaveLength(0);
     vi.clearAllMocks();
     const blocked = scenario("pending_signature", [], zeroRatePolicy);
     await blocked.caller.markInstallmentPaid({ id: 91, paymentMethod: "pix" });
-    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.skipped" }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "commission.automatic.blocked" }));
+    expect(skippedEvents(blocked.inserted)).toHaveLength(0);
+    expect(txEvents(blocked.inserted, "commission.automatic.blocked")).toHaveLength(1);
   });
 });

@@ -8,7 +8,8 @@ import { assertCapability, financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
 import { buildCampaignDre } from "../financeDre";
 import { isSaleValidated, recordZeroRateSkip } from "../saleValidationService";
-import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "../installmentCommissions";
+import { recordInstallmentSettlementFacts } from "../installmentSettlementFacts";
+import { COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "../installmentCommissions";
 import { parseCompleteCommissionPolicy } from "../projectPolicy";
 import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../revenueQualityLedger";
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
@@ -381,17 +382,12 @@ export const financeRouter = router({
           }
           if (!blockedReason && commissionPolicy) createdCommissionFacts.push(...await insertInstallmentCommissions(tx, { installment: { id: item.id, amount: item.amount, contractId: item.contractId }, context: { contract: { ...commissionContext.contract, status: lockedContract?.status ?? commissionContext.contract.status }, proposal: commissionContext.proposal, opportunity: commissionContext.opportunity, capture: commissionContext.capture }, policy: commissionPolicy, paymentMethod: normalizePaymentMethod(input.paymentMethod), compensatedAt: new Date() }));
         }
+        // Issue #43: auditoria e fatos consumidos pelo Financial nascem na MESMA transação da baixa (outbox em domain_events).
+        await recordInstallmentSettlementFacts(tx, { installmentId: input.id, contractId: item.contractId, sequence: item.sequence, amount: lockedItem.amount, paidAmount: remainingAmount.toFixed(2), source: "manual", gatewayPaymentId: null, actorUserId: ctx.user.id, blockedReason, createdCommissions: createdCommissionFacts });
         return true;
       });
       if (!settled) return { success: true, alreadyPaid: true, commissionBlocked: false };
-      await recordAudit(ctx.user.id, "installment", input.id, "paid", `Parcela ${item.sequence} baixada como paga.`);
       const commissionBlocked = blockedReason !== null;
-      if (blockedReason) {
-        await recordAudit(ctx.user.id, "installment", input.id, "commission_blocked", COMMISSION_BLOCKED_MESSAGE[blockedReason]);
-        await recordDomainEvent({ eventName: "commission.automatic.blocked", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { contractId: item.contractId, reason: blockedReason, source: "manual" } });
-      }
-      await recordDomainEvent({ eventName: "installment.paid", aggregateType: "installment", aggregateId: input.id, actorUserId: ctx.user.id, payload: { installmentId: input.id, paidAmount: Number((Number(item.amount) - Number(item.paidAmount ?? 0)).toFixed(2)).toFixed(2), contractId: item.contractId, sequence: item.sequence, amount: item.amount, source: "manual", gatewayPaymentId: null, commissionBlocked } });
-      for (const commission of createdCommissionFacts) { await recordAudit(ctx.user.id, "sales_commission", commission.id, "created", `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada.`); await recordDomainEvent({ eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId: ctx.user.id, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate } }); }
       await syncRevenueQualityForContract({ contractId: item.contractId, actorUserId: ctx.user.id, trigger: "baixa de parcela" });
       return { success: true, alreadyPaid: false, commissionBlocked };
     }),
