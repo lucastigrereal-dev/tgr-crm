@@ -108,6 +108,8 @@ describe.skipIf(!integrationUrl)("Bridge de contrato do CRM em MySQL real: curso
     try {
       await conn.beginTransaction();
       const [result] = await conn.query<mysql.ResultSetHeader>("INSERT INTO domain_events (eventName, aggregateType, aggregateId, payload) VALUES ('contract.status.updated', 'contract', ?, ?)", [String(lateContract), JSON.stringify({ status: "cancelled" })]);
+      // Mais de um lote (500) de cancelamentos recentes, todos tratados ANTES do commit tardio: a releitura não pode ficar presa neles.
+      await db.insert(domainEvents).values(Array.from({ length: 501 }, (_, i) => ({ eventName: "contract.status.updated" as const, aggregateType: "contract", aggregateId: String(earlyContract + 1 + i), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) })));
       const [early] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(earlyContract), actorUserId: null, payload: JSON.stringify({ status: "cancelled" }) }).$returningId();
       expect(early.id).toBeGreaterThan(result.insertId);
       for (let i = 0; i < 50 && !(await salesReceipt(earlyContract)).length; i += 1) await pump.tick();

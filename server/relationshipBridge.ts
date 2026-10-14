@@ -87,18 +87,27 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * de id MENOR pode aparecer depois que o cursor em memória já passou por ids maiores de outra transação. Por isso a leitura
  * de cada tick inclui também os eventos recentes (janela folgada, no relógio do banco) abaixo do cursor, ainda não tratados.
  * Os novos (acima do cursor) vêm primeiro no lote, então os relidos nunca escondem evento novo (sem inanição); o lote volta
- * a ser drenado em ordem de id. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
+ * a ser drenado em ordem de id. A releitura só traz o que AINDA NÃO foi tratado (`unhandled`, filtro de recibo no SQL), então
+ * os recentes já entregues não ocupam o lote. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
+ * Limite conhecido: transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes)
+ * só é entregue quando o cursor zera (reinício do CRM relê tudo que não tem recibo).
  */
-export const LATE_COMMIT_WINDOW_MS = 120_000;
-export function cursorRange(cursor: number): { where: SQL; order: SQL[] } {
+export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
+export function cursorRange(cursor: number, unhandled: SQL): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
   return {
     // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
-    where: or(isNew, sql`${domainEvents.occurredAt} >= NOW() - INTERVAL ${Math.round(LATE_COMMIT_WINDOW_MS / 1000)} SECOND`)!,
-    // Novos em ordem crescente (o cursor anda sem pular); relidos do mais novo para o mais velho: o de commit tardio fica logo
-    // abaixo do cursor e não é empurrado para fora do lote pelos recentes já tratados.
+    where: or(isNew, and(sql`${domainEvents.occurredAt} >= NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`, unhandled))!,
+    // Novos em ordem crescente (o cursor anda sem pular); relidos do mais novo para o mais velho (o de commit tardio fica logo
+    // abaixo do cursor).
     order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(sql`CASE WHEN ${domainEvents.id} > ${cursor} THEN ${domainEvents.id} ELSE -${domainEvents.id} END`)],
   };
+}
+
+/** Recibo do pump de estado de contrato: `<prefixo><contrato>:<estado>`, estado = `validated` (sale.validated) ou `payload.status`. */
+function contractStateUnhandled(target: ContractStateTarget): SQL {
+  const state = sql`CASE WHEN ${domainEvents.eventName} = 'sale.validated' THEN 'validated' WHEN JSON_VALID(${domainEvents.payload}) THEN JSON_UNQUOTE(JSON_EXTRACT(${domainEvents.payload}, '$.status')) END`;
+  return sql`(${state}) IN (${sql.join(target.statuses.map(status => sql`${status}`), sql`, `)}) AND NOT EXISTS (SELECT 1 FROM ${auditLogs} WHERE ${auditLogs.idempotencyKey} = CONCAT(${target.receiptPrefix}, ${domainEvents.aggregateId}, ':', ${state}))`;
 }
 
 /**
@@ -481,7 +490,7 @@ function startContractStatePump(
     try {
       const db = await getDb();
       if (!db) return 0;
-      const range = cursorRange(cursor);
+      const range = cursorRange(cursor, contractStateUnhandled(target));
       const events = await db.select().from(domainEvents)
         .where(and(
           inArray(domainEvents.eventName, ["contract.created", "contract.status.updated", "sale.validated"]),
