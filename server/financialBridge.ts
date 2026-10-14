@@ -4,7 +4,7 @@ import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
 import { fetchWithTimeout } from "./integrationReliability";
-import { createRejectionTracker, createRetryBackoff, cursorRange, drainOrdered, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
+import { createRejectionTracker, createRereadPager, createRetryBackoff, cursorRange, drainOrdered, DeliveryRejectedError, MIN_REJECTION_WINDOW_MS, readRejectionCode, rejectionReceiptSummary } from "./relationshipBridge";
 
 export const FINANCIAL_EVENT_NAMES = [
   "contract.created",
@@ -87,7 +87,7 @@ export function startFinancialBridgePump(
   endpoint: string,
   integrationKey: string,
   project: FinancialBridgeProject,
-  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number } = {},
+  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number; retryExclusionCap?: number } = {},
 ): FinancialBridgePump {
   const target = financialBridgeTarget(endpoint);
   if (!integrationKey.trim()) throw new Error("Financial CRM integration key required");
@@ -104,6 +104,7 @@ export function startFinancialBridgePump(
   // e escondiam os eventos novos. ponytail: zera no restart (os sem recibo são relidos; a entrega é idempotente pelo recibo).
   let cursor = 0;
   const retry = createRetryBackoff<number, DomainEventRow>(now);
+  const pager = createRereadPager();
   // 409 sem code no Financial = ordem de chegada (ex.: comissão paga antes do sale.validated): tenta sempre, nunca DLQ.
   const rejections = createRejectionTracker<number>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: true, conflictIsTransient: true });
 
@@ -170,7 +171,8 @@ export function startFinancialBridgePump(
       const db = await getDb();
       if (!db) return 0;
       // Commit tardio (outbox na transação): relê também os recentes sem recibo abaixo do cursor (ver `cursorRange`).
-      const range = cursorRange(cursor, FINANCIAL_EVENT_NAMES, isNull(auditLogs.id), retry.items().map(event => event.id));
+      const queriedCursor = cursor;
+      const range = cursorRange(cursor, FINANCIAL_EVENT_NAMES, isNull(auditLogs.id), { inRetry: retry.items().map(event => event.id), after: pager.after(), cap: options.retryExclusionCap });
       const events = await db.select({ event: domainEvents }).from(domainEvents)
         .leftJoin(
           auditLogs,
@@ -182,6 +184,7 @@ export function startFinancialBridgePump(
           range.where,
         ))
         .orderBy(...range.order).limit(batchSize);
+      pager.update(events.map(row => row.event), queriedCursor, batchSize);
       delivered = await drainOrdered({
         retry, fresh: events.map(row => row.event).sort((a, b) => a.id - b.id), onError: options.onError,
         orderKey: financialOrderKey,

@@ -92,7 +92,6 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez):
  * - transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes);
  * - backlog de novos que lota o lote por mais que a janela;
- * - mais de RETRY_EXCLUSION_CAP eventos em retry, mais velhos que o tardio, dentro da janela (queda longa do consumidor).
  * Os relidos vêm do mais velho para o mais novo: uma transação tardia com mais eventos que o lote (distrato com muitas comissões)
  * sai em ordem de id, sem pular o cancelamento do contrato (Codex P2). O evento tardio ainda pode chegar ao consumidor depois de
  * um evento NOVO do mesmo contrato já entregue (o Financial trata 409 como transitório e tenta de novo).
@@ -100,25 +99,45 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
 const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
 /** Teto dos ids em retry excluídos da releitura: só os mais velhos (são eles que ocupariam o lote, que vem do mais velho para o mais novo).
- * Sem teto, uma queda longa do consumidor punha dezenas de milhares de ids no SELECT de cada tick (Codex P2). */
+ * Sem teto, uma queda longa do consumidor punha dezenas de milhares de ids no SELECT de cada tick (Codex P2). O que passa do teto
+ * não esconde o tardio para sempre: a releitura é paginada (`createRereadPager`). */
 export const RETRY_EXCLUSION_CAP = 1000;
-export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL, inRetry: readonly number[] = []): { where: SQL; order: SQL[] } {
+export type Reread = { inRetry?: readonly number[]; after?: number; cap?: number };
+export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL, reread: Reread = {}): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
   const recent = sql`NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`;
   const names = sql.join(eventNames.map(name => sql`${name}`), sql`, `);
-  const skip = inRetry.filter(id => id <= cursor).sort((a, b) => a - b).slice(0, RETRY_EXCLUSION_CAP);
+  const skip = (reread.inRetry ?? []).filter(id => id <= cursor).sort((a, b) => a - b).slice(0, reread.cap ?? RETRY_EXCLUSION_CAP);
+  const after = reread.after ?? 0;
   return {
     where: and(
       // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
       // Quem já está no conjunto de retry é tentado pela memória (`retry.due()`), não pela releitura: fica fora dela, senão uma fila
       // de retry do tamanho do lote esconde o evento de commit tardio a cada tick (Codex P1).
-      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled, skip.length ? notInArray(domainEvents.id, skip) : undefined)),
+      or(isNew, and(sql`${domainEvents.occurredAt} >= ${recent}`, unhandled, skip.length ? notInArray(domainEvents.id, skip) : undefined, after > 0 ? gt(domainEvents.id, after) : undefined)),
       // Piso por id = menor id dentro da janela (subconsulta executada uma vez, pelo índice eventName+occurredAt): a varredura é
       // uma faixa da chave primária do tamanho da janela, nunca a tabela inteira.
       sql`${domainEvents.id} > LEAST(${cursor}, COALESCE((SELECT MIN(recent_events.id) - 1 FROM ${domainEvents} AS recent_events WHERE recent_events.eventName IN (${names}) AND recent_events.occurredAt >= ${recent}), ${cursor}))`,
     )!,
     // Novos primeiro (o cursor anda sem pular e os relidos nunca escondem evento novo); cada grupo em ordem crescente de id.
     order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(domainEvents.id)],
+  };
+}
+
+/**
+ * Paginação da releitura: se o lote voltou cheio e trouxe relidos, o próximo tick relê a partir do último relido (as páginas
+ * andam pela janela, do mais velho para o mais novo); lote incompleto = a página chegou ao fim, volta ao piso da janela.
+ * Sem isso, eventos em retry além do teto (ou qualquer cauda de relidos já agendados) ocupavam o lote em todo tick (Codex P2).
+ */
+export function createRereadPager() {
+  let after = 0;
+  return {
+    after: () => after,
+    update(rows: readonly { id: number }[], cursorAtQuery: number, limit: number) {
+      if (rows.length < limit) { after = 0; return; }
+      const reread = rows.filter(row => row.id <= cursorAtQuery);
+      if (reread.length) after = Math.max(...reread.map(row => row.id));
+    },
   };
 }
 
@@ -450,7 +469,7 @@ async function deliverContractState(target: ContractStateTarget, endpoint: strin
 export interface RelationshipBridgePump { tick(): Promise<number>; stop(): void; }
 export type SalesCancellationBridgePump = RelationshipBridgePump;
 
-type PumpOptions = { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number };
+type PumpOptions = { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number; retryExclusionCap?: number };
 type DomainEventRow = typeof domainEvents.$inferSelect;
 
 function startContractStatePump(
@@ -472,6 +491,7 @@ function startContractStatePump(
   // ponytail: tudo zera no restart (reler é seguro, a entrega é idempotente pelo recibo).
   let cursor = 0;
   const retry = createRetryBackoff<number, DomainEventRow>(now);
+  const pager = createRereadPager();
   const rejections = createRejectionTracker<string>(options.rejectionWindowMs ?? MIN_REJECTION_WINDOW_MS, Date.now, { codedRejections: target.codedRejections });
 
   /** Tenta entregar um evento. Devolve true se entregou agora. Falha não-terminal agenda o retry. */
@@ -508,13 +528,15 @@ function startContractStatePump(
     try {
       const db = await getDb();
       if (!db) return 0;
-      const range = cursorRange(cursor, CONTRACT_STATE_EVENT_NAMES, contractStateUnhandled(target), retry.items().map(event => event.id));
+      const queriedCursor = cursor;
+      const range = cursorRange(cursor, CONTRACT_STATE_EVENT_NAMES, contractStateUnhandled(target), { inRetry: retry.items().map(event => event.id), after: pager.after(), cap: options.retryExclusionCap });
       const events = await db.select().from(domainEvents)
         .where(and(
           inArray(domainEvents.eventName, [...CONTRACT_STATE_EVENT_NAMES]),
           range.where,
         ))
         .orderBy(...range.order).limit(batchSize);
+      pager.update(events, queriedCursor, batchSize);
       delivered = await drainOrdered({
         retry, fresh: [...events].sort((a, b) => a.id - b.id), onError: options.onError,
         orderKey: event => "contract:" + event.aggregateId,

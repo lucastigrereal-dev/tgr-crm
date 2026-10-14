@@ -354,10 +354,23 @@ describe("cursorRange: exclusão dos ids em retry", () => {
     const { cursorRange, RETRY_EXCLUSION_CAP } = await import("./relationshipBridge");
     const cursor = 100_000;
     const inRetry = Array.from({ length: 70_000 }, (_, i) => cursor - 70_000 + i + 1).concat([cursor + 5]);
-    const { params } = new MySqlDialect().sqlToQuery(cursorRange(cursor, ["contract.status.updated"], isNull(auditLogs.id), inRetry).where);
+    const { params } = new MySqlDialect().sqlToQuery(cursorRange(cursor, ["contract.status.updated"], isNull(auditLogs.id), { inRetry }).where);
     expect(params.length).toBeLessThan(RETRY_EXCLUSION_CAP + 20);
     expect(params).toContain(cursor - 70_000 + 1); // mais velho em retry: excluído (a releitura vem do mais velho)
     expect(params).not.toContain(cursor - 1); // mais novo, fora do teto
     expect(params).not.toContain(cursor + 5); // acima do cursor: é evento novo, não releitura
+  });
+});
+
+describe("createRereadPager", () => {
+  it("lote cheio com relidos avança a página; lote incompleto volta ao piso; lote cheio só de novos mantém", async () => {
+    const { createRereadPager } = await import("./relationshipBridge");
+    const pager = createRereadPager();
+    pager.update([{ id: 3 }, { id: 5 }], 10, 2);
+    expect(pager.after()).toBe(5);
+    pager.update([{ id: 11 }, { id: 12 }], 10, 2);
+    expect(pager.after()).toBe(5);
+    pager.update([{ id: 7 }], 10, 2);
+    expect(pager.after()).toBe(0);
   });
 });
