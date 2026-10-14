@@ -19,6 +19,7 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
   let baseUrl = "";
   const stuck = new Set<number>();
   const hits = new Map<number, number>();
+  const seen: number[] = [];
 
   beforeAll(async () => {
     validateIsolatedE2EDatabase(integrationUrl, process.env.DATABASE_URL);
@@ -31,6 +32,7 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       req.on("end", () => {
         const eventId = Number(JSON.parse(raw).event.eventId);
         hits.set(eventId, (hits.get(eventId) ?? 0) + 1);
+        seen.push(eventId);
         res.writeHead(stuck.has(eventId) ? 503 : 201, { "Content-Type": "application/json" }).end("{}");
       });
     });
@@ -146,6 +148,45 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       for (let i = 0; i < maxTicks && !hits.get(lateId); i += 1) await pump.tick();
       expect(hits.get(lateId)).toBe(1);
       for (const id of stuckIds) expect(hits.get(id)).toBe(1); // backoff respeitado
+    } finally {
+      pump.stop();
+      await conn.rollback().catch(() => undefined);
+      conn.release();
+    }
+  });
+  // Codex P2: uma transação tardia com mais eventos que o lote (distrato com muitas comissões) sai em ordem de id, do mais velho.
+  it("commit tardio com mais eventos que o lote, mesmo contrato: entregues em ordem de id", async () => {
+    const { startFinancialBridgePump, FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
+    const aggregate = 970_000_000 + Math.floor(Math.random() * 1_000_000);
+    const conn = await pool.getConnection();
+    await conn.query("SET SESSION lock_wait_timeout = 10");
+    const pump = startFinancialBridgePump(baseUrl, "syn-fin-key", { externalKey: randomUUID(), name: `SYN late order ${runId}`, timezone: "America/Recife" }, { autoStart: false, batchSize: 2, onError: () => undefined });
+    try {
+      const placeholders = FINANCIAL_EVENT_NAMES.map(() => "?").join(",");
+      const [backlogRows] = await pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(*) AS pending FROM domain_events d LEFT JOIN audit_logs a ON a.idempotencyKey = CONCAT('financial-event:', d.id) WHERE a.id IS NULL AND d.eventName IN (${placeholders})`,
+        [...FINANCIAL_EVENT_NAMES],
+      );
+      const maxTicks = Math.ceil((Number(backlogRows[0]?.pending ?? 0) + 2000) / 2) + 20;
+      // Backlog drenado antes de abrir a transação (ver o teste anterior).
+      const [marker] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate + 9), actorUserId: null, payload: JSON.stringify({ status: "active" }) }).$returningId();
+      for (let i = 0; i < maxTicks && !hits.get(marker.id); i += 1) await pump.tick();
+      expect(hits.get(marker.id)).toBe(1);
+
+      await conn.beginTransaction();
+      const lateIds: number[] = [];
+      for (const status of ["cancelled", "cancelled", "cancelled"]) {
+        const [result] = await conn.query<mysql.ResultSetHeader>("INSERT INTO domain_events (eventName, aggregateType, aggregateId, payload) VALUES ('contract.status.updated', 'contract', ?, ?)", [String(aggregate), JSON.stringify({ status })]);
+        lateIds.push(result.insertId);
+      }
+      const [early] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(aggregate + 1), actorUserId: null, payload: JSON.stringify({ status: "active" }) }).$returningId();
+      for (let i = 0; i < maxTicks && !hits.get(early.id); i += 1) await pump.tick();
+      expect(hits.get(early.id)).toBe(1); // cursor passou dos ids da transação aberta
+
+      await conn.commit();
+      for (let i = 0; i < maxTicks && !lateIds.every(id => hits.get(id)); i += 1) await pump.tick();
+      for (const id of lateIds) expect(hits.get(id)).toBe(1);
+      expect(seen.filter(id => lateIds.includes(id))).toEqual(lateIds); // do mais velho para o mais novo
     } finally {
       pump.stop();
       await conn.rollback().catch(() => undefined);

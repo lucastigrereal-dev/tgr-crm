@@ -92,20 +92,21 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez):
  * - transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes);
  * - backlog de novos que lota o lote por mais que a janela;
- * - mais de RETRY_EXCLUSION_CAP eventos em retry, mais novos que o tardio, dentro da janela (queda longa do consumidor).
- * O evento tardio pode chegar ao consumidor depois de um evento mais novo do mesmo contrato (o Financial trata 409 como
- * transitório e tenta de novo).
+ * - mais de RETRY_EXCLUSION_CAP eventos em retry, mais velhos que o tardio, dentro da janela (queda longa do consumidor).
+ * Os relidos vêm do mais velho para o mais novo: uma transação tardia com mais eventos que o lote (distrato com muitas comissões)
+ * sai em ordem de id, sem pular o cancelamento do contrato (Codex P2). O evento tardio ainda pode chegar ao consumidor depois de
+ * um evento NOVO do mesmo contrato já entregue (o Financial trata 409 como transitório e tenta de novo).
  */
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
 const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
-/** Teto dos ids em retry excluídos da releitura: só os mais novos (são eles que ocupam o lote, que vem do mais novo para o mais velho).
+/** Teto dos ids em retry excluídos da releitura: só os mais velhos (são eles que ocupariam o lote, que vem do mais velho para o mais novo).
  * Sem teto, uma queda longa do consumidor punha dezenas de milhares de ids no SELECT de cada tick (Codex P2). */
 export const RETRY_EXCLUSION_CAP = 1000;
 export function cursorRange(cursor: number, eventNames: readonly string[], unhandled: SQL, inRetry: readonly number[] = []): { where: SQL; order: SQL[] } {
   const isNew = gt(domainEvents.id, cursor);
   const recent = sql`NOW() - INTERVAL ${LATE_COMMIT_WINDOW_SECONDS} SECOND`;
   const names = sql.join(eventNames.map(name => sql`${name}`), sql`, `);
-  const skip = inRetry.filter(id => id <= cursor).sort((a, b) => b - a).slice(0, RETRY_EXCLUSION_CAP);
+  const skip = inRetry.filter(id => id <= cursor).sort((a, b) => a - b).slice(0, RETRY_EXCLUSION_CAP);
   return {
     where: and(
       // Janela no relógio do PRÓPRIO banco (mesma sessão/fuso do defaultNow de occurredAt): sem depender do relógio nem do fuso do app.
@@ -116,9 +117,8 @@ export function cursorRange(cursor: number, eventNames: readonly string[], unhan
       // uma faixa da chave primária do tamanho da janela, nunca a tabela inteira.
       sql`${domainEvents.id} > LEAST(${cursor}, COALESCE((SELECT MIN(recent_events.id) - 1 FROM ${domainEvents} AS recent_events WHERE recent_events.eventName IN (${names}) AND recent_events.occurredAt >= ${recent}), ${cursor}))`,
     )!,
-    // Novos em ordem crescente (o cursor anda sem pular); relidos do mais novo para o mais velho (o de commit tardio fica logo
-    // abaixo do cursor).
-    order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(sql`CASE WHEN ${domainEvents.id} > ${cursor} THEN ${domainEvents.id} ELSE -${domainEvents.id} END`)],
+    // Novos primeiro (o cursor anda sem pular e os relidos nunca escondem evento novo); cada grupo em ordem crescente de id.
+    order: [desc(sql`(${domainEvents.id} > ${cursor})`), asc(domainEvents.id)],
   };
 }
 

@@ -347,7 +347,7 @@ describe("CRM to Relationship bridge", () => {
 });
 
 describe("cursorRange: exclusão dos ids em retry", () => {
-  it("queda longa: 70 mil ids em retry não estouram os placeholders; exclui só os mais novos abaixo do cursor", async () => {
+  it("queda longa: 70 mil ids em retry não estouram o SELECT; exclui só os mais velhos abaixo do cursor", async () => {
     const { MySqlDialect } = await import("drizzle-orm/mysql-core");
     const { isNull } = await import("drizzle-orm");
     const { auditLogs } = await import("../drizzle/schema");
@@ -356,8 +356,8 @@ describe("cursorRange: exclusão dos ids em retry", () => {
     const inRetry = Array.from({ length: 70_000 }, (_, i) => cursor - 70_000 + i + 1).concat([cursor + 5]);
     const { params } = new MySqlDialect().sqlToQuery(cursorRange(cursor, ["contract.status.updated"], isNull(auditLogs.id), inRetry).where);
     expect(params.length).toBeLessThan(RETRY_EXCLUSION_CAP + 20);
-    expect(params).toContain(cursor - 1); // entre os mais novos em retry: excluído
-    expect(params).not.toContain(cursor - 70_000 + 1); // mais velho, fora do teto
+    expect(params).toContain(cursor - 70_000 + 1); // mais velho em retry: excluído (a releitura vem do mais velho)
+    expect(params).not.toContain(cursor - 1); // mais novo, fora do teto
     expect(params).not.toContain(cursor + 5); // acima do cursor: é evento novo, não releitura
   });
 });
