@@ -60,11 +60,10 @@ export function pendingExpirations(rows: ExpiryRow[], currentYear: number) {
   }
   return due;
 }
-/** Anos de crédito já fora da validade e ainda sem lançamento de vencimento, inclusive os que não têm mais nada a baixar (crédito todo usado). */
+/** Anos de crédito já fora da validade e ainda sem lançamento de vencimento, inclusive os que não têm mais nada a baixar (crédito todo usado ou estornado). */
 export function unsettledExpiredYears(rows: ExpiryRow[], currentYear: number) {
-  const reversedIds = new Set(rows.map(row => row.reversesEntryId).filter((id): id is number => id !== null));
   const settledYears = new Set(rows.filter(row => row.entryType === "expiration" && row.referenceYear !== null).map(row => row.referenceYear!));
-  const years = new Set(rows.filter(row => row.entryType === "annual_credit" && row.referenceYear !== null && !reversedIds.has(row.id)).map(row => row.referenceYear!));
+  const years = new Set(rows.filter(row => row.entryType === "annual_credit" && row.referenceYear !== null).map(row => row.referenceYear!));
   return Array.from(years).filter(year => lastValidYear(year) < currentYear && !settledYears.has(year)).sort((a, b) => a - b);
 }
 const expiryColumns = { id: pointsLedger.id, entryType: pointsLedger.entryType, points: pointsLedger.points, referenceYear: pointsLedger.referenceYear, reversesEntryId: pointsLedger.reversesEntryId };
