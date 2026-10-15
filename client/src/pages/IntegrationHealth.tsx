@@ -42,7 +42,7 @@ export default function IntegrationHealth() {
           <p><strong>{row.bridge}</strong> · {row.entityType} {row.entityId} · <span className="text-muted-foreground">{dateTime(row.createdAt)}</span></p>
           <p className="text-xs text-muted-foreground">{row.summary ?? "Sem detalhe."}</p>
         </div>)}
-        {data.rejected.length > 0 && <p className="text-xs text-muted-foreground">Reprocessar um recusado hoje é manual, pelo roteiro do piloto: o recibo é apagado do banco por quem tem acesso a ele. Depois de apagado, o CRM reenvia sozinho.</p>}
+        {data.rejected.length > 0 && <p className="text-xs text-muted-foreground">Reprocessar um recusado hoje é manual, pelo roteiro do piloto: o recibo é apagado do banco por quem tem acesso a ele. Depois de apagado, o reenvio só acontece quando o servidor reinicia (eventos com mais de 15 minutos não voltam sozinhos).</p>}
       </CardContent></Card>
     </>}
   </div>;
