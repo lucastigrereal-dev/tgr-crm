@@ -1,6 +1,7 @@
 import { EmptyState, PageHeader, money, StatusPill, dateLabel } from "@/components/crm/ui";
 import { RevenueQualityCard } from "@/components/crm/RevenueQualityCard";
 import { SaleValidationCard } from "@/components/crm/SaleValidationCard";
+import { PointsStatementDialog } from "@/components/crm/PointsStatementDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -92,6 +93,7 @@ export default function ContractDetail() {
         {user && canCapability(user.role, "sale.validation.view") ? <SaleValidationCard contractId={id} /> : null}
         {canSeeFinance ? <RevenueQualityCard contractId={id} /> : null}
         {canSeeFinance ? <PortfolioOwnerCard assignments={portfolioAssignments.data ?? []} candidates={portfolioCandidateRows} candidateTruncated={portfolioCandidates.data?.truncated ?? false} candidateTruncatedSources={portfolioCandidates.data?.truncatedSources ?? []} selectedOwnerId={portfolioOwnerId} notes={portfolioNotes} pending={assignPortfolioOwner.isPending} onOwnerChange={setPortfolioOwnerId} onNotesChange={setPortfolioNotes} onAssign={() => assignPortfolioOwner.mutate({ contractId: id, ownerUserId: Number(portfolioOwnerId), notes: portfolioNotes || null })} /> : null}
+        <EntitlementsCard contractId={id} contractNumber={contract.number} />
         <CancellationCard simulation={cancellationSimulation.data} request={latestCancellation} open={cancellationOpen} setOpen={setCancellationOpen} reason={cancellationReason} setReason={setCancellationReason} isCancelled={contract.status === "cancelled"} canRequest={!!user && canCapability(user.role, "contract.cancel.request")} canDecide={!!user && canCapability(user.role, "contract.cancel.decide")} canExecute={!!user && canCapability(user.role, "contract.cancel.execute")} requestPending={requestCancellation.isPending} decisionPending={decideCancellation.isPending} executionPending={executeCancellation.isPending} onRequest={() => requestCancellation.mutate({ contractId: id, reason: cancellationReason })} onDecision={(decision) => decideCancellation.mutate({ requestId: latestCancellation.id, decision })} onExecute={() => executeCancellation.mutate({ requestId: latestCancellation.id })} />
         <DocumentsCard
           documents={documents}
@@ -168,4 +170,13 @@ function DocumentsCard({
       }) : <p className="rounded-xl bg-[#faf8f3] p-4 text-sm text-muted-foreground">Nenhum documento anexado.</p>}
     </CardContent>
   </Card>;
+}
+
+/** Direitos de uso do contrato, com o extrato de pontos: alcança qualquer contrato, sem depender da lista geral de direitos. */
+function EntitlementsCard({ contractId, contractNumber }: { contractId: number; contractNumber: string }) {
+  const entitlements = trpc.ownership.listEntitlements.useQuery({ contractId }, { enabled: contractId > 0 });
+  const rows = entitlements.data?.rows ?? [];
+  return <Card className="rounded-xl border-[#e9e4da] shadow-none"><CardHeader className="border-b border-[#eee9df] pb-4"><p className="tgr-data-label text-[#94702e]">Uso do associado</p><CardTitle className="mt-1 font-serif text-xl text-[#1d2b2a]">Direitos de uso</CardTitle></CardHeader><CardContent className="space-y-2 pt-5 text-sm">
+    {rows.length ? rows.map(item => <div key={item.id} className="rounded-lg bg-[#faf8f3] p-3"><p className="font-medium text-[#1d2b2a]">{item.entitlementType.replace("_", " ")} · {item.status}</p><p className="mt-1 text-xs text-muted-foreground">{item.annualPoints ? `${item.annualPoints} pontos por ano` : item.fixedWeek ? `Semana ${item.fixedWeek}` : "Uso sem cota fixa"}</p>{item.entitlementType === "points" ? <PointsStatementDialog entitlementId={item.id} label={contractNumber} /> : null}</div>) : <p className="text-muted-foreground">Nenhum direito de uso neste contrato.</p>}
+  </CardContent></Card>;
 }

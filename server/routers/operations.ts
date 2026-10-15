@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql, SQL } from "drizzle-orm";
 import { z } from "zod";
-import { contracts, customers, installments, ownershipEntitlements, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { contracts, customers, installments, ownershipEntitlements, pointsLedger, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, serviceProcedure } from "./access";
@@ -270,6 +270,13 @@ export const operationsRouter = router({
         const current = (await tx.select({ status: reservations.status }).from(reservations).where(eq(reservations.id, input.id)).limit(1).for("update"))[0];
         if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada." });
         if (!canTransitionReservationStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de reserva inválida: ${current.status} → ${input.status}.` });
+        // Reserva que consumiu pontos não cancela com o débito de pé: o uso precisa ser estornado antes. Leitura com trava,
+        // com a reserva já travada, a mesma linha que o lançamento de uso trava.
+        if (input.status === "cancelled") {
+          const ledger = await tx.select({ id: pointsLedger.id, entryType: pointsLedger.entryType, reversesEntryId: pointsLedger.reversesEntryId }).from(pointsLedger).where(eq(pointsLedger.reservationId, input.id)).for("share");
+          const reversed = new Set(ledger.map(row => row.reversesEntryId));
+          if (ledger.some(row => row.entryType === "usage" && !reversed.has(row.id))) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta reserva consumiu pontos. Estorne o uso no extrato de pontos antes de cancelar." });
+        }
         const now = new Date();
         const updateResult = await tx.update(reservations).set({ status: input.status, checkedInAt: input.status === "checked_in" ? now : undefined, checkedOutAt: input.status === "completed" ? now : undefined }).where(and(eq(reservations.id, input.id), eq(reservations.status, current.status)));
         if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A reserva foi alterada por outra operação. Recarregue e tente novamente." });

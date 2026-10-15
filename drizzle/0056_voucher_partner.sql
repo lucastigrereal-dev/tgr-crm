@@ -1,0 +1,1 @@
+ALTER TABLE `vouchers` ADD `partnerName` varchar(120);

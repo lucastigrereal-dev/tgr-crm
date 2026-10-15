@@ -56,6 +56,7 @@ export function canCapability(role: InternalPermissionRole | "user", capability:
 // Rota ausente aqui = qualquer papel interno. A tela nunca mostra o que o servidor recusaria (403 virava R$ 0,00 na UI).
 export const menuPathRoles: Record<string, readonly InternalPermissionRole[]> = {
   "/sala-de-vendas": ["admin", "seller", "service"],
+  "/vouchers": ["admin", "seller", "service"],
   "/captacao": ["admin", "seller"],
   "/vendas": ["admin", "seller"],
   "/campanhas": ["admin", "seller"],

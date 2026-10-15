@@ -18,6 +18,7 @@ describe("menu segue o RBAC do servidor", () => {
     ["/importar", ["admin"]],
     ["/configuracoes-projeto", ["admin"]],
     ["/dicionarios", ["admin"]],
+    ["/vouchers", ["admin", "seller", "service"]],
   ];
   it.each(cases)("%s só para %j", (path, roles) => {
     for (const role of ["admin", "seller", "finance", "service", "user"] as const) {

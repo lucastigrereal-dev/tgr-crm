@@ -339,6 +339,37 @@ export const captureRecords = mysqlTable(
   ],
 );
 
+/**
+ * Voucher/brinde (TSE #31): o que foi prometido ao casal na captação ou depois, com custo, validade e baixa de uso.
+ * Nada é apagado: cancelar guarda o motivo; vencido é calculado pela data de validade no dia do projeto.
+ */
+export const vouchers = mysqlTable(
+  "vouchers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    code: varchar("code", { length: 16 }).notNull(),
+    customerId: int("customerId").notNull().references(() => customers.id),
+    captureId: int("captureId").references(() => captureRecords.id),
+    description: varchar("description", { length: 255 }).notNull(),
+    /** Parceiro que entrega o brinde (restaurante, spa, passeio), para conferir o custo com ele. */
+    partnerName: varchar("partnerName", { length: 120 }),
+    costAmount: decimal("costAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
+    expiresAt: date("expiresAt", { mode: "string" }),
+    status: mysqlEnum("status", ["issued", "redeemed", "cancelled"]).default("issued").notNull(),
+    issuedByUserId: int("issuedByUserId").references(() => users.id),
+    issuedAt: timestamp("issuedAt").defaultNow().notNull(),
+    redeemedAt: timestamp("redeemedAt"),
+    redeemedByUserId: int("redeemedByUserId").references(() => users.id),
+    redeemNote: varchar("redeemNote", { length: 255 }),
+    cancelledAt: timestamp("cancelledAt"),
+    cancelledByUserId: int("cancelledByUserId").references(() => users.id),
+    cancelReason: varchar("cancelReason", { length: 255 }),
+    /** Gerado pela tela a cada emissão: reenvio depois de resposta perdida devolve o mesmo voucher. */
+    requestId: varchar("requestId", { length: 64 }),
+  },
+  table => [uniqueIndex("vouchers_code_unique").on(table.code), uniqueIndex("vouchers_request_unique").on(table.requestId), index("vouchers_customer_idx").on(table.customerId), index("vouchers_status_expiry_idx").on(table.status, table.expiresAt), index("vouchers_issued_idx").on(table.issuedAt, table.id)],
+);
+
 export const proposals = mysqlTable("proposals", {
   id: int("id").autoincrement().primaryKey(),
   opportunityId: int("opportunityId").notNull().references(() => opportunities.id),
@@ -928,6 +959,24 @@ export const ownershipEntitlements = mysqlTable("ownership_entitlements", {
   status: mysqlEnum("status", ["active", "suspended", "expired", "cancelled"]).default("active").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("entitlements_contract_idx").on(table.contractId), index("entitlements_resort_idx").on(table.resortId, table.status)]);
+
+/**
+ * Extrato de pontos (TSE #29): só inclusão. Saldo = soma dos lançamentos; erro se corrige com estorno, nunca editando.
+ * idempotencyKey impede creditar o mesmo ano duas vezes e estornar o mesmo lançamento duas vezes.
+ */
+export const pointsLedger = mysqlTable("points_ledger", {
+  id: int("id").autoincrement().primaryKey(),
+  entitlementId: int("entitlementId").notNull().references(() => ownershipEntitlements.id),
+  entryType: mysqlEnum("entryType", ["annual_credit", "usage", "adjustment", "reversal"]).notNull(),
+  points: int("points").notNull(),
+  referenceYear: int("referenceYear"),
+  reservationId: int("reservationId").references(() => reservations.id),
+  reversesEntryId: int("reversesEntryId"),
+  note: varchar("note", { length: 255 }),
+  idempotencyKey: varchar("idempotencyKey", { length: 80 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("points_ledger_entitlement_idx").on(table.entitlementId, table.id), uniqueIndex("points_ledger_idempotency_unique").on(table.idempotencyKey)]);
 
 export const unitMaintenanceBlocks = mysqlTable("unit_maintenance_blocks", {
   id: int("id").autoincrement().primaryKey(),
