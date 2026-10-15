@@ -18,6 +18,7 @@ import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
 import { processClicksignWebhook } from "../eSignatureService";
+import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 
@@ -41,31 +42,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
-  const relationshipEndpoint = ENV.relationshipEndpoint.trim();
-  const relationshipKey = ENV.relationshipCrmIntegrationKey.trim();
-  if (Boolean(relationshipEndpoint) !== Boolean(relationshipKey)) {
-    throw new Error("Relationship bridge configuration incomplete");
-  }
+  const bridges = resolveBridgeConfig(ENV);
   let relationshipPump: RelationshipBridgePump | undefined;
-  const salesEndpoint = ENV.salesCommandEndpoint.trim();
-  const salesCancellationKey = ENV.salesCommandCancellationKey.trim();
-  if (Boolean(salesEndpoint) !== Boolean(salesCancellationKey)) {
-    throw new Error("Sales Command cancellation bridge configuration incomplete");
-  }
   let salesCancellationPump: SalesCancellationBridgePump | undefined;
-  const financialEndpoint = ENV.financialEndpoint.trim();
-  const financialKey = ENV.financialCrmIntegrationKey.trim();
-  const financialProject = {
-    externalKey: ENV.financialProjectExternalKey.trim(),
-    name: ENV.financialProjectName.trim(),
-    timezone: ENV.financialProjectTimezone.trim(),
-  };
-  if (Boolean(financialEndpoint) !== Boolean(financialKey)) {
-    throw new Error("Financial bridge configuration incomplete");
-  }
-  if (financialEndpoint && (!financialProject.externalKey || !financialProject.name || !financialProject.timezone)) {
-    throw new Error("Financial project identity incomplete");
-  }
   let financialPump: FinancialBridgePump | undefined;
   let pointsExpiryJob: PointsExpiryJob | undefined;
   const app = express();
@@ -174,18 +153,18 @@ async function startServer() {
 
   // HOST opcional (ex.: 127.0.0.1), como nos apps da Suite; vazio mantém todas as interfaces.
   server.listen(port, ENV.host.trim() || undefined, () => {
-    if (relationshipEndpoint && relationshipKey) {
-      relationshipPump = startRelationshipBridgePump(relationshipEndpoint, relationshipKey, {
+    if (bridges.relationship) {
+      relationshipPump = startRelationshipBridgePump(bridges.relationship.endpoint, bridges.relationship.key, {
         onError: error => logger.error("Relationship bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }
-    if (salesEndpoint && salesCancellationKey) {
-      salesCancellationPump = startSalesCancellationBridgePump(salesEndpoint, salesCancellationKey, {
+    if (bridges.salesCancellation) {
+      salesCancellationPump = startSalesCancellationBridgePump(bridges.salesCancellation.endpoint, bridges.salesCancellation.key, {
         onError: error => logger.error("Sales Command cancellation delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }
-    if (financialEndpoint && financialKey) {
-      financialPump = startFinancialBridgePump(financialEndpoint, financialKey, financialProject, {
+    if (bridges.financial) {
+      financialPump = startFinancialBridgePump(bridges.financial.endpoint, bridges.financial.key, bridges.financial.project, {
         onError: error => logger.error("Financial bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }

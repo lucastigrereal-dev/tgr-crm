@@ -273,6 +273,58 @@ test.describe("homologação isolada estrita", () => {
     expect(Number(afterReplay[0]?.count ?? 0)).toBe(1);
   });
 
+  // P-05 (Piloto na sala): o administrativo enxerga no navegador o que a ponte do Sales criou: contrato, parcelas,
+  // baixa manual, trilha de auditoria, painel de integrações (Financial desligado) e o estoque. Depende do teste anterior.
+  test("a sala no navegador: contrato da ponte, baixa manual, auditoria, integrações e estoque", async ({ page }) => {
+    const fx = fixture!;
+    const saleId = `E2E-SALE-${fx.normalizedRunId}`;
+    const [contract] = await queryDatabase<Array<{ id: number; number: string }>>(
+      "SELECT id, number FROM contracts WHERE externalSource = 'sales-command' AND externalSaleId = ?", [saleId],
+    );
+    expect(contract).toBeDefined();
+
+    // contrato criado pela ponte aparece na pasta contratual e abre com as parcelas
+    await page.goto("/contratos");
+    const row = page.locator("div", { hasText: fx.prefix + "Sales Command Cliente" }).filter({ has: page.getByRole("link", { name: contract!.number }) }).last();
+    await expect(row).toContainText("R$ 28.900,00");
+    await page.getByRole("link", { name: contract!.number }).click();
+    await expect(page).toHaveURL(new RegExp(`/contratos/${contract!.id}$`));
+    await expect(page.getByText("Parcelas", { exact: true })).toBeVisible();
+    await expect(page.getByText("#1", { exact: true })).toBeVisible();
+    await expect(page.getByText("#2", { exact: true })).toBeVisible();
+
+    // baixa manual da parcela 2 pela régua do Financeiro
+    await page.goto("/financeiro");
+    const item = page.locator("div", { hasText: `${contract!.number} · Parcela 2 · vence` }).filter({ has: page.getByRole("button", { name: "Baixar" }) }).last();
+    await expect(item).toContainText("R$ 1.800,00");
+    const paid = waitForMutation(page, "finance.markInstallmentPaid");
+    await item.getByRole("button", { name: "Baixar" }).click();
+    await paid;
+    await expect(page.getByText("Parcela baixada como paga.")).toBeVisible();
+    const installment = await queryDatabase<Array<{ status: string; paidAmount: string }>>(
+      "SELECT status, paidAmount FROM installments WHERE contractId = ? AND sequence = 2", [contract!.id],
+    );
+    expect(installment[0]).toMatchObject({ status: "paid", paidAmount: "1800.00" });
+
+    // a trilha de auditoria mostra a formalização da ponte e a baixa
+    await page.goto("/auditoria");
+    await expect(page.getByRole("heading", { name: "Auditoria" })).toBeVisible();
+    await expect(page.getByText(`Venda ${saleId} formalizada em cliente, oportunidade, proposta, contrato e 86 parcelas.`)).toBeVisible();
+    await expect(page.getByText("Parcela 2 baixada como paga.")).toBeVisible();
+
+    // painel de integrações: Financial desligado (piloto) sem evento recusado
+    await page.goto("/integracoes");
+    await expect(page.getByRole("heading", { name: "Integrações" })).toBeVisible();
+    await expect(page.getByText("TGR Financial Layer")).toBeVisible();
+    await expect(page.getByText("Desligada").first()).toBeVisible();
+    await expect(page.getByText("Nenhum evento recusado.")).toBeVisible();
+
+    // estoque: as 2 cotas vendidas saíram do disponível
+    await page.goto("/estoque-comercial");
+    await expect(page.getByText(fx.resortName).first()).toBeVisible();
+    await expect(page.getByText("Estoque comercial de cotas")).toBeVisible();
+  });
+
   test("solicita, aprova e executa distrato uma única vez", async ({ page }) => {
     const contractId = process.env.E2E_CANCELLATION_CONTRACT_ID;
     test.skip(

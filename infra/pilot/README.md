@@ -21,6 +21,11 @@ URL atual: `infra/pilot/.pilot-url.local.txt`.
 ### Ponte do Financial (opcional)
 Fica desligada enquanto `FINANCIAL_ENDPOINT` e `FINANCIAL_CRM_INTEGRATION_KEY` estiverem vazios. Para ligar, preencha também `FINANCIAL_PROJECT_EXTERNAL_KEY` e `FINANCIAL_PROJECT_NAME` (o fuso padrão é `America/Recife`): com só endpoint e chave, o app recusa subir ("Financial project identity incomplete").
 
+### Piloto na sala (Plano Piloto 3 dias): CRM sem Financial e usuários
+- Com `FINANCIAL_ENDPOINT` e `FINANCIAL_CRM_INTEGRATION_KEY` vazios o CRM sobe normalmente e a ponte fica desligada (provado em `server/bridgeConfig.test.ts`). Em `/integracoes` o Financial aparece como "Desligada" e os eventos pendentes acumulam sem perda; ligar depois entrega tudo na ordem.
+- Usuários do piloto (login local): `node scripts/pilot-users.mjs --out <pasta fora do repositório> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance`. `--perfil-sala` cria os 5 perfis da sala com nomes provisórios (`lucas.admin` admin geral, `gerente.vendas` admin, `gerente.captacao` seller, `recepcao` service, `administrativo` admin; o CRM não tem papel "gerente", ADR-007) e os nomes reais entram depois com `--user`. Papéis: `admin`, `seller`, `finance`, `service`. O script é idempotente (quem já existe mantém a senha; `--rotate nome` troca uma), grava `crm-users.env` (valor de `LOCAL_AUTH_USERS` para o compose) e as senhas temporárias só em `crm-credentials.local.txt` (modo 600). Nada de senha ou hash no terminal. `--env-name CRM_LOCAL_AUTH_USERS` gera a linha no nome que o compose portátil da Suite (`infra/piloto-portavel`) lê. Depois de subir, `node scripts/pilot-login-smoke.mjs --base https://<crm> --credentials <pasta>/crm-credentials.local.txt` confere o login de cada perfil (PASS/FAIL, sem imprimir senha). A troca das senhas temporárias é do Lucas no D3.
+- Browser: `e2e/strict-isolated.spec.ts` ("a sala no navegador") prova contrato criado pela ponte, parcelas, baixa manual, auditoria, painel de integrações e estoque.
+
 ## Status
 `pwsh ./infra/pilot/status-pilot.ps1`
 
