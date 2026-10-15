@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { contracts, customers, ownershipEntitlements, pointsLedger, reservations, resorts, units, users } from "../drizzle/schema";
+import { auditLogs, contracts, customers, ownershipEntitlements, pointsLedger, reservations, resorts, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Extrato de pontos (TSE #29) em MySQL real: só inclusão, saldo nunca negativo, crédito anual uma vez, estorno uma vez.
@@ -93,6 +94,11 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     const first = await caller().pointsLedger.recordUsage({ entitlementId, points: 50, requestId });
     const again = await caller().pointsLedger.recordUsage({ entitlementId, points: 50, requestId });
     expect(again.entryId).toBe(first.entryId);
+    // Auditoria que falhou na primeira vez: o reenvio grava, e mais um reenvio não duplica.
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${first.entryId}`));
+    await caller().pointsLedger.recordUsage({ entitlementId, points: 50, requestId });
+    await caller().pointsLedger.recordUsage({ entitlementId, points: 50, requestId });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${first.entryId}`))).toHaveLength(1);
     const adjustId = randomUUID();
     const adjusted = await caller("admin").pointsLedger.adjust({ entitlementId, points: 20, note: "Bônus de boas-vindas", requestId: adjustId });
     const results = await Promise.all([1, 2].map(() => caller("admin").pointsLedger.adjust({ entitlementId, points: 20, note: "Bônus de boas-vindas", requestId: adjustId })));
@@ -123,6 +129,12 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(statement.entries).toHaveLength(500);
     expect(statement.entries[0]!.balanceAfter).toBe(620);
     expect(statement.entries.at(-1)!.balanceAfter).toBe(121);
+    const older = await caller().pointsLedger.statement({ entitlementId: busy, beforeId: statement.nextBeforeId! });
+    expect(older.entries).toHaveLength(120);
+    expect(older.entries[0]!.balanceAfter).toBe(120);
+    expect(older.entries.at(-1)!.balanceAfter).toBe(1);
+    expect(older.nextBeforeId).toBeNull();
+    expect(new Set([...statement.entries, ...older.entries].map(entry => entry.id)).size).toBe(620);
   });
 
   it("direito de uso cancelado não recebe ajuste", async () => {

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { customers, users, vouchers } from "../drizzle/schema";
+import { auditLogs, customers, users, vouchers } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { localDateInTimezone } from "./saleTermsPolicy";
 
@@ -59,6 +59,7 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     const old = await caller().vouchers.issue({ customerId, description: "Brinde que venceu", costAmount: 40, requestId: randomUUID() });
     await db.update(vouchers).set({ expiresAt: "2020-01-01" }).where(eq(vouchers.id, old.voucherId));
     await expect(caller().vouchers.redeem({ code: old.code })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("venceu") });
+    await expect(caller("seller").vouchers.cancel({ id: old.voucherId, reason: "Casal não veio" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
 
     const toCancel = await caller().vouchers.issue({ customerId, description: "Brinde cancelado", costAmount: 25, requestId: randomUUID() });
     await expect(caller("service").vouchers.cancel({ id: toCancel.voucherId, reason: "Casal desistiu" })).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -91,7 +92,8 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     expect(summary.cancelled).toEqual({ count, cost: 6375 });
     expect(summary.total).toEqual({ count, cost: 6375 });
 
-    // Histórico grande: um voucher válido antigo continua aparecendo na ficha, e a resposta avisa o corte.
+    // Histórico grande: um voucher válido antigo continua aparecendo na ficha, à frente de vencidos mais novos, e a resposta avisa o corte.
+    await db.insert(vouchers).values(Array.from({ length: 210 }, (_, index) => ({ code: `E${runId}${index}`, customerId, description: "Brinde vencido sintético", costAmount: "1.00", expiresAt: "2020-01-01", issuedByUserId: userId })));
     const [{ id: oldValid }] = await db.insert(vouchers).values({ code: `V${runId}`, customerId, description: "Brinde válido antigo", costAmount: "10.00", issuedByUserId: userId, issuedAt: new Date("2000-06-01T15:00:00Z") }).$returningId();
     const list = await caller().vouchers.listByCustomer({ customerId });
     expect(list.truncated).toBe(true);
@@ -105,6 +107,11 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     const first = await caller().vouchers.issue({ customerId, description: "Café da manhã", costAmount: 30, requestId });
     const again = await Promise.all([1, 2, 3].map(() => caller().vouchers.issue({ customerId, description: "Café da manhã", costAmount: 30, requestId })));
     expect(again).toEqual([first, first, first]);
+    // Auditoria que falhou na primeira vez: o reenvio grava, sem duplicar.
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_issued:${first.voucherId}`));
+    await caller().vouchers.issue({ customerId, description: "Café da manhã", costAmount: 30, requestId });
+    await caller().vouchers.issue({ customerId, description: "Café da manhã", costAmount: 30, requestId });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_issued:${first.voucherId}`))).toHaveLength(1);
     const parallelId = randomUUID();
     const parallel = await Promise.all([1, 2, 3].map(() => caller().vouchers.issue({ customerId, description: "Massagem", costAmount: 120, requestId: parallelId })));
     expect(new Set(parallel.map(result => result.voucherId)).size).toBe(1);

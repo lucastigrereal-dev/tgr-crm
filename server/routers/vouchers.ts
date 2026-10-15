@@ -38,13 +38,13 @@ export const SUMMARY_PAGE_SIZE = 5000;
 export const CUSTOMER_LIST_LIMIT = 200;
 
 export const vouchersRouter = router({
-  // Os válidos (ainda sem baixa nem cancelamento) vêm primeiro, para nunca sumirem atrás de histórico usado; acima do
+  // Os válidos (sem baixa, sem cancelamento e dentro da validade no dia do projeto) vêm primeiro, para nunca sumirem atrás de histórico usado; acima do
   // limite a resposta avisa quantos existem.
   listByCustomer: internalProcedure.input(z.object({ customerId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await requireDb();
     const today = projectToday();
     const rows = await db.select().from(vouchers).where(eq(vouchers.customerId, input.customerId))
-      .orderBy(sql`${vouchers.status} = 'issued' desc`, desc(vouchers.issuedAt), desc(vouchers.id)).limit(CUSTOMER_LIST_LIMIT);
+      .orderBy(sql`(${vouchers.status} = 'issued' and (${vouchers.expiresAt} is null or ${vouchers.expiresAt} >= ${today})) desc`, desc(vouchers.issuedAt), desc(vouchers.id)).limit(CUSTOMER_LIST_LIMIT);
     const total = rows.length < CUSTOMER_LIST_LIMIT ? rows.length
       : Number((await db.select({ count: sql<number>`count(*)` }).from(vouchers).where(eq(vouchers.customerId, input.customerId)))[0]?.count ?? rows.length);
     const list = rows.map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
@@ -92,11 +92,16 @@ export const vouchersRouter = router({
       const [capture] = await db.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
       if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
     }
+    const auditIssued = (id: number, code: string, customerId: number, description: string) =>
+      recordAudit(ctx.user.id, "voucher", id, "issued", `Voucher ${code} emitido para o associado ${customerId}: ${description}.`, { idempotencyKey: `voucher_issued:${id}` });
     // Reenvio da mesma emissão (resposta perdida, auditoria que falhou): devolve o voucher já gravado, sem novo código.
     const previous = async () => {
-      const [row] = await db.select({ id: vouchers.id, code: vouchers.code, customerId: vouchers.customerId }).from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
-      if (row && row.customerId !== input.customerId) throw new TRPCError({ code: "CONFLICT", message: "Esta emissão já foi usada para outro associado." });
-      return row ? { voucherId: row.id, code: row.code } : undefined;
+      const [row] = await db.select({ id: vouchers.id, code: vouchers.code, customerId: vouchers.customerId, description: vouchers.description }).from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
+      if (!row) return undefined;
+      if (row.customerId !== input.customerId) throw new TRPCError({ code: "CONFLICT", message: "Esta emissão já foi usada para outro associado." });
+      // Se a auditoria da primeira tentativa falhou, o reenvio a grava; se já existe, a chave impede a duplicata.
+      await auditIssued(row.id, row.code, row.customerId, row.description);
+      return { voucherId: row.id, code: row.code };
     };
     const replay = await previous();
     if (replay) return replay;
@@ -104,7 +109,7 @@ export const vouchersRouter = router({
       const code = newCode();
       try {
         const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId();
-        await recordAudit(ctx.user.id, "voucher", created.id, "issued", `Voucher ${code} emitido para o associado ${input.customerId}: ${input.description}.`);
+        await auditIssued(created.id, code, input.customerId, input.description);
         return { voucherId: created.id, code };
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;
@@ -139,6 +144,8 @@ export const vouchersRouter = router({
       const [row] = await tx.select().from(vouchers).where(eq(vouchers.id, input.id)).limit(1).for("update");
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Voucher não encontrado." });
       if (row.status !== "issued") throw new TRPCError({ code: "CONFLICT", message: row.status === "redeemed" ? "Voucher já usado não pode ser cancelado." : "Voucher já cancelado." });
+      // Vencido fica vencido: cancelar depois da validade mudaria o histórico (e o custo) de "vencido sem uso" para "cancelado".
+      if (voucherState(row, projectToday()) === "expired") throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Este voucher venceu em ${row.expiresAt}; não há o que cancelar.` });
       await tx.update(vouchers).set({ status: "cancelled", cancelledAt: new Date(), cancelledByUserId: ctx.user.id, cancelReason: input.reason }).where(eq(vouchers.id, row.id));
       return row;
     });

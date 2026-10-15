@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ownershipEntitlements, pointsLedger, reservations } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -51,7 +51,8 @@ async function append(tx: Tx, values: typeof pointsLedger.$inferInsert, duplicat
 
 /**
  * Uso e ajuste manuais trazem um requestId gerado pela tela a cada lançamento. Se a resposta se perde e a tela reenvia, o
- * mesmo requestId devolve o lançamento já gravado em vez de debitar de novo.
+ * mesmo requestId devolve o lançamento já gravado em vez de debitar de novo. A auditoria tem chave pelo lançamento: o
+ * reenvio grava a que faltou (se a primeira falhou) e nunca duplica.
  */
 const requestId = z.string().uuid();
 async function existingRequest(tx: Tx, idempotencyKey: string) {
@@ -63,7 +64,9 @@ async function existingRequest(tx: Tx, idempotencyKey: string) {
 export const STATEMENT_ENTRY_LIMIT = 500;
 
 export const pointsLedgerRouter = router({
-  statement: contractsProcedure.input(z.object({ entitlementId: z.number().int().positive() })).query(async ({ input }) => {
+  // Página do extrato: sem beforeId, os mais recentes; com beforeId, os anteriores a ele. nextBeforeId abre a página
+  // seguinte, para que todo lançamento antigo possa ser visto e estornado.
+  statement: contractsProcedure.input(z.object({ entitlementId: z.number().int().positive(), beforeId: z.number().int().positive().optional() })).query(async ({ input }) => {
     const db = await requireDb();
     const [entitlement] = await db.select().from(ownershipEntitlements).where(eq(ownershipEntitlements.id, input.entitlementId)).limit(1);
     if (!entitlement) throw new TRPCError({ code: "NOT_FOUND", message: "Direito de uso não encontrado." });
@@ -74,13 +77,20 @@ export const pointsLedgerRouter = router({
       const [totals] = await tx.select({ balance: sql<number>`coalesce(sum(${pointsLedger.points}), 0)`, count: sql<number>`count(*)` }).from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId));
       const balance = Number(totals?.balance ?? 0);
       const totalEntries = Number(totals?.count ?? 0);
-      const rows = await tx.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId)).orderBy(desc(pointsLedger.id)).limit(STATEMENT_ENTRY_LIMIT);
+      const pageFilter = input.beforeId ? and(eq(pointsLedger.entitlementId, input.entitlementId), lt(pointsLedger.id, input.beforeId)) : eq(pointsLedger.entitlementId, input.entitlementId);
+      const rows = await tx.select().from(pointsLedger).where(pageFilter).orderBy(desc(pointsLedger.id)).limit(STATEMENT_ENTRY_LIMIT + 1);
+      const hasMore = rows.length > STATEMENT_ENTRY_LIMIT;
+      if (hasMore) rows.pop();
+      // Saldo depois do lançamento mais novo da página: o total, ou a soma de tudo antes do cursor.
+      const pageTop = input.beforeId
+        ? Number((await tx.select({ value: sql<number>`coalesce(sum(${pointsLedger.points}), 0)` }).from(pointsLedger).where(pageFilter))[0]?.value ?? 0)
+        : balance;
       const reversed = rows.length
         ? new Set((await tx.select({ reversesEntryId: pointsLedger.reversesEntryId }).from(pointsLedger).where(and(eq(pointsLedger.entitlementId, input.entitlementId), inArray(pointsLedger.reversesEntryId, rows.map(row => row.id))))).map(row => row.reversesEntryId))
         : new Set<number | null>();
-      let after = balance;
+      let after = pageTop;
       const entries = rows.map(row => { const entry = { id: row.id, entryType: row.entryType, points: row.points, balanceAfter: after, referenceYear: row.referenceYear, reservationId: row.reservationId, reversesEntryId: row.reversesEntryId, reversed: reversed.has(row.id), note: row.note, createdAt: row.createdAt }; after -= row.points; return entry; });
-      return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance, totalEntries, truncated: totalEntries > rows.length, entries };
+      return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance, totalEntries, truncated: hasMore || Boolean(input.beforeId), nextBeforeId: hasMore ? rows[rows.length - 1]!.id : null, entries };
     });
   }),
 
@@ -95,18 +105,17 @@ export const pointsLedgerRouter = router({
       if ((fromYear && input.year < fromYear) || (untilYear && input.year > untilYear)) throw new TRPCError({ code: "BAD_REQUEST", message: `O ano ${input.year} está fora da vigência do direito de uso.` });
       return append(tx, { entitlementId: entitlement.id, entryType: "annual_credit", points: entitlement.annualPoints, referenceYear: input.year, idempotencyKey: `annual:${entitlement.id}:${input.year}`, note: `Crédito anual ${input.year}`, createdByUserId: ctx.user.id }, `Os pontos de ${input.year} já foram creditados neste direito de uso.`);
     });
-    await recordAudit(ctx.user.id, "points_ledger", id, "annual_credit", `Crédito anual ${input.year} no direito de uso ${input.entitlementId}.`);
+    await recordAudit(ctx.user.id, "points_ledger", id, "annual_credit", `Crédito anual ${input.year} no direito de uso ${input.entitlementId}.`, { idempotencyKey: `points_ledger:${id}` });
     return { entryId: id };
   }),
 
   recordUsage: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().positive().max(1_000_000), reservationId: z.number().int().positive().optional(), note: z.string().trim().max(255).optional(), requestId })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const idempotencyKey = `usage:${input.entitlementId}:${input.requestId}`;
-    let replay = false;
     const id = await db.transaction(async tx => {
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
       const existing = await existingRequest(tx, idempotencyKey);
-      if (existing) { replay = true; return existing; }
+      if (existing) return existing;
       requireActive(entitlement);
       if (input.reservationId) {
         const [reservation] = await tx.select({ contractId: reservations.contractId, status: reservations.status }).from(reservations).where(eq(reservations.id, input.reservationId)).limit(1);
@@ -121,25 +130,22 @@ export const pointsLedgerRouter = router({
       if (balance < input.points) throw insufficient(balance, input.points);
       return append(tx, { entitlementId: entitlement.id, entryType: "usage", points: -input.points, reservationId: input.reservationId ?? null, note: input.note || null, idempotencyKey, createdByUserId: ctx.user.id }, "Uso repetido.");
     });
-    if (replay) return { entryId: id };
-    await recordAudit(ctx.user.id, "points_ledger", id, "usage", `Uso de ${input.points} ponto(s) no direito de uso ${input.entitlementId}${input.reservationId ? ` (reserva ${input.reservationId})` : ""}.`);
+    await recordAudit(ctx.user.id, "points_ledger", id, "usage", `Uso de ${input.points} ponto(s) no direito de uso ${input.entitlementId}${input.reservationId ? ` (reserva ${input.reservationId})` : ""}.`, { idempotencyKey: `points_ledger:${id}` });
     return { entryId: id };
   }),
 
   adjust: adminProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().min(-1_000_000).max(1_000_000).refine(value => value !== 0, "Ajuste não pode ser zero."), note: z.string().trim().min(5, "Explique o ajuste.").max(255), requestId })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const idempotencyKey = `adjustment:${input.entitlementId}:${input.requestId}`;
-    let replay = false;
     const id = await db.transaction(async tx => {
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
       const existing = await existingRequest(tx, idempotencyKey);
-      if (existing) { replay = true; return existing; }
+      if (existing) return existing;
       requireActive(entitlement);
       if (balance + input.points < 0) throw insufficient(balance, -input.points);
       return append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, idempotencyKey, createdByUserId: ctx.user.id }, "Ajuste repetido.");
     });
-    if (replay) return { entryId: id };
-    await recordAudit(ctx.user.id, "points_ledger", id, "adjustment", `Ajuste de ${input.points} ponto(s) no direito de uso ${input.entitlementId}: ${input.note}.`);
+    await recordAudit(ctx.user.id, "points_ledger", id, "adjustment", `Ajuste de ${input.points} ponto(s) no direito de uso ${input.entitlementId}: ${input.note}.`, { idempotencyKey: `points_ledger:${id}` });
     return { entryId: id };
   }),
 
@@ -154,7 +160,7 @@ export const pointsLedgerRouter = router({
       const id = await append(tx, { entitlementId: target.entitlementId, entryType: "reversal", points: -target.points, referenceYear: target.referenceYear, reservationId: target.reservationId, reversesEntryId: target.id, idempotencyKey: `reversal:${target.id}`, note: input.note, createdByUserId: ctx.user.id }, "Este lançamento já foi estornado.");
       return { id, target };
     });
-    await recordAudit(ctx.user.id, "points_ledger", result.id, "reversal", `Estorno do ${entryLabel[result.target.entryType]} ${result.target.id} (${result.target.points} ponto(s)): ${input.note}.`);
+    await recordAudit(ctx.user.id, "points_ledger", result.id, "reversal", `Estorno do ${entryLabel[result.target.entryType]} ${result.target.id} (${result.target.points} ponto(s)): ${input.note}.`, { idempotencyKey: `points_ledger:${result.id}` });
     return { entryId: result.id };
   }),
 });

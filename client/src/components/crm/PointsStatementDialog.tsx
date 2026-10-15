@@ -23,7 +23,20 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
   const [note, setNote] = useState("");
   const utils = trpc.useUtils();
   const statement = trpc.pointsLedger.statement.useQuery({ entitlementId }, { enabled: open });
-  const done = (message: string) => { toast.success(message); setRequestId(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
+  // Páginas mais antigas carregadas sob demanda, para ver e estornar qualquer lançamento.
+  type Page = NonNullable<typeof statement.data>;
+  const [older, setOlder] = useState<Page[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const nextBeforeId = older.length ? older[older.length - 1]!.nextBeforeId : statement.data?.nextBeforeId ?? null;
+  const entries = [...(statement.data?.entries ?? []), ...older.flatMap(page => page.entries)];
+  const loadOlder = async () => {
+    if (!nextBeforeId) return;
+    setLoadingOlder(true);
+    try { const page = await utils.pointsLedger.statement.fetch({ entitlementId, beforeId: nextBeforeId }); setOlder(pages => [...pages, page]); }
+    catch (error) { toast.error((error as Error).message); }
+    finally { setLoadingOlder(false); }
+  };
+  const done = (message: string) => { toast.success(message); setRequestId(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); setOlder([]); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
   const onError = (error: { message: string }) => toast.error(error.message);
   const credit = trpc.pointsLedger.creditAnnual.useMutation({ onSuccess: () => done("Pontos do ano creditados."), onError });
   const usage = trpc.pointsLedger.recordUsage.useMutation({ onSuccess: () => done("Uso lançado."), onError });
@@ -37,7 +50,7 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
     <DialogContent className="max-w-2xl">
       <DialogHeader><DialogTitle className="font-serif text-2xl">Extrato de pontos · {label}</DialogTitle></DialogHeader>
       <p className="text-sm">Saldo: <strong>{statement.data?.balance ?? "..."}</strong> ponto(s){statement.data ? ` · ${statement.data.entitlement.annualPoints} por ano` : ""}</p>
-      {statement.data?.truncated && <p className="text-xs text-amber-700">Mostrando os {statement.data.entries.length} lançamentos mais recentes de {statement.data.totalEntries}. O saldo considera todos.</p>}
+      {statement.data?.truncated && <p className="text-xs text-amber-700">Mostrando {entries.length} de {statement.data.totalEntries} lançamentos, dos mais recentes para os antigos. O saldo considera todos.</p>}
       {canPost && <div className="grid gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
         <div className="flex flex-wrap gap-2"><Input className="h-9 w-24" type="number" min="2000" max="2100" value={year} onChange={e => setYear(e.target.value)} aria-label="Ano" /><Button size="sm" className="h-9" disabled={busy} onClick={() => credit.mutate({ entitlementId, year: Number(year) })}>Creditar pontos do ano</Button></div>
         <div className="flex flex-wrap gap-2">
@@ -51,13 +64,14 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
         </div>
       </div>}
       <div className="max-h-72 overflow-y-auto text-sm">
-        {statement.data?.entries.length === 0 && <p className="text-muted-foreground">Nenhum lançamento ainda.</p>}
-        {(statement.data?.entries ?? []).map(entry => <div key={entry.id} className="flex items-center justify-between gap-2 border-b border-[#f0ece4] py-2 last:border-b-0">
+        {statement.data && entries.length === 0 && <p className="text-muted-foreground">Nenhum lançamento ainda.</p>}
+        {entries.map(entry => <div key={entry.id} className="flex items-center justify-between gap-2 border-b border-[#f0ece4] py-2 last:border-b-0">
           <div><p className="font-semibold text-[#1d2b2a]">{entryLabel[entry.entryType]}{entry.referenceYear ? ` ${entry.referenceYear}` : ""}{entry.reservationId ? ` · reserva ${entry.reservationId}` : ""}{entry.reversed ? " · estornado" : ""}</p><p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleDateString("pt-BR")}{entry.note ? ` · ${entry.note}` : ""}</p></div>
           <div className="flex items-center gap-3 text-right"><div><p className={entry.points < 0 ? "text-[#8a3b2d]" : "text-[#285043]"}>{entry.points > 0 ? `+${entry.points}` : entry.points}</p><p className="text-xs text-muted-foreground">saldo {entry.balanceAfter}</p></div>
             {isAdmin && entry.entryType !== "reversal" && !entry.reversed && <Button size="sm" variant="ghost" disabled={busy} onClick={() => { const reason = window.prompt("Motivo do estorno:"); if (reason?.trim()) reverse.mutate({ entryId: entry.id, note: reason }); }}>Estornar</Button>}
           </div>
         </div>)}
+        {nextBeforeId && <Button size="sm" variant="outline" className="mt-2 w-full" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? "Carregando..." : "Carregar lançamentos mais antigos"}</Button>}
       </div>
     </DialogContent>
   </Dialog>;
