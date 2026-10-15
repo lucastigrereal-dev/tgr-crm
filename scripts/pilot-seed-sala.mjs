@@ -27,7 +27,13 @@ const balanceInstallments = intOpt("--balance-installments", 12, 1, 360);
 const POLICY_VERSION = "SYN-PILOTO-SALA-1";
 const pad = n => String(n).padStart(2, "0");
 
-const connection = await mysql.createConnection({ uri: url });
+// A criação da conexão também é protegida: URL malformada não pode vazar a senha na mensagem de erro.
+let connection;
+try {
+  connection = await mysql.createConnection({ uri: url });
+} catch {
+  fail("Seed falhou: não foi possível conectar com a DATABASE_URL informada (confira o formato; o valor não é exibido).");
+}
 try {
   await connection.beginTransaction();
   await connection.query("INSERT IGNORE INTO resorts (name, city, state, status) VALUES (?, 'Natal', 'RN', 'active')", [projectName]);
@@ -47,6 +53,10 @@ try {
     "INSERT IGNORE INTO commercial_policy_versions (resortId, policyType, version, policyJson, effectiveAt) VALUES (?, 'sale_terms', ?, ?, '2026-01-01 00:00:00')",
     [resort.id, POLICY_VERSION, JSON.stringify(policy)],
   );
+  // Rodar de novo com outro número de parcelas não pode passar em silêncio: a política já gravada vale.
+  const [[stored]] = await connection.query("SELECT policyJson FROM commercial_policy_versions WHERE resortId = ? AND policyType = 'sale_terms' AND version = ?", [resort.id, POLICY_VERSION]);
+  const storedJson = typeof stored.policyJson === "string" ? JSON.parse(stored.policyJson) : stored.policyJson;
+  if (storedJson?.balanceInstallmentCount !== balanceInstallments) throw new Error(`a política ${POLICY_VERSION} já existe com ${storedJson?.balanceInstallmentCount} parcelas de saldo e não é alterada por este script; use o mesmo --balance-installments ou ajuste a política no banco.`);
   await connection.query(
     "INSERT IGNORE INTO audit_logs (entityType, entityId, action, summary, idempotencyKey) VALUES ('pilot_seed', ?, 'seeded', ?, ?)",
     [String(resort.id), `Seed sintético do piloto da sala: ${units.length} UH, ${fractionRows.length} cotas, política sale_terms ${POLICY_VERSION}.`, `pilot-seed-sala:${resort.id}`],

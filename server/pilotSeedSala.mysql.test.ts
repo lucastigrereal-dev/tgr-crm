@@ -34,6 +34,19 @@ describe.skipIf(!integrationUrl)("seed do piloto da sala em MySQL real", () => {
     expect(JSON.parse(again.stdout)).toMatchObject({ units: 1, fractions: 10, available: 10, saleTermsPolicies: 1 });
   });
 
+  it("rodar de novo com outro número de parcelas é recusado (não ignora em silêncio) e a URL malformada não vaza", () => {
+    const name = `SYN Parcelas ${runId}`;
+    const base = ["scripts/pilot-seed-sala.mjs", "--project-name", name];
+    const env = { ...process.env, DATABASE_URL: integrationUrl };
+    expect(spawnSync(process.execPath, [...base, "--balance-installments", "12"], { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, env }).status).toBe(0);
+    const conflict = spawnSync(process.execPath, [...base, "--balance-installments", "6"], { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, env });
+    expect(conflict.status).toBe(1);
+    expect(conflict.stderr).toContain("12 parcelas");
+    const bad = spawnSync(process.execPath, base, { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, env: { ...process.env, DATABASE_URL: "mysql://usuario:SENHA-SECRETA@host-invalido:abc/db" } });
+    expect(bad.status).toBe(1);
+    expect(`${bad.stdout}${bad.stderr}`).not.toContain("SENHA-SECRETA");
+  });
+
   it("só cria cota nas UHs pedidas (UH alheia com prefixo parecido fica sem cota)", async () => {
     const name = `SYN Prefixo ${runId}`;
     await pool.query("INSERT INTO resorts (name, status) VALUES (?, 'active')", [name]);
