@@ -19,7 +19,11 @@ export default function Vouchers() {
   const [last, setLast] = useState<{ customerId: number; description: string } | null>(null);
   const utils = trpc.useUtils();
   const summary = trpc.vouchers.summary.useQuery({ startDate: startDate || undefined, endDate: endDate || undefined }, { enabled: !(startDate && endDate && startDate > endDate) });
-  const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: r => { setLast(r); setCode(""); setNote(""); toast.success("Baixa registrada."); void utils.vouchers.summary.invalidate(); }, onError: e => toast.error(e.message) });
+  const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: r => { setLast(r); setCode(""); setNote(""); toast.success("Baixa registrada."); void utils.vouchers.summary.invalidate(); }, onError: e => {
+    toast.error(e.message);
+    // O erro pode vir de uma baixa anterior que já gravou (resposta perdida): o resumo recarrega para mostrar o estado real.
+    void utils.vouchers.summary.invalidate();
+  } });
 
   return <div className="space-y-6">
     <PageHeader eyebrow="Recepção" title="Vouchers e brindes" description="Dê baixa quando o casal apresentar o código e acompanhe quanto os brindes custaram no período." />

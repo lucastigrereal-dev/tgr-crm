@@ -23,7 +23,6 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   const [partnerName, setPartnerName] = useState("");
   const [cost, setCost] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
-  const [captureId, setCaptureId] = useState("");
   // Um requestId por emissão: reenvio após resposta perdida devolve o mesmo voucher, sem emitir outro.
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const utils = trpc.useUtils();
@@ -34,7 +33,13 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   // Valem só para a primeira página de onde saíram; recarregada, as antigas são descartadas (sem buraco na fronteira).
   const [olderCaptureState, setOlderCaptures] = useState<{ base: number; captures: NonNullable<typeof captures.data>["captures"]; nextBeforeId: number | null } | null>(null);
   const olderCaptures = olderCaptureState?.base === captures.dataUpdatedAt ? olderCaptureState : null;
-  const captureList = [...(captures.data?.captures ?? []), ...(olderCaptures?.captures ?? [])];
+  const loadedCaptures = [...(captures.data?.captures ?? []), ...(olderCaptures?.captures ?? [])];
+  // A ficha escolhida fica guardada inteira: se a página antiga de onde ela veio for descartada, a opção continua na lista
+  // e o que aparece selecionado é o que vai no envio.
+  const [pickedCapture, setPickedCapture] = useState<(typeof loadedCaptures)[number] | null>(null);
+  const captureList = pickedCapture && !loadedCaptures.some(capture => capture.id === pickedCapture.id) ? [...loadedCaptures, pickedCapture] : loadedCaptures;
+  const captureId = pickedCapture ? String(pickedCapture.id) : "";
+  const setCaptureId = (value: string) => setPickedCapture(captureList.find(capture => String(capture.id) === value) ?? null);
   const nextCaptureCursor = olderCaptures ? olderCaptures.nextBeforeId : captures.data?.nextBeforeId ?? null;
   const loadOlderCaptures = async () => {
     if (!nextCaptureCursor) return;
