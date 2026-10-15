@@ -20,7 +20,8 @@ import { buildMonetaryAdjustment, parseMonetaryAdjustmentPolicy } from "../monet
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 
 const day = (value: Date | string) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
-const atNoon = (value: Date | string) => value instanceof Date ? value : new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
+// Coluna date volta do banco como meia-noite UTC; normaliza tudo para meio-dia UTC do mesmo dia antes de comparar.
+const atNoon = (value: Date | string) => new Date(`${day(value)}T12:00:00Z`);
 const monthStart = (value: Date | string) => {
   const parsed = atNoon(value);
   return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), 1, 12));

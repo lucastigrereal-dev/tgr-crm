@@ -9,7 +9,7 @@ import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustom
 import { assertCsvImportRowBudget, duplicateValueIndexes } from "../csvImportGuard";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
-import { affectedRows } from "../mysqlErrors";
+import { affectedRows, isForeignKeyBlockError } from "../mysqlErrors";
 
 // Origem do lote (Gate 2 da migração): sistema de origem (ex.: "tse", "planilha_comercial") e nome do arquivo, ambos opcionais.
 const inputSchema = z.object({ kind: z.enum(["customers", "contracts", "units"]), csv: z.string().min(2).max(2_000_000), mapping: z.record(z.string(), z.string()).optional(), sourceSystem: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,60}$/, "Sistema de origem: só letras, números, ponto, hífen e sublinhado (até 60).").optional(), sourceFileName: z.string().trim().min(1).max(255).optional() });
@@ -184,7 +184,11 @@ export const importsRouter = router({
           ]);
           if (dependencies.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já possui contrato vinculado." });
           if (portalLinks.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já recebeu link do portal do associado." });
-          await tx.delete(customers).where(inArray(customers.id, createdIds));
+          // Contatos, documentos, interações e outros vínculos criados depois do lote também seguram o associado.
+          try { await tx.delete(customers).where(inArray(customers.id, createdIds)); } catch (error) {
+            if (isForeignKeyBlockError(error)) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já tem contato, documento, interação ou outro registro vinculado." });
+            throw error;
+          }
         }
         for (const item of items.filter(item => item.entityType === "customer" && item.action === "updated" && item.beforeSnapshot)) await tx.update(customers).set(restoreCustomerValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(customers.id, item.entityId));
       } else {

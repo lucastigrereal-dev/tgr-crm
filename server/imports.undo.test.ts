@@ -9,7 +9,7 @@ import { importsRouter } from "./routers/imports";
 type Batch = { id: number; kind: "customers" | "contracts" | "units"; status: "completed" | "reverted" };
 type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
 
-function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }> } = {}) {
+function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }>; deleteError?: unknown } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
@@ -38,7 +38,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
       };
       },
     })),
-    delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { deletes.push(table); return Promise.resolve(); }) })),
+    delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { if (options.deleteError) return Promise.reject(options.deleteError); deletes.push(table); return Promise.resolve(); }) })),
     update: vi.fn((table: unknown) => ({ set: vi.fn((values: unknown) => ({ where: vi.fn(() => { updates.push({ table, values }); return Promise.resolve(); }) })) })),
   };
   const db = {
@@ -88,6 +88,19 @@ describe("imports.undoLast", () => {
 
     await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("portal") });
     expect(fixture.deletes).toEqual([]);
+  });
+
+  it("vínculo criado depois do lote (contato, documento, interação) vira recusa controlada, não erro de banco", async () => {
+    const fkError = Object.assign(new Error("Failed query"), { cause: { code: "ER_ROW_IS_REFERENCED_2", errno: 1451 } });
+    const fixture = makeDb(
+      { id: 88, kind: "customers", status: "completed" },
+      [{ entityType: "customer", entityId: 108, action: "created", beforeSnapshot: null }],
+      [],
+      { deleteError: fkError },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("contato") });
   });
 
   it("restaura o snapshot do associado atualizado em vez de apagá-lo", async () => {

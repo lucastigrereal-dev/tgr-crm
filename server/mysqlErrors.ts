@@ -19,3 +19,14 @@ export function affectedRows(result: unknown): number | null {
   const count = Number((header as { affectedRows: unknown }).affectedRows);
   return Number.isFinite(count) ? count : null;
 }
+
+// Delete barrado por chave estrangeira (ER_ROW_IS_REFERENCED_2, 1451): a linha ainda tem dependente.
+export function isForeignKeyBlockError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const candidate = current as { code?: unknown; errno?: unknown; cause?: unknown };
+    if (candidate.code === "ER_ROW_IS_REFERENCED_2" || Number(candidate.errno) === 1451) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
