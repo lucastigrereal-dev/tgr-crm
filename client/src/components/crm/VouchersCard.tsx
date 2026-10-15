@@ -31,13 +31,16 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   // Ficha de captação que originou o brinde (tour, venda), para o custo ficar ligado a ela.
   const captures = trpc.vouchers.captureOptions.useQuery({ customerId }, { enabled: customerId > 0 && canIssue });
   // Fichas mais antigas que a primeira página, carregadas sob demanda.
-  const [olderCaptures, setOlderCaptures] = useState<{ captures: NonNullable<typeof captures.data>["captures"]; nextBeforeId: number | null } | null>(null);
+  // Valem só para a primeira página de onde saíram; recarregada, as antigas são descartadas (sem buraco na fronteira).
+  const [olderCaptureState, setOlderCaptures] = useState<{ base: number; captures: NonNullable<typeof captures.data>["captures"]; nextBeforeId: number | null } | null>(null);
+  const olderCaptures = olderCaptureState?.base === captures.dataUpdatedAt ? olderCaptureState : null;
   const captureList = [...(captures.data?.captures ?? []), ...(olderCaptures?.captures ?? [])];
   const nextCaptureCursor = olderCaptures ? olderCaptures.nextBeforeId : captures.data?.nextBeforeId ?? null;
   const loadOlderCaptures = async () => {
     if (!nextCaptureCursor) return;
+    const base = captures.dataUpdatedAt;
     const page = await utils.vouchers.captureOptions.fetch({ customerId, beforeId: nextCaptureCursor });
-    setOlderCaptures(previous => ({ captures: [...(previous?.captures ?? []), ...page.captures], nextBeforeId: page.nextBeforeId }));
+    setOlderCaptures(previous => ({ base, captures: [...(previous?.base === base ? previous.captures : []), ...page.captures], nextBeforeId: page.nextBeforeId }));
   };
   const refresh = () => void utils.vouchers.listByCustomer.invalidate({ customerId });
   const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setPartnerName(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });

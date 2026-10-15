@@ -26,18 +26,22 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
   const statement = trpc.pointsLedger.statement.useQuery({ entitlementId }, { enabled: open });
   // Páginas mais antigas carregadas sob demanda, para ver e estornar qualquer lançamento.
   type Page = NonNullable<typeof statement.data>;
-  const [older, setOlder] = useState<Page[]>([]);
+  // As páginas antigas valem só para a primeira página de onde saíram: quando ela é recarregada (lançamento novo, foco na
+  // janela, reabrir), as antigas são descartadas e voltam a ser buscadas a partir do cursor novo, sem buraco na fronteira.
+  const [olderState, setOlder] = useState<{ base: number; pages: Page[] }>({ base: 0, pages: [] });
+  const older = olderState.base === statement.dataUpdatedAt ? olderState.pages : [];
   const [loadingOlder, setLoadingOlder] = useState(false);
   const nextBeforeId = older.length ? older[older.length - 1]!.nextBeforeId : statement.data?.nextBeforeId ?? null;
   const entries = [...(statement.data?.entries ?? []), ...older.flatMap(page => page.entries)];
   const loadOlder = async () => {
     if (!nextBeforeId) return;
     setLoadingOlder(true);
-    try { const page = await utils.pointsLedger.statement.fetch({ entitlementId, beforeId: nextBeforeId }); setOlder(pages => [...pages, page]); }
+    const base = statement.dataUpdatedAt;
+    try { const page = await utils.pointsLedger.statement.fetch({ entitlementId, beforeId: nextBeforeId }); setOlder(current => ({ base, pages: [...(current.base === base ? current.pages : []), page] })); }
     catch (error) { toast.error((error as Error).message); }
     finally { setLoadingOlder(false); }
   };
-  const done = (message: string) => { toast.success(message); setRequestId(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); setOlder([]); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
+  const done = (message: string) => { toast.success(message); setRequestId(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
   const onError = (error: { message: string }) => toast.error(error.message);
   const credit = trpc.pointsLedger.creditAnnual.useMutation({ onSuccess: () => done("Pontos do ano creditados."), onError });
   const usage = trpc.pointsLedger.recordUsage.useMutation({ onSuccess: () => done("Uso lançado."), onError });
