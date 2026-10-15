@@ -1,0 +1,1 @@
+CREATE INDEX `vouchers_issued_idx` ON `vouchers` (`issuedAt`,`id`);

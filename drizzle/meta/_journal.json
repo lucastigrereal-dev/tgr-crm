@@ -386,6 +386,13 @@
       "when": 1792043030651,
       "tag": "0054_voucher_request_id",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "5",
+      "when": 1792045728929,
+      "tag": "0055_voucher_issued_index",
+      "breakpoints": true
     }
   ]
 }

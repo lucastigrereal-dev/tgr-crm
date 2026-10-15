@@ -365,7 +365,7 @@ export const vouchers = mysqlTable(
     /** Gerado pela tela a cada emissão: reenvio depois de resposta perdida devolve o mesmo voucher. */
     requestId: varchar("requestId", { length: 64 }),
   },
-  table => [uniqueIndex("vouchers_code_unique").on(table.code), uniqueIndex("vouchers_request_unique").on(table.requestId), index("vouchers_customer_idx").on(table.customerId), index("vouchers_status_expiry_idx").on(table.status, table.expiresAt)],
+  table => [uniqueIndex("vouchers_code_unique").on(table.code), uniqueIndex("vouchers_request_unique").on(table.requestId), index("vouchers_customer_idx").on(table.customerId), index("vouchers_status_expiry_idx").on(table.status, table.expiresAt), index("vouchers_issued_idx").on(table.issuedAt, table.id)],
 );
 
 export const proposals = mysqlTable("proposals", {

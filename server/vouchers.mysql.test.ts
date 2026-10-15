@@ -121,7 +121,11 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     // Emissão feita no último dia de validade e reenviada depois da meia-noite: devolve o voucher já gravado, sem recusar a data.
     const lateId = randomUUID();
     const late = await caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: today, requestId: lateId });
+    await db.update(vouchers).set({ expiresAt: "2000-01-01" }).where(eq(vouchers.id, late.voucherId));
     await expect(caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: "2000-01-01", requestId: lateId })).resolves.toEqual(late);
+    // Reenvio com o brinde editado é recusado, em vez de dizer que emitiu o que foi digitado agora.
+    await expect(caller().vouchers.issue({ customerId, description: "Jantar para 4", expiresAt: "2000-01-01", requestId: lateId })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(caller().vouchers.issue({ customerId, description: "Jantar", costAmount: 99, expiresAt: "2000-01-01", requestId: lateId })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: "2000-01-01", requestId: randomUUID() })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 

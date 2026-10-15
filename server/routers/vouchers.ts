@@ -92,9 +92,13 @@ export const vouchersRouter = router({
     const to = new Date(`${endDate}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 2);
     const timezone = projectTimezone();
     const totals = { issued: { count: 0, cents: 0 }, redeemed: { count: 0, cents: 0 }, cancelled: { count: 0, cents: 0 }, expired: { count: 0, cents: 0 } };
-    for (let afterId = 0; ;) {
+    // Cursor por (data de emissão, id), na ordem do índice vouchers_issued_idx: cada página lê só o trecho do período.
+    let cursor: { at: Date; id: number } | null = null;
+    for (;;) {
+      const range = and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to));
+      const after = cursor ? or(gt(vouchers.issuedAt, cursor.at), and(eq(vouchers.issuedAt, cursor.at), gt(vouchers.id, cursor.id))) : undefined;
       const page = await db.select({ id: vouchers.id, status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt }).from(vouchers)
-        .where(and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to), gt(vouchers.id, afterId))).orderBy(asc(vouchers.id)).limit(SUMMARY_PAGE_SIZE);
+        .where(after ? and(range, after) : range).orderBy(asc(vouchers.issuedAt), asc(vouchers.id)).limit(SUMMARY_PAGE_SIZE);
       for (const row of page) {
         const day = localDateInTimezone(row.issuedAt, timezone);
         if (day < startDate || day > endDate) continue;
@@ -103,7 +107,8 @@ export const vouchersRouter = router({
         bucket.cents += Math.round(Number(row.costAmount) * 100);
       }
       if (page.length < SUMMARY_PAGE_SIZE) break;
-      afterId = page[page.length - 1]!.id;
+      const last: { issuedAt: Date; id: number } = page[page.length - 1]!;
+      cursor = { at: last.issuedAt, id: last.id };
     }
     const out = (bucket: { count: number; cents: number }) => ({ count: bucket.count, cost: bucket.cents / 100 });
     const all = Object.values(totals).reduce((sum, bucket) => ({ count: sum.count + bucket.count, cents: sum.cents + bucket.cents }), { count: 0, cents: 0 });
@@ -122,11 +127,14 @@ export const vouchersRouter = router({
       recordAudit(actorUserId, "voucher", id, "issued", `Voucher ${code} emitido para o associado ${customerId}: ${description}.`, { idempotencyKey: `voucher_issued:${id}` });
     // Reenvio da mesma emissão (resposta perdida, auditoria que falhou): devolve o voucher já gravado, sem novo código.
     const previous = async () => {
-      const [row] = await db.select({ id: vouchers.id, code: vouchers.code, customerId: vouchers.customerId, description: vouchers.description, issuedByUserId: vouchers.issuedByUserId }).from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
+      const [row] = await db.select().from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
       if (!row) return undefined;
       if (row.customerId !== input.customerId) throw new TRPCError({ code: "CONFLICT", message: "Esta emissão já foi usada para outro associado." });
       // Se a auditoria da primeira tentativa falhou, o reenvio a grava; se já existe, a chave impede a duplicata.
       await auditIssued(row.issuedByUserId, row.id, row.code, row.customerId, row.description);
+      // Reenvio com o brinde editado na tela: não finge que emitiu o que foi digitado agora.
+      const changed = row.description !== input.description || Math.round(Number(row.costAmount) * 100) !== Math.round(input.costAmount * 100) || (row.expiresAt ?? null) !== (input.expiresAt ?? null) || (row.captureId ?? null) !== (input.captureId ?? null);
+      if (changed) throw new TRPCError({ code: "CONFLICT", message: `Esta emissão já gerou o voucher ${row.code} com outros dados. Confira a lista antes de emitir de novo.` });
       return { voucherId: row.id, code: row.code };
     };
     const replay = await previous();
