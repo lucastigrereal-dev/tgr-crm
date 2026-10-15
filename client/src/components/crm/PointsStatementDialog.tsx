@@ -43,9 +43,15 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
   };
   const done = (message: string) => { toast.success(message); setRequestId(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
   const onError = (error: { message: string }) => toast.error(error.message);
+  // CONFLICT num lançamento com requestId: o pedido já existe (ou foi recusado de vez). O extrato recarrega para mostrar o
+  // que está gravado, e o próximo envio sai com requestId novo, como um lançamento novo e consciente.
+  const onPostingError = (error: { message: string; data?: { code?: string } | null }) => {
+    toast.error(error.message);
+    if (error.data?.code === "CONFLICT") { setRequestId(crypto.randomUUID()); void utils.pointsLedger.statement.invalidate({ entitlementId }); }
+  };
   const credit = trpc.pointsLedger.creditAnnual.useMutation({ onSuccess: () => done("Pontos do ano creditados."), onError });
-  const usage = trpc.pointsLedger.recordUsage.useMutation({ onSuccess: () => done("Uso lançado."), onError });
-  const adjust = trpc.pointsLedger.adjust.useMutation({ onSuccess: () => done("Ajuste lançado."), onError });
+  const usage = trpc.pointsLedger.recordUsage.useMutation({ onSuccess: () => done("Uso lançado."), onError: onPostingError });
+  const adjust = trpc.pointsLedger.adjust.useMutation({ onSuccess: () => done("Ajuste lançado."), onError: onPostingError });
   const reverse = trpc.pointsLedger.reverse.useMutation({ onSuccess: () => done("Lançamento estornado."), onError });
   const busy = credit.isPending || usage.isPending || adjust.isPending || reverse.isPending;
   const points = Number(usagePoints);

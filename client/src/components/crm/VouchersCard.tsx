@@ -43,7 +43,12 @@ export function VouchersCard({ customerId }: { customerId: number }) {
     setOlderCaptures(previous => ({ base, captures: [...(previous?.base === base ? previous.captures : []), ...page.captures], nextBeforeId: page.nextBeforeId }));
   };
   const refresh = () => void utils.vouchers.listByCustomer.invalidate({ customerId });
-  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setPartnerName(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
+  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setPartnerName(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => {
+    toast.error(e.message);
+    // CONFLICT: esta emissão já gerou um voucher (com outros dados). A lista recarrega para mostrá-lo, e o próximo envio
+    // sai com requestId novo, como uma emissão nova.
+    if (e.data?.code === "CONFLICT") { setRequestId(crypto.randomUUID()); refresh(); }
+  } });
   const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: e => toast.error(e.message) });
   const cancel = trpc.vouchers.cancel.useMutation({ onSuccess: () => { toast.success("Voucher cancelado."); refresh(); }, onError: e => toast.error(e.message) });
   const submit = () => {
