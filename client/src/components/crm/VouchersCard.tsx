@@ -20,6 +20,7 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   const canIssue = user?.role === "admin" || user?.role === "seller" || user?.role === "service";
   const canCancel = user?.role === "admin" || user?.role === "seller";
   const [description, setDescription] = useState("");
+  const [partnerName, setPartnerName] = useState("");
   const [cost, setCost] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [captureId, setCaptureId] = useState("");
@@ -39,14 +40,14 @@ export function VouchersCard({ customerId }: { customerId: number }) {
     setOlderCaptures(previous => ({ captures: [...(previous?.captures ?? []), ...page.captures], nextBeforeId: page.nextBeforeId }));
   };
   const refresh = () => void utils.vouchers.listByCustomer.invalidate({ customerId });
-  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
+  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setPartnerName(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
   const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: e => toast.error(e.message) });
   const cancel = trpc.vouchers.cancel.useMutation({ onSuccess: () => { toast.success("Voucher cancelado."); refresh(); }, onError: e => toast.error(e.message) });
   const submit = () => {
     if (description.trim().length < 3) return toast.error("Descreva o brinde.");
     const costAmount = cost.trim() ? Number(cost.replace(",", ".")) : 0;
     if (!Number.isFinite(costAmount) || costAmount < 0) return toast.error("Custo inválido.");
-    issue.mutate({ customerId, description, costAmount, expiresAt: expiresAt || undefined, captureId: captureId ? Number(captureId) : undefined, requestId });
+    issue.mutate({ customerId, description, partnerName: partnerName.trim() || undefined, costAmount, expiresAt: expiresAt || undefined, captureId: captureId ? Number(captureId) : undefined, requestId });
   };
 
   return <Card className="rounded-[1.35rem] border-[#e9e4da]">
@@ -57,7 +58,8 @@ export function VouchersCard({ customerId }: { customerId: number }) {
         <Input value={cost} onChange={e => setCost(e.target.value)} inputMode="decimal" placeholder="Custo R$" className="h-9" />
         <Input value={expiresAt} onChange={e => setExpiresAt(e.target.value)} type="date" aria-label="Validade" className="h-9" />
         <Button size="sm" className="h-9" disabled={issue.isPending} onClick={submit}>{issue.isPending ? "Emitindo..." : "Emitir"}</Button>
-        {captureList.length > 0 && <select value={captureId} onChange={e => setCaptureId(e.target.value)} aria-label="Ficha de captação" className="h-9 rounded-md border border-input bg-background px-2 text-sm sm:col-span-3">
+        <Input value={partnerName} onChange={e => setPartnerName(e.target.value)} maxLength={120} placeholder="Parceiro que entrega (ex.: restaurante)" className="h-9 sm:col-span-2" />
+        {captureList.length > 0 && <select value={captureId} onChange={e => setCaptureId(e.target.value)} aria-label="Ficha de captação" className="h-9 rounded-md border border-input bg-background px-2 text-sm sm:col-span-2">
           <option value="">Sem ficha de captação</option>
           {captureList.map(capture => <option key={capture.id} value={capture.id}>Ficha {capture.id} · {new Date(capture.scheduledAt ?? capture.createdAt).toLocaleDateString("pt-BR")}{capture.captureLocation ? ` · ${capture.captureLocation}` : ""}</option>)}
         </select>}
@@ -68,7 +70,7 @@ export function VouchersCard({ customerId }: { customerId: number }) {
       {(list.data?.vouchers ?? []).map(voucher => <div key={voucher.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#b18f4b]">{voucher.code} · {money(voucher.costAmount)} · {dateLabel(voucher.expiresAt)}</p>
-          <p className="break-words text-[#1d2b2a]">{voucher.description}</p>
+          <p className="break-words text-[#1d2b2a]">{voucher.description}{voucher.partnerName ? <span className="text-muted-foreground"> · {voucher.partnerName}</span> : null}</p>
           {voucher.cancelReason && <p className="text-xs text-muted-foreground">Motivo: {voucher.cancelReason}</p>}
         </div>
         <div className="flex items-center gap-2">

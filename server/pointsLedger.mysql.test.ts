@@ -56,7 +56,10 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect(await balance()).toBe(2000);
     // Ano seguinte dentro da vigência ainda não se credita: os pontos ficariam usáveis antes da hora.
-    const nextYear = new Date().getUTCFullYear() + 1;
+    // O extrato informa o ano corrente do projeto, o mesmo que limita o crédito.
+    const { currentYear } = await caller().pointsLedger.statement({ entitlementId });
+    expect(currentYear).toBeGreaterThanOrEqual(2026);
+    const nextYear = currentYear + 1;
     await expect(caller().pointsLedger.creditAnnual({ entitlementId, year: nextYear })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect(await balance()).toBe(2000);
   });

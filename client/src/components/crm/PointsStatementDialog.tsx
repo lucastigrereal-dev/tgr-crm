@@ -17,7 +17,8 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
   // Um requestId por lançamento: reenvio após resposta perdida devolve o mesmo lançamento, sem debitar de novo.
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [open, setOpen] = useState(false);
-  const [year, setYear] = useState(String(new Date().getFullYear()));
+  // Vazio = ano corrente do projeto, que vem do servidor (o navegador pode estar em outro fuso na virada do ano).
+  const [year, setYear] = useState("");
   const [usagePoints, setUsagePoints] = useState("");
   const [reservationId, setReservationId] = useState("");
   const [note, setNote] = useState("");
@@ -52,7 +53,7 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
       <p className="text-sm">Saldo: <strong>{statement.data?.balance ?? "..."}</strong> ponto(s){statement.data ? ` · ${statement.data.entitlement.annualPoints} por ano` : ""}</p>
       {statement.data?.truncated && <p className="text-xs text-amber-700">Mostrando {entries.length} de {statement.data.totalEntries} lançamentos, dos mais recentes para os antigos. O saldo considera todos.</p>}
       {canPost && <div className="grid gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
-        <div className="flex flex-wrap gap-2"><Input className="h-9 w-24" type="number" min="2000" max={new Date().getFullYear()} value={year} onChange={e => setYear(e.target.value)} aria-label="Ano" /><Button size="sm" className="h-9" disabled={busy} onClick={() => credit.mutate({ entitlementId, year: Number(year) })}>Creditar pontos do ano</Button></div>
+        <div className="flex flex-wrap gap-2"><Input className="h-9 w-24" type="number" min="2000" max={statement.data?.currentYear} value={year || String(statement.data?.currentYear ?? "")} onChange={e => setYear(e.target.value)} aria-label="Ano" /><Button size="sm" className="h-9" disabled={busy || !statement.data} onClick={() => credit.mutate({ entitlementId, year: Number(year || statement.data?.currentYear) })}>Creditar pontos do ano</Button></div>
         <div className="flex flex-wrap gap-2">
           <Input className="h-9 w-28" type="number" value={usagePoints} onChange={e => setUsagePoints(e.target.value)} placeholder="Pontos" aria-label="Pontos" />
           <Input className="h-9 w-32" type="number" min="1" value={reservationId} onChange={e => setReservationId(e.target.value)} placeholder="Reserva nº" aria-label="Reserva" />

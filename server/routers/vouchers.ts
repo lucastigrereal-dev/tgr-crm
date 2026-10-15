@@ -60,7 +60,7 @@ export const vouchersRouter = router({
       if (historyTruncated) historyRows.pop();
       const historyTotal = historyTruncated ? Number((await tx.select({ count: sql<number>`count(*)` }).from(vouchers).where(historyFilter))[0]?.count ?? 0) : historyRows.length;
       const total = validRows.length + historyTotal;
-      const list = [...validRows, ...historyRows].map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
+      const list = [...validRows, ...historyRows].map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, partnerName: row.partnerName, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
       return { vouchers: list, total, validCount: validRows.length, truncated: historyTruncated };
     });
   }),
@@ -93,18 +93,27 @@ export const vouchersRouter = router({
     const timezone = projectTimezone();
     const totals = { issued: { count: 0, cents: 0 }, redeemed: { count: 0, cents: 0 }, cancelled: { count: 0, cents: 0 }, expired: { count: 0, cents: 0 } };
     // Cursor por (data de emissão, id), na ordem do índice vouchers_issued_idx: cada página lê só o trecho do período.
+    const byPartner = new Map<string, { count: number; cents: number; redeemedCount: number; redeemedCents: number }>();
     let cursor: { at: Date; id: number } | null = null;
     for (;;) {
       const range = and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to));
       const after = cursor ? or(gt(vouchers.issuedAt, cursor.at), and(eq(vouchers.issuedAt, cursor.at), gt(vouchers.id, cursor.id))) : undefined;
-      const page = await db.select({ id: vouchers.id, status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt }).from(vouchers)
+      const page = await db.select({ id: vouchers.id, status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt, partnerName: vouchers.partnerName }).from(vouchers)
         .where(after ? and(range, after) : range).orderBy(asc(vouchers.issuedAt), asc(vouchers.id)).limit(SUMMARY_PAGE_SIZE);
       for (const row of page) {
         const day = localDateInTimezone(row.issuedAt, timezone);
         if (day < startDate || day > endDate) continue;
-        const bucket = totals[voucherState(row, today)];
+        const state = voucherState(row, today);
+        const bucket = totals[state];
+        const cents = Math.round(Number(row.costAmount) * 100);
         bucket.count += 1;
-        bucket.cents += Math.round(Number(row.costAmount) * 100);
+        bucket.cents += cents;
+        // Por parceiro: o que foi prometido (todas as situações) e o que foi de fato usado, para conferir a cobrança dele.
+        const partner = byPartner.get(row.partnerName ?? "") ?? { count: 0, cents: 0, redeemedCount: 0, redeemedCents: 0 };
+        partner.count += 1;
+        partner.cents += cents;
+        if (state === "redeemed") { partner.redeemedCount += 1; partner.redeemedCents += cents; }
+        byPartner.set(row.partnerName ?? "", partner);
       }
       if (page.length < SUMMARY_PAGE_SIZE) break;
       const last: { issuedAt: Date; id: number } = page[page.length - 1]!;
@@ -112,10 +121,10 @@ export const vouchersRouter = router({
     }
     const out = (bucket: { count: number; cents: number }) => ({ count: bucket.count, cost: bucket.cents / 100 });
     const all = Object.values(totals).reduce((sum, bucket) => ({ count: sum.count + bucket.count, cents: sum.cents + bucket.cents }), { count: 0, cents: 0 });
-    return { startDate, endDate, issued: out(totals.issued), redeemed: out(totals.redeemed), cancelled: out(totals.cancelled), expired: out(totals.expired), total: out(all) };
+    return { startDate, endDate, issued: out(totals.issued), redeemed: out(totals.redeemed), cancelled: out(totals.cancelled), expired: out(totals.expired), total: out(all), partners: Array.from(byPartner.entries()).map(([name, value]) => ({ partnerName: name || null, count: value.count, cost: value.cents / 100, redeemedCount: value.redeemedCount, redeemedCost: value.redeemedCents / 100 })).sort((a, b) => b.cost - a.cost || (a.partnerName ?? "").localeCompare(b.partnerName ?? "")) };
   }),
 
-  issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), costAmount: money.default(0), expiresAt: z.string().date().optional(), requestId: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+  issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), partnerName: z.string().trim().max(120).optional(), costAmount: money.default(0), expiresAt: z.string().date().optional(), requestId: z.string().uuid() })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const [customer] = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1);
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
@@ -133,7 +142,7 @@ export const vouchersRouter = router({
       // Se a auditoria da primeira tentativa falhou, o reenvio a grava; se já existe, a chave impede a duplicata.
       await auditIssued(row.issuedByUserId, row.id, row.code, row.customerId, row.description);
       // Reenvio com o brinde editado na tela: não finge que emitiu o que foi digitado agora.
-      const changed = row.description !== input.description || Math.round(Number(row.costAmount) * 100) !== Math.round(input.costAmount * 100) || (row.expiresAt ?? null) !== (input.expiresAt ?? null) || (row.captureId ?? null) !== (input.captureId ?? null);
+      const changed = row.description !== input.description || (row.partnerName ?? null) !== (input.partnerName || null) || Math.round(Number(row.costAmount) * 100) !== Math.round(input.costAmount * 100) || (row.expiresAt ?? null) !== (input.expiresAt ?? null) || (row.captureId ?? null) !== (input.captureId ?? null);
       if (changed) throw new TRPCError({ code: "CONFLICT", message: `Esta emissão já gerou o voucher ${row.code} com outros dados. Confira a lista antes de emitir de novo.` });
       return { voucherId: row.id, code: row.code };
     };
@@ -144,7 +153,7 @@ export const vouchersRouter = router({
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = newCode();
       try {
-        const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId();
+        const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, partnerName: input.partnerName || null, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId();
         await auditIssued(ctx.user.id, created.id, code, input.customerId, input.description);
         return { voucherId: created.id, code };
       } catch (error) {

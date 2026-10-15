@@ -37,6 +37,10 @@ export default function Vouchers() {
         {rows.map(([key, label]) => <div key={key} className="rounded-xl bg-[#faf8f3] p-3"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#b18f4b]">{label}</p><p className="text-lg text-[#1d2b2a]">{summary.data[key].count}</p><p className="text-xs text-muted-foreground">{money(summary.data[key].cost)}</p></div>)}
         <div className="rounded-xl bg-[#1d2b2a] p-3 text-white"><p className="text-[10px] font-bold uppercase tracking-[.1em]">Total</p><p className="text-lg">{summary.data.total.count}</p><p className="text-xs">{money(summary.data.total.cost)}</p></div>
       </div>}
+      {(summary.data?.partners.length ?? 0) > 0 && <div className="space-y-1 text-sm">
+        <p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#b18f4b]">Por parceiro</p>
+        {summary.data!.partners.map(partner => <div key={partner.partnerName ?? ""} className="flex flex-wrap justify-between gap-2 border-b border-[#efe9dd] py-1"><span>{partner.partnerName ?? "Sem parceiro informado"}</span><span className="text-muted-foreground">{partner.count} emitido(s), {money(partner.cost)} · {partner.redeemedCount} usado(s), {money(partner.redeemedCost)}</span></div>)}
+      </div>}
     </CardContent></Card>
   </div>;
 }

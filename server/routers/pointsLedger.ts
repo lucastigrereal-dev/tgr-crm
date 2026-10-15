@@ -51,6 +51,8 @@ const requireInValidity = (entitlement: { validFrom: Date | null; validUntil: Da
   if (from && today < from) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `O direito de uso só vale a partir de ${from}.` });
   if (until && today > until) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `O direito de uso venceu em ${until}.` });
 };
+/** Ano corrente no fuso do projeto: é ele que limita o crédito anual, então a tela usa o mesmo. */
+const projectYear = () => Number(localDateInTimezone(new Date(), ENV.financialProjectTimezone.trim() || "America/Recife").slice(0, 4));
 const insufficient = (balance: number, points: number) => new TRPCError({ code: "PRECONDITION_FAILED", message: `Saldo insuficiente: ${balance} ponto(s) disponível(is), lançamento de ${points}.` });
 
 async function append(tx: Tx, values: typeof pointsLedger.$inferInsert, duplicateMessage: string) {
@@ -108,7 +110,7 @@ export const pointsLedgerRouter = router({
         : new Set<number | null>();
       let after = pageTop;
       const entries = rows.map(row => { const entry = { id: row.id, entryType: row.entryType, points: row.points, balanceAfter: after, referenceYear: row.referenceYear, reservationId: row.reservationId, reversesEntryId: row.reversesEntryId, reversed: reversed.has(row.id), note: row.note, createdAt: row.createdAt }; after -= row.points; return entry; });
-      return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance, totalEntries, truncated: hasMore || Boolean(input.beforeId), nextBeforeId: hasMore ? rows[rows.length - 1]!.id : null, entries };
+      return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, currentYear: projectYear(), balance, totalEntries, truncated: hasMore || Boolean(input.beforeId), nextBeforeId: hasMore ? rows[rows.length - 1]!.id : null, entries };
     });
   }),
 
@@ -128,8 +130,7 @@ export const pointsLedgerRouter = router({
       const untilYear = entitlement.validUntil ? new Date(entitlement.validUntil).getUTCFullYear() : null;
       if ((fromYear && input.year < fromYear) || (untilYear && input.year > untilYear)) throw new TRPCError({ code: "BAD_REQUEST", message: `O ano ${input.year} está fora da vigência do direito de uso.` });
       // Ano futuro não se credita antes da hora: o saldo é uma soma só, e pontos de anos à frente já poderiam ser usados hoje.
-      const currentYear = Number(localDateInTimezone(new Date(), ENV.financialProjectTimezone.trim() || "America/Recife").slice(0, 4));
-      if (input.year > currentYear) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Os pontos de ${input.year} só podem ser creditados a partir de ${input.year}.` });
+      if (input.year > projectYear()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Os pontos de ${input.year} só podem ser creditados a partir de ${input.year}.` });
       return append(tx, { entitlementId: entitlement.id, entryType: "annual_credit", points: entitlement.annualPoints, referenceYear: input.year, idempotencyKey, note: `Crédito anual ${input.year}`, createdByUserId: ctx.user.id }, `Os pontos de ${input.year} já foram creditados neste direito de uso.`);
     });
     // No reenvio, a auditoria leva o autor do crédito gravado, não quem tentou de novo.

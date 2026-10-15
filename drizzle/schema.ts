@@ -351,6 +351,8 @@ export const vouchers = mysqlTable(
     customerId: int("customerId").notNull().references(() => customers.id),
     captureId: int("captureId").references(() => captureRecords.id),
     description: varchar("description", { length: 255 }).notNull(),
+    /** Parceiro que entrega o brinde (restaurante, spa, passeio), para conferir o custo com ele. */
+    partnerName: varchar("partnerName", { length: 120 }),
     costAmount: decimal("costAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
     expiresAt: date("expiresAt", { mode: "string" }),
     status: mysqlEnum("status", ["issued", "redeemed", "cancelled"]).default("issued").notNull(),

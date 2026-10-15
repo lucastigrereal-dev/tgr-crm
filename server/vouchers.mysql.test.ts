@@ -75,6 +75,17 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     expect(summary.redeemed.count).toBeGreaterThanOrEqual(2);
     expect(summary.expired.cost).toBeGreaterThanOrEqual(40);
     expect(summary.total.count).toBe(summary.issued.count + summary.redeemed.count + summary.cancelled.count + summary.expired.count);
+    // Parceiro que entrega o brinde: aparece na ficha e no resumo, com o prometido e o usado.
+    const partnerName = `Restaurante Sintético ${runId}`;
+    const [{ id: partnerCustomer }] = await db.insert(customers).values({ fullName: `Casal Parceiro ${runId}`, status: "active" }).$returningId();
+    const partnerRequest = randomUUID();
+    const dinner = await caller().vouchers.issue({ customerId: partnerCustomer, description: "Jantar do parceiro", partnerName, costAmount: 80, requestId: partnerRequest });
+    await caller().vouchers.issue({ customerId: partnerCustomer, description: "Almoço do parceiro", partnerName, costAmount: 50, requestId: randomUUID() });
+    await caller().vouchers.redeem({ code: dinner.code });
+    expect((await caller().vouchers.listByCustomer({ customerId: partnerCustomer })).vouchers.find(row => row.id === dinner.voucherId)?.partnerName).toBe(partnerName);
+    const byPartner = (await caller().vouchers.summary({ startDate: today, endDate: today })).partners.find(row => row.partnerName === partnerName);
+    expect(byPartner).toEqual({ partnerName, count: 2, cost: 130, redeemedCount: 1, redeemedCost: 80 });
+    await expect(caller().vouchers.issue({ customerId: partnerCustomer, description: "Jantar do parceiro", partnerName: "Outro parceiro", costAmount: 80, requestId: partnerRequest })).rejects.toMatchObject({ code: "CONFLICT" });
     const [{ id: other }] = await db.insert(customers).values({ fullName: `Outro Casal ${runId}`, status: "active" }).$returningId();
     await expect(caller().vouchers.issue({ customerId: other, captureId: 2147483000, description: "Brinde errado", requestId: randomUUID() })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
