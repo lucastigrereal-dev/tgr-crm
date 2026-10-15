@@ -6,7 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { useState } from "react";
 import { toast } from "sonner";
 
-const entryLabel = { annual_credit: "Crédito anual", usage: "Uso", adjustment: "Ajuste", reversal: "Estorno" } as const;
+const entryLabel = { annual_credit: "Crédito anual", usage: "Uso", adjustment: "Ajuste", reversal: "Estorno", expiration: "Vencimento" } as const;
 
 // Extrato de pontos do direito de uso (TSE #29): só inclusão; erro se corrige com estorno.
 export function PointsStatementDialog({ entitlementId, label }: { entitlementId: number; label: string }) {
@@ -66,7 +66,8 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
     <DialogTrigger asChild><Button size="sm" variant="outline" className="mt-2 h-7 text-xs">Extrato de pontos</Button></DialogTrigger>
     <DialogContent className="max-w-2xl">
       <DialogHeader><DialogTitle className="font-serif text-2xl">Extrato de pontos · {label}</DialogTitle></DialogHeader>
-      <p className="text-sm">Saldo: <strong>{statement.data?.balance ?? "..."}</strong> ponto(s){statement.data ? ` · ${statement.data.entitlement.annualPoints} por ano` : ""}</p>
+      <p className="text-sm">Disponível: <strong>{statement.data?.available ?? "..."}</strong> ponto(s){statement.data ? ` · ${statement.data.entitlement.annualPoints} por ano · cada crédito vale ${statement.data.validityYears} anos (o do crédito e o seguinte); o uso consome primeiro o que vence antes` : ""}</p>
+      {(statement.data?.pendingExpirations.length ?? 0) > 0 && <p className="text-xs text-amber-700">Vencidos: {statement.data!.pendingExpirations.map(item => `${item.points} de ${item.year}`).join(", ")}. A baixa no extrato acontece no próximo lançamento; o disponível já desconta.</p>}
       {statement.data?.truncated && <p className="text-xs text-amber-700">Mostrando {entries.length} de {statement.data.totalEntries} lançamentos, dos mais recentes para os antigos. O saldo considera todos.</p>}
       {canPost && <div className="grid gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
         <div className="flex flex-wrap gap-2"><Input className="h-9 w-24" type="number" min="2000" max={statement.data?.currentYear} value={year || String(statement.data?.currentYear ?? "")} onChange={e => setYear(e.target.value)} aria-label="Ano" /><Button size="sm" className="h-9" disabled={busy || !statement.data} onClick={() => credit.mutate({ entitlementId, year: Number(year || statement.data?.currentYear) })}>Creditar pontos do ano</Button></div>
@@ -83,7 +84,7 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
       <div className="max-h-72 overflow-y-auto text-sm">
         {statement.data && entries.length === 0 && <p className="text-muted-foreground">Nenhum lançamento ainda.</p>}
         {entries.map(entry => <div key={entry.id} className="flex items-center justify-between gap-2 border-b border-[#f0ece4] py-2 last:border-b-0">
-          <div><p className="font-semibold text-[#1d2b2a]">{entryLabel[entry.entryType]}{entry.referenceYear ? ` ${entry.referenceYear}` : ""}{entry.reservationId ? ` · reserva ${entry.reservationId}` : ""}{entry.reversed ? " · estornado" : ""}</p><p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleDateString("pt-BR")}{entry.note ? ` · ${entry.note}` : ""}</p></div>
+          <div><p className="font-semibold text-[#1d2b2a]">{entryLabel[entry.entryType]}{entry.referenceYear ? ` ${entry.referenceYear}` : ""}{entry.expiresOn && !entry.reversed ? ` · vale até ${entry.expiresOn.split("-").reverse().join("/")}` : ""}{entry.reservationId ? ` · reserva ${entry.reservationId}` : ""}{entry.reversed ? " · estornado" : ""}</p><p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleDateString("pt-BR")}{entry.note ? ` · ${entry.note}` : ""}</p></div>
           <div className="flex items-center gap-3 text-right"><div><p className={entry.points < 0 ? "text-[#8a3b2d]" : "text-[#285043]"}>{entry.points > 0 ? `+${entry.points}` : entry.points}</p><p className="text-xs text-muted-foreground">saldo {entry.balanceAfter}</p></div>
             {isAdmin && entry.entryType !== "reversal" && !entry.reversed && <Button size="sm" variant="ghost" disabled={busy} onClick={() => { const reason = window.prompt("Motivo do estorno:"); if (reason?.trim()) reverse.mutate({ entryId: entry.id, note: reason }); }}>Estornar</Button>}
           </div>

@@ -967,7 +967,7 @@ export const ownershipEntitlements = mysqlTable("ownership_entitlements", {
 export const pointsLedger = mysqlTable("points_ledger", {
   id: int("id").autoincrement().primaryKey(),
   entitlementId: int("entitlementId").notNull().references(() => ownershipEntitlements.id),
-  entryType: mysqlEnum("entryType", ["annual_credit", "usage", "adjustment", "reversal"]).notNull(),
+  entryType: mysqlEnum("entryType", ["annual_credit", "usage", "adjustment", "reversal", "expiration"]).notNull(),
   points: int("points").notNull(),
   referenceYear: int("referenceYear"),
   reservationId: int("reservationId").references(() => reservations.id),
