@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/crm/ui";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { trpc } from "@/lib/trpc";
 
 const dateTime = (value: Date | string) => new Date(value).toLocaleString("pt-BR");
@@ -13,7 +14,9 @@ export default function AuditTrail() {
   const [entityType, setEntityType] = useState("all");
   const [entityId, setEntityId] = useState("");
   const [action, setAction] = useState("");
-  const filters = { entityType: entityType === "all" ? undefined : entityType, entityId: entityId.trim() || undefined, action: action.trim() || undefined, limit: 50 };
+  const debouncedEntityId = useDebouncedValue(entityId, 500);
+  const debouncedAction = useDebouncedValue(action, 500);
+  const filters = { entityType: entityType === "all" ? undefined : entityType, entityId: debouncedEntityId.trim() || undefined, action: debouncedAction.trim() || undefined, limit: 50 };
   const trail = trpc.auditTrail.list.useInfiniteQuery(filters, { getNextPageParam: page => page.nextCursor ?? undefined });
   const rows = trail.data?.pages.flatMap(page => page.rows) ?? [];
   const typeList = trpc.auditTrail.entityTypes.useQuery(undefined, { staleTime: 5 * 60_000, refetchOnWindowFocus: false });
@@ -29,7 +32,7 @@ export default function AuditTrail() {
     {trail.isError && <p className="text-sm text-[#8a3b2d]">Não foi possível carregar a auditoria: {trail.error.message}</p>}
     <Card className="rounded-xl"><CardContent className="space-y-1 pt-6">
       {trail.isLoading && <p className="text-sm text-muted-foreground">Carregando...</p>}
-      {!trail.isLoading && rows.length === 0 && <p className="text-sm text-muted-foreground">Nada registrado neste recorte.</p>}
+      {!trail.isLoading && !trail.isError && rows.length === 0 && <p className="text-sm text-muted-foreground">Nada registrado neste recorte.</p>}
       {rows.map(row => <div key={row.id} className="border-b border-[#f0ece4] py-2 text-sm last:border-b-0">
         <p><strong>{row.action}</strong> · {row.entityType} {row.entityId} · <span className="text-muted-foreground">{dateTime(row.createdAt)} · {row.actorName ?? (row.actorUserId ? `usuário ${row.actorUserId}` : "sistema")}</span></p>
         {row.summary && <p className="text-xs text-muted-foreground">{row.summary}</p>}
