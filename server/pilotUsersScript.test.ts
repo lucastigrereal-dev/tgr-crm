@@ -73,6 +73,15 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(doctor.status).toBe(0);
   });
 
+  it("mudar o papel de quem já existe mantém a senha e atualiza o papel na linha de credencial", () => {
+    const dir = newDir();
+    expect(run(dir, "--user", "ana.adm:admin").status).toBe(0);
+    const password = credentials(dir)["ana.adm"]!;
+    expect(run(dir, "--user", "ana.adm:seller").status).toBe(0);
+    const line = readFileSync(join(dir, "crm-credentials.local.txt"), "utf8").trim().split("\n").find(l => l.startsWith("ana.adm\t"))!;
+    expect(line.split("\t")).toEqual(["ana.adm", "seller", password]);
+  });
+
   it("--env-name escreve o valor entre aspas simples com o nome pedido (compose portátil)", () => {
     const dir = newDir();
     expect(run(dir, "--user", "ana.adm:admin", "--env-name", "CRM_LOCAL_AUTH_USERS").status).toBe(0);

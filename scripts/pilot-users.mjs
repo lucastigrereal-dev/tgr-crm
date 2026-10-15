@@ -69,15 +69,22 @@ for (const name of flags.rotate) { const user = byName.get(name); byName.set(nam
 const users = [...byName.values()];
 writeFileSync(file, JSON.stringify({ users }, null, 2), { mode: 0o600 });
 writeFileSync(join(out, "crm-users.env"), `${flags.envName}='${JSON.stringify(users)}'\n`, { mode: 0o600 });
-if (credentials.length) {
-  // Uma linha por usuário: rotacionar SUBSTITUI a senha antiga (senão o smoke de login testaria uma senha já invalidada).
-  const credFile = join(out, "crm-credentials.local.txt");
+// Uma linha por usuário: rotacionar SUBSTITUI a senha antiga (senão o smoke de login testaria uma senha já invalidada) e a
+// coluna do papel acompanha o papel atual mesmo quando a senha é mantida (o smoke lê o papel esperado daqui).
+const credFile = join(out, "crm-credentials.local.txt");
+if (credentials.length || existsSync(credFile)) {
   const rows = new Map();
-  if (existsSync(credFile)) for (const line of readFileSync(credFile, "utf8").trim().split("\n").slice(1)) { const [name] = line.split("\t"); if (name) rows.set(name, line); }
+  if (existsSync(credFile)) {
+    for (const line of readFileSync(credFile, "utf8").trim().split("\n").slice(1)) {
+      const [name, , plain] = line.split("\t");
+      const user = name ? byName.get(name) : undefined;
+      if (user && plain) rows.set(name, `${name}\t${user.role}\t${plain}`);
+    }
+  }
   for (const line of credentials) rows.set(line.split("\t")[0], line);
   writeFileSync(credFile, ["usuario\tpapel\tsenha_temporaria", ...rows.values()].join("\n") + "\n", { mode: 0o600 });
   chmodSync(credFile, 0o600);
 }
 chmodSync(file, 0o600);
 chmodSync(join(out, "crm-users.env"), 0o600);
-console.log(JSON.stringify({ created, kept, rotated, total: users.length, env: join(out, "crm-users.env"), credentials: credentials.length ? join(out, "crm-credentials.local.txt") : null }));
+console.log(JSON.stringify({ created, kept, rotated, total: users.length, env: join(out, "crm-users.env"), credentials: credentials.length ? credFile : null }));
