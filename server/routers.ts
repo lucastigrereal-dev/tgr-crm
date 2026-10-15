@@ -19,6 +19,7 @@ import { operationsRouter } from "./routers/operations";
 import { salesRouter } from "./routers/sales";
 import { teamRouter } from "./routers/team";
 import { integrationsRouter } from "./routers/integrations";
+import { auditTrailRouter } from "./routers/auditTrail";
 import { aiRouter } from "./routers/ai";
 import { capturesRouter } from "./routers/captures";
 import { projectSettingsRouter } from "./routers/projectSettings";
@@ -87,6 +88,7 @@ export const appRouter = router({
   dashboard: dashboardRouter,
   imports: importsRouter,
   integrations: integrationsRouter,
+  auditTrail: auditTrailRouter,
   ai: aiRouter,
   captures: capturesRouter,
   projectSettings: projectSettingsRouter,
