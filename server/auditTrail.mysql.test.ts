@@ -32,7 +32,7 @@ describe.skipIf(!integrationUrl)("tela de auditoria em MySQL real", () => {
     const all = await caller().list({ entityType: type, limit: 2 });
     expect(all.rows.map(row => row.entityId)).toEqual(["reg-3", "reg-2"]);
     expect(all.nextCursor).not.toBeNull();
-    expect(all.entityTypes).toContain(type);
+    expect(await caller().entityTypes()).toContain(type);
     const next = await caller().list({ entityType: type, limit: 2, cursor: all.nextCursor! });
     expect(next.rows.map(row => row.entityId)).toEqual(["reg-1"]);
     expect(next.nextCursor).toBeNull();

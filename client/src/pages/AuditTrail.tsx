@@ -16,7 +16,8 @@ export default function AuditTrail() {
   const filters = { entityType: entityType === "all" ? undefined : entityType, entityId: entityId.trim() || undefined, action: action.trim() || undefined, limit: 50 };
   const trail = trpc.auditTrail.list.useInfiniteQuery(filters, { getNextPageParam: page => page.nextCursor ?? undefined });
   const rows = trail.data?.pages.flatMap(page => page.rows) ?? [];
-  const entityTypes = trail.data?.pages[0]?.entityTypes ?? [];
+  const typeList = trpc.auditTrail.entityTypes.useQuery(undefined, { staleTime: 5 * 60_000, refetchOnWindowFocus: false });
+  const entityTypes = typeList.data ?? [];
 
   return <div className="space-y-6">
     <PageHeader eyebrow="Admin" title="Auditoria" description="Tudo o que o sistema registrou: quem fez, em qual registro e quando. A trilha só cresce; ninguém edita nem apaga por aqui." action={<Button size="sm" variant="outline" disabled={trail.isFetching} onClick={() => void trail.refetch()}>{trail.isFetching ? "Atualizando..." : "Atualizar"}</Button>} />

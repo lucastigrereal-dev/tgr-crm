@@ -22,7 +22,7 @@ const listInput = z.object({
 // e não devolve a chave de idempotência (é detalhe interno das pontes).
 export const auditTrailRouter = router({
   list: adminProcedure.input(listInput).query(async ({ input }) => {
-    const db = await getDb(); if (!db) return { rows: [], nextCursor: null, entityTypes: [] as string[] };
+    const db = await getDb(); if (!db) return { rows: [], nextCursor: null };
     const where = and(
       input.entityType ? eq(auditLogs.entityType, input.entityType) : undefined,
       input.entityId ? eq(auditLogs.entityId, input.entityId) : undefined,
@@ -35,7 +35,12 @@ export const auditTrailRouter = router({
     const rows = await db.select({ id: auditLogs.id, actorUserId: auditLogs.actorUserId, actorName: users.name, entityType: auditLogs.entityType, entityId: auditLogs.entityId, action: auditLogs.action, summary: auditLogs.summary, createdAt: auditLogs.createdAt })
       .from(auditLogs).leftJoin(users, eq(users.id, auditLogs.actorUserId)).where(where).orderBy(desc(auditLogs.id)).limit(input.limit + 1);
     const page = rows.slice(0, input.limit);
+    return { rows: page, nextCursor: rows.length > input.limit ? page[page.length - 1].id : null };
+  }),
+  // Tipos de registro para o filtro: consulta à parte, que a tela pede uma vez só (não a cada página ou tecla).
+  entityTypes: adminProcedure.query(async () => {
+    const db = await getDb(); if (!db) return [] as string[];
     const types = await db.selectDistinct({ entityType: auditLogs.entityType }).from(auditLogs).orderBy(auditLogs.entityType).limit(200);
-    return { rows: page, nextCursor: rows.length > input.limit ? page[page.length - 1].id : null, entityTypes: types.map(row => row.entityType) };
+    return types.map(row => row.entityType);
   }),
 });
