@@ -266,4 +266,49 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(statement.pendingExpirations).toEqual([{ year: 2024, points: 1000 }]);
     expect(statement.available).toBe(0);
   });
+
+  it("a varredura do vencimento baixa o vencido sem esperar lançamento, uma vez só, e não toca crédito dentro da validade", async () => {
+    const { settleAllExpirations } = await import("./routers/pointsLedger");
+    const [{ id: stale }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000 }).$returningId();
+    const [{ id: fresh }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000 }).$returningId();
+    await db.insert(pointsLedger).values([
+      { entitlementId: stale, entryType: "annual_credit", points: 1000, referenceYear: 2021, createdByUserId: userId },
+      { entitlementId: stale, entryType: "annual_credit", points: 500, referenceYear: 2026, createdByUserId: userId },
+      { entitlementId: fresh, entryType: "annual_credit", points: 700, referenceYear: 2026, createdByUserId: userId },
+    ]);
+    const first = await settleAllExpirations();
+    expect(first.settled).toBeGreaterThanOrEqual(1);
+    const rows = await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, stale));
+    const expirations = rows.filter(row => row.entryType === "expiration");
+    expect(expirations).toHaveLength(1);
+    expect(expirations[0]).toMatchObject({ points: -1000, referenceYear: 2021, createdByUserId: null });
+    expect((await caller().pointsLedger.statement({ entitlementId: stale })).available).toBe(500);
+    const second = await settleAllExpirations();
+    expect(second.settled).toBe(0);
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, stale))).filter(row => row.entryType === "expiration")).toHaveLength(1);
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, fresh))).filter(row => row.entryType === "expiration")).toHaveLength(0);
+    // Crédito vencido e todo usado: ganha vencimento de zero pontos e sai da varredura, sem repetir a cada rodada.
+    const [{ id: spent }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000 }).$returningId();
+    await db.insert(pointsLedger).values([
+      { entitlementId: spent, entryType: "annual_credit", points: 300, referenceYear: 2020, createdByUserId: userId },
+      { entitlementId: spent, entryType: "usage", points: -300, createdByUserId: userId },
+    ]);
+    await settleAllExpirations();
+    const marker = (await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, spent))).filter(row => row.entryType === "expiration");
+    expect(marker).toHaveLength(1);
+    expect(marker[0]).toMatchObject({ points: 0, referenceYear: 2020 });
+    await settleAllExpirations();
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, spent))).filter(row => row.entryType === "expiration")).toHaveLength(1);
+    // Crédito estornado enquanto valia: ao vencer o ano também ganha o marcador de zero.
+    const [{ id: undone }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000 }).$returningId();
+    const [{ id: undoneCredit }] = await db.insert(pointsLedger).values({ entitlementId: undone, entryType: "annual_credit", points: 200, referenceYear: 2020, createdByUserId: userId }).$returningId();
+    await db.insert(pointsLedger).values({ entitlementId: undone, entryType: "reversal", points: -200, reversesEntryId: undoneCredit, createdByUserId: userId });
+    await settleAllExpirations();
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, undone))).filter(row => row.entryType === "expiration")).toMatchObject([{ points: 0, referenceYear: 2020 }]);
+    // Vencimento gravado cuja auditoria falhou depois do commit: a varredura refaz só a auditoria.
+    const [{ id: orphan }] = await db.insert(pointsLedger).values({ entitlementId: fresh, entryType: "expiration", points: -1, referenceYear: 2019, idempotencyKey: `expiry:${fresh}:2019`, createdByUserId: null }).$returningId();
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${orphan}`))).toHaveLength(0);
+    await settleAllExpirations();
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${orphan}`))).toHaveLength(1);
+  });
 });
