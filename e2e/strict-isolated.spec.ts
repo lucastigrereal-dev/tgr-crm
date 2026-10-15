@@ -315,8 +315,9 @@ test.describe("homologação isolada estrita", () => {
     // painel de integrações: Financial desligado (piloto) sem evento recusado
     await page.goto("/integracoes");
     await expect(page.getByRole("heading", { name: "Integrações" })).toBeVisible();
-    await expect(page.getByText("TGR Financial Layer")).toBeVisible();
-    await expect(page.getByText("Desligada").first()).toBeVisible();
+    const financialCard = page.locator(".rounded-xl", { has: page.getByText("TGR Financial Layer", { exact: true }) }).first();
+    await expect(financialCard).toBeVisible();
+    await expect(financialCard.getByText("Desligada")).toBeVisible();
     await expect(page.getByText("Nenhum evento recusado.")).toBeVisible();
 
     // estoque: as 2 cotas vendidas saíram do disponível
