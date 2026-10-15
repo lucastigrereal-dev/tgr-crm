@@ -95,30 +95,34 @@ export const vouchersRouter = router({
     // Cursor por (data de emissão, id), na ordem do índice vouchers_issued_idx: cada página lê só o trecho do período.
     const byPartner = new Map<string, { count: number; cents: number; redeemedCount: number; redeemedCents: number }>();
     let cursor: { at: Date; id: number } | null = null;
-    for (;;) {
-      const range = and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to));
-      const after = cursor ? or(gt(vouchers.issuedAt, cursor.at), and(eq(vouchers.issuedAt, cursor.at), gt(vouchers.id, cursor.id))) : undefined;
-      const page = await db.select({ id: vouchers.id, status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt, partnerName: vouchers.partnerName }).from(vouchers)
-        .where(after ? and(range, after) : range).orderBy(asc(vouchers.issuedAt), asc(vouchers.id)).limit(SUMMARY_PAGE_SIZE);
-      for (const row of page) {
-        const day = localDateInTimezone(row.issuedAt, timezone);
-        if (day < startDate || day > endDate) continue;
-        const state = voucherState(row, today);
-        const bucket = totals[state];
-        const cents = Math.round(Number(row.costAmount) * 100);
-        bucket.count += 1;
-        bucket.cents += cents;
-        // Por parceiro: o que foi prometido (todas as situações) e o que foi de fato usado, para conferir a cobrança dele.
-        const partner = byPartner.get(row.partnerName ?? "") ?? { count: 0, cents: 0, redeemedCount: 0, redeemedCents: 0 };
-        partner.count += 1;
-        partner.cents += cents;
-        if (state === "redeemed") { partner.redeemedCount += 1; partner.redeemedCents += cents; }
-        byPartner.set(row.partnerName ?? "", partner);
+    // Todas as páginas no mesmo snapshot (REPEATABLE READ): o resumo descreve um único momento, mesmo com emissões e baixas
+    // acontecendo durante a leitura.
+    await db.transaction(async tx => {
+      for (;;) {
+        const range = and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to));
+        const after = cursor ? or(gt(vouchers.issuedAt, cursor.at), and(eq(vouchers.issuedAt, cursor.at), gt(vouchers.id, cursor.id))) : undefined;
+        const page = await tx.select({ id: vouchers.id, status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt, partnerName: vouchers.partnerName }).from(vouchers)
+          .where(after ? and(range, after) : range).orderBy(asc(vouchers.issuedAt), asc(vouchers.id)).limit(SUMMARY_PAGE_SIZE);
+        for (const row of page) {
+          const day = localDateInTimezone(row.issuedAt, timezone);
+          if (day < startDate || day > endDate) continue;
+          const state = voucherState(row, today);
+          const bucket = totals[state];
+          const cents = Math.round(Number(row.costAmount) * 100);
+          bucket.count += 1;
+          bucket.cents += cents;
+          // Por parceiro: o que foi prometido (todas as situações) e o que foi de fato usado, para conferir a cobrança dele.
+          const partner = byPartner.get(row.partnerName ?? "") ?? { count: 0, cents: 0, redeemedCount: 0, redeemedCents: 0 };
+          partner.count += 1;
+          partner.cents += cents;
+          if (state === "redeemed") { partner.redeemedCount += 1; partner.redeemedCents += cents; }
+          byPartner.set(row.partnerName ?? "", partner);
+        }
+        if (page.length < SUMMARY_PAGE_SIZE) break;
+        const last: { issuedAt: Date; id: number } = page[page.length - 1]!;
+        cursor = { at: last.issuedAt, id: last.id };
       }
-      if (page.length < SUMMARY_PAGE_SIZE) break;
-      const last: { issuedAt: Date; id: number } = page[page.length - 1]!;
-      cursor = { at: last.issuedAt, id: last.id };
-    }
+    });
     const out = (bucket: { count: number; cents: number }) => ({ count: bucket.count, cost: bucket.cents / 100 });
     const all = Object.values(totals).reduce((sum, bucket) => ({ count: sum.count + bucket.count, cents: sum.cents + bucket.cents }), { count: 0, cents: 0 });
     return { startDate, endDate, issued: out(totals.issued), redeemed: out(totals.redeemed), cancelled: out(totals.cancelled), expired: out(totals.expired), total: out(all), partners: Array.from(byPartner.entries()).map(([name, value]) => ({ partnerName: name || null, count: value.count, cost: value.cents / 100, redeemedCount: value.redeemedCount, redeemedCost: value.redeemedCents / 100 })).sort((a, b) => b.cost - a.cost || (a.partnerName ?? "").localeCompare(b.partnerName ?? "")) };
