@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { captureRecords, masterDataOptions, users } from "../drizzle/schema";
+import { captureRecords, customers, masterDataOptions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Dicionários de cadastro (TSE #25) em MySQL real: lista vazia deixa o campo livre; com opções, a captação só aceita a lista.
@@ -27,7 +27,7 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
     [{ id: adminId }] = await db.insert(users).values({ openId: `masterdata-${runId}`, name: "Admin dicionários", role: "admin" }).$returningId();
   });
   afterAll(async () => {
-    for (const field of ["partnerProfession", "captureLocation", "transportation"] as const) await db?.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, field));
+    for (const field of ["partnerProfession", "captureLocation", "transportation", "vehicleBrand"] as const) await db?.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, field));
     process.env = previousEnv;
     await pool?.end();
   });
@@ -73,13 +73,23 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
     expect(coverage.outside).toContainEqual({ value: `Advogada ${runId}`, total: 1 });
   });
 
-  it("valor gravado pelo sistema (Sales Command) vale com a lista fechada e não entra na cobertura nem na importação", async () => {
+  it("Sales Command é só do sistema: a captação manual não usa, a lista não aceita, e a ficha automática fica fora da cobertura e da importação", async () => {
     await caller().masterData.add({ field: "captureLocation", value: `Praia ${runId}` });
-    const automatic = await caller("seller").captures.create({ customer: { fullName: `Casal Automático ${runId}`, city: "Natal", state: "RN" }, captureLocation: "sales command", createOpportunity: false });
-    expect((await db.select({ value: captureRecords.captureLocation }).from(captureRecords).where(eq(captureRecords.id, automatic.captureId)))[0]!.value).toBe("sales command");
+    await expect(caller("seller").captures.create({ customer: { fullName: `Casal Manual ${runId}`, city: "Natal", state: "RN" }, captureLocation: "sales command", createOpportunity: false })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("reservado") });
+    await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "captureLocation"));
+    await expect(caller("seller").captures.create({ customer: { fullName: `Casal Manual Livre ${runId}`, city: "Natal", state: "RN" }, captureLocation: "Sales Command", createOpportunity: false })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller().masterData.add({ field: "captureLocation", value: "Sales  Command" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    const [{ id: automaticCustomer }] = await db.insert(customers).values({ fullName: `Casal Automático ${runId}`, status: "active" }).$returningId();
+    await db.insert(captureRecords).values({ customerId: automaticCustomer, captureLocation: "Sales Command", presentationStatus: "closed", qualificationStatus: "qualified" });
     expect((await caller().masterData.coverage({ field: "captureLocation" })).outside.map(row => row.value.toLowerCase())).not.toContain("sales command");
     await caller().masterData.importExisting({ field: "captureLocation" });
     expect((await caller().masterData.list({ field: "captureLocation", includeInactive: true })).map(row => row.value.toLowerCase())).not.toContain("sales command");
+  });
+
+  it("opção maior que o campo da ficha é recusada, para nunca fechar a lista com valor impossível de escolher", async () => {
+    await expect(caller().masterData.add({ field: "vehicleBrand", value: `M${"a".repeat(100)}` })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("100") });
+    await expect(caller().masterData.add({ field: "partnerProfession", value: `P${"a".repeat(120)}` })).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("120") });
   });
 
   it("a lista ativa de um campo tem teto: incluir, reativar ou importar além dele é recusado", async () => {

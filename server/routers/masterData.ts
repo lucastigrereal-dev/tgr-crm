@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, masterDataOptions } from "../../drizzle/schema";
-import { isReservedMasterDataValue, MAX_ACTIVE_OPTIONS_PER_FIELD, masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../../shared/masterData";
+import { isReservedMasterDataValue, MAX_ACTIVE_OPTIONS_PER_FIELD, masterDataMaxLength, masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../../shared/masterData";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure } from "./access";
@@ -67,6 +67,8 @@ export const masterDataRouter = router({
   add: adminProcedure.input(z.object({ field: fieldInput, value: z.string().trim().min(2, "Valor muito curto.").max(180) })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const value = input.value.replace(/\s+/g, " ");
+    if (value.length > masterDataMaxLength[input.field]) throw new TRPCError({ code: "BAD_REQUEST", message: `${masterDataFieldLabel[input.field]} aceita até ${masterDataMaxLength[input.field]} caracteres na ficha.` });
+    if (isReservedMasterDataValue(input.field, value)) throw new TRPCError({ code: "BAD_REQUEST", message: `"${value}" é reservado para fichas criadas automaticamente e não entra na lista.` });
     const key = masterDataKey(value);
     const result = await db.transaction(async tx => {
       const [existing] = await tx.select().from(masterDataOptions).where(and(eq(masterDataOptions.field, input.field), eq(masterDataOptions.normalizedKey, key))).limit(1).for("update");
@@ -104,7 +106,7 @@ export const masterDataRouter = router({
     const groups = await usedValues(input.field);
     const added = await db.transaction(async tx => {
       const known = new Set((await tx.select({ normalizedKey: masterDataOptions.normalizedKey }).from(masterDataOptions).where(eq(masterDataOptions.field, input.field)).for("update")).map(row => row.normalizedKey));
-      const fresh = Array.from(groups.entries()).filter(([key]) => !known.has(key) && key.length >= 2).map(([key, group]) => ({ field: input.field, value: group.value.replace(/\s+/g, " ").slice(0, 180), normalizedKey: key.slice(0, 180), createdByUserId: ctx.user.id }));
+      const fresh = Array.from(groups.entries()).filter(([key]) => !known.has(key) && key.length >= 2).map(([key, group]) => ({ field: input.field, value: group.value.replace(/\s+/g, " ").slice(0, masterDataMaxLength[input.field]), normalizedKey: key.slice(0, 180), createdByUserId: ctx.user.id }));
       if (fresh.length && await activeCount(tx, input.field) + fresh.length > MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(input.field);
       for (let start = 0; start < fresh.length; start += 500) await tx.insert(masterDataOptions).values(fresh.slice(start, start + 500));
       return fresh.length;

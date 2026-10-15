@@ -9,14 +9,18 @@ export const masterDataFieldLabel: Record<MasterDataField, string> = {
   partnerProfession: "Profissão do cônjuge",
 };
 
+/** Tamanho máximo de cada campo na ficha de captação: uma opção maior que isso nunca poderia ser escolhida. */
+export const masterDataMaxLength: Record<MasterDataField, number> = { captureLocation: 180, transportation: 100, vehicleBrand: 100, partnerProfession: 120 };
+
 /** Chave de comparação: sem acento, sem diferença de maiúscula e com espaços únicos ("Olímpia " = "olimpia"). */
 export function masterDataKey(value: string) {
   return value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().replace(/\s+/g, " ").toLocaleLowerCase("pt-BR");
 }
 
 /**
- * Valores gravados pelo próprio sistema (não por gente): marcam a origem da ficha e valem mesmo com a lista fechada.
- * A ficha criada pela formalização automática do Sales Command usa "Sales Command" como local de captação.
+ * Valores gravados só pelo próprio sistema: marcam a origem da ficha. A formalização automática do Sales Command grava
+ * "Sales Command" como local de captação direto no banco; a captação manual não pode usar esse valor, e ele fica fora
+ * da cobertura e da importação do dicionário.
  */
 export const reservedMasterDataValues: Record<MasterDataField, readonly string[]> = {
   captureLocation: ["Sales Command"],

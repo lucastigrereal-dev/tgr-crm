@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader } from "@/components/crm/ui";
 import { trpc } from "@/lib/trpc";
-import { masterDataFieldLabel, masterDataFields, type MasterDataField } from "@shared/masterData";
+import { masterDataFieldLabel, masterDataFields, masterDataMaxLength, type MasterDataField } from "@shared/masterData";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -33,7 +33,7 @@ export default function MasterData() {
         <Button size="sm" variant="outline" disabled={importExisting.isPending} onClick={() => importExisting.mutate({ field })}>{importExisting.isPending ? "Importando..." : "Criar a partir das fichas"}</Button>
       </div>
       <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); if (value.trim()) add.mutate({ field, value }); }}>
-        <Input className="h-9 max-w-sm" value={value} maxLength={180} onChange={event => setValue(event.target.value)} placeholder={`Nova opção de ${masterDataFieldLabel[field].toLowerCase()}`} />
+        <Input className="h-9 max-w-sm" value={value} maxLength={masterDataMaxLength[field]} onChange={event => setValue(event.target.value)} placeholder={`Nova opção de ${masterDataFieldLabel[field].toLowerCase()}`} />
         <Button size="sm" className="h-9" type="submit" disabled={add.isPending || !value.trim()}>Incluir</Button>
       </form>
       {coverage.data && coverage.data.totalCaptures > 0 && <p className="text-xs text-muted-foreground">{coverage.data.outsideCaptures} de {coverage.data.totalCaptures} fichas usam um valor fora da lista ativa.{coverage.data.outside.length > 0 && ` Mais comuns: ${coverage.data.outside.slice(0, 5).map(row => `${row.value} (${row.total})`).join(", ")}.`}</p>}
