@@ -78,12 +78,13 @@ async function settleExpirations(db: Db, entitlementId: number) {
     const [entitlement] = await tx.select({ id: ownershipEntitlements.id, entitlementType: ownershipEntitlements.entitlementType }).from(ownershipEntitlements).where(eq(ownershipEntitlements.id, entitlementId)).limit(1).for("update");
     if (!entitlement || entitlement.entitlementType !== "points") return [];
     const rows = await tx.select(expiryColumns).from(pointsLedger).where(eq(pointsLedger.entitlementId, entitlementId)).orderBy(pointsLedger.id);
-    const due = new Map(pendingExpirations(rows, projectYear()).map(item => [item.year, item.points]));
+    const year = projectYear(); // uma leitura só: virar o ano no meio da transação não pode separar a conta do marcador
+    const due = new Map(pendingExpirations(rows, year).map(item => [item.year, item.points]));
     // Ano vencido sem nada a baixar (crédito todo usado) também ganha o lançamento, de zero pontos: é o marcador de que
     // o ano foi conferido, para a varredura não voltar a ele.
-    for (const year of unsettledExpiredYears(rows, projectYear())) {
-      const points = due.get(year) ?? 0;
-      await tx.insert(pointsLedger).values({ entitlementId, entryType: "expiration", points: -points, referenceYear: year, idempotencyKey: `expiry:${entitlementId}:${year}`, note: points > 0 ? `Pontos de ${year} vencidos em ${expiresOn(year)}` : `Pontos de ${year} sem saldo a vencer em ${expiresOn(year)}`, createdByUserId: null });
+    for (const expiredYear of unsettledExpiredYears(rows, year)) {
+      const points = due.get(expiredYear) ?? 0;
+      await tx.insert(pointsLedger).values({ entitlementId, entryType: "expiration", points: -points, referenceYear: expiredYear, idempotencyKey: `expiry:${entitlementId}:${expiredYear}`, note: points > 0 ? `Pontos de ${expiredYear} vencidos em ${expiresOn(expiredYear)}` : `Pontos de ${expiredYear} sem saldo a vencer em ${expiresOn(expiredYear)}`, createdByUserId: null });
     }
   });
   // Auditoria de todo vencimento gravado, novo ou de uma rodada anterior cuja auditoria falhou: a chave é pelo lançamento,
