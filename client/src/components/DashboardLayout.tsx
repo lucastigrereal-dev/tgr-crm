@@ -37,7 +37,7 @@ const menuGroups = [
   { label: "Receita", items: [{ icon: Trophy, label: "Comissões", path: "/comissoes" }, { icon: CircleDollarSign, label: "Financeiro", path: "/financeiro" }, { icon: Calculator, label: "Reajustes", path: "/reajustes" }, { icon: ScrollText, label: "Políticas", path: "/politicas" }, { icon: FileSignature, label: "Contratos", path: "/contratos" }] },
   { label: "Proprietário", items: [{ icon: UsersRound, label: "Clientes", path: "/clientes" }, { icon: CalendarDays, label: "Reservas", path: "/reservas" }, { icon: CalendarDays, label: "Agenda", path: "/agenda" }] },
   { label: "Gestão", items: [{ icon: BrainCircuit, label: "Saúde da carteira", path: "/inteligencia" }, { icon: ShieldCheck, label: "Equipe", path: "/equipe" }] },
-  { label: "Admin", items: [{ icon: Settings, label: "Configurações", path: "/configuracoes-projeto" }, { icon: Upload, label: "Importar", path: "/importar" }, { icon: ListChecks, label: "Dicionários", path: "/dicionarios" }, { icon: Cable, label: "Integrações", path: "/integracoes" }] },
+  { label: "Admin", items: [{ icon: Settings, label: "Configurações", path: "/configuracoes-projeto" }, { icon: Upload, label: "Importar", path: "/importar" }, { icon: ListChecks, label: "Dicionários", path: "/dicionarios" }, { icon: Cable, label: "Integrações", path: "/integracoes" }, { icon: ScrollText, label: "Auditoria", path: "/auditoria" }] },
 ];
 const menuItems = menuGroups.flatMap(group => group.items);
 

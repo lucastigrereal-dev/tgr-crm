@@ -29,6 +29,7 @@ const MonetaryAdjustments = lazy(() => import("./pages/MonetaryAdjustments"));
 const PolicyRegistry = lazy(() => import("./pages/PolicyRegistry"));
 const MasterData = lazy(() => import("./pages/MasterData"));
 const IntegrationHealth = lazy(() => import("./pages/IntegrationHealth"));
+const AuditTrail = lazy(() => import("./pages/AuditTrail"));
 const Vouchers = lazy(() => import("./pages/Vouchers"));
 const OwnerPortal = lazy(() => import("./pages/OwnerPortal"));
 
@@ -69,6 +70,7 @@ function InternalRouter() {
     <Route path="/politicas" component={PolicyRegistry} />
     <Route path="/dicionarios" component={MasterData} />
     <Route path="/integracoes" component={IntegrationHealth} />
+    <Route path="/auditoria" component={AuditTrail} />
     <Route path="/vouchers" component={Vouchers} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
