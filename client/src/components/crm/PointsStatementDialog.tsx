@@ -14,8 +14,11 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
   const isAdmin = user?.role === "admin";
   // Lançar crédito e uso é do atendimento (admin e service); quem só consulta vê o extrato.
   const canPost = user?.role === "admin" || user?.role === "service";
-  // Um requestId por lançamento: reenvio após resposta perdida devolve o mesmo lançamento, sem debitar de novo.
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  // Um requestId por lançamento manual, separado para uso e ajuste: reenvio após resposta perdida devolve o mesmo
+  // lançamento, sem debitar de novo. Só o sucesso (ou o CONFLICT) daquela mesma operação troca a chave dela; crédito
+  // anual e estorno não mexem nelas.
+  const [usageRequestId, setUsageRequestId] = useState<string>(() => crypto.randomUUID());
+  const [adjustRequestId, setAdjustRequestId] = useState<string>(() => crypto.randomUUID());
   const [open, setOpen] = useState(false);
   // Vazio = ano corrente do projeto, que vem do servidor (o navegador pode estar em outro fuso na virada do ano).
   const [year, setYear] = useState("");
@@ -41,17 +44,18 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
     catch (error) { toast.error((error as Error).message); }
     finally { setLoadingOlder(false); }
   };
-  const done = (message: string) => { toast.success(message); setRequestId(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
+  const done = (message: string) => { toast.success(message); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
+  const manualDone = (message: string, rotate: (id: string) => void) => { rotate(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); done(message); };
   const onError = (error: { message: string }) => toast.error(error.message);
   // CONFLICT num lançamento com requestId: o pedido já existe (ou foi recusado de vez). O extrato recarrega para mostrar o
   // que está gravado, e o próximo envio sai com requestId novo, como um lançamento novo e consciente.
-  const onPostingError = (error: { message: string; data?: { code?: string } | null }) => {
+  const onPostingError = (rotate: (id: string) => void) => (error: { message: string; data?: { code?: string } | null }) => {
     toast.error(error.message);
-    if (error.data?.code === "CONFLICT") { setRequestId(crypto.randomUUID()); void utils.pointsLedger.statement.invalidate({ entitlementId }); }
+    if (error.data?.code === "CONFLICT") { rotate(crypto.randomUUID()); void utils.pointsLedger.statement.invalidate({ entitlementId }); }
   };
   const credit = trpc.pointsLedger.creditAnnual.useMutation({ onSuccess: () => done("Pontos do ano creditados."), onError });
-  const usage = trpc.pointsLedger.recordUsage.useMutation({ onSuccess: () => done("Uso lançado."), onError: onPostingError });
-  const adjust = trpc.pointsLedger.adjust.useMutation({ onSuccess: () => done("Ajuste lançado."), onError: onPostingError });
+  const usage = trpc.pointsLedger.recordUsage.useMutation({ onSuccess: () => manualDone("Uso lançado.", setUsageRequestId), onError: onPostingError(setUsageRequestId) });
+  const adjust = trpc.pointsLedger.adjust.useMutation({ onSuccess: () => manualDone("Ajuste lançado.", setAdjustRequestId), onError: onPostingError(setAdjustRequestId) });
   const reverse = trpc.pointsLedger.reverse.useMutation({ onSuccess: () => done("Lançamento estornado."), onError });
   const busy = credit.isPending || usage.isPending || adjust.isPending || reverse.isPending;
   const points = Number(usagePoints);
@@ -70,8 +74,8 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
           <Input className="h-9 min-w-40 flex-1" value={note} maxLength={255} onChange={e => setNote(e.target.value)} placeholder="Observação ou motivo" />
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" disabled={busy || !(points > 0)} onClick={() => usage.mutate({ entitlementId, points, reservationId: reservationId ? Number(reservationId) : undefined, note: note.trim() || undefined, requestId })}>Lançar uso</Button>
-          {isAdmin && <Button size="sm" variant="outline" disabled={busy || !points} onClick={() => adjust.mutate({ entitlementId, points, note, requestId })}>Lançar ajuste (+/-)</Button>}
+          <Button size="sm" variant="outline" disabled={busy || !(points > 0)} onClick={() => usage.mutate({ entitlementId, points, reservationId: reservationId ? Number(reservationId) : undefined, note: note.trim() || undefined, requestId: usageRequestId })}>Lançar uso</Button>
+          {isAdmin && <Button size="sm" variant="outline" disabled={busy || !points} onClick={() => adjust.mutate({ entitlementId, points, note, requestId: adjustRequestId })}>Lançar ajuste (+/-)</Button>}
         </div>
       </div>}
       <div className="max-h-72 overflow-y-auto text-sm">
