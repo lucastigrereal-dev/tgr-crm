@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, customers, users, vouchers } from "../drizzle/schema";
+import { auditLogs, captureRecords, customers, users, vouchers } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { localDateInTimezone } from "./saleTermsPolicy";
 
@@ -98,7 +98,7 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     const list = await caller().vouchers.listByCustomer({ customerId });
     expect(list.truncated).toBe(true);
     expect(list.total).toBeGreaterThan(count);
-    expect(list.vouchers).toHaveLength(200);
+    expect(list.vouchers).toHaveLength(201);
     expect(list.vouchers.some(row => row.id === oldValid && row.state === "issued")).toBe(true);
   });
 
@@ -118,5 +118,32 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     expect((await db.select().from(vouchers).where(eq(vouchers.requestId, parallelId)))).toHaveLength(1);
     const [{ id: other }] = await db.insert(customers).values({ fullName: `Outro Casal ${runId}`, status: "active" }).$returningId();
     await expect(caller().vouchers.issue({ customerId: other, description: "Café da manhã", requestId })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("mais de 200 válidos: todos aparecem na ficha; baixa repetida grava a auditoria que faltou; a ficha de captação liga o brinde", async () => {
+    const [{ id: many }] = await db.insert(customers).values({ fullName: `Casal Muitos ${runId}`, status: "active" }).$returningId();
+    await db.insert(vouchers).values(Array.from({ length: 230 }, (_, index) => ({ code: `M${runId}${index}`, customerId: many, description: "Brinde válido sintético", costAmount: "1.00", issuedByUserId: userId })));
+    await db.insert(vouchers).values(Array.from({ length: 205 }, (_, index) => ({ code: `H${runId}${index}`, customerId: many, description: "Brinde usado sintético", costAmount: "1.00", status: "redeemed" as const, redeemedAt: new Date(), issuedByUserId: userId })));
+    const list = await caller().vouchers.listByCustomer({ customerId: many });
+    expect(list.validCount).toBe(230);
+    expect(list.vouchers.filter(row => row.state === "issued")).toHaveLength(230);
+    expect(list.vouchers).toHaveLength(430);
+    expect(list).toMatchObject({ total: 435, truncated: true });
+
+    const issued = await caller().vouchers.issue({ customerId, description: "Spa", costAmount: 50, requestId: randomUUID() });
+    await caller().vouchers.redeem({ code: issued.code });
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_redeemed:${issued.voucherId}`));
+    await expect(caller().vouchers.redeem({ code: issued.code })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_redeemed:${issued.voucherId}`))).toHaveLength(1);
+    const toCancel = await caller().vouchers.issue({ customerId, description: "Passeio", costAmount: 20, requestId: randomUUID() });
+    await caller("seller").vouchers.cancel({ id: toCancel.voucherId, reason: "Casal desistiu" });
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_cancelled:${toCancel.voucherId}`));
+    await expect(caller("seller").vouchers.cancel({ id: toCancel.voucherId, reason: "Casal desistiu" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_cancelled:${toCancel.voucherId}`))).toHaveLength(1);
+
+    const [{ id: captureId }] = await db.insert(captureRecords).values({ customerId, captureLocation: "Recepção sintética" } as never).$returningId();
+    expect((await caller().vouchers.captureOptions({ customerId })).map(row => row.id)).toContain(captureId);
+    const linked = await caller().vouchers.issue({ customerId, captureId, description: "Jantar do tour", costAmount: 80, requestId: randomUUID() });
+    expect((await caller().vouchers.listByCustomer({ customerId })).vouchers.find(row => row.id === linked.voucherId)?.captureId).toBe(captureId);
   });
 });

@@ -141,4 +141,52 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     const [{ id: closed }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, status: "cancelled" }).$returningId();
     await expect(caller("admin").pointsLedger.adjust({ entitlementId: closed, points: 50, note: "Bônus depois do distrato", requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
+
+  it("uso e ajuste fora da vigência são recusados, mesmo com status ativo", async () => {
+    const [{ id: lapsed }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, validFrom: new Date("2020-01-01T12:00:00Z"), validUntil: new Date("2021-12-31T12:00:00Z") }).$returningId();
+    await caller().pointsLedger.creditAnnual({ entitlementId: lapsed, year: 2021 });
+    await expect(caller().pointsLedger.recordUsage({ entitlementId: lapsed, points: 10, requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("venceu") });
+    await expect(caller("admin").pointsLedger.adjust({ entitlementId: lapsed, points: 10, note: "Bônus fora da vigência", requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    const [{ id: future }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, validFrom: new Date("2099-01-01T12:00:00Z") }).$returningId();
+    await expect(caller().pointsLedger.recordUsage({ entitlementId: future, points: 1, requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("a partir") });
+  });
+
+  it("crédito do ano e estorno repetidos respondem CONFLICT e gravam a auditoria que tinha faltado", async () => {
+    const [{ id: audited }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, validFrom: new Date("2026-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
+    const credit = await caller().pointsLedger.creditAnnual({ entitlementId: audited, year: 2026 });
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${credit.entryId}`));
+    await expect(caller().pointsLedger.creditAnnual({ entitlementId: audited, year: 2026 })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${credit.entryId}`))).toHaveLength(1);
+    const reversal = await caller("admin").pointsLedger.reverse({ entryId: credit.entryId, note: "Crédito em duplicidade" });
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${reversal.entryId}`));
+    await expect(caller("admin").pointsLedger.reverse({ entryId: credit.entryId, note: "Crédito em duplicidade" })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(caller("admin").pointsLedger.reverse({ entryId: credit.entryId, note: "Crédito em duplicidade" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${reversal.entryId}`))).toHaveLength(1);
+  });
+
+  it("reserva que consumiu pontos só cancela depois do estorno; uso e cancelamento ao mesmo tempo nunca deixam reserva cancelada com débito", async () => {
+    const [{ id: booked }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000, validFrom: new Date("2026-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
+    await caller().pointsLedger.creditAnnual({ entitlementId: booked, year: 2026 });
+    const [{ unitId }] = await db.select({ unitId: reservations.unitId }).from(reservations).where(eq(reservations.id, reservationId));
+    const newReservation = async () => (await db.insert(reservations).values({ customerId: (await db.select({ customerId: reservations.customerId }).from(reservations).where(eq(reservations.id, reservationId)))[0]!.customerId, contractId: contractIdForRace, unitId, checkIn: new Date("2027-03-10T12:00:00Z"), checkOut: new Date("2027-03-12T12:00:00Z"), status: "confirmed" }).$returningId())[0]!.id;
+    const ops = () => appRouter.createCaller({ user: { id: userId, role: "service" } } as never).operations;
+    const first = await newReservation();
+    const usage = await caller().pointsLedger.recordUsage({ entitlementId: booked, points: 100, reservationId: first, requestId: randomUUID() });
+    await expect(ops().updateReservationStatus({ id: first, status: "cancelled" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await caller("admin").pointsLedger.reverse({ entryId: usage.entryId, note: "Reserva desfeita" });
+    await ops().updateReservationStatus({ id: first, status: "cancelled" });
+
+    for (let round = 0; round < 8; round += 1) {
+      const racing = await newReservation();
+      await Promise.allSettled([
+        caller().pointsLedger.recordUsage({ entitlementId: booked, points: 10, reservationId: racing, requestId: randomUUID() }),
+        ops().updateReservationStatus({ id: racing, status: "cancelled" }),
+      ]);
+      const [{ status }] = await db.select({ status: reservations.status }).from(reservations).where(eq(reservations.id, racing));
+      const rows = await db.select().from(pointsLedger).where(eq(pointsLedger.reservationId, racing));
+      const reversedIds = new Set(rows.map(row => row.reversesEntryId));
+      const activeUsage = rows.some(row => row.entryType === "usage" && !reversedIds.has(row.id));
+      expect(status === "cancelled" && activeUsage).toBe(false);
+    }
+  });
 });

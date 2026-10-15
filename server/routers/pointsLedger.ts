@@ -6,6 +6,8 @@ import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, contractsProcedure, serviceProcedure } from "./access";
 import { isDuplicateKeyError } from "../mysqlErrors";
+import { ENV } from "../_core/env";
+import { localDateInTimezone } from "../saleTermsPolicy";
 
 /**
  * Extrato de pontos do direito de uso (TSE #29). Só inclusão: crédito anual, uso, ajuste e estorno. Nenhum lançamento é
@@ -36,6 +38,18 @@ async function lockPointsEntitlement(tx: Tx, entitlementId: number) {
 }
 const requireActive = (entitlement: { status: string }) => {
   if (entitlement.status !== "active") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Direito de uso não está ativo." });
+};
+const dateKey = (value: Date | string | null) => value ? new Date(value).toISOString().slice(0, 10) : null;
+/**
+ * Uso e ajuste só dentro da vigência, pelo dia do projeto: nenhum processo muda o status para "vencido" quando a data
+ * passa, então a data é conferida aqui.
+ */
+const requireInValidity = (entitlement: { validFrom: Date | null; validUntil: Date | null }) => {
+  const today = localDateInTimezone(new Date(), ENV.financialProjectTimezone.trim() || "America/Recife");
+  const from = dateKey(entitlement.validFrom);
+  const until = dateKey(entitlement.validUntil);
+  if (from && today < from) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `O direito de uso só vale a partir de ${from}.` });
+  if (until && today > until) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `O direito de uso venceu em ${until}.` });
 };
 const insufficient = (balance: number, points: number) => new TRPCError({ code: "PRECONDITION_FAILED", message: `Saldo insuficiente: ${balance} ponto(s) disponível(is), lançamento de ${points}.` });
 
@@ -96,16 +110,22 @@ export const pointsLedgerRouter = router({
 
   creditAnnual: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), year: z.number().int().min(2000).max(2100) })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
+    const idempotencyKey = `annual:${input.entitlementId}:${input.year}`;
+    let duplicate = false;
     const id = await db.transaction(async tx => {
       const { entitlement } = await lockPointsEntitlement(tx, input.entitlementId);
+      // Ano já creditado: responde CONFLICT, mas antes grava a auditoria do crédito se ela tiver faltado.
+      const existing = await existingRequest(tx, idempotencyKey);
+      if (existing) { duplicate = true; return existing; }
       requireActive(entitlement);
       if (entitlement.annualPoints <= 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O direito de uso não tem pontos anuais definidos." });
       const fromYear = entitlement.validFrom ? new Date(entitlement.validFrom).getUTCFullYear() : null;
       const untilYear = entitlement.validUntil ? new Date(entitlement.validUntil).getUTCFullYear() : null;
       if ((fromYear && input.year < fromYear) || (untilYear && input.year > untilYear)) throw new TRPCError({ code: "BAD_REQUEST", message: `O ano ${input.year} está fora da vigência do direito de uso.` });
-      return append(tx, { entitlementId: entitlement.id, entryType: "annual_credit", points: entitlement.annualPoints, referenceYear: input.year, idempotencyKey: `annual:${entitlement.id}:${input.year}`, note: `Crédito anual ${input.year}`, createdByUserId: ctx.user.id }, `Os pontos de ${input.year} já foram creditados neste direito de uso.`);
+      return append(tx, { entitlementId: entitlement.id, entryType: "annual_credit", points: entitlement.annualPoints, referenceYear: input.year, idempotencyKey, note: `Crédito anual ${input.year}`, createdByUserId: ctx.user.id }, `Os pontos de ${input.year} já foram creditados neste direito de uso.`);
     });
     await recordAudit(ctx.user.id, "points_ledger", id, "annual_credit", `Crédito anual ${input.year} no direito de uso ${input.entitlementId}.`, { idempotencyKey: `points_ledger:${id}` });
+    if (duplicate) throw new TRPCError({ code: "CONFLICT", message: `Os pontos de ${input.year} já foram creditados neste direito de uso.` });
     return { entryId: id };
   }),
 
@@ -117,8 +137,10 @@ export const pointsLedgerRouter = router({
       const existing = await existingRequest(tx, idempotencyKey);
       if (existing) return existing;
       requireActive(entitlement);
+      requireInValidity(entitlement);
       if (input.reservationId) {
-        const [reservation] = await tx.select({ contractId: reservations.contractId, status: reservations.status }).from(reservations).where(eq(reservations.id, input.reservationId)).limit(1);
+        // Trava a reserva: o cancelamento dela trava a mesma linha e confere os pontos lançados, então uso e cancelamento entram em fila.
+        const [reservation] = await tx.select({ contractId: reservations.contractId, status: reservations.status }).from(reservations).where(eq(reservations.id, input.reservationId)).limit(1).for("update");
         if (!reservation || reservation.contractId !== entitlement.contractId) throw new TRPCError({ code: "NOT_FOUND", message: "Reserva não encontrada para o contrato deste direito de uso." });
         if (reservation.status === "cancelled") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reserva cancelada não consome pontos." });
         // Uma reserva consome pontos uma vez por direito; depois de estornado, o uso pode ser lançado de novo (a trava do direito põe em fila).
@@ -142,6 +164,7 @@ export const pointsLedgerRouter = router({
       const existing = await existingRequest(tx, idempotencyKey);
       if (existing) return existing;
       requireActive(entitlement);
+      requireInValidity(entitlement);
       if (balance + input.points < 0) throw insufficient(balance, -input.points);
       return append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, idempotencyKey, createdByUserId: ctx.user.id }, "Ajuste repetido.");
     });
@@ -156,11 +179,15 @@ export const pointsLedgerRouter = router({
       if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Lançamento não encontrado." });
       if (target.entryType === "reversal") throw new TRPCError({ code: "BAD_REQUEST", message: "Estorno não se estorna; faça um ajuste." });
       const { balance } = await lockPointsEntitlement(tx, target.entitlementId);
+      // Já estornado: responde CONFLICT, mas antes grava a auditoria do estorno se ela tiver faltado.
+      const existing = await existingRequest(tx, `reversal:${target.id}`);
+      if (existing) return { id: existing, target, duplicate: true };
       if (balance - target.points < 0) throw insufficient(balance, target.points);
       const id = await append(tx, { entitlementId: target.entitlementId, entryType: "reversal", points: -target.points, referenceYear: target.referenceYear, reservationId: target.reservationId, reversesEntryId: target.id, idempotencyKey: `reversal:${target.id}`, note: input.note, createdByUserId: ctx.user.id }, "Este lançamento já foi estornado.");
-      return { id, target };
+      return { id, target, duplicate: false };
     });
     await recordAudit(ctx.user.id, "points_ledger", result.id, "reversal", `Estorno do ${entryLabel[result.target.entryType]} ${result.target.id} (${result.target.points} ponto(s)): ${input.note}.`, { idempotencyKey: `points_ledger:${result.id}` });
+    if (result.duplicate) throw new TRPCError({ code: "CONFLICT", message: "Este lançamento já foi estornado." });
     return { entryId: result.id };
   }),
 });

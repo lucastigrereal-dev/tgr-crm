@@ -22,19 +22,22 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   const [description, setDescription] = useState("");
   const [cost, setCost] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [captureId, setCaptureId] = useState("");
   // Um requestId por emissão: reenvio após resposta perdida devolve o mesmo voucher, sem emitir outro.
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const utils = trpc.useUtils();
   const list = trpc.vouchers.listByCustomer.useQuery({ customerId }, { enabled: customerId > 0 });
+  // Ficha de captação que originou o brinde (tour, venda), para o custo ficar ligado a ela.
+  const captures = trpc.vouchers.captureOptions.useQuery({ customerId }, { enabled: customerId > 0 && canIssue });
   const refresh = () => void utils.vouchers.listByCustomer.invalidate({ customerId });
-  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setCost(""); setExpiresAt(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
+  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
   const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: e => toast.error(e.message) });
   const cancel = trpc.vouchers.cancel.useMutation({ onSuccess: () => { toast.success("Voucher cancelado."); refresh(); }, onError: e => toast.error(e.message) });
   const submit = () => {
     if (description.trim().length < 3) return toast.error("Descreva o brinde.");
     const costAmount = cost.trim() ? Number(cost.replace(",", ".")) : 0;
     if (!Number.isFinite(costAmount) || costAmount < 0) return toast.error("Custo inválido.");
-    issue.mutate({ customerId, description, costAmount, expiresAt: expiresAt || undefined, requestId });
+    issue.mutate({ customerId, description, costAmount, expiresAt: expiresAt || undefined, captureId: captureId ? Number(captureId) : undefined, requestId });
   };
 
   return <Card className="rounded-[1.35rem] border-[#e9e4da]">
@@ -45,8 +48,12 @@ export function VouchersCard({ customerId }: { customerId: number }) {
         <Input value={cost} onChange={e => setCost(e.target.value)} inputMode="decimal" placeholder="Custo R$" className="h-9" />
         <Input value={expiresAt} onChange={e => setExpiresAt(e.target.value)} type="date" aria-label="Validade" className="h-9" />
         <Button size="sm" className="h-9" disabled={issue.isPending} onClick={submit}>{issue.isPending ? "Emitindo..." : "Emitir"}</Button>
+        {(captures.data?.length ?? 0) > 0 && <select value={captureId} onChange={e => setCaptureId(e.target.value)} aria-label="Ficha de captação" className="h-9 rounded-md border border-input bg-background px-2 text-sm sm:col-span-4">
+          <option value="">Sem ficha de captação</option>
+          {(captures.data ?? []).map(capture => <option key={capture.id} value={capture.id}>Ficha {capture.id} · {new Date(capture.scheduledAt ?? capture.createdAt).toLocaleDateString("pt-BR")}{capture.captureLocation ? ` · ${capture.captureLocation}` : ""}</option>)}
+        </select>}
       </div>}
-      {list.data?.truncated && <p className="text-xs text-amber-700">Mostrando {list.data.vouchers.length} de {list.data.total} vouchers: todos os válidos e os mais recentes do histórico.</p>}
+      {list.data?.truncated && <p className="text-xs text-amber-700">Mostrando {list.data.vouchers.length} de {list.data.total} vouchers: os {list.data.validCount} válidos e os mais recentes do histórico.</p>}
       {list.data?.vouchers.length === 0 && <p className="text-xs text-muted-foreground">Nenhum voucher emitido.</p>}
       {(list.data?.vouchers ?? []).map(voucher => <div key={voucher.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
         <div className="min-w-0">
