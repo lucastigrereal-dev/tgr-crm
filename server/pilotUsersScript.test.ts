@@ -47,6 +47,12 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(JSON.parse(rotated.stdout)).toMatchObject({ rotated: ["ana.adm"] });
     const users = JSON.parse(readFileSync(join(dir, "crm-users.json"), "utf8")).users as Array<{ username: string; passwordHash: string }>;
     expect(verifyLocalPassword(oldPassword, users.find(u => u.username === "ana.adm")!.passwordHash)).toBe(false);
+    // o arquivo de credenciais troca a senha da linha (uma linha por usuário), para o smoke não testar senha invalidada
+    const lines = readFileSync(join(dir, "crm-credentials.local.txt"), "utf8").trim().split("\n");
+    expect(lines.filter(line => line.startsWith("ana.adm\t"))).toHaveLength(1);
+    expect(lines).toHaveLength(3);
+    expect(credentials(dir)["ana.adm"]).not.toBe(oldPassword);
+    expect(verifyLocalPassword(credentials(dir)["ana.adm"]!, users.find(u => u.username === "ana.adm")!.passwordHash)).toBe(true);
   });
 
   it("--perfil-sala cria os 5 perfis da sala com o papel certo e aceita nomes reais por cima", () => {

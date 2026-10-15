@@ -323,6 +323,10 @@ test.describe("homologação isolada estrita", () => {
     await page.goto("/estoque-comercial");
     await expect(page.getByText(fx.resortName).first()).toBeVisible();
     await expect(page.getByText("Estoque comercial de cotas")).toBeVisible();
+    const counter = (label: string) => page.locator("p.uppercase", { hasText: new RegExp(`^${label}$`) }).first().locator("xpath=following-sibling::p");
+    await expect(counter("Total")).toHaveText("2");
+    await expect(counter("Vendida")).toHaveText("2");
+    await expect(counter("Disponível")).toHaveText("0");
   });
 
   test("solicita, aprova e executa distrato uma única vez", async ({ page }) => {

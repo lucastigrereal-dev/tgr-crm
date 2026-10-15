@@ -71,9 +71,12 @@ const users = [...byName.values()];
 writeFileSync(file, JSON.stringify({ users }, null, 2), { mode: 0o600 });
 writeFileSync(join(out, "crm-users.env"), `${flags.envName}='${JSON.stringify(users)}'\n`, { mode: 0o600 });
 if (credentials.length) {
+  // Uma linha por usuário: rotacionar SUBSTITUI a senha antiga (senão o smoke de login testaria uma senha já invalidada).
   const credFile = join(out, "crm-credentials.local.txt");
-  const header = existsSync(credFile) ? "" : "usuario\tpapel\tsenha_temporaria\n";
-  writeFileSync(credFile, (existsSync(credFile) ? readFileSync(credFile, "utf8") : header) + credentials.join("\n") + "\n", { mode: 0o600 });
+  const rows = new Map();
+  if (existsSync(credFile)) for (const line of readFileSync(credFile, "utf8").trim().split("\n").slice(1)) { const [name] = line.split("\t"); if (name) rows.set(name, line); }
+  for (const line of credentials) rows.set(line.split("\t")[0], line);
+  writeFileSync(credFile, ["usuario\tpapel\tsenha_temporaria", ...rows.values()].join("\n") + "\n", { mode: 0o600 });
   chmodSync(credFile, 0o600);
 }
 chmodSync(file, 0o600);
