@@ -5,7 +5,7 @@
 // --env-name troca o nome da variável no .env gerado (o compose portátil da Suite usa CRM_LOCAL_AUTH_USERS).
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,8 +44,15 @@ for (const entry of flags.user) {
 }
 const out = resolve(flags.out);
 // As senhas em texto não podem cair dentro do checkout (um `git add .` as commitaria): recusa --out dentro do repositório.
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const fromRepo = relative(repoRoot, out);
+// Resolve links simbólicos: usa o caminho real do ancestral existente mais próximo (a pasta pode ainda não existir).
+function realLocation(path) {
+  let probe = path;
+  const rest = [];
+  while (!existsSync(probe)) { rest.unshift(probe.slice(dirname(probe).length + 1)); const up = dirname(probe); if (up === probe) break; probe = up; }
+  return join(realpathSync(probe), ...rest);
+}
+const repoRoot = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
+const fromRepo = relative(repoRoot, realLocation(out));
 if (fromRepo === "" || (fromRepo !== ".." && !fromRepo.startsWith(".." + sep) && !isAbsolute(fromRepo))) fail("--out está dentro do repositório: use uma pasta fora dele, para as senhas não irem pro Git.");
 const file = join(out, "crm-users.json");
 const requested = flags.user.map(entry => {

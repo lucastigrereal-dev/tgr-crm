@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -99,6 +99,24 @@ describe("P-06 usuários do piloto do CRM", () => {
     const dotted = spawnSync(process.execPath, ["scripts/pilot-users.mjs", "--out", "..credenciais-teste", "--user", "ana.adm:admin"], { cwd: root, encoding: "utf8", timeout: 20_000 });
     expect(dotted.status).not.toBe(0);
     expect(`${dotted.stdout}${dotted.stderr}`).toContain("dentro do repositório");
+  });
+
+  it("recusa --out que é link simbólico para dentro do repositório", () => {
+    const base = newDir();
+    const link = join(base, "link-pro-repo");
+    symlinkSync(root, link);
+    const result = spawnSync(process.execPath, ["scripts/pilot-users.mjs", "--out", join(link, "sub-credenciais"), "--user", "ana.adm:admin"], { cwd: root, encoding: "utf8", timeout: 20_000 });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("dentro do repositório");
+  });
+
+  it("smoke recusa arquivo de credenciais vazio ou sem linhas", () => {
+    const dir = newDir();
+    const file = join(dir, "vazio.txt");
+    writeFileSync(file, "usuario\tpapel\tsenha_temporaria\n");
+    const result = spawnSync(process.execPath, ["scripts/pilot-login-smoke.mjs", "--base", "http://127.0.0.1:9", "--credentials", file], { cwd: root, encoding: "utf8", timeout: 20_000 });
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain("sem nenhum usuário");
   });
 
   it("recusa --out dentro do repositório (senhas não podem ir pro Git)", () => {

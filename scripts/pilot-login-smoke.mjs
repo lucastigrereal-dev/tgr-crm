@@ -11,6 +11,7 @@ const credentialsFile = opt("--credentials");
 if (!base || !credentialsFile) { console.error("Uso: --base <url do CRM> --credentials <crm-credentials.local.txt>"); process.exit(2); }
 
 const rows = readFileSync(credentialsFile, "utf8").trim().split("\n").slice(1).map(line => line.split("\t"));
+if (rows.length === 0) { console.error("RESULTADO: FAIL (arquivo de credenciais sem nenhum usuário)"); process.exit(1); }
 let failed = 0;
 const report = (ok, label, detail = "") => { if (!ok) failed += 1; console.log(`${ok ? "PASS" : "FAIL"} ${label}${detail ? " " + detail : ""}`); };
 
@@ -26,7 +27,7 @@ async function login(username, password) {
 }
 
 for (const [username, role, password] of rows) {
-  if (!username || !role || !password) continue;
+  if (!username || !role || !password) { report(false, `${username || "(linha sem usuário)"}: linha de credencial incompleta`); continue; }
   const bad = await login(username, password + "x");
   report(bad.status === 401, `${username}: senha errada recusada`, `(${bad.status})`);
   const good = await login(username, password);
