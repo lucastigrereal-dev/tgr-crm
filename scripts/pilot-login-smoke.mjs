@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // P-06 / D2 (piloto na sala): confere o login de cada usuário do piloto contra o CRM que está no ar.
 // Uso: node scripts/pilot-login-smoke.mjs --base https://crm.empresa.com.br --credentials <pasta>/crm-credentials.local.txt
-// Imprime só PASS/FAIL por usuário e papel (nunca a senha). Também confere /api/health/ready e que senha errada é recusada.
+// Imprime só PASS/FAIL por usuário e papel (nunca a senha). Também confere /api/health/ready e que credencial inválida é recusada (com usuário inexistente, para não gastar tentativas das contas reais).
 import { readFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -26,10 +26,13 @@ async function login(username, password) {
   return { status: response.status, cookie };
 }
 
+// A recusa é provada com um usuário inexistente: a trava de tentativas é por IP+usuário, e errar a senha de uma conta real aqui
+// poderia somar a 5ª falha e bloquear o login válido logo em seguida.
+const probe = await login(`smoke.inexistente.${Date.now().toString(36)}`, "senha-invalida-" + Date.now());
+report(probe.status === 401, "credencial inválida recusada", `(${probe.status})`);
+
 for (const [username, role, password] of rows) {
   if (!username || !role || !password) { report(false, `${username || "(linha sem usuário)"}: linha de credencial incompleta`); continue; }
-  const bad = await login(username, password + "x");
-  report(bad.status === 401, `${username}: senha errada recusada`, `(${bad.status})`);
   const good = await login(username, password);
   if (good.status !== 200 || !good.cookie) { report(false, `${username}: login`, `(${good.status})`); continue; }
   const me = await fetch(base + "/api/trpc/auth.me", { headers: { Cookie: good.cookie } });
