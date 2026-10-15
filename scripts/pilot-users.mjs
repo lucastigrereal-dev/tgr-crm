@@ -6,8 +6,8 @@
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROLES = ["admin", "seller", "finance", "service"];
@@ -54,11 +54,18 @@ function lockDown(path) {
   const result = owner ? spawnSync("icacls", [path, "/inheritance:r", "/grant:r", `${owner}:(R,W)`], { encoding: "utf8" }) : { status: 1 };
   return result.status === 0;
 }
-// Segredo só é gravado DEPOIS de protegido: cria o arquivo vazio, trava, e só então escreve. Se a trava falhar, apaga e para (nada de senha solta).
+// Segredo só é gravado DEPOIS de protegido e SUBSTITUI o arquivo antigo só no fim: escreve num temporário do mesmo diretório (nasce vazio,
+// é travado, recebe o conteúdo) e troca por rename. Se a trava falhar, o temporário some e o arquivo antigo fica intacto; o rename também
+// troca a entrada do diretório (não segue link simbólico nem físico do destino).
 function writeSecret(path, content) {
-  writeFileSync(path, "", { mode: 0o600 });
-  if (!lockDown(path)) { try { unlinkSync(path); } catch { /* já sumiu */ } fail(`Não consegui restringir ${path} só ao seu usuário (icacls); removi o arquivo. Use uma pasta privada e tente de novo.`); }
-  writeFileSync(path, content, { mode: 0o600 });
+  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  const discard = () => { try { unlinkSync(temp); } catch { /* já sumiu */ } };
+  try {
+    writeFileSync(temp, "", { mode: 0o600, flag: "wx" });
+    if (!lockDown(temp)) { discard(); fail(`Não consegui restringir ${path} só ao seu usuário (icacls); nada foi gravado e o arquivo anterior foi mantido. Use uma pasta privada e tente de novo.`); }
+    writeFileSync(temp, content, { mode: 0o600 });
+    renameSync(temp, path);
+  } catch (error) { discard(); throw error; }
 }
 function realLocation(path) {
   let probe = path;
@@ -125,6 +132,9 @@ if (existsSync(credFile)) {
   }
 }
 for (const line of credentials) rows.set(line.split("\t")[0], line);
+// Uma credencial por conta salva: faltando alguma, o smoke deixaria de testá-la em silêncio. Rodar --rotate <usuário> emite a senha de novo.
+const withoutCredential = users.filter(user => !rows.has(user.username)).map(user => user.username);
+if (withoutCredential.length) fail(`Sem senha temporária salva para: ${withoutCredential.join(", ")}. Rode de novo com --rotate <usuário> para emitir uma nova.`);
 if (credentials.length || existsSync(credFile)) writeSecret(credFile, [CREDENTIALS_HEADER, ...rows.values()].join("\n") + "\n");
 writeSecret(file, JSON.stringify({ users }, null, 2));
 writeSecret(join(out, "crm-users.env"), `${flags.envName}='${JSON.stringify(users)}'\n`);

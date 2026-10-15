@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -139,6 +139,29 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("cabeçalho");
     expect(readFileSync(join(dir, "crm-users.json"), "utf8")).toBe(before);
     expect(readFileSync(file, "utf8").trim().split("\n")).toEqual(lines.slice(1));
+  });
+
+  it("falta de senha salva para uma conta aborta sem reescrever (smoke não pode pular conta em silêncio)", () => {
+    const dir = newDir();
+    expect(run(dir, "--user", "ana.adm:admin", "--user", "bia.fin:finance").status).toBe(0);
+    const file = join(dir, "crm-credentials.local.txt");
+    const lines = readFileSync(file, "utf8").trim().split("\n");
+    writeFileSync(file, lines.filter(line => !line.startsWith("bia.fin\t")).join("\n") + "\n");
+    const result = run(dir, "--user", "cris.adm:admin");
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("bia.fin");
+    // o caminho indicado na mensagem resolve: rotacionar emite a senha de novo e o arquivo volta a ter uma linha por conta
+    expect(run(dir, "--rotate", "bia.fin").status).toBe(0);
+    expect(readFileSync(file, "utf8").trim().split("\n").map(line => line.split("\t")[0]).sort()).toEqual(["ana.adm", "bia.fin", "usuario"]);
+  });
+
+  it("não deixa temporário para trás e mantém o modo 600 após regravar", () => {
+    const dir = newDir();
+    expect(run(dir, "--user", "ana.adm:admin").status).toBe(0);
+    expect(run(dir, "--user", "bia.fin:finance").status).toBe(0);
+    const names = readdirSync(dir);
+    expect(names.filter(name => name.endsWith(".tmp"))).toEqual([]);
+    expect(statSync(join(dir, "crm-credentials.local.txt")).mode & 0o777).toBe(0o600);
   });
 
   it("recusa arquivo de saída com link físico (mais de um nome)", () => {

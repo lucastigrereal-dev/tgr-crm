@@ -35,7 +35,8 @@ try {
 
   const unitRows = Array.from({ length: unitCount }, (_, i) => [resort.id, `SYN-UH-${pad(i + 1)}`, "SYN", 4, 2, "active"]);
   await connection.query("INSERT IGNORE INTO units (resortId, code, category, capacity, beds, status) VALUES ?", [unitRows]);
-  const [units] = await connection.query("SELECT id, code FROM units WHERE resortId = ? AND code LIKE 'SYN-UH-%' ORDER BY code", [resort.id]);
+  // Só as UHs pedidas, por código exato (LIKE trataria "_" como curinga e pegaria UH alheia).
+  const [units] = await connection.query("SELECT id, code FROM units WHERE resortId = ? AND code IN (?) ORDER BY code", [resort.id, unitRows.map(row => row[1])]);
 
   const fractionRows = units.flatMap(unit => Array.from({ length: quotasPerUnit }, (_, q) => [resort.id, unit.id, `${unit.code}-C${pad(q + 1)}`, q + 1, "available"]));
   await connection.query("INSERT IGNORE INTO commercial_fractions (resortId, unitId, code, sequence, status) VALUES ?", [fractionRows]);

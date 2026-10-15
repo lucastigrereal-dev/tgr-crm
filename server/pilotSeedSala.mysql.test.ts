@@ -34,6 +34,18 @@ describe.skipIf(!integrationUrl)("seed do piloto da sala em MySQL real", () => {
     expect(JSON.parse(again.stdout)).toMatchObject({ units: 1, fractions: 10, available: 10, saleTermsPolicies: 1 });
   });
 
+  it("só cria cota nas UHs pedidas (UH alheia com prefixo parecido fica sem cota)", async () => {
+    const name = `SYN Prefixo ${runId}`;
+    await pool.query("INSERT INTO resorts (name, status) VALUES (?, 'active')", [name]);
+    const [[resort]] = await pool.query("SELECT id FROM resorts WHERE name = ?", [name]) as [Array<{ id: number }>, unknown];
+    await pool.query("INSERT INTO units (resortId, code, status) VALUES (?, 'SYN-UH-77', 'active')", [resort.id]);
+    const result = spawnSync(process.execPath, ["scripts/pilot-seed-sala.mjs", "--project-name", name], { cwd: process.cwd(), encoding: "utf8", timeout: 30_000, env: { ...process.env, DATABASE_URL: integrationUrl } });
+    expect(result.status).toBe(0);
+    const [[alheia]] = await pool.query("SELECT COUNT(*) AS n FROM commercial_fractions f JOIN units u ON u.id = f.unitId WHERE u.resortId = ? AND u.code = 'SYN-UH-77'", [resort.id]) as [Array<{ n: number }>, unknown];
+    expect(Number(alheia.n)).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ units: 2, fractions: 10 });
+  });
+
   it("a 1ª venda do Sales entra sem configuração manual (mapeia por nome e usa a política do seed)", async () => {
     expect(seed().status).toBe(0);
     const event: SalesCommandSale = {
