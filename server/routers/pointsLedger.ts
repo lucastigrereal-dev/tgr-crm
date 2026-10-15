@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ownershipEntitlements, pointsLedger, reservations } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
@@ -22,12 +22,16 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 const entryLabel = { annual_credit: "crédito anual", usage: "uso", adjustment: "ajuste", reversal: "estorno" } as const;
 
-/** Trava o direito de uso (fila por direito) e devolve o saldo atual. Só direito de pontos ativo recebe lançamento. */
+/**
+ * Trava o direito de uso (fila por direito) e devolve o saldo atual. Só direito de pontos ativo recebe lançamento.
+ * A soma é leitura com trava (current read): se a transação já tinha um snapshot de antes de esperar a trava (o estorno lê
+ * o lançamento alvo primeiro), uma soma comum ignoraria o uso que a transação da frente acabou de gravar.
+ */
 async function lockPointsEntitlement(tx: Tx, entitlementId: number) {
   const [entitlement] = await tx.select().from(ownershipEntitlements).where(eq(ownershipEntitlements.id, entitlementId)).limit(1).for("update");
   if (!entitlement) throw new TRPCError({ code: "NOT_FOUND", message: "Direito de uso não encontrado." });
   if (entitlement.entitlementType !== "points") throw new TRPCError({ code: "BAD_REQUEST", message: "Este direito de uso não é por pontos." });
-  const [{ balance }] = await tx.select({ balance: sql<number>`coalesce(sum(${pointsLedger.points}), 0)` }).from(pointsLedger).where(eq(pointsLedger.entitlementId, entitlementId));
+  const [{ balance }] = await tx.select({ balance: sql<number>`coalesce(sum(${pointsLedger.points}), 0)` }).from(pointsLedger).where(eq(pointsLedger.entitlementId, entitlementId)).for("share");
   return { entitlement, balance: Number(balance) };
 }
 const requireActive = (entitlement: { status: string }) => {
@@ -45,16 +49,36 @@ async function append(tx: Tx, values: typeof pointsLedger.$inferInsert, duplicat
   }
 }
 
+/**
+ * Uso e ajuste manuais trazem um requestId gerado pela tela a cada lançamento. Se a resposta se perde e a tela reenvia, o
+ * mesmo requestId devolve o lançamento já gravado em vez de debitar de novo.
+ */
+const requestId = z.string().uuid();
+async function existingRequest(tx: Tx, idempotencyKey: string) {
+  const [row] = await tx.select({ id: pointsLedger.id }).from(pointsLedger).where(eq(pointsLedger.idempotencyKey, idempotencyKey)).limit(1);
+  return row?.id;
+}
+
+/** Lançamentos mostrados no extrato; o saldo sempre sai da soma do extrato inteiro. */
+export const STATEMENT_ENTRY_LIMIT = 500;
+
 export const pointsLedgerRouter = router({
   statement: contractsProcedure.input(z.object({ entitlementId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await requireDb();
     const [entitlement] = await db.select().from(ownershipEntitlements).where(eq(ownershipEntitlements.id, input.entitlementId)).limit(1);
     if (!entitlement) throw new TRPCError({ code: "NOT_FOUND", message: "Direito de uso não encontrado." });
-    const rows = await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId)).orderBy(asc(pointsLedger.id)).limit(5000);
-    const reversed = new Set(rows.map(row => row.reversesEntryId).filter((id): id is number => id !== null));
-    let running = 0;
-    const entries = rows.map(row => { running += row.points; return { id: row.id, entryType: row.entryType, points: row.points, balanceAfter: running, referenceYear: row.referenceYear, reservationId: row.reservationId, reversesEntryId: row.reversesEntryId, reversed: reversed.has(row.id), note: row.note, createdAt: row.createdAt }; });
-    return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance: running, entries: entries.reverse() };
+    // Saldo e total pela soma do extrato inteiro; a lista traz os lançamentos mais recentes, com o saldo de cada um
+    // calculado de trás para frente a partir do saldo total.
+    const [totals] = await db.select({ balance: sql<number>`coalesce(sum(${pointsLedger.points}), 0)`, count: sql<number>`count(*)` }).from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId));
+    const balance = Number(totals?.balance ?? 0);
+    const totalEntries = Number(totals?.count ?? 0);
+    const rows = await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId)).orderBy(desc(pointsLedger.id)).limit(STATEMENT_ENTRY_LIMIT);
+    const reversed = rows.length
+      ? new Set((await db.select({ reversesEntryId: pointsLedger.reversesEntryId }).from(pointsLedger).where(and(eq(pointsLedger.entitlementId, input.entitlementId), inArray(pointsLedger.reversesEntryId, rows.map(row => row.id))))).map(row => row.reversesEntryId))
+      : new Set<number | null>();
+    let after = balance;
+    const entries = rows.map(row => { const entry = { id: row.id, entryType: row.entryType, points: row.points, balanceAfter: after, referenceYear: row.referenceYear, reservationId: row.reservationId, reversesEntryId: row.reversesEntryId, reversed: reversed.has(row.id), note: row.note, createdAt: row.createdAt }; after -= row.points; return entry; });
+    return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance, totalEntries, truncated: totalEntries > rows.length, entries };
   }),
 
   creditAnnual: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), year: z.number().int().min(2000).max(2100) })).mutation(async ({ ctx, input }) => {
@@ -72,10 +96,14 @@ export const pointsLedgerRouter = router({
     return { entryId: id };
   }),
 
-  recordUsage: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().positive().max(1_000_000), reservationId: z.number().int().positive().optional(), note: z.string().trim().max(255).optional() })).mutation(async ({ ctx, input }) => {
+  recordUsage: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().positive().max(1_000_000), reservationId: z.number().int().positive().optional(), note: z.string().trim().max(255).optional(), requestId })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
+    const idempotencyKey = `usage:${input.entitlementId}:${input.requestId}`;
+    let replay = false;
     const id = await db.transaction(async tx => {
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
+      const existing = await existingRequest(tx, idempotencyKey);
+      if (existing) { replay = true; return existing; }
       requireActive(entitlement);
       if (input.reservationId) {
         const [reservation] = await tx.select({ contractId: reservations.contractId, status: reservations.status }).from(reservations).where(eq(reservations.id, input.reservationId)).limit(1);
@@ -88,19 +116,25 @@ export const pointsLedgerRouter = router({
         if (previous.some(row => row.entryType === "usage" && !reversedIds.has(row.id))) throw new TRPCError({ code: "CONFLICT", message: "Esta reserva já tem uso de pontos lançado neste direito. Para corrigir, estorne o lançamento." });
       }
       if (balance < input.points) throw insufficient(balance, input.points);
-      return append(tx, { entitlementId: entitlement.id, entryType: "usage", points: -input.points, reservationId: input.reservationId ?? null, note: input.note || null, createdByUserId: ctx.user.id }, "Uso repetido.");
+      return append(tx, { entitlementId: entitlement.id, entryType: "usage", points: -input.points, reservationId: input.reservationId ?? null, note: input.note || null, idempotencyKey, createdByUserId: ctx.user.id }, "Uso repetido.");
     });
+    if (replay) return { entryId: id };
     await recordAudit(ctx.user.id, "points_ledger", id, "usage", `Uso de ${input.points} ponto(s) no direito de uso ${input.entitlementId}${input.reservationId ? ` (reserva ${input.reservationId})` : ""}.`);
     return { entryId: id };
   }),
 
-  adjust: adminProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().min(-1_000_000).max(1_000_000).refine(value => value !== 0, "Ajuste não pode ser zero."), note: z.string().trim().min(5, "Explique o ajuste.").max(255) })).mutation(async ({ ctx, input }) => {
+  adjust: adminProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().min(-1_000_000).max(1_000_000).refine(value => value !== 0, "Ajuste não pode ser zero."), note: z.string().trim().min(5, "Explique o ajuste.").max(255), requestId })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
+    const idempotencyKey = `adjustment:${input.entitlementId}:${input.requestId}`;
+    let replay = false;
     const id = await db.transaction(async tx => {
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
+      const existing = await existingRequest(tx, idempotencyKey);
+      if (existing) { replay = true; return existing; }
       if (balance + input.points < 0) throw insufficient(balance, -input.points);
-      return append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, createdByUserId: ctx.user.id }, "Ajuste repetido.");
+      return append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, idempotencyKey, createdByUserId: ctx.user.id }, "Ajuste repetido.");
     });
+    if (replay) return { entryId: id };
     await recordAudit(ctx.user.id, "points_ledger", id, "adjustment", `Ajuste de ${input.points} ponto(s) no direito de uso ${input.entitlementId}: ${input.note}.`);
     return { entryId: id };
   }),

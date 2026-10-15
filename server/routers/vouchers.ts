@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, customers, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
@@ -34,6 +34,7 @@ async function requireDb() {
 }
 
 const money = z.number().min(0).max(999999.99);
+export const SUMMARY_PAGE_SIZE = 5000;
 
 export const vouchersRouter = router({
   listByCustomer: internalProcedure.input(z.object({ customerId: z.number().int().positive() })).query(async ({ input }) => {
@@ -44,20 +45,35 @@ export const vouchersRouter = router({
   }),
 
   /** Custo dos brindes emitidos no período, por situação: quanto foi prometido, usado, cancelado e perdido por validade. */
-  summary: internalProcedure.input(z.object({ startDate: z.string().date(), endDate: z.string().date() })).query(async ({ input }) => {
-    if (input.endDate < input.startDate) throw new TRPCError({ code: "BAD_REQUEST", message: "A data final vem antes da inicial." });
-    const db = await requireDb();
+  // Sem datas, o período é do dia 1º do mês até hoje, no fuso do projeto; a resposta devolve o período usado.
+  summary: internalProcedure.input(z.object({ startDate: z.string().date().optional(), endDate: z.string().date().optional() }).default({})).query(async ({ input }) => {
     const today = projectToday();
-    // Busca com um dia de folga em cada ponta e filtra pela data de emissão no fuso do projeto.
-    const from = new Date(`${input.startDate}T00:00:00Z`); from.setUTCDate(from.getUTCDate() - 1);
-    const to = new Date(`${input.endDate}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 2);
+    const endDate = input.endDate ?? today;
+    const startDate = input.startDate ?? `${endDate.slice(0, 7)}-01`;
+    if (endDate < startDate) throw new TRPCError({ code: "BAD_REQUEST", message: "A data final vem antes da inicial." });
+    const db = await requireDb();
+    // Busca com um dia de folga em cada ponta e filtra pela data de emissão no fuso do projeto. Lê o período inteiro em
+    // páginas pelo id, sem corte: o resumo é de dinheiro e não pode sair menor do que é.
+    const from = new Date(`${startDate}T00:00:00Z`); from.setUTCDate(from.getUTCDate() - 1);
+    const to = new Date(`${endDate}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 2);
     const timezone = projectTimezone();
-    const rows = (await db.select({ status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt }).from(vouchers)
-      .where(and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to))).limit(20000))
-      .filter(row => { const day = localDateInTimezone(row.issuedAt, timezone); return day >= input.startDate && day <= input.endDate; });
-    const totals = { issued: { count: 0, cost: 0 }, redeemed: { count: 0, cost: 0 }, cancelled: { count: 0, cost: 0 }, expired: { count: 0, cost: 0 } };
-    for (const row of rows) { const bucket = totals[voucherState(row, today)]; bucket.count += 1; bucket.cost = Math.round((bucket.cost + Number(row.costAmount)) * 100) / 100; }
-    return { ...totals, total: { count: rows.length, cost: Math.round(rows.reduce((sum, row) => sum + Number(row.costAmount), 0) * 100) / 100 } };
+    const totals = { issued: { count: 0, cents: 0 }, redeemed: { count: 0, cents: 0 }, cancelled: { count: 0, cents: 0 }, expired: { count: 0, cents: 0 } };
+    for (let afterId = 0; ;) {
+      const page = await db.select({ id: vouchers.id, status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt }).from(vouchers)
+        .where(and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to), gt(vouchers.id, afterId))).orderBy(asc(vouchers.id)).limit(SUMMARY_PAGE_SIZE);
+      for (const row of page) {
+        const day = localDateInTimezone(row.issuedAt, timezone);
+        if (day < startDate || day > endDate) continue;
+        const bucket = totals[voucherState(row, today)];
+        bucket.count += 1;
+        bucket.cents += Math.round(Number(row.costAmount) * 100);
+      }
+      if (page.length < SUMMARY_PAGE_SIZE) break;
+      afterId = page[page.length - 1]!.id;
+    }
+    const out = (bucket: { count: number; cents: number }) => ({ count: bucket.count, cost: bucket.cents / 100 });
+    const all = Object.values(totals).reduce((sum, bucket) => ({ count: sum.count + bucket.count, cents: sum.cents + bucket.cents }), { count: 0, cents: 0 });
+    return { startDate, endDate, issued: out(totals.issued), redeemed: out(totals.redeemed), cancelled: out(totals.cancelled), expired: out(totals.expired), total: out(all) };
   }),
 
   issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), costAmount: money.default(0), expiresAt: z.string().date().optional() })).mutation(async ({ ctx, input }) => {

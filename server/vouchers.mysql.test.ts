@@ -77,4 +77,18 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     const [{ id: other }] = await db.insert(customers).values({ fullName: `Outro Casal ${runId}`, status: "active" }).$returningId();
     await expect(caller().vouchers.issue({ customerId: other, captureId: 2147483000, description: "Brinde errado" })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("resumo sem datas usa o mês corrente no fuso do projeto e soma o período inteiro, além de uma página de leitura", async () => {
+    const defaults = await caller().vouchers.summary({});
+    expect(defaults).toMatchObject({ startDate: `${today.slice(0, 7)}-01`, endDate: today });
+    const day = new Date(Date.UTC(2001, 0, 1 + Math.floor(Math.random() * 360), 15));
+    const dayKey = day.toISOString().slice(0, 10);
+    const count = 5100;
+    for (let start = 0; start < count; start += 1000) {
+      await db.insert(vouchers).values(Array.from({ length: Math.min(1000, count - start) }, (_, index) => ({ code: `T${runId}${start + index}`.slice(0, 16), customerId, description: "Brinde sintético de carga", costAmount: "1.25", issuedByUserId: userId, issuedAt: day, status: "cancelled" as const, cancelledAt: day, cancelReason: "Carga sintética" })));
+    }
+    const summary = await caller().vouchers.summary({ startDate: dayKey, endDate: dayKey });
+    expect(summary.cancelled).toEqual({ count, cost: 6375 });
+    expect(summary.total).toEqual({ count, cost: 6375 });
+  });
 });
