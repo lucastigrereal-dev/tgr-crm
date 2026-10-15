@@ -97,7 +97,7 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * um evento NOVO do mesmo contrato já entregue (o Financial trata 409 como transitório e tenta de novo).
  */
 export const LATE_COMMIT_WINDOW_SECONDS = 15 * 60;
-const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
+export const CONTRACT_STATE_EVENT_NAMES = ["contract.created", "contract.status.updated", "sale.validated"] as const;
 /** Teto dos ids em retry excluídos da releitura: só os mais velhos (são eles que ocupariam o lote, que vem do mais velho para o mais novo).
  * Sem teto, uma queda longa do consumidor punha dezenas de milhares de ids no SELECT de cada tick (Codex P2). O que passa do teto
  * não esconde o tardio para sempre: a releitura é paginada (`createRereadPager`). */
@@ -144,7 +144,7 @@ export function createRereadPager() {
 }
 
 /** Recibo do pump de estado de contrato: `<prefixo><contrato>:<estado>`, estado = `validated` (sale.validated) ou `payload.status`. */
-function contractStateUnhandled(target: ContractStateTarget): SQL {
+export function contractStateUnhandled(target: ContractStateTarget): SQL {
   const state = sql`CASE WHEN ${domainEvents.eventName} = 'sale.validated' THEN 'validated' WHEN JSON_VALID(${domainEvents.payload}) THEN JSON_UNQUOTE(JSON_EXTRACT(${domainEvents.payload}, '$.status')) END`;
   return sql`(${state}) IN (${sql.join(target.statuses.map(status => sql`${status}`), sql`, `)}) AND NOT EXISTS (SELECT 1 FROM ${auditLogs} WHERE ${auditLogs.idempotencyKey} = CONCAT(${target.receiptPrefix}, ${domainEvents.aggregateId}, ':', ${state}))`;
 }
