@@ -34,7 +34,7 @@ for (const [username, role, password] of rows) {
   const me = await fetch(base + "/api/trpc/auth.me", { headers: { Cookie: good.cookie } });
   const body = await me.json().catch(() => ({}));
   const user = body?.result?.data?.json;
-  report(user?.role === role, `${username}: entrou como ${user?.role ?? "?"}`, `(esperado ${role})`);
+  report(user?.role === role && user?.openId === `local:${username}`, `${username}: entrou como ${user?.role ?? "?"}`, `(esperado ${role})`);
 }
 console.log(failed === 0 ? "RESULTADO: PASS" : `RESULTADO: FAIL (${failed})`);
 process.exit(failed === 0 ? 0 : 1);

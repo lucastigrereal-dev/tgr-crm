@@ -6,7 +6,8 @@
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ROLES = ["admin", "seller", "finance", "service"];
 const USERNAME = /^[a-z0-9._-]{3,58}$/;
@@ -36,6 +37,10 @@ if (flags.sala) flags.user.unshift(...SALA);
 if (flags.user.length === 0 && flags.rotate.length === 0) fail("Informe --perfil-sala ou ao menos um --user nome:papel[:Nome de exibição].");
 
 const out = resolve(flags.out);
+// As senhas em texto não podem cair dentro do checkout (um `git add .` as commitaria): recusa --out dentro do repositório.
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const fromRepo = relative(repoRoot, out);
+if (fromRepo === "" || (!fromRepo.startsWith("..") && !isAbsolute(fromRepo))) fail("--out está dentro do repositório: use uma pasta fora dele, para as senhas não irem pro Git.");
 const file = join(out, "crm-users.json");
 const requested = flags.user.map(entry => {
   const [username, role, ...display] = entry.split(":");

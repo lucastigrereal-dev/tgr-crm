@@ -82,6 +82,12 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(line.split("\t")).toEqual(["ana.adm", "seller", password]);
   });
 
+  it("recusa --out dentro do repositório (senhas não podem ir pro Git)", () => {
+    const result = spawnSync(process.execPath, ["scripts/pilot-users.mjs", "--out", "tmp-credenciais", "--user", "ana.adm:admin"], { cwd: root, encoding: "utf8", timeout: 20_000 });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("dentro do repositório");
+  });
+
   it("--env-name escreve o valor entre aspas simples com o nome pedido (compose portátil)", () => {
     const dir = newDir();
     expect(run(dir, "--user", "ana.adm:admin", "--env-name", "CRM_LOCAL_AUTH_USERS").status).toBe(0);
