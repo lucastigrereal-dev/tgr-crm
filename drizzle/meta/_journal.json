@@ -372,6 +372,13 @@
       "when": 1792039644155,
       "tag": "0052_vouchers",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "5",
+      "when": 1792040213296,
+      "tag": "0053_points_ledger",
+      "breakpoints": true
     }
   ]
 }

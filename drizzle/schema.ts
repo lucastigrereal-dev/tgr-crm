@@ -956,6 +956,24 @@ export const ownershipEntitlements = mysqlTable("ownership_entitlements", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("entitlements_contract_idx").on(table.contractId), index("entitlements_resort_idx").on(table.resortId, table.status)]);
 
+/**
+ * Extrato de pontos (TSE #29): só inclusão. Saldo = soma dos lançamentos; erro se corrige com estorno, nunca editando.
+ * idempotencyKey impede creditar o mesmo ano duas vezes e estornar o mesmo lançamento duas vezes.
+ */
+export const pointsLedger = mysqlTable("points_ledger", {
+  id: int("id").autoincrement().primaryKey(),
+  entitlementId: int("entitlementId").notNull().references(() => ownershipEntitlements.id),
+  entryType: mysqlEnum("entryType", ["annual_credit", "usage", "adjustment", "reversal"]).notNull(),
+  points: int("points").notNull(),
+  referenceYear: int("referenceYear"),
+  reservationId: int("reservationId").references(() => reservations.id),
+  reversesEntryId: int("reversesEntryId"),
+  note: varchar("note", { length: 255 }),
+  idempotencyKey: varchar("idempotencyKey", { length: 80 }),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("points_ledger_entitlement_idx").on(table.entitlementId, table.id), uniqueIndex("points_ledger_idempotency_unique").on(table.idempotencyKey)]);
+
 export const unitMaintenanceBlocks = mysqlTable("unit_maintenance_blocks", {
   id: int("id").autoincrement().primaryKey(),
   unitId: int("unitId").notNull().references(() => units.id),
