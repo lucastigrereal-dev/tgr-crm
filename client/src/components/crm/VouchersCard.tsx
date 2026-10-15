@@ -49,8 +49,11 @@ export function VouchersCard({ customerId }: { customerId: number }) {
     // sai com requestId novo, como uma emissão nova.
     if (e.data?.code === "CONFLICT") { setRequestId(crypto.randomUUID()); refresh(); }
   } });
-  const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: e => toast.error(e.message) });
-  const cancel = trpc.vouchers.cancel.useMutation({ onSuccess: () => { toast.success("Voucher cancelado."); refresh(); }, onError: e => toast.error(e.message) });
+  // Erro na baixa ou no cancelamento também recarrega a lista: o voucher pode já ter mudado de estado (pedido anterior
+  // gravado com resposta perdida), e o cartão não pode continuar oferecendo as ações como se ele ainda valesse.
+  const stateError = (e: { message: string }) => { toast.error(e.message); refresh(); };
+  const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: stateError });
+  const cancel = trpc.vouchers.cancel.useMutation({ onSuccess: () => { toast.success("Voucher cancelado."); refresh(); }, onError: stateError });
   const submit = () => {
     if (description.trim().length < 3) return toast.error("Descreva o brinde.");
     const costAmount = cost.trim() ? Number(cost.replace(",", ".")) : 0;

@@ -46,7 +46,9 @@ export function PointsStatementDialog({ entitlementId, label }: { entitlementId:
   };
   const done = (message: string) => { toast.success(message); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
   const manualDone = (message: string, rotate: (id: string) => void) => { rotate(crypto.randomUUID()); setUsagePoints(""); setReservationId(""); setNote(""); done(message); };
-  const onError = (error: { message: string }) => toast.error(error.message);
+  // Crédito anual e estorno têm chave natural (ano, lançamento): o erro pode vir de um pedido anterior que já gravou. O
+  // extrato recarrega para mostrar o saldo e os botões como estão no banco.
+  const onError = (error: { message: string }) => { toast.error(error.message); void utils.pointsLedger.statement.invalidate({ entitlementId }); };
   // CONFLICT num lançamento com requestId: o pedido já existe (ou foi recusado de vez). O extrato recarrega para mostrar o
   // que está gravado, e o próximo envio sai com requestId novo, como um lançamento novo e consciente.
   const onPostingError = (rotate: (id: string) => void) => (error: { message: string; data?: { code?: string } | null }) => {

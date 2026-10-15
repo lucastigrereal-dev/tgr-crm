@@ -146,7 +146,7 @@ export const vouchersRouter = router({
       // Se a auditoria da primeira tentativa falhou, o reenvio a grava; se já existe, a chave impede a duplicata.
       await auditIssued(row.issuedByUserId, row.id, row.code, row.customerId, row.description);
       // Reenvio com o brinde editado na tela: não finge que emitiu o que foi digitado agora.
-      const changed = row.description !== input.description || (row.partnerName ?? null) !== (input.partnerName || null) || Math.round(Number(row.costAmount) * 100) !== Math.round(input.costAmount * 100) || (row.expiresAt ?? null) !== (input.expiresAt ?? null) || (row.captureId ?? null) !== (input.captureId ?? null);
+      const changed = row.description !== input.description || (row.partnerName ?? null) !== (input.partnerName || null) || Number(row.costAmount).toFixed(2) !== input.costAmount.toFixed(2) || (row.expiresAt ?? null) !== (input.expiresAt ?? null) || (row.captureId ?? null) !== (input.captureId ?? null);
       if (changed) throw new TRPCError({ code: "CONFLICT", message: `Esta emissão já gerou o voucher ${row.code} com outros dados. Confira a lista antes de emitir de novo.` });
       return { voucherId: row.id, code: row.code };
     };

@@ -138,6 +138,10 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     await expect(caller().vouchers.issue({ customerId, description: "Jantar para 4", expiresAt: "2000-01-01", requestId: lateId })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(caller().vouchers.issue({ customerId, description: "Jantar", costAmount: 99, expiresAt: "2000-01-01", requestId: lateId })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: "2000-01-01", requestId: randomUUID() })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    // Custo com fração de centavo: o reenvio idêntico compara pelo mesmo arredondamento que foi gravado, sem CONFLICT.
+    const fractionId = randomUUID();
+    const fraction = await caller().vouchers.issue({ customerId, description: "Drink", costAmount: 2.675, requestId: fractionId });
+    await expect(caller().vouchers.issue({ customerId, description: "Drink", costAmount: 2.675, requestId: fractionId })).resolves.toEqual(fraction);
   });
 
   it("mais de 200 válidos: todos aparecem na ficha; baixa repetida grava a auditoria que faltou; a ficha de captação liga o brinde", async () => {
