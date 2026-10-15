@@ -33,6 +33,7 @@ export function CustomerContactsCard({ customerId }: { customerId: number }) {
         <Input value={label} onChange={event => setLabel(event.target.value)} placeholder="Rótulo (ex.: trabalho)" maxLength={60} className="h-9" />
         <Button size="sm" className="h-9" disabled={add.isPending} onClick={submit}>{add.isPending ? "Salvando..." : "Adicionar"}</Button>
       </div>
+      {(contacts.data?.length ?? 0) >= 200 && <p className="text-xs text-amber-700">Mostrando os 200 primeiros contatos desta ficha.</p>}
       {contacts.data?.length === 0 && <p className="text-xs text-muted-foreground">Nenhum contato extra ainda.</p>}
       {(contacts.data ?? []).map(contact => <div key={contact.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
         <div className="min-w-0"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#b18f4b]">{kindLabel[contact.kind]}{contact.label ? ` · ${contact.label}` : ""}</p><p className="break-words text-[#1d2b2a]">{contact.value}</p></div>
