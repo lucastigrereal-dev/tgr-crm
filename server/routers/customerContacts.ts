@@ -127,10 +127,12 @@ export const customerContactsRouter = router({
         .where(and(eq(customerContacts.id, input.contactId), isNull(customerContacts.archivedAt)));
       if (affectedRows(result) === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Contato já arquivado." });
       // Arquivou o preferencial: o contato mais recente que sobrou assume; sem nenhum, o principal da ficha fica vazio.
+      // Leitura com trava: o lockContact leu o dono sem trava antes de esperar o associado, e o snapshot daquela leitura
+      // não enxerga o que a transação da frente gravou (contato novo, outro arquivado).
       if (contact.isPreferred) {
         const [next] = await tx.select().from(customerContacts)
           .where(and(eq(customerContacts.customerId, contact.customerId), eq(customerContacts.kind, contact.kind), isNull(customerContacts.archivedAt)))
-          .orderBy(desc(customerContacts.id)).limit(1);
+          .orderBy(desc(customerContacts.id)).limit(1).for("update");
         if (next) await makePreferred(tx, next);
         else if (contact.kind === "phone") await tx.update(customers).set({ phone: null }).where(eq(customers.id, contact.customerId));
         else if (contact.kind === "email") await tx.update(customers).set({ email: null }).where(eq(customers.id, contact.customerId));

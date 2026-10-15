@@ -113,4 +113,17 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
     expect(preferred).toHaveLength(1);
     expect((await db.select().from(customers).where(eq(customers.id, busy)))[0]!.phone).toBe(preferred[0]!.value);
   });
+
+  it("arquivar dois contatos ao mesmo tempo nunca deixa arquivado como preferencial nem telefone de contato arquivado na ficha", async () => {
+    for (let round = 0; round < 12; round += 1) {
+      const [{ id: pair }] = await db.insert(customers).values({ fullName: `Par Sintético ${runId}-${round}`, status: "active" }).$returningId();
+      const a = await caller().add({ customerId: pair, kind: "phone", value: `849600${String(round).padStart(2, "0")}01` });
+      const b = await caller().add({ customerId: pair, kind: "phone", value: `849600${String(round).padStart(2, "0")}02` });
+      const results = await Promise.allSettled([caller().archive({ contactId: a.contactId }), caller().archive({ contactId: b.contactId })]);
+      expect(results.filter(result => result.status === "rejected")).toEqual([]);
+      const rows = (await caller().list({ customerId: pair, includeArchived: true })).filter(row => row.kind === "phone");
+      expect(rows.filter(row => row.isPreferred)).toEqual([]);
+      expect((await db.select().from(customers).where(eq(customers.id, pair)))[0]!.phone).toBeNull();
+    }
+  });
 });
