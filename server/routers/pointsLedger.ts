@@ -60,6 +60,13 @@ export function pendingExpirations(rows: ExpiryRow[], currentYear: number) {
   }
   return due;
 }
+/** Anos de crédito já fora da validade e ainda sem lançamento de vencimento, inclusive os que não têm mais nada a baixar (crédito todo usado). */
+export function unsettledExpiredYears(rows: ExpiryRow[], currentYear: number) {
+  const reversedIds = new Set(rows.map(row => row.reversesEntryId).filter((id): id is number => id !== null));
+  const settledYears = new Set(rows.filter(row => row.entryType === "expiration" && row.referenceYear !== null).map(row => row.referenceYear!));
+  const years = new Set(rows.filter(row => row.entryType === "annual_credit" && row.referenceYear !== null && !reversedIds.has(row.id)).map(row => row.referenceYear!));
+  return Array.from(years).filter(year => lastValidYear(year) < currentYear && !settledYears.has(year)).sort((a, b) => a - b);
+}
 const expiryColumns = { id: pointsLedger.id, entryType: pointsLedger.entryType, points: pointsLedger.points, referenceYear: pointsLedger.referenceYear, reversesEntryId: pointsLedger.reversesEntryId };
 
 /**
@@ -72,8 +79,12 @@ async function settleExpirations(db: Db, entitlementId: number) {
     const [entitlement] = await tx.select({ id: ownershipEntitlements.id, entitlementType: ownershipEntitlements.entitlementType }).from(ownershipEntitlements).where(eq(ownershipEntitlements.id, entitlementId)).limit(1).for("update");
     if (!entitlement || entitlement.entitlementType !== "points") return [];
     const rows = await tx.select(expiryColumns).from(pointsLedger).where(eq(pointsLedger.entitlementId, entitlementId)).orderBy(pointsLedger.id);
-    for (const { year, points } of pendingExpirations(rows, projectYear())) {
-      await tx.insert(pointsLedger).values({ entitlementId, entryType: "expiration", points: -points, referenceYear: year, idempotencyKey: `expiry:${entitlementId}:${year}`, note: `Pontos de ${year} vencidos em ${expiresOn(year)}`, createdByUserId: null });
+    const due = new Map(pendingExpirations(rows, projectYear()).map(item => [item.year, item.points]));
+    // Ano vencido sem nada a baixar (crédito todo usado) também ganha o lançamento, de zero pontos: é o marcador de que
+    // o ano foi conferido, para a varredura não voltar a ele.
+    for (const year of unsettledExpiredYears(rows, projectYear())) {
+      const points = due.get(year) ?? 0;
+      await tx.insert(pointsLedger).values({ entitlementId, entryType: "expiration", points: -points, referenceYear: year, idempotencyKey: `expiry:${entitlementId}:${year}`, note: points > 0 ? `Pontos de ${year} vencidos em ${expiresOn(year)}` : `Pontos de ${year} sem saldo a vencer em ${expiresOn(year)}`, createdByUserId: null });
     }
   });
   // Auditoria de todo vencimento gravado, novo ou de uma rodada anterior cuja auditoria falhou: a chave é pelo lançamento,
@@ -86,7 +97,7 @@ async function settleExpirations(db: Db, entitlementId: number) {
  * Varredura do vencimento (job noturno): baixa os pontos vencidos de todo direito com crédito anual de ano já fora da
  * validade e sem lançamento de vencimento daquele ano. Reaproveita `settleExpirations`, que é idempotente por chave
  * (`expiry:direito:ano`), então rodar duas vezes, ou junto com um lançamento comum, não duplica nada. Um direito cujo
- * crédito vencido foi todo usado não gera lançamento e volta a ser candidato; a conferência dele é barata. Vencimento
+ * crédito vencido foi todo usado ganha um lançamento de vencimento de zero pontos, que o tira da varredura. Vencimento
  * gravado sem auditoria (falha depois do commit) também é candidato, até a auditoria existir.
  */
 export async function settleAllExpirations(onError?: (error: unknown) => void) {
