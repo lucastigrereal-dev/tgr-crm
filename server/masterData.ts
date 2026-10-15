@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { masterDataOptions } from "../drizzle/schema";
-import { masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../shared/masterData";
+import { isReservedMasterDataValue, masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../shared/masterData";
 import type { getDb } from "./db";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -20,6 +20,7 @@ export async function canonicalizeMasterData(tx: Tx | Db, values: Partial<Record
       .where(and(eq(masterDataOptions.field, field), eq(masterDataOptions.active, true)));
     if (!options.length) continue;
     const match = options.find(option => option.normalizedKey === masterDataKey(value));
+    if (!match && isReservedMasterDataValue(field, value)) continue;
     if (!match) throw new TRPCError({ code: "BAD_REQUEST", message: `${masterDataFieldLabel[field]} "${value.trim()}" não está na lista. Escolha uma opção ou peça ao administrador para incluir em Dicionários.` });
     result[field] = match.value;
   }

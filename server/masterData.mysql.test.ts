@@ -7,7 +7,7 @@ import { captureRecords, masterDataOptions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Dicionários de cadastro (TSE #25) em MySQL real: lista vazia deixa o campo livre; com opções, a captação só aceita a lista.
-// Usa só a profissão do cônjuge, que nenhum outro teste MySQL grava pela captação, e desativa tudo no fim.
+// Nenhum outro teste MySQL grava estes campos pela captação; tudo o que este teste ativa é desativado no fim.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const runId = randomUUID().slice(0, 8);
 
@@ -27,7 +27,7 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
     [{ id: adminId }] = await db.insert(users).values({ openId: `masterdata-${runId}`, name: "Admin dicionários", role: "admin" }).$returningId();
   });
   afterAll(async () => {
-    await db?.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "partnerProfession"));
+    for (const field of ["partnerProfession", "captureLocation", "transportation"] as const) await db?.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, field));
     process.env = previousEnv;
     await pool?.end();
   });
@@ -71,5 +71,27 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
     await caller().masterData.setActive({ id: advogada.id, active: false });
     const coverage = await caller().masterData.coverage({ field: "partnerProfession" });
     expect(coverage.outside).toContainEqual({ value: `Advogada ${runId}`, total: 1 });
+  });
+
+  it("valor gravado pelo sistema (Sales Command) vale com a lista fechada e não entra na cobertura nem na importação", async () => {
+    await caller().masterData.add({ field: "captureLocation", value: `Praia ${runId}` });
+    const automatic = await caller("seller").captures.create({ customer: { fullName: `Casal Automático ${runId}`, city: "Natal", state: "RN" }, captureLocation: "sales command", createOpportunity: false });
+    expect((await db.select({ value: captureRecords.captureLocation }).from(captureRecords).where(eq(captureRecords.id, automatic.captureId)))[0]!.value).toBe("sales command");
+    expect((await caller().masterData.coverage({ field: "captureLocation" })).outside.map(row => row.value.toLowerCase())).not.toContain("sales command");
+    await caller().masterData.importExisting({ field: "captureLocation" });
+    expect((await caller().masterData.list({ field: "captureLocation", includeInactive: true })).map(row => row.value.toLowerCase())).not.toContain("sales command");
+  });
+
+  it("a lista ativa de um campo tem teto: incluir, reativar ou importar além dele é recusado", async () => {
+    await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "transportation"));
+    const rows = Array.from({ length: 2000 }, (_, index) => ({ field: "transportation" as const, value: `Teto ${runId} ${index}`, normalizedKey: `teto ${runId} ${index}` }));
+    for (let start = 0; start < rows.length; start += 500) await db.insert(masterDataOptions).values(rows.slice(start, start + 500));
+    expect((await caller().masterData.list({ field: "transportation" })).filter(row => row.value.startsWith(`Teto ${runId}`))).toHaveLength(2000);
+    await expect(caller().masterData.add({ field: "transportation", value: `Excedente ${runId}` })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    const [first] = await db.select().from(masterDataOptions).where(eq(masterDataOptions.normalizedKey, `teto ${runId} 0`));
+    await caller().masterData.setActive({ id: first!.id, active: false });
+    await caller().masterData.add({ field: "transportation", value: `Excedente ${runId}` });
+    await expect(caller().masterData.setActive({ id: first!.id, active: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "transportation"));
   });
 });

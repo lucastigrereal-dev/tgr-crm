@@ -24,7 +24,7 @@ export default function MasterData() {
   const activeCount = rows.filter(row => row.active).length;
 
   return <div className="space-y-6">
-    <PageHeader eyebrow="Admin" title="Dicionários de cadastro" description="Listas fechadas para os campos usados na análise da captação. Campo sem opção ativa continua livre; com opções, a ficha só aceita valores da lista." />
+    <PageHeader eyebrow="Admin" title="Dicionários de cadastro" description="Listas fechadas para os campos usados na análise da captação. Campo sem opção ativa continua livre; com opções, a ficha só aceita valores da lista. O valor “Sales Command” é a origem das vendas formalizadas automaticamente e vale sempre." />
     <Card><CardContent className="space-y-4 pt-6">
       <div className="flex flex-wrap items-center gap-3">
         <Select value={field} onValueChange={next => setField(next as MasterDataField)}><SelectTrigger className="w-64" aria-label="Campo"><SelectValue /></SelectTrigger>
