@@ -55,14 +55,14 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(verifyLocalPassword(credentials(dir)["ana.adm"]!, users.find(u => u.username === "ana.adm")!.passwordHash)).toBe(true);
   });
 
-  it("--perfil-sala cria os 5 perfis da sala com o papel certo e aceita nomes reais por cima", () => {
+  it("--perfil-sala cria só os 3 perfis do CRM (§1.2 do plano): captação e recepção não têm login", () => {
     const dir = newDir();
     const result = run(dir, "--perfil-sala");
-    expect(JSON.parse(result.stdout)).toMatchObject({ created: ["lucas.admin", "gerente.vendas", "gerente.captacao", "recepcao", "administrativo"], total: 5 });
+    expect(JSON.parse(result.stdout)).toMatchObject({ created: ["lucas.admin", "gerente.vendas", "administrativo"], total: 3 });
     const users = JSON.parse(readFileSync(join(dir, "crm-users.json"), "utf8")).users as Array<{ username: string; role: string }>;
-    expect(Object.fromEntries(users.map(u => [u.username, u.role]))).toEqual({ "lucas.admin": "admin", "gerente.vendas": "admin", "gerente.captacao": "seller", recepcao: "service", administrativo: "admin" });
+    expect(Object.fromEntries(users.map(u => [u.username, u.role]))).toEqual({ "lucas.admin": "admin", "gerente.vendas": "seller", administrativo: "admin" });
     const again = run(dir, "--perfil-sala", "--user", "maria.souza:admin:Maria Souza");
-    expect(JSON.parse(again.stdout)).toMatchObject({ created: ["maria.souza"], total: 6 });
+    expect(JSON.parse(again.stdout)).toMatchObject({ created: ["maria.souza"], total: 4 });
     // o resultado é aceito de verdade pelo CRM (config-doctor valida LOCAL_AUTH_USERS)
     const env = readFileSync(join(dir, "crm-users.env"), "utf8").trim().replace(/^LOCAL_AUTH_USERS='/, "").replace(/'$/, "");
     const doctor = spawnSync(process.execPath, ["scripts/config-doctor.mjs", "--strict"], {

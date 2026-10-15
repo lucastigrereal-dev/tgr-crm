@@ -23,14 +23,13 @@ for (let i = 0; i < args.length; i += 1) {
 }
 function fail(message) { console.error(message); process.exit(1); }
 if (!flags.out) fail("Informe --out <pasta> (fora do repositório).");
-// Perfis da sala do piloto (nomes provisórios; os reais entram depois com --user, e o provisório fica sem uso).
-// Papéis do CRM (shared/permissions.ts): gerente de vendas e administrativo = admin (ADR-007: o CRM não tem papel "gerente"; só
-// admin ativa contrato e dá baixa de parcela); gerente de captação = seller (captação, vendas, sala); recepção = service (sala, reservas, vouchers).
+// Perfis do CRM no piloto (PLANO_PILOTO_3_DIAS §1.2): só 3 perfis entram no CRM. Gerente de captação e recepção NÃO têm login aqui
+// (usam GuestPass e Sales). Gerente de vendas = seller (lê o contrato criado pela ponte; sem baixa nem auditoria). Administrativo =
+// admin, o único papel do CRM que dá baixa manual, ativa contrato e abre painel de integrações e auditoria (shared/permissions.ts; não existe papel "operador").
+// Nomes provisórios; os reais entram depois com --user.
 const SALA = [
   "lucas.admin:admin:Lucas (admin geral)",
-  "gerente.vendas:admin:Gerente de vendas",
-  "gerente.captacao:seller:Gerente de captação",
-  "recepcao:service:Recepção",
+  "gerente.vendas:seller:Gerente de vendas",
   "administrativo:admin:Administrativo",
 ];
 if (flags.sala) flags.user.unshift(...SALA);
