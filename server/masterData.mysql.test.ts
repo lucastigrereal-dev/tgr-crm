@@ -59,13 +59,15 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
 
   it("cria a lista a partir das fichas juntando grafias diferentes, e a cobertura aponta o que ficou fora", async () => {
     await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "partnerProfession"));
-    const spellings = [`Engenheiro ${runId}`, `engenheiro ${runId}`, `ENGENHEIRO ${runId}`, `Advogada ${runId}`];
+    const spellings = [`Engenheiro ${runId}`, `engenheiro ${runId}`, `ENGENHEIRO ${runId}`, `Advogada ${runId}`, `PEDIATRA ${runId}`, `Pediatra ${runId}`, `Pediatra ${runId}`];
     for (const [index, value] of spellings.entries()) await capture(value, String(10 + index));
     const imported = await caller().masterData.importExisting({ field: "partnerProfession" });
     expect(imported.added).toBeGreaterThanOrEqual(2);
     const options = (await caller().masterData.list({ field: "partnerProfession" })).filter(row => row.value.includes(runId));
     expect(options.filter(row => row.value.toLowerCase().startsWith("engenheiro"))).toHaveLength(1);
     expect(options.map(row => row.value)).toContain(`Advogada ${runId}`);
+    // A grafia mais usada vira a oficial, mesmo que a collation do banco não diferencie maiúscula.
+    expect(options.filter(row => row.value.toLowerCase().startsWith("pediatra")).map(row => row.value)).toEqual([`Pediatra ${runId}`]);
 
     const advogada = options.find(row => row.value === `Advogada ${runId}`)!;
     await caller().masterData.setActive({ id: advogada.id, active: false });
@@ -93,7 +95,8 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
   });
 
   it("a lista ativa de um campo tem teto: incluir, reativar ou importar além dele é recusado", async () => {
-    await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "transportation"));
+    // Banco de teste descartável (sufixo _test validado no beforeAll): o campo começa vazio para o teto total não pesar.
+    await db.delete(masterDataOptions).where(eq(masterDataOptions.field, "transportation"));
     const rows = Array.from({ length: 2000 }, (_, index) => ({ field: "transportation" as const, value: `Teto ${runId} ${index}`, normalizedKey: `teto ${runId} ${index}` }));
     for (let start = 0; start < rows.length; start += 500) await db.insert(masterDataOptions).values(rows.slice(start, start + 500));
     expect((await caller().masterData.list({ field: "transportation" })).filter(row => row.value.startsWith(`Teto ${runId}`))).toHaveLength(2000);
@@ -109,6 +112,16 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
     const racing = await Promise.allSettled(["A", "B", "C", "D"].map(letter => caller().masterData.add({ field: "transportation", value: `Corrida ${runId} ${letter}` })));
     expect(racing.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect((await caller().masterData.list({ field: "transportation" })).length).toBe(2000);
-    await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "transportation"));
+    await db.delete(masterDataOptions).where(eq(masterDataOptions.field, "transportation"));
+  });
+
+  it("o histórico guardado de um campo tem teto, para a tela de administração mostrar tudo", async () => {
+    await db.delete(masterDataOptions).where(eq(masterDataOptions.field, "transportation"));
+    const rows = Array.from({ length: 5000 }, (_, index) => ({ field: "transportation" as const, value: `Antiga ${runId} ${index}`, normalizedKey: `antiga ${runId} ${index}`, active: false }));
+    for (let start = 0; start < rows.length; start += 1000) await db.insert(masterDataOptions).values(rows.slice(start, start + 1000));
+    expect(await caller().masterData.list({ field: "transportation", includeInactive: true })).toHaveLength(5000);
+    await expect(caller().masterData.add({ field: "transportation", value: `Nova ${runId}` })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("desativadas") });
+    expect(await caller().masterData.add({ field: "transportation", value: `ANTIGA ${runId} 7` })).toMatchObject({ reactivated: true });
+    await db.delete(masterDataOptions).where(eq(masterDataOptions.field, "transportation"));
   });
 });

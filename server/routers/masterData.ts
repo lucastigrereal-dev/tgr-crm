@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, masterDataOptions } from "../../drizzle/schema";
-import { isReservedMasterDataValue, MAX_ACTIVE_OPTIONS_PER_FIELD, masterDataMaxLength, masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../../shared/masterData";
+import { isReservedMasterDataValue, MAX_ACTIVE_OPTIONS_PER_FIELD, MAX_TOTAL_OPTIONS_PER_FIELD, masterDataMaxLength, masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../../shared/masterData";
 import { getDb, recordAudit } from "../db";
 import { withDeadlockRetry } from "../mysqlErrors";
 import { router } from "../_core/trpc";
@@ -33,7 +33,9 @@ async function usedValues(field: MasterDataField) {
   const groups = new Map<string, { value: string; total: number; best: number }>();
   const pageSize = 2000;
   for (let offset = 0; ; offset += pageSize) {
-    const rows = await db.select({ value: column, total: sql<number>`count(*)` }).from(captureRecords).where(isNotNull(column)).groupBy(column).orderBy(asc(column)).limit(pageSize).offset(offset);
+    // Agrupa pela grafia exata (collation binária): a collation do banco juntaria "Médica" e "MEDICA" antes de escolher a mais usada.
+    const exact = sql<string>`${column} collate utf8mb4_bin`;
+    const rows = await db.select({ value: exact, total: sql<number>`count(*)` }).from(captureRecords).where(isNotNull(column)).groupBy(exact).orderBy(exact).limit(pageSize).offset(offset);
     for (const row of rows) {
       const value = row.value?.trim();
       if (!value || isReservedMasterDataValue(field, value)) continue;
@@ -58,6 +60,7 @@ async function lockField(tx: Tx, field: MasterDataField) {
   return { rows, activeCount: rows.filter(row => row.active).length };
 }
 const tooMany = (field: MasterDataField) => new TRPCError({ code: "PRECONDITION_FAILED", message: `A lista de ${masterDataFieldLabel[field]} chegou ao limite de ${MAX_ACTIVE_OPTIONS_PER_FIELD} opções ativas. Desative opções antes de incluir outras.` });
+const tooManyStored = (field: MasterDataField) => new TRPCError({ code: "PRECONDITION_FAILED", message: `${masterDataFieldLabel[field]} já guarda ${MAX_TOTAL_OPTIONS_PER_FIELD} opções, contando as desativadas. Reative uma opção existente em vez de criar outra.` });
 
 export const masterDataRouter = router({
   list: internalProcedure.input(z.object({ field: fieldInput.optional(), includeInactive: z.boolean().default(false) }).default({ includeInactive: false })).query(async ({ input }) => {
@@ -66,7 +69,7 @@ export const masterDataRouter = router({
     const fields = input.field ? [input.field] : [...masterDataFields];
     const perField = await Promise.all(fields.map(field => db.select({ id: masterDataOptions.id, field: masterDataOptions.field, value: masterDataOptions.value, active: masterDataOptions.active })
       .from(masterDataOptions).where(input.includeInactive ? eq(masterDataOptions.field, field) : and(eq(masterDataOptions.field, field), eq(masterDataOptions.active, true)))
-      .orderBy(desc(masterDataOptions.active), asc(masterDataOptions.value)).limit(input.includeInactive ? MAX_ACTIVE_OPTIONS_PER_FIELD * 2 : MAX_ACTIVE_OPTIONS_PER_FIELD)));
+      .orderBy(desc(masterDataOptions.active), asc(masterDataOptions.value)).limit(input.includeInactive ? MAX_TOTAL_OPTIONS_PER_FIELD : MAX_ACTIVE_OPTIONS_PER_FIELD)));
     return perField.flat();
   }),
 
@@ -86,6 +89,7 @@ export const masterDataRouter = router({
         await tx.update(masterDataOptions).set({ active: true, value }).where(eq(masterDataOptions.id, existing.id));
         return { id: existing.id, reactivated: true };
       }
+      if (locked.rows.length >= MAX_TOTAL_OPTIONS_PER_FIELD) throw tooManyStored(input.field);
       const [created] = await tx.insert(masterDataOptions).values({ field: input.field, value, normalizedKey: key, createdByUserId: ctx.user.id }).$returningId();
       return { id: created.id, reactivated: false };
     }));
@@ -119,6 +123,7 @@ export const masterDataRouter = router({
       const known = new Set(locked.rows.map(row => row.normalizedKey));
       const fresh = Array.from(groups.entries()).filter(([key]) => !known.has(key) && key.length >= 2).map(([key, group]) => ({ field: input.field, value: group.value.replace(/\s+/g, " ").slice(0, masterDataMaxLength[input.field]), normalizedKey: key.slice(0, 180), createdByUserId: ctx.user.id }));
       if (fresh.length && locked.activeCount + fresh.length > MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(input.field);
+      if (fresh.length && locked.rows.length + fresh.length > MAX_TOTAL_OPTIONS_PER_FIELD) throw tooManyStored(input.field);
       for (let start = 0; start < fresh.length; start += 500) await tx.insert(masterDataOptions).values(fresh.slice(start, start + 500));
       return fresh.length;
     }));

@@ -32,3 +32,5 @@ export const isReservedMasterDataValue = (field: MasterDataField, value: string)
 
 /** Teto de opções ativas por campo: a lista inteira sempre cabe numa leitura, então a tela mostra tudo o que o servidor aceita. */
 export const MAX_ACTIVE_OPTIONS_PER_FIELD = 2000;
+/** Teto de opções guardadas por campo, ativas ou não: a tela de administração sempre mostra o histórico inteiro. */
+export const MAX_TOTAL_OPTIONS_PER_FIELD = 5000;
