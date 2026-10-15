@@ -1040,7 +1040,7 @@ export const auditLogs = mysqlTable("audit_logs", {
   summary: text("summary"),
   idempotencyKey: varchar("idempotencyKey", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [uniqueIndex("audit_logs_idempotency_unique").on(table.idempotencyKey)]);
+}, table => [uniqueIndex("audit_logs_idempotency_unique").on(table.idempotencyKey), index("audit_logs_entity_type_idx").on(table.entityType, table.id), index("audit_logs_action_idx").on(table.action, table.id)]);
 
 export const domainEvents = mysqlTable("domain_events", {
   id: int("id").autoincrement().primaryKey(),
