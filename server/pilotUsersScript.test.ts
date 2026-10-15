@@ -110,6 +110,14 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("dentro do repositório");
   });
 
+  it("recusa arquivo de saída que é link simbólico (mesmo solto)", () => {
+    const dir = newDir();
+    symlinkSync(join(root, "destino-que-nao-deve-existir.txt"), join(dir, "crm-credentials.local.txt"));
+    const result = run(dir, "--user", "ana.adm:admin");
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("não é um arquivo comum");
+  });
+
   it("smoke recusa arquivo de credenciais vazio ou sem linhas", () => {
     const dir = newDir();
     const file = join(dir, "vazio.txt");

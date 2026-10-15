@@ -5,7 +5,7 @@
 // --env-name troca o nome da variável no .env gerado (o compose portátil da Suite usa CRM_LOCAL_AUTH_USERS).
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -66,6 +66,13 @@ if (requested.some(user => user.displayName.includes("'"))) fail("Nome de exibi�
 if (new Set(requested.map(user => user.username)).size !== requested.length) fail("Usuário repetido na lista.");
 
 mkdirSync(out, { recursive: true });
+// Os arquivos de saída não podem ser links simbólicos (nem soltos): a escrita seguiria o link e poderia cair dentro do repositório.
+for (const name of ["crm-users.json", "crm-users.env", "crm-credentials.local.txt"]) {
+  const target = join(out, name);
+  let stat = null;
+  try { stat = lstatSync(target); } catch { /* não existe: ok */ }
+  if (stat && !stat.isFile()) fail(`${target} não é um arquivo comum (link simbólico?): apague-o e rode de novo.`);
+}
 const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { users: [] };
 const byName = new Map(current.users.map(user => [user.username, user]));
 for (const name of flags.rotate) if (!byName.has(name)) fail(`--rotate: ${name} não existe em ${file}`);
