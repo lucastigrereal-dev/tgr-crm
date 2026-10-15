@@ -118,6 +118,11 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     expect((await db.select().from(vouchers).where(eq(vouchers.requestId, parallelId)))).toHaveLength(1);
     const [{ id: other }] = await db.insert(customers).values({ fullName: `Outro Casal ${runId}`, status: "active" }).$returningId();
     await expect(caller().vouchers.issue({ customerId: other, description: "Café da manhã", requestId })).rejects.toMatchObject({ code: "CONFLICT" });
+    // Emissão feita no último dia de validade e reenviada depois da meia-noite: devolve o voucher já gravado, sem recusar a data.
+    const lateId = randomUUID();
+    const late = await caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: today, requestId: lateId });
+    await expect(caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: "2000-01-01", requestId: lateId })).resolves.toEqual(late);
+    await expect(caller().vouchers.issue({ customerId, description: "Jantar", expiresAt: "2000-01-01", requestId: randomUUID() })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("mais de 200 válidos: todos aparecem na ficha; baixa repetida grava a auditoria que faltou; a ficha de captação liga o brinde", async () => {

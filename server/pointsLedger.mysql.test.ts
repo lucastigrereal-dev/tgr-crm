@@ -177,8 +177,12 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     const [{ id: audited }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, validFrom: new Date("2026-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
     const credit = await caller().pointsLedger.creditAnnual({ entitlementId: audited, year: 2026 });
     await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${credit.entryId}`));
+    // Outro operador reenvia: a auditoria volta com o autor do crédito gravado.
+    const [{ id: otherUser }] = await db.insert(users).values({ openId: `points-other-${runId}`, name: "Outro atendimento", role: "service" }).$returningId();
+    await expect(appRouter.createCaller({ user: { id: otherUser, role: "service" } } as never).pointsLedger.creditAnnual({ entitlementId: audited, year: 2026 })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(caller().pointsLedger.creditAnnual({ entitlementId: audited, year: 2026 })).rejects.toMatchObject({ code: "CONFLICT" });
-    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${credit.entryId}`))).toHaveLength(1);
+    const creditAudits = await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${credit.entryId}`));
+    expect(creditAudits.map(row => row.actorUserId)).toEqual([userId]);
     const reversal = await caller("admin").pointsLedger.reverse({ entryId: credit.entryId, note: "Crédito em duplicidade" });
     await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${reversal.entryId}`));
     await expect(caller("admin").pointsLedger.reverse({ entryId: credit.entryId, note: "Crédito em duplicidade" })).rejects.toMatchObject({ code: "CONFLICT" });

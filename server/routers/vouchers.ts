@@ -104,7 +104,6 @@ export const vouchersRouter = router({
   }),
 
   issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), costAmount: money.default(0), expiresAt: z.string().date().optional(), requestId: z.string().uuid() })).mutation(async ({ ctx, input }) => {
-    if (input.expiresAt && input.expiresAt < projectToday()) throw new TRPCError({ code: "BAD_REQUEST", message: "A validade não pode ser no passado." });
     const db = await requireDb();
     const [customer] = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1);
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
@@ -112,24 +111,26 @@ export const vouchersRouter = router({
       const [capture] = await db.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
       if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
     }
-    const auditIssued = (id: number, code: string, customerId: number, description: string) =>
-      recordAudit(ctx.user.id, "voucher", id, "issued", `Voucher ${code} emitido para o associado ${customerId}: ${description}.`, { idempotencyKey: `voucher_issued:${id}` });
+    const auditIssued = (actorUserId: number | null, id: number, code: string, customerId: number, description: string) =>
+      recordAudit(actorUserId, "voucher", id, "issued", `Voucher ${code} emitido para o associado ${customerId}: ${description}.`, { idempotencyKey: `voucher_issued:${id}` });
     // Reenvio da mesma emissão (resposta perdida, auditoria que falhou): devolve o voucher já gravado, sem novo código.
     const previous = async () => {
-      const [row] = await db.select({ id: vouchers.id, code: vouchers.code, customerId: vouchers.customerId, description: vouchers.description }).from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
+      const [row] = await db.select({ id: vouchers.id, code: vouchers.code, customerId: vouchers.customerId, description: vouchers.description, issuedByUserId: vouchers.issuedByUserId }).from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
       if (!row) return undefined;
       if (row.customerId !== input.customerId) throw new TRPCError({ code: "CONFLICT", message: "Esta emissão já foi usada para outro associado." });
       // Se a auditoria da primeira tentativa falhou, o reenvio a grava; se já existe, a chave impede a duplicata.
-      await auditIssued(row.id, row.code, row.customerId, row.description);
+      await auditIssued(row.issuedByUserId, row.id, row.code, row.customerId, row.description);
       return { voucherId: row.id, code: row.code };
     };
     const replay = await previous();
     if (replay) return replay;
+    // A validade no passado só barra emissão nova: o reenvio de uma emissão feita no último dia, depois da meia-noite, devolve o voucher.
+    if (input.expiresAt && input.expiresAt < projectToday()) throw new TRPCError({ code: "BAD_REQUEST", message: "A validade não pode ser no passado." });
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = newCode();
       try {
         const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId();
-        await auditIssued(created.id, code, input.customerId, input.description);
+        await auditIssued(ctx.user.id, created.id, code, input.customerId, input.description);
         return { voucherId: created.id, code };
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;

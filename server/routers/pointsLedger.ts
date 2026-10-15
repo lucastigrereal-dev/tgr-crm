@@ -116,11 +116,12 @@ export const pointsLedgerRouter = router({
     const db = await requireDb();
     const idempotencyKey = `annual:${input.entitlementId}:${input.year}`;
     let duplicate = false;
+    let actorUserId: number | null = ctx.user.id;
     const id = await db.transaction(async tx => {
       const { entitlement } = await lockPointsEntitlement(tx, input.entitlementId);
       // Ano já creditado: responde CONFLICT, mas antes grava a auditoria do crédito se ela tiver faltado.
       const existing = await existingRequest(tx, idempotencyKey);
-      if (existing) { duplicate = true; return existing.id; }
+      if (existing) { duplicate = true; actorUserId = existing.createdByUserId; return existing.id; }
       requireActive(entitlement);
       if (entitlement.annualPoints <= 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O direito de uso não tem pontos anuais definidos." });
       const fromYear = entitlement.validFrom ? new Date(entitlement.validFrom).getUTCFullYear() : null;
@@ -131,7 +132,8 @@ export const pointsLedgerRouter = router({
       if (input.year > currentYear) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Os pontos de ${input.year} só podem ser creditados a partir de ${input.year}.` });
       return append(tx, { entitlementId: entitlement.id, entryType: "annual_credit", points: entitlement.annualPoints, referenceYear: input.year, idempotencyKey, note: `Crédito anual ${input.year}`, createdByUserId: ctx.user.id }, `Os pontos de ${input.year} já foram creditados neste direito de uso.`);
     });
-    await recordAudit(ctx.user.id, "points_ledger", id, "annual_credit", `Crédito anual ${input.year} no direito de uso ${input.entitlementId}.`, { idempotencyKey: `points_ledger:${id}` });
+    // No reenvio, a auditoria leva o autor do crédito gravado, não quem tentou de novo.
+    await recordAudit(actorUserId, "points_ledger", id, "annual_credit", `Crédito anual ${input.year} no direito de uso ${input.entitlementId}.`, { idempotencyKey: `points_ledger:${id}` });
     if (duplicate) throw new TRPCError({ code: "CONFLICT", message: `Os pontos de ${input.year} já foram creditados neste direito de uso.` });
     return { entryId: id };
   }),
