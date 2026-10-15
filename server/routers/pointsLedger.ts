@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { ownershipEntitlements, pointsLedger, reservations } from "../../drizzle/schema";
+import { auditLogs, ownershipEntitlements, pointsLedger, reservations } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, contractsProcedure, serviceProcedure } from "./access";
@@ -86,16 +86,25 @@ async function settleExpirations(db: Db, entitlementId: number) {
  * Varredura do vencimento (job noturno): baixa os pontos vencidos de todo direito com crédito anual de ano já fora da
  * validade e sem lançamento de vencimento daquele ano. Reaproveita `settleExpirations`, que é idempotente por chave
  * (`expiry:direito:ano`), então rodar duas vezes, ou junto com um lançamento comum, não duplica nada. Um direito cujo
- * crédito vencido foi todo usado não gera lançamento e volta a ser candidato; a conferência dele é barata.
+ * crédito vencido foi todo usado não gera lançamento e volta a ser candidato; a conferência dele é barata. Vencimento
+ * gravado sem auditoria (falha depois do commit) também é candidato, até a auditoria existir.
  */
 export async function settleAllExpirations(onError?: (error: unknown) => void) {
   const db = await getDb();
   if (!db) return { checked: 0, settled: 0 };
   const lastDueCreditYear = projectYear() - POINTS_VALIDITY_YEARS;
-  const candidates = await db.selectDistinct({ entitlementId: pointsLedger.entitlementId }).from(pointsLedger).where(and(
-    eq(pointsLedger.entryType, "annual_credit"),
-    lte(pointsLedger.referenceYear, lastDueCreditYear),
-    sql`NOT EXISTS (SELECT 1 FROM ${pointsLedger} AS settled WHERE settled.entitlementId = ${pointsLedger.entitlementId} AND settled.entryType = 'expiration' AND settled.referenceYear = ${pointsLedger.referenceYear})`,
+  const candidates = await db.selectDistinct({ entitlementId: pointsLedger.entitlementId }).from(pointsLedger).where(or(
+    // Crédito de ano já fora da validade, sem lançamento de vencimento daquele ano.
+    and(
+      eq(pointsLedger.entryType, "annual_credit"),
+      lte(pointsLedger.referenceYear, lastDueCreditYear),
+      sql`NOT EXISTS (SELECT 1 FROM ${pointsLedger} AS settled WHERE settled.entitlementId = ${pointsLedger.entitlementId} AND settled.entryType = 'expiration' AND settled.referenceYear = ${pointsLedger.referenceYear})`,
+    ),
+    // Vencimento já gravado cuja auditoria falhou: `settleExpirations` refaz a auditoria que faltou.
+    and(
+      eq(pointsLedger.entryType, "expiration"),
+      sql`NOT EXISTS (SELECT 1 FROM ${auditLogs} WHERE ${auditLogs.idempotencyKey} = CONCAT('points_ledger:', ${pointsLedger.id}))`,
+    ),
   ));
   let settled = 0;
   for (const { entitlementId } of candidates) {

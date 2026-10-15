@@ -287,5 +287,10 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(second.settled).toBe(0);
     expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, stale))).filter(row => row.entryType === "expiration")).toHaveLength(1);
     expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, fresh))).filter(row => row.entryType === "expiration")).toHaveLength(0);
+    // Vencimento gravado cuja auditoria falhou depois do commit: a varredura refaz só a auditoria.
+    const [{ id: orphan }] = await db.insert(pointsLedger).values({ entitlementId: fresh, entryType: "expiration", points: -1, referenceYear: 2019, idempotencyKey: `expiry:${fresh}:2019`, createdByUserId: null }).$returningId();
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${orphan}`))).toHaveLength(0);
+    await settleAllExpirations();
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${orphan}`))).toHaveLength(1);
   });
 });
