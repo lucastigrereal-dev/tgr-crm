@@ -29,6 +29,15 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   const list = trpc.vouchers.listByCustomer.useQuery({ customerId }, { enabled: customerId > 0 });
   // Ficha de captação que originou o brinde (tour, venda), para o custo ficar ligado a ela.
   const captures = trpc.vouchers.captureOptions.useQuery({ customerId }, { enabled: customerId > 0 && canIssue });
+  // Fichas mais antigas que a primeira página, carregadas sob demanda.
+  const [olderCaptures, setOlderCaptures] = useState<{ captures: NonNullable<typeof captures.data>["captures"]; nextBeforeId: number | null } | null>(null);
+  const captureList = [...(captures.data?.captures ?? []), ...(olderCaptures?.captures ?? [])];
+  const nextCaptureCursor = olderCaptures ? olderCaptures.nextBeforeId : captures.data?.nextBeforeId ?? null;
+  const loadOlderCaptures = async () => {
+    if (!nextCaptureCursor) return;
+    const page = await utils.vouchers.captureOptions.fetch({ customerId, beforeId: nextCaptureCursor });
+    setOlderCaptures(previous => ({ captures: [...(previous?.captures ?? []), ...page.captures], nextBeforeId: page.nextBeforeId }));
+  };
   const refresh = () => void utils.vouchers.listByCustomer.invalidate({ customerId });
   const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setCost(""); setExpiresAt(""); setCaptureId(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
   const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: e => toast.error(e.message) });
@@ -48,10 +57,11 @@ export function VouchersCard({ customerId }: { customerId: number }) {
         <Input value={cost} onChange={e => setCost(e.target.value)} inputMode="decimal" placeholder="Custo R$" className="h-9" />
         <Input value={expiresAt} onChange={e => setExpiresAt(e.target.value)} type="date" aria-label="Validade" className="h-9" />
         <Button size="sm" className="h-9" disabled={issue.isPending} onClick={submit}>{issue.isPending ? "Emitindo..." : "Emitir"}</Button>
-        {(captures.data?.length ?? 0) > 0 && <select value={captureId} onChange={e => setCaptureId(e.target.value)} aria-label="Ficha de captação" className="h-9 rounded-md border border-input bg-background px-2 text-sm sm:col-span-4">
+        {captureList.length > 0 && <select value={captureId} onChange={e => setCaptureId(e.target.value)} aria-label="Ficha de captação" className="h-9 rounded-md border border-input bg-background px-2 text-sm sm:col-span-3">
           <option value="">Sem ficha de captação</option>
-          {(captures.data ?? []).map(capture => <option key={capture.id} value={capture.id}>Ficha {capture.id} · {new Date(capture.scheduledAt ?? capture.createdAt).toLocaleDateString("pt-BR")}{capture.captureLocation ? ` · ${capture.captureLocation}` : ""}</option>)}
+          {captureList.map(capture => <option key={capture.id} value={capture.id}>Ficha {capture.id} · {new Date(capture.scheduledAt ?? capture.createdAt).toLocaleDateString("pt-BR")}{capture.captureLocation ? ` · ${capture.captureLocation}` : ""}</option>)}
         </select>}
+        {nextCaptureCursor && <Button size="sm" variant="outline" className="h-9" onClick={() => void loadOlderCaptures()}>Fichas mais antigas</Button>}
       </div>}
       {list.data?.truncated && <p className="text-xs text-amber-700">Mostrando {list.data.vouchers.length} de {list.data.total} vouchers: os {list.data.validCount} válidos e os mais recentes do histórico.</p>}
       {list.data?.vouchers.length === 0 && <p className="text-xs text-muted-foreground">Nenhum voucher emitido.</p>}

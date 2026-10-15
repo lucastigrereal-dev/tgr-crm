@@ -147,7 +147,19 @@ describe.skipIf(!integrationUrl)("vouchers e brindes em MySQL real", () => {
     expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `voucher_cancelled:${toCancel.voucherId}`))).toHaveLength(1);
 
     const [{ id: captureId }] = await db.insert(captureRecords).values({ customerId, captureLocation: "Recepção sintética" } as never).$returningId();
-    expect((await caller().vouchers.captureOptions({ customerId })).map(row => row.id)).toContain(captureId);
+    expect((await caller().vouchers.captureOptions({ customerId })).captures.map(row => row.id)).toContain(captureId);
+    // Mais de uma página de fichas: a mais antiga continua alcançável pela página seguinte.
+    const [{ id: busy }] = await db.insert(customers).values({ fullName: `Casal Muitas Fichas ${runId}`, status: "active" }).$returningId();
+    const [{ id: oldest }] = await db.insert(captureRecords).values({ customerId: busy, captureLocation: "Ficha sintética antiga" } as never).$returningId();
+    for (let index = 0; index < 59; index += 1) await db.insert(captureRecords).values({ customerId: busy, captureLocation: `Ficha sintética ${index}` } as never);
+    const firstPage = await caller().vouchers.captureOptions({ customerId: busy });
+    expect(firstPage.captures).toHaveLength(50);
+    expect(firstPage.captures.map(row => row.id)).not.toContain(oldest);
+    const secondPage = await caller().vouchers.captureOptions({ customerId: busy, beforeId: firstPage.nextBeforeId! });
+    expect(secondPage.captures).toHaveLength(10);
+    expect(secondPage.captures.map(row => row.id)).toContain(oldest);
+    expect(secondPage.nextBeforeId).toBeNull();
+    await expect(caller().vouchers.issue({ customerId: busy, captureId: oldest, description: "Brinde da ficha antiga", requestId: randomUUID() })).resolves.toMatchObject({ voucherId: expect.any(Number) });
     const linked = await caller().vouchers.issue({ customerId, captureId, description: "Jantar do tour", costAmount: 80, requestId: randomUUID() });
     expect((await caller().vouchers.listByCustomer({ customerId })).vouchers.find(row => row.id === linked.voucherId)?.captureId).toBe(captureId);
   });

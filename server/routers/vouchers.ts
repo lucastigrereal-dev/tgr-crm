@@ -36,6 +36,7 @@ async function requireDb() {
 const money = z.number().min(0).max(999999.99);
 export const SUMMARY_PAGE_SIZE = 5000;
 export const CUSTOMER_LIST_LIMIT = 200;
+export const CAPTURE_PAGE_SIZE = 50;
 
 /** Auditoria idempotente da baixa ou do cancelamento, gravada com os dados do próprio voucher. */
 async function auditTerminal(row: VoucherRow) {
@@ -65,10 +66,16 @@ export const vouchersRouter = router({
   }),
 
   /** Fichas de captação do associado, para ligar o brinde ao tour/venda que o originou. */
-  captureOptions: internalProcedure.input(z.object({ customerId: z.number().int().positive() })).query(async ({ input }) => {
+  // Em páginas, da mais nova para a mais antiga: com beforeId, as anteriores a ela. nextBeforeId abre a página seguinte,
+  // para que qualquer ficha antiga possa ser escolhida.
+  captureOptions: internalProcedure.input(z.object({ customerId: z.number().int().positive(), beforeId: z.number().int().positive().optional() })).query(async ({ input }) => {
     const db = await requireDb();
-    return db.select({ id: captureRecords.id, createdAt: captureRecords.createdAt, scheduledAt: captureRecords.scheduledAt, captureLocation: captureRecords.captureLocation, presentationStatus: captureRecords.presentationStatus })
-      .from(captureRecords).where(eq(captureRecords.customerId, input.customerId)).orderBy(desc(captureRecords.createdAt), desc(captureRecords.id)).limit(50);
+    const filter = input.beforeId ? and(eq(captureRecords.customerId, input.customerId), lt(captureRecords.id, input.beforeId)) : eq(captureRecords.customerId, input.customerId);
+    const rows = await db.select({ id: captureRecords.id, createdAt: captureRecords.createdAt, scheduledAt: captureRecords.scheduledAt, captureLocation: captureRecords.captureLocation, presentationStatus: captureRecords.presentationStatus })
+      .from(captureRecords).where(filter).orderBy(desc(captureRecords.id)).limit(CAPTURE_PAGE_SIZE + 1);
+    const hasMore = rows.length > CAPTURE_PAGE_SIZE;
+    if (hasMore) rows.pop();
+    return { captures: rows, nextBeforeId: hasMore ? rows[rows.length - 1]!.id : null };
   }),
 
   /** Custo dos brindes emitidos no período, por situação: quanto foi prometido, usado, cancelado e perdido por validade. */
