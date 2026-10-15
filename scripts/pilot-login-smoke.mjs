@@ -10,7 +10,9 @@ const base = (opt("--base") ?? "").replace(/\/$/, "");
 const credentialsFile = opt("--credentials");
 if (!base || !credentialsFile) { console.error("Uso: --base <url do CRM> --credentials <crm-credentials.local.txt>"); process.exit(2); }
 
-const rows = readFileSync(credentialsFile, "utf8").trim().split("\n").slice(1).map(line => line.split("\t"));
+const lines = readFileSync(credentialsFile, "utf8").trim().split("\n");
+if (lines[0]?.trim() !== "usuario\tpapel\tsenha_temporaria") { console.error("RESULTADO: FAIL (cabeçalho do arquivo de credenciais ausente ou alterado)"); process.exit(1); }
+const rows = lines.slice(1).map(line => line.split("\t"));
 if (rows.length === 0) { console.error("RESULTADO: FAIL (arquivo de credenciais sem nenhum usuário)"); process.exit(1); }
 let failed = 0;
 const report = (ok, label, detail = "") => { if (!ok) failed += 1; console.log(`${ok ? "PASS" : "FAIL"} ${label}${detail ? " " + detail : ""}`); };

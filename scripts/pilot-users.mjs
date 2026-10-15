@@ -5,6 +5,7 @@
 // --env-name troca o nome da variável no .env gerado (o compose portátil da Suite usa CRM_LOCAL_AUTH_USERS).
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +46,14 @@ for (const entry of flags.user) {
 const out = resolve(flags.out);
 // As senhas em texto não podem cair dentro do checkout (um `git add .` as commitaria): recusa --out dentro do repositório.
 // Resolve links simbólicos: usa o caminho real do ancestral existente mais próximo (a pasta pode ainda não existir).
+// No Windows o chmod 0o600 não restringe nada (a ACL herdada continua valendo): aplica ACL só do dono, como o start-pilot.ps1 faz com icacls.
+function lockDown(path) {
+  chmodSync(path, 0o600);
+  if (process.platform !== "win32") return;
+  const owner = process.env.USERNAME;
+  const result = owner ? spawnSync("icacls", [path, "/inheritance:r", "/grant:r", `${owner}:(R,W)`], { encoding: "utf8" }) : { status: 1 };
+  if (result.status !== 0) fail(`Não consegui restringir ${path} só ao seu usuário (icacls). Use uma pasta privada e tente de novo.`);
+}
 function realLocation(path) {
   let probe = path;
   const rest = [];
@@ -110,8 +119,8 @@ if (credentials.length || existsSync(credFile)) {
   }
   for (const line of credentials) rows.set(line.split("\t")[0], line);
   writeFileSync(credFile, ["usuario\tpapel\tsenha_temporaria", ...rows.values()].join("\n") + "\n", { mode: 0o600 });
-  chmodSync(credFile, 0o600);
+  lockDown(credFile);
 }
-chmodSync(file, 0o600);
-chmodSync(join(out, "crm-users.env"), 0o600);
+lockDown(file);
+lockDown(join(out, "crm-users.env"));
 console.log(JSON.stringify({ created, kept, rotated, total: users.length, env: join(out, "crm-users.env"), credentials: credentials.length ? credFile : null }));

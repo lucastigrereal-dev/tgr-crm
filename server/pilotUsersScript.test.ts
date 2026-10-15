@@ -118,6 +118,15 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("não é um arquivo comum");
   });
 
+  it("smoke recusa arquivo de credenciais sem o cabeçalho (não pode perder a 1ª conta em silêncio)", () => {
+    const dir = newDir();
+    const file = join(dir, "sem-cabecalho.txt");
+    writeFileSync(file, "ana.adm\tadmin\tx\nbia.fin\tfinance\ty\n");
+    const result = spawnSync(process.execPath, ["scripts/pilot-login-smoke.mjs", "--base", "http://127.0.0.1:9", "--credentials", file], { cwd: root, encoding: "utf8", timeout: 20_000 });
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain("cabeçalho");
+  });
+
   it("recusa arquivo de saída com link físico (mais de um nome)", () => {
     const dir = newDir();
     const other = newDir();
