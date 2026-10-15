@@ -1,0 +1,115 @@
+import { randomInt } from "node:crypto";
+import { TRPCError } from "@trpc/server";
+import { and, desc, eq, gte, lt } from "drizzle-orm";
+import { z } from "zod";
+import { captureRecords, customers, vouchers } from "../../drizzle/schema";
+import { ENV } from "../_core/env";
+import { getDb, recordAudit } from "../db";
+import { router } from "../_core/trpc";
+import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
+import { isDuplicateKeyError } from "../mysqlErrors";
+import { localDateInTimezone } from "../saleTermsPolicy";
+
+/**
+ * Voucher/brinde (TSE #31): emitir com custo e validade, dar baixa quando o casal usa, cancelar com motivo.
+ * A validade vale até o fim do dia no fuso do projeto; vencido não é gravado, é calculado na leitura.
+ */
+const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const newCode = () => Array.from({ length: 8 }, () => codeAlphabet[randomInt(codeAlphabet.length)]).join("");
+const projectTimezone = () => ENV.financialProjectTimezone.trim() || "America/Recife";
+const projectToday = () => localDateInTimezone(new Date(), projectTimezone());
+const normalizeCode = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+type VoucherRow = typeof vouchers.$inferSelect;
+export type VoucherState = "issued" | "redeemed" | "cancelled" | "expired";
+export function voucherState(row: Pick<VoucherRow, "status" | "expiresAt">, today: string): VoucherState {
+  if (row.status !== "issued") return row.status;
+  return row.expiresAt && row.expiresAt < today ? "expired" : "issued";
+}
+
+async function requireDb() {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+  return db;
+}
+
+const money = z.number().min(0).max(999999.99);
+
+export const vouchersRouter = router({
+  listByCustomer: internalProcedure.input(z.object({ customerId: z.number().int().positive() })).query(async ({ input }) => {
+    const db = await requireDb();
+    const today = projectToday();
+    const rows = await db.select().from(vouchers).where(eq(vouchers.customerId, input.customerId)).orderBy(desc(vouchers.issuedAt), desc(vouchers.id)).limit(200);
+    return rows.map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
+  }),
+
+  /** Custo dos brindes emitidos no período, por situação: quanto foi prometido, usado, cancelado e perdido por validade. */
+  summary: internalProcedure.input(z.object({ startDate: z.string().date(), endDate: z.string().date() })).query(async ({ input }) => {
+    if (input.endDate < input.startDate) throw new TRPCError({ code: "BAD_REQUEST", message: "A data final vem antes da inicial." });
+    const db = await requireDb();
+    const today = projectToday();
+    // Busca com um dia de folga em cada ponta e filtra pela data de emissão no fuso do projeto.
+    const from = new Date(`${input.startDate}T00:00:00Z`); from.setUTCDate(from.getUTCDate() - 1);
+    const to = new Date(`${input.endDate}T00:00:00Z`); to.setUTCDate(to.getUTCDate() + 2);
+    const timezone = projectTimezone();
+    const rows = (await db.select({ status: vouchers.status, expiresAt: vouchers.expiresAt, costAmount: vouchers.costAmount, issuedAt: vouchers.issuedAt }).from(vouchers)
+      .where(and(gte(vouchers.issuedAt, from), lt(vouchers.issuedAt, to))).limit(20000))
+      .filter(row => { const day = localDateInTimezone(row.issuedAt, timezone); return day >= input.startDate && day <= input.endDate; });
+    const totals = { issued: { count: 0, cost: 0 }, redeemed: { count: 0, cost: 0 }, cancelled: { count: 0, cost: 0 }, expired: { count: 0, cost: 0 } };
+    for (const row of rows) { const bucket = totals[voucherState(row, today)]; bucket.count += 1; bucket.cost = Math.round((bucket.cost + Number(row.costAmount)) * 100) / 100; }
+    return { ...totals, total: { count: rows.length, cost: Math.round(rows.reduce((sum, row) => sum + Number(row.costAmount), 0) * 100) / 100 } };
+  }),
+
+  issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), costAmount: money.default(0), expiresAt: z.string().date().optional() })).mutation(async ({ ctx, input }) => {
+    if (input.expiresAt && input.expiresAt < projectToday()) throw new TRPCError({ code: "BAD_REQUEST", message: "A validade não pode ser no passado." });
+    const db = await requireDb();
+    const [customer] = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1);
+    if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
+    if (input.captureId) {
+      const [capture] = await db.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
+      if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
+    }
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = newCode();
+      try {
+        const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id }).$returningId();
+        await recordAudit(ctx.user.id, "voucher", created.id, "issued", `Voucher ${code} emitido para o associado ${input.customerId}: ${input.description}.`);
+        return { voucherId: created.id, code };
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+      }
+    }
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar um código de voucher. Tente de novo." });
+  }),
+
+  redeem: receptionProcedure.input(z.object({ code: z.string().trim().min(4).max(32), note: z.string().trim().max(255).optional() })).mutation(async ({ ctx, input }) => {
+    const db = await requireDb();
+    const code = normalizeCode(input.code);
+    const voucher = await db.transaction(async tx => {
+      const [row] = await tx.select().from(vouchers).where(eq(vouchers.code, code)).limit(1).for("update");
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Voucher não encontrado. Confira o código." });
+      const state = voucherState(row, projectToday());
+      if (state === "redeemed") throw new TRPCError({ code: "CONFLICT", message: "Este voucher já foi usado." });
+      if (state === "cancelled") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Este voucher foi cancelado." });
+      if (state === "expired") throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Este voucher venceu em ${row.expiresAt}.` });
+      await tx.update(vouchers).set({ status: "redeemed", redeemedAt: new Date(), redeemedByUserId: ctx.user.id, redeemNote: input.note || null }).where(and(eq(vouchers.id, row.id), eq(vouchers.status, "issued")));
+      return row;
+    });
+    await recordAudit(ctx.user.id, "voucher", voucher.id, "redeemed", `Voucher ${voucher.code} usado pelo associado ${voucher.customerId}.`);
+    return { voucherId: voucher.id, customerId: voucher.customerId, description: voucher.description };
+  }),
+
+  cancel: salesProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(5, "Informe o motivo do cancelamento.").max(255) })).mutation(async ({ ctx, input }) => {
+    const db = await requireDb();
+    const voucher = await db.transaction(async tx => {
+      const [row] = await tx.select().from(vouchers).where(eq(vouchers.id, input.id)).limit(1).for("update");
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Voucher não encontrado." });
+      if (row.status !== "issued") throw new TRPCError({ code: "CONFLICT", message: row.status === "redeemed" ? "Voucher já usado não pode ser cancelado." : "Voucher já cancelado." });
+      await tx.update(vouchers).set({ status: "cancelled", cancelledAt: new Date(), cancelledByUserId: ctx.user.id, cancelReason: input.reason }).where(eq(vouchers.id, row.id));
+      return row;
+    });
+    await recordAudit(ctx.user.id, "voucher", voucher.id, "cancelled", `Voucher ${voucher.code} cancelado: ${input.reason}.`);
+    return { success: true };
+  }),
+});
+

@@ -1,0 +1,43 @@
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { PageHeader, money } from "@/components/crm/ui";
+import { trpc } from "@/lib/trpc";
+import { useState } from "react";
+import { Link } from "wouter";
+import { toast } from "sonner";
+
+const isoDay = (value: Date) => value.toISOString().slice(0, 10);
+const firstOfMonth = () => { const now = new Date(); return isoDay(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))); };
+const rows = [["issued", "Válidos"], ["redeemed", "Usados"], ["expired", "Vencidos sem uso"], ["cancelled", "Cancelados"]] as const;
+
+// Recepção: dar baixa no voucher pelo código e ver o custo dos brindes emitidos no período (TSE #31).
+export default function Vouchers() {
+  const [code, setCode] = useState("");
+  const [note, setNote] = useState("");
+  const [startDate, setStartDate] = useState(firstOfMonth());
+  const [endDate, setEndDate] = useState(isoDay(new Date()));
+  const [last, setLast] = useState<{ customerId: number; description: string } | null>(null);
+  const utils = trpc.useUtils();
+  const summary = trpc.vouchers.summary.useQuery({ startDate, endDate }, { enabled: Boolean(startDate && endDate && startDate <= endDate) });
+  const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: r => { setLast(r); setCode(""); setNote(""); toast.success("Baixa registrada."); void utils.vouchers.summary.invalidate(); }, onError: e => toast.error(e.message) });
+
+  return <div className="space-y-6">
+    <PageHeader eyebrow="Recepção" title="Vouchers e brindes" description="Dê baixa quando o casal apresentar o código e acompanhe quanto os brindes custaram no período." />
+    <Card><CardContent className="space-y-3 pt-6">
+      <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); if (code.trim()) redeem.mutate({ code, note: note.trim() || undefined }); }}>
+        <Input className="h-9 w-48 uppercase" value={code} maxLength={32} onChange={e => setCode(e.target.value)} placeholder="Código do voucher" aria-label="Código do voucher" />
+        <Input className="h-9 max-w-sm" value={note} maxLength={255} onChange={e => setNote(e.target.value)} placeholder="Observação (opcional)" />
+        <Button size="sm" className="h-9" type="submit" disabled={redeem.isPending || !code.trim()}>{redeem.isPending ? "Registrando..." : "Dar baixa"}</Button>
+      </form>
+      {last && <p className="text-sm text-[#285043]">Usado: {last.description}. <Link href={`/clientes/${last.customerId}`} className="underline">Abrir ficha</Link></p>}
+    </CardContent></Card>
+    <Card><CardContent className="space-y-3 pt-6">
+      <div className="flex flex-wrap items-center gap-2 text-sm"><span>Emitidos de</span><Input type="date" className="h-9 w-40" value={startDate} onChange={e => setStartDate(e.target.value)} aria-label="Início" /><span>a</span><Input type="date" className="h-9 w-40" value={endDate} onChange={e => setEndDate(e.target.value)} aria-label="Fim" /></div>
+      {summary.data && <div className="grid gap-2 sm:grid-cols-5">
+        {rows.map(([key, label]) => <div key={key} className="rounded-xl bg-[#faf8f3] p-3"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#b18f4b]">{label}</p><p className="text-lg text-[#1d2b2a]">{summary.data[key].count}</p><p className="text-xs text-muted-foreground">{money(summary.data[key].cost)}</p></div>)}
+        <div className="rounded-xl bg-[#1d2b2a] p-3 text-white"><p className="text-[10px] font-bold uppercase tracking-[.1em]">Total</p><p className="text-lg">{summary.data.total.count}</p><p className="text-xs">{money(summary.data.total.cost)}</p></div>
+      </div>}
+    </CardContent></Card>
+  </div>;
+}

@@ -339,6 +339,33 @@ export const captureRecords = mysqlTable(
   ],
 );
 
+/**
+ * Voucher/brinde (TSE #31): o que foi prometido ao casal na captação ou depois, com custo, validade e baixa de uso.
+ * Nada é apagado: cancelar guarda o motivo; vencido é calculado pela data de validade no dia do projeto.
+ */
+export const vouchers = mysqlTable(
+  "vouchers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    code: varchar("code", { length: 16 }).notNull(),
+    customerId: int("customerId").notNull().references(() => customers.id),
+    captureId: int("captureId").references(() => captureRecords.id),
+    description: varchar("description", { length: 255 }).notNull(),
+    costAmount: decimal("costAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
+    expiresAt: date("expiresAt", { mode: "string" }),
+    status: mysqlEnum("status", ["issued", "redeemed", "cancelled"]).default("issued").notNull(),
+    issuedByUserId: int("issuedByUserId").references(() => users.id),
+    issuedAt: timestamp("issuedAt").defaultNow().notNull(),
+    redeemedAt: timestamp("redeemedAt"),
+    redeemedByUserId: int("redeemedByUserId").references(() => users.id),
+    redeemNote: varchar("redeemNote", { length: 255 }),
+    cancelledAt: timestamp("cancelledAt"),
+    cancelledByUserId: int("cancelledByUserId").references(() => users.id),
+    cancelReason: varchar("cancelReason", { length: 255 }),
+  },
+  table => [uniqueIndex("vouchers_code_unique").on(table.code), index("vouchers_customer_idx").on(table.customerId), index("vouchers_status_expiry_idx").on(table.status, table.expiresAt)],
+);
+
 export const proposals = mysqlTable("proposals", {
   id: int("id").autoincrement().primaryKey(),
   opportunityId: int("opportunityId").notNull().references(() => opportunities.id),
