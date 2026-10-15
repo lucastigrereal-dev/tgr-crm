@@ -5,11 +5,14 @@ import { domainEventCatalog, isKnownDomainEvent } from "../../shared/domainEvent
 import { integrationContractVersion, toIntegrationEvent } from "../../shared/integrationContract";
 import { router } from "../_core/trpc";
 import { getDb } from "../db";
+import { integrationHealth } from "../integrationHealth";
 import { adminProcedure } from "./access";
 
 const feedInput = z.object({ limit: z.number().int().min(1).max(100).default(50), eventNames: z.array(z.string().refine(isKnownDomainEvent, "Evento desconhecido.")).max(20).optional() });
 
 export const integrationsRouter = router({
+  // Painel de falhas (TSE #34): entregues, recusados e pendentes de cada ponte, sem escrever nada.
+  health: adminProcedure.query(() => integrationHealth()),
   contract: adminProcedure.query(() => ({ version: integrationContractVersion, events: Object.entries(domainEventCatalog).map(([eventName, definition]) => ({ eventName, ...definition })) })),
   eventFeed: adminProcedure.input(feedInput).query(async ({ input }) => {
     const db = await getDb(); if (!db) return { contractVersion: integrationContractVersion, events: [] };
