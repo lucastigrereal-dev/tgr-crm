@@ -110,6 +110,25 @@ export const customerContacts = mysqlTable(
   table => [index("customer_contacts_customer_idx").on(table.customerId, table.kind)],
 );
 
+/**
+ * Dicionários de cadastro (TSE #25): listas fechadas para os campos analíticos da ficha de captação. Campo sem nenhuma
+ * opção ativa continua livre; com opções, a captação só aceita valores da lista (gravados com a grafia da lista).
+ */
+export const masterDataOptions = mysqlTable(
+  "master_data_options",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    field: mysqlEnum("field", ["captureLocation", "transportation", "vehicleBrand", "partnerProfession"]).notNull(),
+    value: varchar("value", { length: 180 }).notNull(),
+    normalizedKey: varchar("normalizedKey", { length: 180 }).notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdByUserId: int("createdByUserId").references(() => users.id),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [uniqueIndex("master_data_options_field_key_unique").on(table.field, table.normalizedKey)],
+);
+
 export const customerInteractions = mysqlTable(
   "customer_interactions",
   {

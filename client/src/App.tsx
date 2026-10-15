@@ -27,6 +27,7 @@ const Intelligence = lazy(() => import("./pages/Intelligence"));
 const CommercialInventory = lazy(() => import("./pages/CommercialInventory"));
 const MonetaryAdjustments = lazy(() => import("./pages/MonetaryAdjustments"));
 const PolicyRegistry = lazy(() => import("./pages/PolicyRegistry"));
+const MasterData = lazy(() => import("./pages/MasterData"));
 const OwnerPortal = lazy(() => import("./pages/OwnerPortal"));
 
 function PageFallback() {
@@ -64,6 +65,7 @@ function InternalRouter() {
     <Route path="/estoque-comercial" component={CommercialInventory} />
     <Route path="/reajustes" component={MonetaryAdjustments} />
     <Route path="/politicas" component={PolicyRegistry} />
+    <Route path="/dicionarios" component={MasterData} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
   </Switch></Suspense></DashboardLayout>;

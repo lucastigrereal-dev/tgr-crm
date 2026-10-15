@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./db", () => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
+// Dicionários de cadastro têm teste próprio em MySQL; aqui a lista fica vazia (campos livres).
+vi.mock("./masterData", () => ({ canonicalizeMasterData: vi.fn(async () => ({})) }));
 import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { appRouter } from "./routers";
 
