@@ -55,20 +55,20 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(verifyLocalPassword(credentials(dir)["ana.adm"]!, users.find(u => u.username === "ana.adm")!.passwordHash)).toBe(true);
   });
 
-  it("--perfil-sala cria só os 3 perfis do CRM (§1.2 do plano): captação e recepção não têm login", () => {
+  it("--perfil-sala cria os 2 perfis extras do CRM (o admin geral é o primário do runtime; captação e recepção não têm login)", () => {
     const dir = newDir();
     const result = run(dir, "--perfil-sala");
-    expect(JSON.parse(result.stdout)).toMatchObject({ created: ["lucas.admin", "gerente.vendas", "administrativo"], total: 3 });
+    expect(JSON.parse(result.stdout)).toMatchObject({ created: ["gerente.vendas", "administrativo"], total: 2 });
     const users = JSON.parse(readFileSync(join(dir, "crm-users.json"), "utf8")).users as Array<{ username: string; role: string }>;
-    expect(Object.fromEntries(users.map(u => [u.username, u.role]))).toEqual({ "lucas.admin": "admin", "gerente.vendas": "seller", administrativo: "admin" });
+    expect(Object.fromEntries(users.map(u => [u.username, u.role]))).toEqual({ "gerente.vendas": "seller", administrativo: "admin" });
     const again = run(dir, "--perfil-sala", "--user", "maria.souza:admin:Maria Souza");
-    expect(JSON.parse(again.stdout)).toMatchObject({ created: ["maria.souza"], total: 4 });
+    expect(JSON.parse(again.stdout)).toMatchObject({ created: ["maria.souza"], total: 3 });
     // o resultado é aceito de verdade pelo CRM (config-doctor valida LOCAL_AUTH_USERS)
     const env = readFileSync(join(dir, "crm-users.env"), "utf8").trim().replace(/^LOCAL_AUTH_USERS='/, "").replace(/'$/, "");
     const doctor = spawnSync(process.execPath, ["scripts/config-doctor.mjs", "--strict"], {
       cwd: root, encoding: "utf8", timeout: 10_000,
       env: { ...process.env, DATABASE_URL: "mysql://tgr:x@127.0.0.1:3306/tgr_crm_pilot", JWT_SECRET: "local-pilot-secret-with-at-least-32-characters", VITE_APP_ID: "tgr-crm-pilot",
-        LOCAL_AUTH_ENABLED: "1", LOCAL_AUTH_USERNAME: "admin.crm", LOCAL_AUTH_PASSWORD_HASH: "scrypt:00112233445566778899aabbccddeeff:" + "ab".repeat(64), LOCAL_STORAGE_DIRECTORY: "/data/documents", LOCAL_AUTH_USERS: env },
+        LOCAL_AUTH_ENABLED: "1", LOCAL_AUTH_USERNAME: "lucas.admin", LOCAL_AUTH_PASSWORD_HASH: "scrypt:00112233445566778899aabbccddeeff:" + "ab".repeat(64), LOCAL_STORAGE_DIRECTORY: "/data/documents", LOCAL_AUTH_USERS: env },
     });
     expect(doctor.status).toBe(0);
   });
@@ -80,6 +80,14 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(run(dir, "--user", "ana.adm:seller").status).toBe(0);
     const line = readFileSync(join(dir, "crm-credentials.local.txt"), "utf8").trim().split("\n").find(l => l.startsWith("ana.adm\t"))!;
     expect(line.split("\t")).toEqual(["ana.adm", "seller", password]);
+  });
+
+  it("recusa repetir o admin primário do runtime em LOCAL_AUTH_USERS", () => {
+    const dir = newDir();
+    const result = run(dir, "--user", "lucas.admin:admin");
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("admin primário");
+    expect(run(dir, "--primary", "chefe.geral", "--user", "lucas.admin:admin").status).toBe(0);
   });
 
   it("recusa --out dentro do repositório (senhas não podem ir pro Git)", () => {

@@ -12,12 +12,13 @@ import { fileURLToPath } from "node:url";
 const ROLES = ["admin", "seller", "finance", "service"];
 const USERNAME = /^[a-z0-9._-]{3,58}$/;
 const args = process.argv.slice(2);
-const flags = { out: "", user: [], rotate: [], sala: false, envName: "LOCAL_AUTH_USERS" };
+const flags = { out: "", user: [], rotate: [], sala: false, envName: "LOCAL_AUTH_USERS", primary: "lucas.admin" };
 for (let i = 0; i < args.length; i += 1) {
   const key = args[i];
   if (key === "--out") flags.out = args[++i] ?? "";
   else if (key === "--user") flags.user.push(args[++i] ?? "");
   else if (key === "--env-name") flags.envName = args[++i] ?? "";
+  else if (key === "--primary") flags.primary = args[++i] ?? "";
   else if (key === "--perfil-sala") flags.sala = true;
   else if (key === "--rotate") flags.rotate.push(args[++i] ?? "");
   else fail(`Argumento desconhecido: ${key}`);
@@ -28,14 +29,19 @@ if (!flags.out) fail("Informe --out <pasta> (fora do repositório).");
 // (usam GuestPass e Sales). Gerente de vendas = seller (lê o contrato criado pela ponte; sem baixa nem auditoria). Administrativo =
 // admin, o único papel do CRM que dá baixa manual, ativa contrato e abre painel de integrações e auditoria (shared/permissions.ts; não existe papel "operador").
 // Nomes provisórios; os reais entram depois com --user.
+// O admin geral (lucas.admin) NÃO entra aqui: é o LOCAL_AUTH_USERNAME do runtime (start-pilot.ps1 / compose) e o CRM recusa repeti-lo em
+// LOCAL_AUTH_USERS (a lista inteira ficaria desabilitada). Se o runtime usar outro nome de admin primário, passe --primary <nome>.
 const SALA = [
-  "lucas.admin:admin:Lucas (admin geral)",
   "gerente.vendas:seller:Gerente de vendas",
   "administrativo:admin:Administrativo",
 ];
 if (flags.sala) flags.user.unshift(...SALA);
 if (flags.user.length === 0 && flags.rotate.length === 0) fail("Informe --perfil-sala ou ao menos um --user nome:papel[:Nome de exibição].");
 
+const primary = flags.primary.trim().toLowerCase();
+for (const entry of flags.user) {
+  if (primary && (entry.split(":")[0] ?? "").trim().toLowerCase() === primary) fail(`"${primary}" é o admin primário do runtime (LOCAL_AUTH_USERNAME) e não pode repetir em LOCAL_AUTH_USERS: tire do --user ou use --primary <outro nome>.`);
+}
 const out = resolve(flags.out);
 // As senhas em texto não podem cair dentro do checkout (um `git add .` as commitaria): recusa --out dentro do repositório.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
