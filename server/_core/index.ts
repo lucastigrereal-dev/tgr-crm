@@ -19,6 +19,7 @@ import { ENV } from "./env";
 import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
 import { processClicksignWebhook } from "../eSignatureService";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
+import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -66,6 +67,7 @@ async function startServer() {
     throw new Error("Financial project identity incomplete");
   }
   let financialPump: FinancialBridgePump | undefined;
+  let pointsExpiryJob: PointsExpiryJob | undefined;
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
@@ -158,6 +160,7 @@ async function startServer() {
     relationshipPump?.stop();
     salesCancellationPump?.stop();
     financialPump?.stop();
+    pointsExpiryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
     server.close(error => {
       if (error) {
@@ -186,6 +189,10 @@ async function startServer() {
         onError: error => logger.error("Financial bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }
+    pointsExpiryJob = startPointsExpiryJob({
+      onError: error => logger.error("Points expiry job failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+      onRun: result => { if (result.settled > 0) logger.info("Points expiry job settled", result); },
+    });
     logger.info("Server running", { port });
   });
 }

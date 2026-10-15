@@ -266,4 +266,26 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(statement.pendingExpirations).toEqual([{ year: 2024, points: 1000 }]);
     expect(statement.available).toBe(0);
   });
+
+  it("a varredura do vencimento baixa o vencido sem esperar lançamento, uma vez só, e não toca crédito dentro da validade", async () => {
+    const { settleAllExpirations } = await import("./routers/pointsLedger");
+    const [{ id: stale }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000 }).$returningId();
+    const [{ id: fresh }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000 }).$returningId();
+    await db.insert(pointsLedger).values([
+      { entitlementId: stale, entryType: "annual_credit", points: 1000, referenceYear: 2021, createdByUserId: userId },
+      { entitlementId: stale, entryType: "annual_credit", points: 500, referenceYear: 2026, createdByUserId: userId },
+      { entitlementId: fresh, entryType: "annual_credit", points: 700, referenceYear: 2026, createdByUserId: userId },
+    ]);
+    const first = await settleAllExpirations();
+    expect(first.settled).toBeGreaterThanOrEqual(1);
+    const rows = await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, stale));
+    const expirations = rows.filter(row => row.entryType === "expiration");
+    expect(expirations).toHaveLength(1);
+    expect(expirations[0]).toMatchObject({ points: -1000, referenceYear: 2021, createdByUserId: null });
+    expect((await caller().pointsLedger.statement({ entitlementId: stale })).available).toBe(500);
+    const second = await settleAllExpirations();
+    expect(second.settled).toBe(0);
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, stale))).filter(row => row.entryType === "expiration")).toHaveLength(1);
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, fresh))).filter(row => row.entryType === "expiration")).toHaveLength(0);
+  });
 });
