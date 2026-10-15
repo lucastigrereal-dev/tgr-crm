@@ -22,17 +22,19 @@ export function VouchersCard({ customerId }: { customerId: number }) {
   const [description, setDescription] = useState("");
   const [cost, setCost] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  // Um requestId por emissão: reenvio após resposta perdida devolve o mesmo voucher, sem emitir outro.
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const utils = trpc.useUtils();
   const list = trpc.vouchers.listByCustomer.useQuery({ customerId }, { enabled: customerId > 0 });
   const refresh = () => void utils.vouchers.listByCustomer.invalidate({ customerId });
-  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setDescription(""); setCost(""); setExpiresAt(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
+  const issue = trpc.vouchers.issue.useMutation({ onSuccess: r => { setRequestId(crypto.randomUUID()); setDescription(""); setCost(""); setExpiresAt(""); toast.success(`Voucher ${r.code} emitido.`); refresh(); }, onError: e => toast.error(e.message) });
   const redeem = trpc.vouchers.redeem.useMutation({ onSuccess: () => { toast.success("Baixa registrada."); refresh(); }, onError: e => toast.error(e.message) });
   const cancel = trpc.vouchers.cancel.useMutation({ onSuccess: () => { toast.success("Voucher cancelado."); refresh(); }, onError: e => toast.error(e.message) });
   const submit = () => {
     if (description.trim().length < 3) return toast.error("Descreva o brinde.");
     const costAmount = cost.trim() ? Number(cost.replace(",", ".")) : 0;
     if (!Number.isFinite(costAmount) || costAmount < 0) return toast.error("Custo inválido.");
-    issue.mutate({ customerId, description, costAmount, expiresAt: expiresAt || undefined });
+    issue.mutate({ customerId, description, costAmount, expiresAt: expiresAt || undefined, requestId });
   };
 
   return <Card className="rounded-[1.35rem] border-[#e9e4da]">
@@ -44,8 +46,9 @@ export function VouchersCard({ customerId }: { customerId: number }) {
         <Input value={expiresAt} onChange={e => setExpiresAt(e.target.value)} type="date" aria-label="Validade" className="h-9" />
         <Button size="sm" className="h-9" disabled={issue.isPending} onClick={submit}>{issue.isPending ? "Emitindo..." : "Emitir"}</Button>
       </div>}
-      {list.data?.length === 0 && <p className="text-xs text-muted-foreground">Nenhum voucher emitido.</p>}
-      {(list.data ?? []).map(voucher => <div key={voucher.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
+      {list.data?.truncated && <p className="text-xs text-amber-700">Mostrando {list.data.vouchers.length} de {list.data.total} vouchers: todos os válidos e os mais recentes do histórico.</p>}
+      {list.data?.vouchers.length === 0 && <p className="text-xs text-muted-foreground">Nenhum voucher emitido.</p>}
+      {(list.data?.vouchers ?? []).map(voucher => <div key={voucher.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#faf8f3] p-3 text-sm">
         <div className="min-w-0">
           <p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#b18f4b]">{voucher.code} · {money(voucher.costAmount)} · {dateLabel(voucher.expiresAt)}</p>
           <p className="break-words text-[#1d2b2a]">{voucher.description}</p>

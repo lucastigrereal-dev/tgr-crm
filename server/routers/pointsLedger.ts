@@ -69,16 +69,19 @@ export const pointsLedgerRouter = router({
     if (!entitlement) throw new TRPCError({ code: "NOT_FOUND", message: "Direito de uso não encontrado." });
     // Saldo e total pela soma do extrato inteiro; a lista traz os lançamentos mais recentes, com o saldo de cada um
     // calculado de trás para frente a partir do saldo total.
-    const [totals] = await db.select({ balance: sql<number>`coalesce(sum(${pointsLedger.points}), 0)`, count: sql<number>`count(*)` }).from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId));
-    const balance = Number(totals?.balance ?? 0);
-    const totalEntries = Number(totals?.count ?? 0);
-    const rows = await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId)).orderBy(desc(pointsLedger.id)).limit(STATEMENT_ENTRY_LIMIT);
-    const reversed = rows.length
-      ? new Set((await db.select({ reversesEntryId: pointsLedger.reversesEntryId }).from(pointsLedger).where(and(eq(pointsLedger.entitlementId, input.entitlementId), inArray(pointsLedger.reversesEntryId, rows.map(row => row.id))))).map(row => row.reversesEntryId))
-      : new Set<number | null>();
-    let after = balance;
-    const entries = rows.map(row => { const entry = { id: row.id, entryType: row.entryType, points: row.points, balanceAfter: after, referenceYear: row.referenceYear, reservationId: row.reservationId, reversesEntryId: row.reversesEntryId, reversed: reversed.has(row.id), note: row.note, createdAt: row.createdAt }; after -= row.points; return entry; });
-    return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance, totalEntries, truncated: totalEntries > rows.length, entries };
+    // Todas as leituras no mesmo snapshot: saldo, lista e estornos descrevem o mesmo momento do extrato.
+    return db.transaction(async tx => {
+      const [totals] = await tx.select({ balance: sql<number>`coalesce(sum(${pointsLedger.points}), 0)`, count: sql<number>`count(*)` }).from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId));
+      const balance = Number(totals?.balance ?? 0);
+      const totalEntries = Number(totals?.count ?? 0);
+      const rows = await tx.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, input.entitlementId)).orderBy(desc(pointsLedger.id)).limit(STATEMENT_ENTRY_LIMIT);
+      const reversed = rows.length
+        ? new Set((await tx.select({ reversesEntryId: pointsLedger.reversesEntryId }).from(pointsLedger).where(and(eq(pointsLedger.entitlementId, input.entitlementId), inArray(pointsLedger.reversesEntryId, rows.map(row => row.id))))).map(row => row.reversesEntryId))
+        : new Set<number | null>();
+      let after = balance;
+      const entries = rows.map(row => { const entry = { id: row.id, entryType: row.entryType, points: row.points, balanceAfter: after, referenceYear: row.referenceYear, reservationId: row.reservationId, reversesEntryId: row.reversesEntryId, reversed: reversed.has(row.id), note: row.note, createdAt: row.createdAt }; after -= row.points; return entry; });
+      return { entitlement: { id: entitlement.id, contractId: entitlement.contractId, entitlementType: entitlement.entitlementType, annualPoints: entitlement.annualPoints, status: entitlement.status }, balance, totalEntries, truncated: totalEntries > rows.length, entries };
+    });
   }),
 
   creditAnnual: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), year: z.number().int().min(2000).max(2100) })).mutation(async ({ ctx, input }) => {
@@ -131,6 +134,7 @@ export const pointsLedgerRouter = router({
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
       const existing = await existingRequest(tx, idempotencyKey);
       if (existing) { replay = true; return existing; }
+      requireActive(entitlement);
       if (balance + input.points < 0) throw insufficient(balance, -input.points);
       return append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, idempotencyKey, createdByUserId: ctx.user.id }, "Ajuste repetido.");
     });

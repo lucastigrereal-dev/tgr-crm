@@ -124,4 +124,9 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(statement.entries[0]!.balanceAfter).toBe(620);
     expect(statement.entries.at(-1)!.balanceAfter).toBe(121);
   });
+
+  it("direito de uso cancelado não recebe ajuste", async () => {
+    const [{ id: closed }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, status: "cancelled" }).$returningId();
+    await expect(caller("admin").pointsLedger.adjust({ entitlementId: closed, points: 50, note: "Bônus depois do distrato", requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
 });

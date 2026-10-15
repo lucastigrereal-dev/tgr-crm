@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, customers, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
@@ -35,13 +35,20 @@ async function requireDb() {
 
 const money = z.number().min(0).max(999999.99);
 export const SUMMARY_PAGE_SIZE = 5000;
+export const CUSTOMER_LIST_LIMIT = 200;
 
 export const vouchersRouter = router({
+  // Os válidos (ainda sem baixa nem cancelamento) vêm primeiro, para nunca sumirem atrás de histórico usado; acima do
+  // limite a resposta avisa quantos existem.
   listByCustomer: internalProcedure.input(z.object({ customerId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await requireDb();
     const today = projectToday();
-    const rows = await db.select().from(vouchers).where(eq(vouchers.customerId, input.customerId)).orderBy(desc(vouchers.issuedAt), desc(vouchers.id)).limit(200);
-    return rows.map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
+    const rows = await db.select().from(vouchers).where(eq(vouchers.customerId, input.customerId))
+      .orderBy(sql`${vouchers.status} = 'issued' desc`, desc(vouchers.issuedAt), desc(vouchers.id)).limit(CUSTOMER_LIST_LIMIT);
+    const total = rows.length < CUSTOMER_LIST_LIMIT ? rows.length
+      : Number((await db.select({ count: sql<number>`count(*)` }).from(vouchers).where(eq(vouchers.customerId, input.customerId)))[0]?.count ?? rows.length);
+    const list = rows.map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
+    return { vouchers: list, total, truncated: total > list.length };
   }),
 
   /** Custo dos brindes emitidos no período, por situação: quanto foi prometido, usado, cancelado e perdido por validade. */
@@ -76,7 +83,7 @@ export const vouchersRouter = router({
     return { startDate, endDate, issued: out(totals.issued), redeemed: out(totals.redeemed), cancelled: out(totals.cancelled), expired: out(totals.expired), total: out(all) };
   }),
 
-  issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), costAmount: money.default(0), expiresAt: z.string().date().optional() })).mutation(async ({ ctx, input }) => {
+  issue: receptionProcedure.input(z.object({ customerId: z.number().int().positive(), captureId: z.number().int().positive().optional(), description: z.string().trim().min(3, "Descreva o brinde.").max(255), costAmount: money.default(0), expiresAt: z.string().date().optional(), requestId: z.string().uuid() })).mutation(async ({ ctx, input }) => {
     if (input.expiresAt && input.expiresAt < projectToday()) throw new TRPCError({ code: "BAD_REQUEST", message: "A validade não pode ser no passado." });
     const db = await requireDb();
     const [customer] = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1);
@@ -85,14 +92,25 @@ export const vouchersRouter = router({
       const [capture] = await db.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
       if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
     }
+    // Reenvio da mesma emissão (resposta perdida, auditoria que falhou): devolve o voucher já gravado, sem novo código.
+    const previous = async () => {
+      const [row] = await db.select({ id: vouchers.id, code: vouchers.code, customerId: vouchers.customerId }).from(vouchers).where(eq(vouchers.requestId, input.requestId)).limit(1);
+      if (row && row.customerId !== input.customerId) throw new TRPCError({ code: "CONFLICT", message: "Esta emissão já foi usada para outro associado." });
+      return row ? { voucherId: row.id, code: row.code } : undefined;
+    };
+    const replay = await previous();
+    if (replay) return replay;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = newCode();
       try {
-        const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id }).$returningId();
+        const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId();
         await recordAudit(ctx.user.id, "voucher", created.id, "issued", `Voucher ${code} emitido para o associado ${input.customerId}: ${input.description}.`);
         return { voucherId: created.id, code };
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;
+        // Dois envios da mesma emissão ao mesmo tempo: o que perdeu devolve o do que ganhou.
+        const raced = await previous();
+        if (raced) return raced;
       }
     }
     throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível gerar um código de voucher. Tente de novo." });
