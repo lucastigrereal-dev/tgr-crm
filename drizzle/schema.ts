@@ -91,6 +91,25 @@ export const customerDocuments = mysqlTable("customer_documents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+// Contatos adicionais do associado (TSE #28): vários telefones, WhatsApp, e-mails e endereços. O preferencial de telefone e
+// e-mail espelha customers.phone/email, que continuam sendo o contato principal usado pelo resto do sistema.
+export const customerContacts = mysqlTable(
+  "customer_contacts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    customerId: int("customerId").notNull().references(() => customers.id),
+    kind: mysqlEnum("kind", ["phone", "whatsapp", "email", "address"]).notNull(),
+    label: varchar("label", { length: 60 }),
+    value: varchar("value", { length: 500 }).notNull(),
+    isPreferred: boolean("isPreferred").default(false).notNull(),
+    createdByUserId: int("createdByUserId").references(() => users.id),
+    archivedAt: timestamp("archivedAt"),
+    archivedByUserId: int("archivedByUserId").references(() => users.id),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [index("customer_contacts_customer_idx").on(table.customerId, table.kind)],
+);
+
 export const customerInteractions = mysqlTable(
   "customer_interactions",
   {

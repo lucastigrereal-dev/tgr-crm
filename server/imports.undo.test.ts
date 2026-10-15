@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, customerContacts, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -9,12 +9,14 @@ import { importsRouter } from "./routers/imports";
 type Batch = { id: number; kind: "customers" | "contracts" | "units"; status: "completed" | "reverted" };
 type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
 
-function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }> } = {}) {
+function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }>; deleteError?: unknown } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
+  const selected: unknown[] = [];
   const tx = {
     select: vi.fn(() => ({
       from: (table: unknown) => {
+        selected.push(table);
         if (table === csvImportBatches) return { orderBy: () => ({ limit: () => Object.assign(Promise.resolve([batch]), { for: async () => [batch] }) }) };
         return {
         where: () => {
@@ -38,7 +40,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
       };
       },
     })),
-    delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { deletes.push(table); return Promise.resolve(); }) })),
+    delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { if (options.deleteError) return Promise.reject(options.deleteError); deletes.push(table); return Promise.resolve(); }) })),
     update: vi.fn((table: unknown) => ({ set: vi.fn((values: unknown) => ({ where: vi.fn(() => { updates.push({ table, values }); return Promise.resolve(); }) })) })),
   };
   const db = {
@@ -51,7 +53,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
     })),
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<void>) => callback(tx)),
   };
-  return { db, deletes, updates };
+  return { db, deletes, updates, selected };
 }
 
 function adminCaller() {
@@ -90,6 +92,19 @@ describe("imports.undoLast", () => {
     expect(fixture.deletes).toEqual([]);
   });
 
+  it("vínculo criado depois do lote (contato, documento, interação) vira recusa controlada, não erro de banco", async () => {
+    const fkError = Object.assign(new Error("Failed query"), { cause: { code: "ER_ROW_IS_REFERENCED_2", errno: 1451 } });
+    const fixture = makeDb(
+      { id: 88, kind: "customers", status: "completed" },
+      [{ entityType: "customer", entityId: 108, action: "created", beforeSnapshot: null }],
+      [],
+      { deleteError: fkError },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("contato") });
+  });
+
   it("restaura o snapshot do associado atualizado em vez de apagá-lo", async () => {
     const snapshot = JSON.stringify({ fullName: "Ana Original", documentNumber: "12345678900", email: "ana@exemplo.com", status: "active", city: "Olímpia", state: "SP" });
     const fixture = makeDb({ id: 82, kind: "customers", status: "completed" }, [
@@ -103,6 +118,8 @@ describe("imports.undoLast", () => {
     expect(fixture.updates).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: customers, values: expect.objectContaining({ fullName: "Ana Original", documentNumber: "12345678900", status: "active", city: "Olímpia" }) }),
     ]));
+    // O telefone/e-mail restaurado também realinha o preferencial da lista de contatos.
+    expect(fixture.selected).toContain(customerContacts);
   });
 
   it("bloqueia a reversão de associado que já ganhou contrato dependente", async () => {

@@ -351,6 +351,13 @@
       "when": 1792021497897,
       "tag": "0049_owner_portal_links",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1792037458518,
+      "tag": "0050_customer_contacts",
+      "breakpoints": true
     }
   ]
 }
