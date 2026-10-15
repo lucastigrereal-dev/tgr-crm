@@ -90,6 +90,17 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(run(dir, "--primary", "chefe.geral", "--user", "lucas.admin:admin").status).toBe(0);
   });
 
+  it("recusa primário que já está salvo como extra e trata ..nome como dentro do repositório", () => {
+    const dir = newDir();
+    expect(run(dir, "--user", "chefe.geral:admin").status).toBe(0);
+    const clash = run(dir, "--primary", "chefe.geral", "--user", "ana.adm:admin");
+    expect(clash.status).not.toBe(0);
+    expect(`${clash.stdout}${clash.stderr}`).toContain("já está salvo");
+    const dotted = spawnSync(process.execPath, ["scripts/pilot-users.mjs", "--out", "..credenciais-teste", "--user", "ana.adm:admin"], { cwd: root, encoding: "utf8", timeout: 20_000 });
+    expect(dotted.status).not.toBe(0);
+    expect(`${dotted.stdout}${dotted.stderr}`).toContain("dentro do repositório");
+  });
+
   it("recusa --out dentro do repositório (senhas não podem ir pro Git)", () => {
     const result = spawnSync(process.execPath, ["scripts/pilot-users.mjs", "--out", "tmp-credenciais", "--user", "ana.adm:admin"], { cwd: root, encoding: "utf8", timeout: 20_000 });
     expect(result.status).not.toBe(0);

@@ -6,7 +6,7 @@
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, isAbsolute } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROLES = ["admin", "seller", "finance", "service"];
@@ -46,7 +46,7 @@ const out = resolve(flags.out);
 // As senhas em texto não podem cair dentro do checkout (um `git add .` as commitaria): recusa --out dentro do repositório.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fromRepo = relative(repoRoot, out);
-if (fromRepo === "" || (!fromRepo.startsWith("..") && !isAbsolute(fromRepo))) fail("--out está dentro do repositório: use uma pasta fora dele, para as senhas não irem pro Git.");
+if (fromRepo === "" || (fromRepo !== ".." && !fromRepo.startsWith(".." + sep) && !isAbsolute(fromRepo))) fail("--out está dentro do repositório: use uma pasta fora dele, para as senhas não irem pro Git.");
 const file = join(out, "crm-users.json");
 const requested = flags.user.map(entry => {
   const [username, role, ...display] = entry.split(":");
@@ -77,6 +77,8 @@ for (const wanted of requested) {
 }
 for (const name of flags.rotate) { const user = byName.get(name); byName.set(name, { ...user, passwordHash: issue(user) }); rotated.push(name); }
 
+// O primário do runtime não pode estar entre os extras salvos (uma rodada antiga pode tê-lo gravado): o CRM recusa a lista inteira.
+if (primary && byName.has(primary)) fail(`"${primary}" já está salvo em ${file} como usuário extra, mas é o admin primário do runtime (LOCAL_AUTH_USERNAME): tire-o do crm-users.json antes de gerar de novo.`);
 const users = [...byName.values()];
 writeFileSync(file, JSON.stringify({ users }, null, 2), { mode: 0o600 });
 writeFileSync(join(out, "crm-users.env"), `${flags.envName}='${JSON.stringify(users)}'\n`, { mode: 0o600 });
