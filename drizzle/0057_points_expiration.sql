@@ -1,0 +1,1 @@
+ALTER TABLE `points_ledger` MODIFY COLUMN `entryType` enum('annual_credit','usage','adjustment','reversal','expiration') NOT NULL;

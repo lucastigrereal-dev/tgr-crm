@@ -169,7 +169,8 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
 
   it("uso e ajuste fora da vigência são recusados, mesmo com status ativo", async () => {
     const [{ id: lapsed }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, validFrom: new Date("2020-01-01T12:00:00Z"), validUntil: new Date("2021-12-31T12:00:00Z") }).$returningId();
-    await caller().pointsLedger.creditAnnual({ entitlementId: lapsed, year: 2021 });
+    // Crédito de 2021 gravado direto: o sistema já não credita ano vencido.
+    await db.insert(pointsLedger).values({ entitlementId: lapsed, entryType: "annual_credit", points: 100, referenceYear: 2021, idempotencyKey: `annual:${lapsed}:2021`, createdByUserId: userId });
     await expect(caller().pointsLedger.recordUsage({ entitlementId: lapsed, points: 10, requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("venceu") });
     await expect(caller("admin").pointsLedger.adjust({ entitlementId: lapsed, points: 10, note: "Bônus fora da vigência", requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     const [{ id: future }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 100, validFrom: new Date("2099-01-01T12:00:00Z") }).$returningId();
@@ -217,5 +218,52 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
       const activeUsage = rows.some(row => row.entryType === "usage" && !reversedIds.has(row.id));
       expect(status === "cancelled" && activeUsage).toBe(false);
     }
+  });
+  it("pontos valem 2 anos: o vencido sai do disponível, o uso consome o mais antigo primeiro, a baixa grava uma vez e crédito vencido não entra nem estorna", async () => {
+    const [{ id: aged }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000, validFrom: new Date("2022-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
+    // Histórico sintético: créditos de 2023, 2024 e 2025 e um uso de 500 (que consumiu o mais antigo).
+    const [credit2023] = await db.insert(pointsLedger).values({ entitlementId: aged, entryType: "annual_credit", points: 1000, referenceYear: 2023, idempotencyKey: `annual:${aged}:2023`, createdByUserId: userId }).$returningId();
+    await db.insert(pointsLedger).values([
+      { entitlementId: aged, entryType: "annual_credit", points: 1000, referenceYear: 2024, idempotencyKey: `annual:${aged}:2024`, createdByUserId: userId },
+      { entitlementId: aged, entryType: "annual_credit", points: 1000, referenceYear: 2025, idempotencyKey: `annual:${aged}:2025`, createdByUserId: userId },
+      { entitlementId: aged, entryType: "usage", points: -500, idempotencyKey: `usage:${aged}:${randomUUID()}`, createdByUserId: userId },
+    ]);
+    // Antes de qualquer lançamento, o extrato já mostra o disponível sem o vencido: 500 de 2023 e 1000 de 2024 venceram.
+    const before = await caller().pointsLedger.statement({ entitlementId: aged });
+    expect(before.balance).toBe(2500);
+    expect(before.available).toBe(1000);
+    expect(before.pendingExpirations).toEqual([{ year: 2023, points: 500 }, { year: 2024, points: 1000 }]);
+    expect(before.entries.find(entry => entry.referenceYear === 2025 && entry.entryType === "annual_credit")?.expiresOn).toBe("2026-12-31");
+    // Só 1000 (de 2025) está disponível: 1001 é recusado, e a baixa do vencido já ficou gravada.
+    await expect(caller().pointsLedger.recordUsage({ entitlementId: aged, points: 1001, requestId: randomUUID() })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    const settled = await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, aged));
+    const expirations = settled.filter(row => row.entryType === "expiration");
+    expect(expirations.map(row => [row.referenceYear, row.points]).sort()).toEqual([[2023, -500], [2024, -1000]]);
+    expect(expirations.every(row => row.createdByUserId === null)).toBe(true);
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${expirations[0]!.id}`))).toHaveLength(1);
+    // Dois lançamentos ao mesmo tempo não baixam o mesmo ano duas vezes.
+    await Promise.allSettled([1, 2, 3].map(() => caller().pointsLedger.recordUsage({ entitlementId: aged, points: 100, requestId: randomUUID() })));
+    expect((await db.select().from(pointsLedger).where(eq(pointsLedger.entitlementId, aged))).filter(row => row.entryType === "expiration")).toHaveLength(2);
+    const after = await caller().pointsLedger.statement({ entitlementId: aged });
+    expect(after.pendingExpirations).toEqual([]);
+    expect(after.available).toBe(after.balance);
+    expect(after.balance).toBe(700);
+    // Auditoria que faltou no vencimento volta no lançamento seguinte, sem duplicar.
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${expirations[0]!.id}`));
+    await caller().pointsLedger.recordUsage({ entitlementId: aged, points: 1, requestId: randomUUID() });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${expirations[0]!.id}`))).toHaveLength(1);
+    // Crédito de ano que já venceu não entra, e o crédito vencido não se estorna (correção é ajuste).
+    await expect(caller().pointsLedger.creditAnnual({ entitlementId: aged, year: 2022 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await expect(caller("admin").pointsLedger.reverse({ entryId: credit2023.id, note: "Tentativa de estorno" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+  it("ajuste a favor estornado antes do vencimento não protege crédito vencido", async () => {
+    const [{ id: shielded }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000, validFrom: new Date("2022-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
+    await db.insert(pointsLedger).values({ entitlementId: shielded, entryType: "annual_credit", points: 1000, referenceYear: 2024, idempotencyKey: `annual:${shielded}:2024`, createdByUserId: userId });
+    const [bonus] = await db.insert(pointsLedger).values({ entitlementId: shielded, entryType: "adjustment", points: 400, note: "Bônus lançado e desfeito", idempotencyKey: `adjustment:${shielded}:${randomUUID()}`, createdByUserId: userId }).$returningId();
+    await db.insert(pointsLedger).values({ entitlementId: shielded, entryType: "reversal", points: -400, reversesEntryId: bonus.id, note: "Bônus desfeito", idempotencyKey: `reversal:${bonus.id}`, createdByUserId: userId });
+    const statement = await caller().pointsLedger.statement({ entitlementId: shielded });
+    expect(statement.balance).toBe(1000);
+    expect(statement.pendingExpirations).toEqual([{ year: 2024, points: 1000 }]);
+    expect(statement.available).toBe(0);
   });
 });

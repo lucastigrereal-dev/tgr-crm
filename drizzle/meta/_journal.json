@@ -400,6 +400,13 @@
       "when": 1792046248344,
       "tag": "0056_voucher_partner",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "5",
+      "when": 1792062415357,
+      "tag": "0057_points_expiration",
+      "breakpoints": true
     }
   ]
 }
