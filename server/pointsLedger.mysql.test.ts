@@ -248,8 +248,22 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     expect(after.pendingExpirations).toEqual([]);
     expect(after.available).toBe(after.balance);
     expect(after.balance).toBe(700);
+    // Auditoria que faltou no vencimento volta no lançamento seguinte, sem duplicar.
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${expirations[0]!.id}`));
+    await caller().pointsLedger.recordUsage({ entitlementId: aged, points: 1, requestId: randomUUID() });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${expirations[0]!.id}`))).toHaveLength(1);
     // Crédito de ano que já venceu não entra, e o crédito vencido não se estorna (correção é ajuste).
     await expect(caller().pointsLedger.creditAnnual({ entitlementId: aged, year: 2022 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     await expect(caller("admin").pointsLedger.reverse({ entryId: credit2023.id, note: "Tentativa de estorno" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+  it("ajuste a favor estornado antes do vencimento não protege crédito vencido", async () => {
+    const [{ id: shielded }] = await db.insert(ownershipEntitlements).values({ contractId: contractIdForRace, resortId: resortIdForRace, entitlementType: "points", annualPoints: 1000, validFrom: new Date("2022-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
+    await db.insert(pointsLedger).values({ entitlementId: shielded, entryType: "annual_credit", points: 1000, referenceYear: 2024, idempotencyKey: `annual:${shielded}:2024`, createdByUserId: userId });
+    const [bonus] = await db.insert(pointsLedger).values({ entitlementId: shielded, entryType: "adjustment", points: 400, note: "Bônus lançado e desfeito", idempotencyKey: `adjustment:${shielded}:${randomUUID()}`, createdByUserId: userId }).$returningId();
+    await db.insert(pointsLedger).values({ entitlementId: shielded, entryType: "reversal", points: -400, reversesEntryId: bonus.id, note: "Bônus desfeito", idempotencyKey: `reversal:${bonus.id}`, createdByUserId: userId });
+    const statement = await caller().pointsLedger.statement({ entitlementId: shielded });
+    expect(statement.balance).toBe(1000);
+    expect(statement.pendingExpirations).toEqual([{ year: 2024, points: 1000 }]);
+    expect(statement.available).toBe(0);
   });
 });

@@ -36,7 +36,7 @@ type ExpiryRow = { id: number; entryType: string; points: number; referenceYear:
 /**
  * Quanto de cada crédito anual vencido ainda sobrava no fim da validade e precisa ser baixado. O uso consome primeiro os
  * créditos mais antigos; o que entrou fora do crédito anual (ajuste a favor, estorno de uso, estorno de vencimento) conta
- * como o mais novo, então nunca vence. Assim, o que sobra de um ano é o saldo menos tudo o que é mais novo que ele.
+ * como o mais novo, então nunca vence, a menos que ele mesmo tenha sido estornado (aí já saiu do saldo). Assim, o que sobra de um ano é o saldo menos tudo o que é mais novo que ele.
  * Ano já baixado (lançamento de vencimento gravado) não entra de novo.
  */
 export function pendingExpirations(rows: ExpiryRow[], currentYear: number) {
@@ -48,7 +48,7 @@ export function pendingExpirations(rows: ExpiryRow[], currentYear: number) {
   for (const row of rows) {
     balance += row.points;
     if (row.entryType === "annual_credit") { if (row.referenceYear !== null && !reversedIds.has(row.id)) credits.set(row.referenceYear, (credits.get(row.referenceYear) ?? 0) + row.points); }
-    else if (row.points > 0) newestNonCredit += row.points;
+    else if (row.points > 0 && !reversedIds.has(row.id)) newestNonCredit += row.points;
   }
   const years = Array.from(credits.keys()).sort((a, b) => a - b);
   const due: { year: number; points: number }[] = [];
@@ -68,18 +68,18 @@ const expiryColumns = { id: pointsLedger.id, entryType: pointsLedger.entryType, 
  * (sem autor) e fica na auditoria.
  */
 async function settleExpirations(db: Db, entitlementId: number) {
-  const created = await db.transaction(async tx => {
+  await db.transaction(async tx => {
     const [entitlement] = await tx.select({ id: ownershipEntitlements.id, entitlementType: ownershipEntitlements.entitlementType }).from(ownershipEntitlements).where(eq(ownershipEntitlements.id, entitlementId)).limit(1).for("update");
     if (!entitlement || entitlement.entitlementType !== "points") return [];
     const rows = await tx.select(expiryColumns).from(pointsLedger).where(eq(pointsLedger.entitlementId, entitlementId)).orderBy(pointsLedger.id);
-    const out: { id: number; year: number; points: number }[] = [];
     for (const { year, points } of pendingExpirations(rows, projectYear())) {
-      const [row] = await tx.insert(pointsLedger).values({ entitlementId, entryType: "expiration", points: -points, referenceYear: year, idempotencyKey: `expiry:${entitlementId}:${year}`, note: `Pontos de ${year} vencidos em ${expiresOn(year)}`, createdByUserId: null }).$returningId();
-      out.push({ id: row.id, year, points });
+      await tx.insert(pointsLedger).values({ entitlementId, entryType: "expiration", points: -points, referenceYear: year, idempotencyKey: `expiry:${entitlementId}:${year}`, note: `Pontos de ${year} vencidos em ${expiresOn(year)}`, createdByUserId: null });
     }
-    return out;
   });
-  for (const row of created) await recordAudit(null, "points_ledger", row.id, "expiration", `Vencimento de ${row.points} ponto(s) de ${row.year} no direito de uso ${entitlementId}.`, { idempotencyKey: `points_ledger:${row.id}` });
+  // Auditoria de todo vencimento gravado, novo ou de uma rodada anterior cuja auditoria falhou: a chave é pelo lançamento,
+  // então o que já tem auditoria não duplica.
+  const settled = await db.select({ id: pointsLedger.id, points: pointsLedger.points, referenceYear: pointsLedger.referenceYear }).from(pointsLedger).where(and(eq(pointsLedger.entitlementId, entitlementId), eq(pointsLedger.entryType, "expiration")));
+  for (const row of settled) await recordAudit(null, "points_ledger", row.id, "expiration", `Vencimento de ${-row.points} ponto(s) de ${row.referenceYear} no direito de uso ${entitlementId}.`, { idempotencyKey: `points_ledger:${row.id}` });
 }
 
 /**
