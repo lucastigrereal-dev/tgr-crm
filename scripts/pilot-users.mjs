@@ -71,7 +71,7 @@ for (const name of ["crm-users.json", "crm-users.env", "crm-credentials.local.tx
   const target = join(out, name);
   let stat = null;
   try { stat = lstatSync(target); } catch { /* não existe: ok */ }
-  if (stat && !stat.isFile()) fail(`${target} não é um arquivo comum (link simbólico?): apague-o e rode de novo.`);
+  if (stat && (!stat.isFile() || stat.nlink > 1)) fail(`${target} não é um arquivo comum de um só nome (link simbólico ou físico?): apague-o e rode de novo.`);
 }
 const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { users: [] };
 const byName = new Map(current.users.map(user => [user.username, user]));

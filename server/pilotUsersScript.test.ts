@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -113,6 +113,16 @@ describe("P-06 usuários do piloto do CRM", () => {
   it("recusa arquivo de saída que é link simbólico (mesmo solto)", () => {
     const dir = newDir();
     symlinkSync(join(root, "destino-que-nao-deve-existir.txt"), join(dir, "crm-credentials.local.txt"));
+    const result = run(dir, "--user", "ana.adm:admin");
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("não é um arquivo comum");
+  });
+
+  it("recusa arquivo de saída com link físico (mais de um nome)", () => {
+    const dir = newDir();
+    const other = newDir();
+    writeFileSync(join(other, "alvo.txt"), "x");
+    linkSync(join(other, "alvo.txt"), join(dir, "crm-credentials.local.txt"));
     const result = run(dir, "--user", "ana.adm:admin");
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain("não é um arquivo comum");
