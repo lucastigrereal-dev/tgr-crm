@@ -4,6 +4,7 @@ import { z } from "zod";
 import { captureRecords, masterDataOptions } from "../../drizzle/schema";
 import { isReservedMasterDataValue, MAX_ACTIVE_OPTIONS_PER_FIELD, masterDataMaxLength, masterDataFieldLabel, masterDataFields, masterDataKey, type MasterDataField } from "../../shared/masterData";
 import { getDb, recordAudit } from "../db";
+import { withDeadlockRetry } from "../mysqlErrors";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure } from "./access";
 
@@ -47,9 +48,14 @@ async function usedValues(field: MasterDataField) {
   return groups;
 }
 
-async function activeCount(tx: Parameters<Parameters<Awaited<ReturnType<typeof requireDb>>["transaction"]>[0]>[0], field: MasterDataField) {
-  const [row] = await tx.select({ total: sql<number>`count(*)` }).from(masterDataOptions).where(and(eq(masterDataOptions.field, field), eq(masterDataOptions.active, true)));
-  return Number(row?.total ?? 0);
+type Tx = Parameters<Parameters<Awaited<ReturnType<typeof requireDb>>["transaction"]>[0]>[0];
+/**
+ * Põe em fila todas as escritas da lista de um campo: trava todas as opções do campo (e o intervalo do índice, que barra
+ * inserção concorrente no mesmo campo) antes de contar. Duas inclusões ao mesmo tempo nunca passam juntas do teto.
+ */
+async function lockField(tx: Tx, field: MasterDataField) {
+  const rows = await tx.select({ id: masterDataOptions.id, normalizedKey: masterDataOptions.normalizedKey, active: masterDataOptions.active }).from(masterDataOptions).where(eq(masterDataOptions.field, field)).for("update");
+  return { rows, activeCount: rows.filter(row => row.active).length };
 }
 const tooMany = (field: MasterDataField) => new TRPCError({ code: "PRECONDITION_FAILED", message: `A lista de ${masterDataFieldLabel[field]} chegou ao limite de ${MAX_ACTIVE_OPTIONS_PER_FIELD} opções ativas. Desative opções antes de incluir outras.` });
 
@@ -70,10 +76,11 @@ export const masterDataRouter = router({
     if (value.length > masterDataMaxLength[input.field]) throw new TRPCError({ code: "BAD_REQUEST", message: `${masterDataFieldLabel[input.field]} aceita até ${masterDataMaxLength[input.field]} caracteres na ficha.` });
     if (isReservedMasterDataValue(input.field, value)) throw new TRPCError({ code: "BAD_REQUEST", message: `"${value}" é reservado para fichas criadas automaticamente e não entra na lista.` });
     const key = masterDataKey(value);
-    const result = await db.transaction(async tx => {
+    const result = await withDeadlockRetry(() => db.transaction(async tx => {
+      const locked = await lockField(tx, input.field);
       const [existing] = await tx.select().from(masterDataOptions).where(and(eq(masterDataOptions.field, input.field), eq(masterDataOptions.normalizedKey, key))).limit(1).for("update");
       if (existing?.active) throw new TRPCError({ code: "CONFLICT", message: `"${existing.value}" já está na lista de ${masterDataFieldLabel[input.field]}.` });
-      if (await activeCount(tx, input.field) >= MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(input.field);
+      if (locked.activeCount >= MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(input.field);
       // Opção desativada com a mesma chave volta para a lista com a grafia nova, sem duplicar.
       if (existing) {
         await tx.update(masterDataOptions).set({ active: true, value }).where(eq(masterDataOptions.id, existing.id));
@@ -81,21 +88,24 @@ export const masterDataRouter = router({
       }
       const [created] = await tx.insert(masterDataOptions).values({ field: input.field, value, normalizedKey: key, createdByUserId: ctx.user.id }).$returningId();
       return { id: created.id, reactivated: false };
-    });
+    }));
     await recordAudit(ctx.user.id, "master_data_option", result.id, result.reactivated ? "reactivated" : "created", `${masterDataFieldLabel[input.field]}: "${value}" na lista.`);
     return result;
   }),
 
   setActive: adminProcedure.input(z.object({ id: z.number().int().positive(), active: z.boolean() })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
-    const outcome = await db.transaction(async tx => {
-      const [option] = await tx.select().from(masterDataOptions).where(eq(masterDataOptions.id, input.id)).limit(1).for("update");
+    const [target] = await db.select({ field: masterDataOptions.field }).from(masterDataOptions).where(eq(masterDataOptions.id, input.id)).limit(1);
+    if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Opção não encontrada." });
+    const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
+      const locked = await lockField(tx, target.field);
+      const [option] = await tx.select().from(masterDataOptions).where(eq(masterDataOptions.id, input.id)).limit(1);
       if (!option) throw new TRPCError({ code: "NOT_FOUND", message: "Opção não encontrada." });
       if (option.active === input.active) return { option, changed: false };
-      if (input.active && await activeCount(tx, option.field) >= MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(option.field);
+      if (input.active && locked.activeCount >= MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(option.field);
       await tx.update(masterDataOptions).set({ active: input.active }).where(eq(masterDataOptions.id, input.id));
       return { option, changed: true };
-    });
+    }));
     if (outcome.changed) await recordAudit(ctx.user.id, "master_data_option", outcome.option.id, input.active ? "reactivated" : "deactivated", `${masterDataFieldLabel[outcome.option.field]}: "${outcome.option.value}" ${input.active ? "voltou para" : "saiu da"} lista.`);
     return { success: true };
   }),
@@ -104,13 +114,14 @@ export const masterDataRouter = router({
   importExisting: adminProcedure.input(z.object({ field: fieldInput })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const groups = await usedValues(input.field);
-    const added = await db.transaction(async tx => {
-      const known = new Set((await tx.select({ normalizedKey: masterDataOptions.normalizedKey }).from(masterDataOptions).where(eq(masterDataOptions.field, input.field)).for("update")).map(row => row.normalizedKey));
+    const added = await withDeadlockRetry(() => db.transaction(async tx => {
+      const locked = await lockField(tx, input.field);
+      const known = new Set(locked.rows.map(row => row.normalizedKey));
       const fresh = Array.from(groups.entries()).filter(([key]) => !known.has(key) && key.length >= 2).map(([key, group]) => ({ field: input.field, value: group.value.replace(/\s+/g, " ").slice(0, masterDataMaxLength[input.field]), normalizedKey: key.slice(0, 180), createdByUserId: ctx.user.id }));
-      if (fresh.length && await activeCount(tx, input.field) + fresh.length > MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(input.field);
+      if (fresh.length && locked.activeCount + fresh.length > MAX_ACTIVE_OPTIONS_PER_FIELD) throw tooMany(input.field);
       for (let start = 0; start < fresh.length; start += 500) await tx.insert(masterDataOptions).values(fresh.slice(start, start + 500));
       return fresh.length;
-    });
+    }));
     if (added) await recordAudit(ctx.user.id, "master_data_option", input.field, "imported", `${masterDataFieldLabel[input.field]}: ${added} opção(ões) criadas a partir das fichas.`);
     return { added, alreadyKnown: groups.size - added };
   }),

@@ -102,6 +102,13 @@ describe.skipIf(!integrationUrl)("dicionários de cadastro em MySQL real", () =>
     await caller().masterData.setActive({ id: first!.id, active: false });
     await caller().masterData.add({ field: "transportation", value: `Excedente ${runId}` });
     await expect(caller().masterData.setActive({ id: first!.id, active: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    // 1999 ativas e várias inclusões ao mesmo tempo: a fila por campo deixa passar só uma.
+    const [excess] = await db.select().from(masterDataOptions).where(eq(masterDataOptions.normalizedKey, `excedente ${runId}`));
+    await caller().masterData.setActive({ id: excess!.id, active: false });
+    const racing = await Promise.allSettled(["A", "B", "C", "D"].map(letter => caller().masterData.add({ field: "transportation", value: `Corrida ${runId} ${letter}` })));
+    expect(racing.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect((await caller().masterData.list({ field: "transportation" })).length).toBe(2000);
     await db.update(masterDataOptions).set({ active: false }).where(eq(masterDataOptions.field, "transportation"));
   });
 });
