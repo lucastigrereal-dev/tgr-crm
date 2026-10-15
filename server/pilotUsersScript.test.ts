@@ -127,6 +127,20 @@ describe("P-06 usuários do piloto do CRM", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("cabeçalho");
   });
 
+  it("credencial salva sem cabeçalho aborta sem reescrever nem perder a 1ª conta", () => {
+    const dir = newDir();
+    expect(run(dir, "--user", "ana.adm:admin", "--user", "bia.fin:finance").status).toBe(0);
+    const file = join(dir, "crm-credentials.local.txt");
+    const lines = readFileSync(file, "utf8").trim().split("\n");
+    writeFileSync(file, lines.slice(1).join("\n") + "\n");
+    const before = readFileSync(join(dir, "crm-users.json"), "utf8");
+    const result = run(dir, "--user", "cris.adm:admin");
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("cabeçalho");
+    expect(readFileSync(join(dir, "crm-users.json"), "utf8")).toBe(before);
+    expect(readFileSync(file, "utf8").trim().split("\n")).toEqual(lines.slice(1));
+  });
+
   it("recusa arquivo de saída com link físico (mais de um nome)", () => {
     const dir = newDir();
     const other = newDir();

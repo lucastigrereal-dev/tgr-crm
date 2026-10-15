@@ -6,7 +6,7 @@
 // Uso: node scripts/pilot-users.mjs [--perfil-sala] --out <pasta-fora-do-repo> --user ana.adm:admin:"Ana Administrativo" --user bia.fin:finance
 import { randomBytes, scryptSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,10 +49,16 @@ const out = resolve(flags.out);
 // No Windows o chmod 0o600 não restringe nada (a ACL herdada continua valendo): aplica ACL só do dono, como o start-pilot.ps1 faz com icacls.
 function lockDown(path) {
   chmodSync(path, 0o600);
-  if (process.platform !== "win32") return;
+  if (process.platform !== "win32") return true;
   const owner = process.env.USERNAME;
   const result = owner ? spawnSync("icacls", [path, "/inheritance:r", "/grant:r", `${owner}:(R,W)`], { encoding: "utf8" }) : { status: 1 };
-  if (result.status !== 0) fail(`Não consegui restringir ${path} só ao seu usuário (icacls). Use uma pasta privada e tente de novo.`);
+  return result.status === 0;
+}
+// Segredo só é gravado DEPOIS de protegido: cria o arquivo vazio, trava, e só então escreve. Se a trava falhar, apaga e para (nada de senha solta).
+function writeSecret(path, content) {
+  writeFileSync(path, "", { mode: 0o600 });
+  if (!lockDown(path)) { try { unlinkSync(path); } catch { /* já sumiu */ } fail(`Não consegui restringir ${path} só ao seu usuário (icacls); removi o arquivo. Use uma pasta privada e tente de novo.`); }
+  writeFileSync(path, content, { mode: 0o600 });
 }
 function realLocation(path) {
   let probe = path;
@@ -103,24 +109,23 @@ for (const name of flags.rotate) { const user = byName.get(name); byName.set(nam
 // O primário do runtime não pode estar entre os extras salvos (uma rodada antiga pode tê-lo gravado): o CRM recusa a lista inteira.
 if (primary && byName.has(primary)) fail(`"${primary}" já está salvo em ${file} como usuário extra, mas é o admin primário do runtime (LOCAL_AUTH_USERNAME): tire-o do crm-users.json antes de gerar de novo.`);
 const users = [...byName.values()];
-writeFileSync(file, JSON.stringify({ users }, null, 2), { mode: 0o600 });
-writeFileSync(join(out, "crm-users.env"), `${flags.envName}='${JSON.stringify(users)}'\n`, { mode: 0o600 });
 // Uma linha por usuário: rotacionar SUBSTITUI a senha antiga (senão o smoke de login testaria uma senha já invalidada) e a
 // coluna do papel acompanha o papel atual mesmo quando a senha é mantida (o smoke lê o papel esperado daqui).
+// A leitura e a validação do arquivo antigo vêm ANTES de gravar qualquer coisa: cabeçalho ausente/alterado aborta sem perder a 1ª conta.
+const CREDENTIALS_HEADER = "usuario\tpapel\tsenha_temporaria";
 const credFile = join(out, "crm-credentials.local.txt");
-if (credentials.length || existsSync(credFile)) {
-  const rows = new Map();
-  if (existsSync(credFile)) {
-    for (const line of readFileSync(credFile, "utf8").trim().split("\n").slice(1)) {
-      const [name, , plain] = line.split("\t");
-      const user = name ? byName.get(name) : undefined;
-      if (user && plain) rows.set(name, `${name}\t${user.role}\t${plain}`);
-    }
+const rows = new Map();
+if (existsSync(credFile)) {
+  const saved = readFileSync(credFile, "utf8").trim().split("\n");
+  if (saved[0]?.trim() !== CREDENTIALS_HEADER) fail(`${credFile} está sem o cabeçalho esperado (arquivo alterado?): apague-o e gere de novo, ou restaure o cabeçalho.`);
+  for (const line of saved.slice(1)) {
+    const [name, , plain] = line.split("\t");
+    const user = name ? byName.get(name) : undefined;
+    if (user && plain) rows.set(name, `${name}\t${user.role}\t${plain}`);
   }
-  for (const line of credentials) rows.set(line.split("\t")[0], line);
-  writeFileSync(credFile, ["usuario\tpapel\tsenha_temporaria", ...rows.values()].join("\n") + "\n", { mode: 0o600 });
-  lockDown(credFile);
 }
-lockDown(file);
-lockDown(join(out, "crm-users.env"));
+for (const line of credentials) rows.set(line.split("\t")[0], line);
+if (credentials.length || existsSync(credFile)) writeSecret(credFile, [CREDENTIALS_HEADER, ...rows.values()].join("\n") + "\n");
+writeSecret(file, JSON.stringify({ users }, null, 2));
+writeSecret(join(out, "crm-users.env"), `${flags.envName}='${JSON.stringify(users)}'\n`);
 console.log(JSON.stringify({ created, kept, rotated, total: users.length, env: join(out, "crm-users.env"), credentials: credentials.length ? credFile : null }));
