@@ -70,9 +70,13 @@ async function append(tx: Tx, values: typeof pointsLedger.$inferInsert, duplicat
  */
 const requestId = z.string().uuid();
 async function existingRequest(tx: Tx, idempotencyKey: string) {
-  const [row] = await tx.select({ id: pointsLedger.id }).from(pointsLedger).where(eq(pointsLedger.idempotencyKey, idempotencyKey)).limit(1);
-  return row?.id;
+  const [row] = await tx.select().from(pointsLedger).where(eq(pointsLedger.idempotencyKey, idempotencyKey)).limit(1);
+  return row;
 }
+type LedgerRow = typeof pointsLedger.$inferSelect;
+const reusedRequest = () => new TRPCError({ code: "CONFLICT", message: "Este pedido já foi gravado com outros dados. Recarregue o extrato antes de lançar de novo." });
+const usageAudit = (row: LedgerRow) => `Uso de ${-row.points} ponto(s) no direito de uso ${row.entitlementId}${row.reservationId ? ` (reserva ${row.reservationId})` : ""}.`;
+const adjustmentAudit = (row: LedgerRow) => `Ajuste de ${row.points} ponto(s) no direito de uso ${row.entitlementId}: ${row.note ?? ""}.`;
 
 /** Lançamentos mostrados no extrato; o saldo sempre sai da soma do extrato inteiro. */
 export const STATEMENT_ENTRY_LIMIT = 500;
@@ -116,12 +120,15 @@ export const pointsLedgerRouter = router({
       const { entitlement } = await lockPointsEntitlement(tx, input.entitlementId);
       // Ano já creditado: responde CONFLICT, mas antes grava a auditoria do crédito se ela tiver faltado.
       const existing = await existingRequest(tx, idempotencyKey);
-      if (existing) { duplicate = true; return existing; }
+      if (existing) { duplicate = true; return existing.id; }
       requireActive(entitlement);
       if (entitlement.annualPoints <= 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O direito de uso não tem pontos anuais definidos." });
       const fromYear = entitlement.validFrom ? new Date(entitlement.validFrom).getUTCFullYear() : null;
       const untilYear = entitlement.validUntil ? new Date(entitlement.validUntil).getUTCFullYear() : null;
       if ((fromYear && input.year < fromYear) || (untilYear && input.year > untilYear)) throw new TRPCError({ code: "BAD_REQUEST", message: `O ano ${input.year} está fora da vigência do direito de uso.` });
+      // Ano futuro não se credita antes da hora: o saldo é uma soma só, e pontos de anos à frente já poderiam ser usados hoje.
+      const currentYear = Number(localDateInTimezone(new Date(), ENV.financialProjectTimezone.trim() || "America/Recife").slice(0, 4));
+      if (input.year > currentYear) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Os pontos de ${input.year} só podem ser creditados a partir de ${input.year}.` });
       return append(tx, { entitlementId: entitlement.id, entryType: "annual_credit", points: entitlement.annualPoints, referenceYear: input.year, idempotencyKey, note: `Crédito anual ${input.year}`, createdByUserId: ctx.user.id }, `Os pontos de ${input.year} já foram creditados neste direito de uso.`);
     });
     await recordAudit(ctx.user.id, "points_ledger", id, "annual_credit", `Crédito anual ${input.year} no direito de uso ${input.entitlementId}.`, { idempotencyKey: `points_ledger:${id}` });
@@ -132,10 +139,10 @@ export const pointsLedgerRouter = router({
   recordUsage: serviceProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().positive().max(1_000_000), reservationId: z.number().int().positive().optional(), note: z.string().trim().max(255).optional(), requestId })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const idempotencyKey = `usage:${input.entitlementId}:${input.requestId}`;
-    const id = await db.transaction(async tx => {
+    const entry = await db.transaction(async tx => {
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
       const existing = await existingRequest(tx, idempotencyKey);
-      if (existing) return existing;
+      if (existing) return { row: existing, mismatch: existing.points !== -input.points || existing.reservationId !== (input.reservationId ?? null) || existing.note !== (input.note || null) };
       requireActive(entitlement);
       requireInValidity(entitlement);
       if (input.reservationId) {
@@ -150,26 +157,33 @@ export const pointsLedgerRouter = router({
         if (previous.some(row => row.entryType === "usage" && !reversedIds.has(row.id))) throw new TRPCError({ code: "CONFLICT", message: "Esta reserva já tem uso de pontos lançado neste direito. Para corrigir, estorne o lançamento." });
       }
       if (balance < input.points) throw insufficient(balance, input.points);
-      return append(tx, { entitlementId: entitlement.id, entryType: "usage", points: -input.points, reservationId: input.reservationId ?? null, note: input.note || null, idempotencyKey, createdByUserId: ctx.user.id }, "Uso repetido.");
+      const id = await append(tx, { entitlementId: entitlement.id, entryType: "usage", points: -input.points, reservationId: input.reservationId ?? null, note: input.note || null, idempotencyKey, createdByUserId: ctx.user.id }, "Uso repetido.");
+      const [row] = await tx.select().from(pointsLedger).where(eq(pointsLedger.id, id)).limit(1);
+      return { row: row!, mismatch: false };
     });
-    await recordAudit(ctx.user.id, "points_ledger", id, "usage", `Uso de ${input.points} ponto(s) no direito de uso ${input.entitlementId}${input.reservationId ? ` (reserva ${input.reservationId})` : ""}.`, { idempotencyKey: `points_ledger:${id}` });
-    return { entryId: id };
+    // A auditoria sai do lançamento gravado, nunca do pedido: no reenvio, ela descreve o que de fato está no extrato.
+    await recordAudit(entry.row.createdByUserId, "points_ledger", entry.row.id, "usage", usageAudit(entry.row), { idempotencyKey: `points_ledger:${entry.row.id}` });
+    if (entry.mismatch) throw reusedRequest();
+    return { entryId: entry.row.id };
   }),
 
   adjust: adminProcedure.input(z.object({ entitlementId: z.number().int().positive(), points: z.number().int().min(-1_000_000).max(1_000_000).refine(value => value !== 0, "Ajuste não pode ser zero."), note: z.string().trim().min(5, "Explique o ajuste.").max(255), requestId })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const idempotencyKey = `adjustment:${input.entitlementId}:${input.requestId}`;
-    const id = await db.transaction(async tx => {
+    const entry = await db.transaction(async tx => {
       const { entitlement, balance } = await lockPointsEntitlement(tx, input.entitlementId);
       const existing = await existingRequest(tx, idempotencyKey);
-      if (existing) return existing;
+      if (existing) return { row: existing, mismatch: existing.points !== input.points || existing.note !== input.note };
       requireActive(entitlement);
       requireInValidity(entitlement);
       if (balance + input.points < 0) throw insufficient(balance, -input.points);
-      return append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, idempotencyKey, createdByUserId: ctx.user.id }, "Ajuste repetido.");
+      const id = await append(tx, { entitlementId: entitlement.id, entryType: "adjustment", points: input.points, note: input.note, idempotencyKey, createdByUserId: ctx.user.id }, "Ajuste repetido.");
+      const [row] = await tx.select().from(pointsLedger).where(eq(pointsLedger.id, id)).limit(1);
+      return { row: row!, mismatch: false };
     });
-    await recordAudit(ctx.user.id, "points_ledger", id, "adjustment", `Ajuste de ${input.points} ponto(s) no direito de uso ${input.entitlementId}: ${input.note}.`, { idempotencyKey: `points_ledger:${id}` });
-    return { entryId: id };
+    await recordAudit(entry.row.createdByUserId, "points_ledger", entry.row.id, "adjustment", adjustmentAudit(entry.row), { idempotencyKey: `points_ledger:${entry.row.id}` });
+    if (entry.mismatch) throw reusedRequest();
+    return { entryId: entry.row.id };
   }),
 
   reverse: adminProcedure.input(z.object({ entryId: z.number().int().positive(), note: z.string().trim().min(5, "Explique o estorno.").max(255) })).mutation(async ({ ctx, input }) => {
@@ -181,12 +195,12 @@ export const pointsLedgerRouter = router({
       const { balance } = await lockPointsEntitlement(tx, target.entitlementId);
       // Já estornado: responde CONFLICT, mas antes grava a auditoria do estorno se ela tiver faltado.
       const existing = await existingRequest(tx, `reversal:${target.id}`);
-      if (existing) return { id: existing, target, duplicate: true };
+      if (existing) return { id: existing.id, target, note: existing.note ?? "", userId: existing.createdByUserId, duplicate: true };
       if (balance - target.points < 0) throw insufficient(balance, target.points);
       const id = await append(tx, { entitlementId: target.entitlementId, entryType: "reversal", points: -target.points, referenceYear: target.referenceYear, reservationId: target.reservationId, reversesEntryId: target.id, idempotencyKey: `reversal:${target.id}`, note: input.note, createdByUserId: ctx.user.id }, "Este lançamento já foi estornado.");
-      return { id, target, duplicate: false };
+      return { id, target, note: input.note, userId: ctx.user.id, duplicate: false };
     });
-    await recordAudit(ctx.user.id, "points_ledger", result.id, "reversal", `Estorno do ${entryLabel[result.target.entryType]} ${result.target.id} (${result.target.points} ponto(s)): ${input.note}.`, { idempotencyKey: `points_ledger:${result.id}` });
+    await recordAudit(result.userId, "points_ledger", result.id, "reversal", `Estorno do ${entryLabel[result.target.entryType]} ${result.target.id} (${result.target.points} ponto(s)): ${result.note}.`, { idempotencyKey: `points_ledger:${result.id}` });
     if (result.duplicate) throw new TRPCError({ code: "CONFLICT", message: "Este lançamento já foi estornado." });
     return { entryId: result.id };
   }),

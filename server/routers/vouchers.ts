@@ -50,15 +50,18 @@ export const vouchersRouter = router({
     const db = await requireDb();
     const today = projectToday();
     const valid = and(eq(vouchers.status, "issued"), or(isNull(vouchers.expiresAt), gte(vouchers.expiresAt, today)));
-    const validRows = await db.select().from(vouchers).where(and(eq(vouchers.customerId, input.customerId), valid)).orderBy(desc(vouchers.issuedAt), desc(vouchers.id));
-    const historyFilter = and(eq(vouchers.customerId, input.customerId), not(valid!));
-    const historyRows = await db.select().from(vouchers).where(historyFilter).orderBy(desc(vouchers.issuedAt), desc(vouchers.id)).limit(CUSTOMER_LIST_LIMIT + 1);
-    const historyTruncated = historyRows.length > CUSTOMER_LIST_LIMIT;
-    if (historyTruncated) historyRows.pop();
-    const historyTotal = historyTruncated ? Number((await db.select({ count: sql<number>`count(*)` }).from(vouchers).where(historyFilter))[0]?.count ?? 0) : historyRows.length;
-    const total = validRows.length + historyTotal;
-    const list = [...validRows, ...historyRows].map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
-    return { vouchers: list, total, validCount: validRows.length, truncated: historyTruncated };
+    // Válidos, histórico e contagem no mesmo snapshot: um voucher baixado entre as leituras não aparece duas vezes.
+    return db.transaction(async tx => {
+      const validRows = await tx.select().from(vouchers).where(and(eq(vouchers.customerId, input.customerId), valid)).orderBy(desc(vouchers.issuedAt), desc(vouchers.id));
+      const historyFilter = and(eq(vouchers.customerId, input.customerId), not(valid!));
+      const historyRows = await tx.select().from(vouchers).where(historyFilter).orderBy(desc(vouchers.issuedAt), desc(vouchers.id)).limit(CUSTOMER_LIST_LIMIT + 1);
+      const historyTruncated = historyRows.length > CUSTOMER_LIST_LIMIT;
+      if (historyTruncated) historyRows.pop();
+      const historyTotal = historyTruncated ? Number((await tx.select({ count: sql<number>`count(*)` }).from(vouchers).where(historyFilter))[0]?.count ?? 0) : historyRows.length;
+      const total = validRows.length + historyTotal;
+      const list = [...validRows, ...historyRows].map(row => ({ id: row.id, code: row.code, captureId: row.captureId, description: row.description, costAmount: Number(row.costAmount), expiresAt: row.expiresAt, state: voucherState(row, today), issuedAt: row.issuedAt, redeemedAt: row.redeemedAt, redeemNote: row.redeemNote, cancelledAt: row.cancelledAt, cancelReason: row.cancelReason }));
+      return { vouchers: list, total, validCount: validRows.length, truncated: historyTruncated };
+    });
   }),
 
   /** Fichas de captação do associado, para ligar o brinde ao tour/venda que o originou. */

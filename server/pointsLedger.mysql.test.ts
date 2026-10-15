@@ -36,7 +36,7 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     const [{ id: resortId }] = await db.insert(resorts).values({ name: `Resort Pontos ${runId}` } as never).$returningId();
     const [{ id: unitId }] = await db.insert(units).values({ resortId, code: `P-${runId}` } as never).$returningId();
     contractIdForRace = contractId; resortIdForRace = resortId;
-    [{ id: entitlementId }] = await db.insert(ownershipEntitlements).values({ contractId, resortId, entitlementType: "points", annualPoints: 1000, validFrom: new Date("2026-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
+    [{ id: entitlementId }] = await db.insert(ownershipEntitlements).values({ contractId, resortId, entitlementType: "points", annualPoints: 1000, validFrom: new Date("2025-01-01T12:00:00Z"), validUntil: new Date("2035-12-31T12:00:00Z") }).$returningId();
     [{ id: weekEntitlementId }] = await db.insert(ownershipEntitlements).values({ contractId, resortId, entitlementType: "fixed_week", fixedWeek: 10 }).$returningId();
     [{ id: reservationId }] = await db.insert(reservations).values({ customerId, contractId, unitId, checkIn: new Date("2026-11-10T12:00:00Z"), checkOut: new Date("2026-11-14T12:00:00Z"), status: "confirmed" }).$returningId();
     [{ id: otherReservationId }] = await db.insert(reservations).values({ customerId, contractId: otherContractId, unitId, checkIn: new Date("2026-12-10T12:00:00Z"), checkOut: new Date("2026-12-12T12:00:00Z"), status: "confirmed" }).$returningId();
@@ -52,8 +52,12 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     await expect(caller().pointsLedger.creditAnnual({ entitlementId, year: 2026 })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(caller().pointsLedger.creditAnnual({ entitlementId, year: 2040 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(caller().pointsLedger.creditAnnual({ entitlementId: weekEntitlementId, year: 2026 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    const results = await Promise.allSettled([2027, 2027, 2027].map(year => caller().pointsLedger.creditAnnual({ entitlementId, year })));
+    const results = await Promise.allSettled([2025, 2025, 2025].map(year => caller().pointsLedger.creditAnnual({ entitlementId, year })));
     expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(await balance()).toBe(2000);
+    // Ano seguinte dentro da vigência ainda não se credita: os pontos ficariam usáveis antes da hora.
+    const nextYear = new Date().getUTCFullYear() + 1;
+    await expect(caller().pointsLedger.creditAnnual({ entitlementId, year: nextYear })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expect(await balance()).toBe(2000);
   });
 
@@ -104,6 +108,24 @@ describe.skipIf(!integrationUrl)("extrato de pontos em MySQL real", () => {
     const results = await Promise.all([1, 2].map(() => caller("admin").pointsLedger.adjust({ entitlementId, points: 20, note: "Bônus de boas-vindas", requestId: adjustId })));
     expect(results.map(result => result.entryId)).toEqual([adjusted.entryId, adjusted.entryId]);
     expect(await balance()).toBe(before - 50 + 20);
+  });
+
+  it("reenvio com o mesmo requestId e outros dados é recusado, e a auditoria descreve o lançamento gravado", async () => {
+    const before = await balance();
+    const requestId = randomUUID();
+    const first = await caller().pointsLedger.recordUsage({ entitlementId, points: 5, note: "Uso original", requestId });
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${first.entryId}`));
+    await expect(caller().pointsLedger.recordUsage({ entitlementId, points: 500, note: "Editado na tela", requestId })).rejects.toMatchObject({ code: "CONFLICT" });
+    const [usageAudit] = await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${first.entryId}`));
+    expect(usageAudit?.summary).toContain("Uso de 5 ponto(s)");
+    const adjustId = randomUUID();
+    const adjusted = await caller("admin").pointsLedger.adjust({ entitlementId, points: 7, note: "Ajuste original", requestId: adjustId });
+    await db.delete(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${adjusted.entryId}`));
+    await expect(caller("admin").pointsLedger.adjust({ entitlementId, points: 70, note: "Ajuste editado", requestId: adjustId })).rejects.toMatchObject({ code: "CONFLICT" });
+    const [adjustAudit] = await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `points_ledger:${adjusted.entryId}`));
+    expect(adjustAudit?.summary).toContain("Ajuste de 7 ponto(s)");
+    expect(adjustAudit?.summary).toContain("Ajuste original");
+    expect(await balance()).toBe(before - 5 + 7);
   });
 
   it("estorno de crédito e uso ao mesmo tempo nunca deixam o saldo negativo", async () => {
