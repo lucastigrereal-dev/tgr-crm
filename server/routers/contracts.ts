@@ -15,7 +15,7 @@ import { canTransitionContractStatus } from "../../shared/contractLifecycle";
 import { canCapability } from "../../shared/permissions";
 import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
-import { affectedRows } from "../mysqlErrors";
+import { affectedRows, withDeadlockRetry } from "../mysqlErrors";
 import { txAudit, txEvent } from "../txOutbox";
 
 export const contractsRouter = router({
@@ -225,7 +225,9 @@ export const contractsRouter = router({
     assertCapability(ctx.user.role, "contract.cancel.execute");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const createdFinancialEntryFacts: Array<{ id: number; contractId: number; type: "income" | "expense"; category: string; amount: number }> = [];
-    const outcome = await db.transaction(async tx => {
+    // Distrato trava cotas por índice secundário; deadlock com outra venda ou distrato desfaz tudo e a transação é repetida.
+    const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
+      createdFinancialEntryFacts.length = 0;
       const request = (await tx.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1).for("update"))[0];
       if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." });
       if (request.status !== "approved") throw new TRPCError({ code: "CONFLICT", message: "Somente distrato aprovado pode ser executado." });
@@ -294,7 +296,7 @@ export const contractsRouter = router({
         await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: fractionId, actorUserId: actor, payload: { fractionId, status: "available", contractId: contract.id, reason: "Distrato executado" }, idempotencyKey: `fraction-returned:${fractionId}:${contract.id}` });
       }
       return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, manualReviewCommissionIds: impact.manualReviewCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
-    });
+    }));
     await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
     return { success: true, ...outcome };
   }),

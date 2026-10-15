@@ -30,3 +30,29 @@ export function isForeignKeyBlockError(error: unknown): boolean {
   }
   return false;
 }
+
+// Deadlock do InnoDB (ER_LOCK_DEADLOCK, 1213): o MySQL desfez a transação inteira e manda repetir.
+export function isDeadlockError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const candidate = current as { code?: unknown; errno?: unknown; cause?: unknown };
+    if (candidate.code === "ER_LOCK_DEADLOCK" || Number(candidate.errno) === 1213) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+/**
+ * Repete a transação quando o MySQL a derruba por deadlock (a recomendação do próprio InnoDB). O callback roda do zero a
+ * cada tentativa, então não pode acumular estado de fora entre tentativas. Qualquer outro erro sobe na hora.
+ */
+export async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (attempt >= attempts || !isDeadlockError(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 20 * attempt + Math.floor(Math.random() * 30)));
+    }
+  }
+}
