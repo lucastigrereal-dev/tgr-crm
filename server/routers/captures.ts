@@ -11,6 +11,7 @@ import { getProjectCaptureReadiness } from "../projectPolicy";
 import { activeRoomStatuses, assertReceptionAction, canTransitionPresentationStatus, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 import { publishSalesRoomEvent } from "../realtime";
 import { affectedRows } from "../mysqlErrors";
+import { canonicalizeMasterData } from "../masterData";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
 const optionalShort = z.string().trim().max(255).optional().nullable();
@@ -210,6 +211,8 @@ export const capturesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.transaction(async tx => {
+      // Campos com dicionário: só valores da lista, gravados com a grafia dela.
+      Object.assign(input, await canonicalizeMasterData(tx, input));
       const [campaignRows, resortRows] = await Promise.all([
         input.campaignId ? tx.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.campaignId)).limit(1) : Promise.resolve([]),
         input.resortId ? tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1) : Promise.resolve([]),

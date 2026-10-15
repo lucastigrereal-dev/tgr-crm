@@ -60,6 +60,18 @@ async function makePreferred(tx: Tx, contact: { id: number; customerId: number; 
   if (contact.kind === "email") await tx.update(customers).set({ email: contact.value }).where(eq(customers.id, contact.customerId));
 }
 
+/**
+ * Trava o associado e depois o contato, na mesma ordem do add: duas mutações no mesmo associado ficam em fila e nunca
+ * deixam dois preferenciais do mesmo tipo.
+ */
+async function lockContact(tx: Tx, contactId: number) {
+  const [owner] = await tx.select({ customerId: customerContacts.customerId }).from(customerContacts).where(eq(customerContacts.id, contactId)).limit(1);
+  if (!owner) return undefined;
+  await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, owner.customerId)).limit(1).for("update");
+  const [row] = await tx.select().from(customerContacts).where(eq(customerContacts.id, contactId)).limit(1).for("update");
+  return row;
+}
+
 export const customerContactsRouter = router({
   list: internalProcedure.input(z.object({ customerId: z.number().int().positive(), includeArchived: z.boolean().default(false) })).query(async ({ input }) => {
     const db = await requireDb();
@@ -97,7 +109,7 @@ export const customerContactsRouter = router({
   setPreferred: internalProcedure.input(z.object({ contactId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const contact = await db.transaction(async tx => {
-      const [row] = await tx.select().from(customerContacts).where(eq(customerContacts.id, input.contactId)).limit(1).for("update");
+      const row = await lockContact(tx, input.contactId);
       if (!row || row.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Contato não encontrado ou arquivado." });
       await makePreferred(tx, row);
       return row;
@@ -109,16 +121,18 @@ export const customerContactsRouter = router({
   archive: internalProcedure.input(z.object({ contactId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const row = await db.transaction(async tx => {
-      const [contact] = await tx.select().from(customerContacts).where(eq(customerContacts.id, input.contactId)).limit(1).for("update");
+      const contact = await lockContact(tx, input.contactId);
       if (!contact) throw new TRPCError({ code: "NOT_FOUND", message: "Contato não encontrado." });
       const result = await tx.update(customerContacts).set({ archivedAt: new Date(), archivedByUserId: ctx.user.id, isPreferred: false })
         .where(and(eq(customerContacts.id, input.contactId), isNull(customerContacts.archivedAt)));
       if (affectedRows(result) === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Contato já arquivado." });
       // Arquivou o preferencial: o contato mais recente que sobrou assume; sem nenhum, o principal da ficha fica vazio.
+      // Leitura com trava: o lockContact leu o dono sem trava antes de esperar o associado, e o snapshot daquela leitura
+      // não enxerga o que a transação da frente gravou (contato novo, outro arquivado).
       if (contact.isPreferred) {
         const [next] = await tx.select().from(customerContacts)
           .where(and(eq(customerContacts.customerId, contact.customerId), eq(customerContacts.kind, contact.kind), isNull(customerContacts.archivedAt)))
-          .orderBy(desc(customerContacts.id)).limit(1);
+          .orderBy(desc(customerContacts.id)).limit(1).for("update");
         if (next) await makePreferred(tx, next);
         else if (contact.kind === "phone") await tx.update(customers).set({ phone: null }).where(eq(customers.id, contact.customerId));
         else if (contact.kind === "email") await tx.update(customers).set({ email: null }).where(eq(customers.id, contact.customerId));

@@ -67,6 +67,7 @@ export const menuPathRoles: Record<string, readonly InternalPermissionRole[]> = 
   "/equipe": ["admin"],
   "/importar": ["admin"],
   "/configuracoes-projeto": ["admin"],
+  "/dicionarios": ["admin"],
 };
 
 export function canOpenMenuPath(role: InternalPermissionRole | "user" | null | undefined, path: string) {

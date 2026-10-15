@@ -101,4 +101,29 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
     await expect(caller().add({ customerId, kind: "email", value: `novo-${runId}@example.test` })).resolves.toMatchObject({ contactId: expect.any(Number) });
   });
 
+
+  it("trocas de preferencial ao mesmo tempo no mesmo associado terminam com um preferencial só, igual ao da ficha", async () => {
+    const [{ id: busy }] = await db.insert(customers).values({ fullName: `Ciclano Sintético ${runId}`, status: "active" }).$returningId();
+    const ids: number[] = [];
+    for (const value of ["84955550001", "84955550002", "84955550003", "84955550004"]) ids.push((await caller().add({ customerId: busy, kind: "phone", value })).contactId);
+    const results = await Promise.allSettled([...ids, ...ids].map(contactId => caller().setPreferred({ contactId })));
+    expect(results.filter(result => result.status === "rejected")).toEqual([]);
+    const phones = (await caller().list({ customerId: busy })).filter(row => row.kind === "phone");
+    const preferred = phones.filter(row => row.isPreferred);
+    expect(preferred).toHaveLength(1);
+    expect((await db.select().from(customers).where(eq(customers.id, busy)))[0]!.phone).toBe(preferred[0]!.value);
+  });
+
+  it("arquivar dois contatos ao mesmo tempo nunca deixa arquivado como preferencial nem telefone de contato arquivado na ficha", async () => {
+    for (let round = 0; round < 12; round += 1) {
+      const [{ id: pair }] = await db.insert(customers).values({ fullName: `Par Sintético ${runId}-${round}`, status: "active" }).$returningId();
+      const a = await caller().add({ customerId: pair, kind: "phone", value: `849600${String(round).padStart(2, "0")}01` });
+      const b = await caller().add({ customerId: pair, kind: "phone", value: `849600${String(round).padStart(2, "0")}02` });
+      const results = await Promise.allSettled([caller().archive({ contactId: a.contactId }), caller().archive({ contactId: b.contactId })]);
+      expect(results.filter(result => result.status === "rejected")).toEqual([]);
+      const rows = (await caller().list({ customerId: pair, includeArchived: true })).filter(row => row.kind === "phone");
+      expect(rows.filter(row => row.isPreferred)).toEqual([]);
+      expect((await db.select().from(customers).where(eq(customers.id, pair)))[0]!.phone).toBeNull();
+    }
+  });
 });
