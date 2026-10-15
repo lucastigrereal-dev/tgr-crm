@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, revenueQualityLedger, saleValidationEvents, saleValidations, salesCommissions, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, revenueQualityLedger, saleValidationEvents, saleValidations, salesCommissions, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
@@ -176,8 +176,12 @@ export const importsRouter = router({
       } else if (batch.kind === "customers") {
         const createdIds = items.filter(item => item.entityType === "customer" && item.action === "created").map(item => item.entityId);
         if (createdIds.length) {
-          const dependencies = await tx.select({ id: contracts.id }).from(contracts).where(inArray(contracts.customerId, createdIds));
+          const [dependencies, portalLinks] = await Promise.all([
+            tx.select({ id: contracts.id }).from(contracts).where(inArray(contracts.customerId, createdIds)),
+            tx.select({ id: ownerPortalLinks.id }).from(ownerPortalLinks).where(inArray(ownerPortalLinks.customerId, createdIds)),
+          ]);
           if (dependencies.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já possui contrato vinculado." });
+          if (portalLinks.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: associado importado já recebeu link do portal do associado." });
           await tx.delete(customers).where(inArray(customers.id, createdIds));
         }
         for (const item of items.filter(item => item.entityType === "customer" && item.action === "updated" && item.beforeSnapshot)) await tx.update(customers).set(restoreCustomerValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>)).where(eq(customers.id, item.entityId));

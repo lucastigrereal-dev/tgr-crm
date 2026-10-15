@@ -34,6 +34,10 @@ describe.skipIf(!integrationUrl)("portal do proprietário em MySQL real", () => 
     const [paid] = await db.insert(installments).values({ contractId: active.id, sequence: 1, dueDate: new Date("2026-09-10T12:00:00Z"), amount: "1000.00", status: "paid", paidAt: new Date() }).$returningId();
     const [open] = await db.insert(installments).values({ contractId: active.id, sequence: 2, dueDate: new Date("2026-11-10T12:00:00Z"), amount: "1000.00", status: "open" }).$returningId();
     await db.insert(billingRecords).values({ installmentId: open.id, type: "pix", status: "generated", amount: "1000.00", dueDate: new Date("2026-11-10T12:00:00Z"), pixCopyPaste: "PIX-SINTETICO", idempotencyKey: `portal-${runId}-open` });
+    // Contrato encerrado com parcela ainda "em aberto" e cobrança gerada: aparece no histórico, sem PIX/boleto.
+    const [closed] = await db.insert(contracts).values({ number: `PORTAL-C-${runId}`, customerId, status: "closed", totalAmount: "3000.00" }).$returningId();
+    const [closedOpen] = await db.insert(installments).values({ contractId: closed.id, sequence: 1, dueDate: new Date("2026-12-10T12:00:00Z"), amount: "3000.00", status: "open" }).$returningId();
+    await db.insert(billingRecords).values({ installmentId: closedOpen.id, type: "pix", status: "generated", amount: "3000.00", dueDate: new Date("2026-12-10T12:00:00Z"), pixCopyPaste: "PIX-ENCERRADO", idempotencyKey: `portal-${runId}-closed` });
     await db.insert(billingRecords).values({ installmentId: paid.id, type: "boleto", status: "paid", amount: "1000.00", dueDate: new Date("2026-09-10T12:00:00Z"), bankSlipUrl: "https://example.test/pago", idempotencyKey: `portal-${runId}-paid` });
   });
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
@@ -50,13 +54,15 @@ describe.skipIf(!integrationUrl)("portal do proprietário em MySQL real", () => 
 
     const view = await visitor().view({ token: tokenOf(link.path) });
     expect(view.firstName).toBe("Maria");
-    expect(view.contracts.map(contract => contract.number)).toEqual([`PORTAL-A-${runId}`]);
+    expect(view.contracts.map(contract => contract.number)).toEqual([`PORTAL-A-${runId}`, `PORTAL-C-${runId}`]);
+    expect(view.contracts[1]!.installments).toEqual([expect.objectContaining({ status: "open", billing: null })]);
     const [first, second] = view.contracts[0]!.installments;
     expect(first).toMatchObject({ sequence: 1, status: "paid", billing: null });
     expect(second).toMatchObject({ sequence: 2, status: "open", billing: { type: "pix", pixCopyPaste: "PIX-SINTETICO" } });
     const body = JSON.stringify(view);
     expect(body).not.toContain(`P${runId}`);
     expect(body).not.toContain("example.test");
+    expect(body).not.toContain("PIX-ENCERRADO");
 
     const [afterView] = await db.select().from(ownerPortalLinks).where(eq(ownerPortalLinks.id, link.linkId));
     expect(afterView.accessCount).toBe(1);

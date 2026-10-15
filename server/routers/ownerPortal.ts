@@ -15,6 +15,7 @@ import { affectedRows } from "../mysqlErrors";
  * Sem CPF, endereço, telefone ou e-mail na resposta: só o primeiro nome do associado.
  */
 export const OWNER_PORTAL_MAX_DAYS = 90;
+const PAYABLE_CONTRACT_STATUSES: string[] = ["pending_signature", "active", "overdue"];
 const tokenHash = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/, "Link inválido.");
 const firstName = (fullName: string) => fullName.trim().split(/\s+/)[0] ?? "";
@@ -71,7 +72,9 @@ export const ownerPortalRouter = router({
       ? await db.select({ id: installments.id, contractId: installments.contractId, sequence: installments.sequence, dueDate: installments.dueDate, amount: installments.amount, status: installments.status, paidAt: installments.paidAt })
         .from(installments).where(inArray(installments.contractId, contractIds)).orderBy(asc(installments.contractId), asc(installments.sequence))
       : [];
-    const openInstallmentIds = installmentRows.filter(row => row.status === "open" || row.status === "overdue").map(row => row.id);
+    // PIX e boleto só para contrato que ainda se paga: encerrado ou cancelado continua no histórico, sem meio de pagamento.
+    const payableContractIds = new Set(contractRows.filter(row => PAYABLE_CONTRACT_STATUSES.includes(row.status)).map(row => row.id));
+    const openInstallmentIds = installmentRows.filter(row => payableContractIds.has(row.contractId) && (row.status === "open" || row.status === "overdue")).map(row => row.id);
     const billingRows = openInstallmentIds.length
       ? await db.select({ installmentId: billingRecords.installmentId, type: billingRecords.type, amount: billingRecords.amount, dueDate: billingRecords.dueDate, digitableLine: billingRecords.digitableLine, pixCopyPaste: billingRecords.pixCopyPaste, invoiceUrl: billingRecords.invoiceUrl, bankSlipUrl: billingRecords.bankSlipUrl })
         .from(billingRecords).where(and(inArray(billingRecords.installmentId, openInstallmentIds), eq(billingRecords.status, "generated"))).orderBy(desc(billingRecords.id))
