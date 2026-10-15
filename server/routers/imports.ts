@@ -16,6 +16,8 @@ const inputSchema = z.object({ kind: z.enum(["customers", "contracts", "units"])
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 /** Impressão digital da linha normalizada (registro já interpretado): a mesma linha gera o mesmo hash em qualquer lote. */
 const rowHash = (row: unknown) => sha256(JSON.stringify(row));
+// sourceLine segue a numeração do relatório de erros (cabeçalho = 1, registro N = N + 1): linha em branco e quebra dentro de
+// aspas não contam. A chave de rastreio é sourceRecordId + rowHash; sourceLine é só referência de posição.
 const provenance = (index: number, sourceRecordId: string, row: unknown) => ({ sourceLine: index + 2, sourceRecordId: sourceRecordId.slice(0, 160), rowHash: rowHash(row) });
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 /** Lote concluído (não revertido) com o mesmo conteúdo: só avisa, não bloqueia (reimportar o mesmo arquivo atualiza os mesmos registros). */
