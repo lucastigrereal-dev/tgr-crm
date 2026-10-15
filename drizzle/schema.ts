@@ -995,10 +995,14 @@ export const csvImportBatches = mysqlTable("csv_import_batches", {
   createdCount: int("createdCount").default(0).notNull(),
   updatedCount: int("updatedCount").default(0).notNull(),
   rejectedCount: int("rejectedCount").default(0).notNull(),
+  // Rastreabilidade da origem (Gate 2 da migração): de que sistema/arquivo veio e a impressão digital do conteúdo importado.
+  sourceSystem: varchar("sourceSystem", { length: 60 }).default("csv_manual").notNull(),
+  sourceFileName: varchar("sourceFileName", { length: 255 }),
+  contentHash: varchar("contentHash", { length: 64 }),
   revertedAt: timestamp("revertedAt"),
   revertedByUserId: int("revertedByUserId").references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("csv_batches_recent_idx").on(table.createdAt, table.status)]);
+}, table => [index("csv_batches_recent_idx").on(table.createdAt, table.status), index("csv_batches_content_hash_idx").on(table.contentHash)]);
 
 export const csvImportItems = mysqlTable("csv_import_items", {
   id: int("id").autoincrement().primaryKey(),
@@ -1007,8 +1011,27 @@ export const csvImportItems = mysqlTable("csv_import_items", {
   entityId: int("entityId").notNull(),
   action: mysqlEnum("action", ["created", "updated"]).notNull(),
   beforeSnapshot: text("beforeSnapshot"),
+  // Linha do arquivo, chave do registro no sistema de origem e hash da linha normalizada.
+  sourceLine: int("sourceLine"),
+  sourceRecordId: varchar("sourceRecordId", { length: 160 }),
+  rowHash: varchar("rowHash", { length: 64 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("csv_items_batch_idx").on(table.batchId)]);
+}, table => [index("csv_items_batch_idx").on(table.batchId), index("csv_items_source_record_idx").on(table.sourceRecordId)]);
+
+// Portal do Proprietário (TSE #19, escopo mínimo): link de leitura gerado pela administração e enviado pelo próprio time.
+// Só o hash do token fica no banco; o link expira e pode ser revogado. Uma instalação = uma empresa (decisão de 14/10).
+export const ownerPortalLinks = mysqlTable("owner_portal_links", {
+  id: int("id").autoincrement().primaryKey(),
+  customerId: int("customerId").notNull().references(() => customers.id),
+  tokenHash: varchar("tokenHash", { length: 64 }).notNull(),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  expiresAt: timestamp("expiresAt").notNull(),
+  revokedAt: timestamp("revokedAt"),
+  revokedByUserId: int("revokedByUserId").references(() => users.id),
+  lastAccessedAt: timestamp("lastAccessedAt"),
+  accessCount: int("accessCount").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("owner_portal_token_unique").on(table.tokenHash), index("owner_portal_customer_idx").on(table.customerId, table.createdAt)]);
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

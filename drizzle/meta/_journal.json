@@ -337,6 +337,20 @@
       "when": 1791378804530,
       "tag": "0047_sale_validation_gate_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "5",
+      "when": 1792020945789,
+      "tag": "0048_import_batch_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "5",
+      "when": 1792021497897,
+      "tag": "0049_owner_portal_links",
+      "breakpoints": true
     }
   ]
 }

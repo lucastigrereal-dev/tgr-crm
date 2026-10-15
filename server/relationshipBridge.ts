@@ -88,7 +88,8 @@ export function createRetryBackoff<K, V>(now: () => number = Date.now) {
  * de cada tick inclui também os eventos recentes (janela folgada, no relógio do banco) abaixo do cursor, ainda não tratados.
  * O lote é escolhido e drenado em ordem global de id; a releitura é paginada, então os relidos não escondem os novos. A releitura só traz o que AINDA NÃO foi tratado (`unhandled`, filtro de recibo no SQL), então
  * os recentes já entregues não ocupam o lote. Reler é seguro: a entrega confere o recibo e quem está no backoff é pulado.
- * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez):
+ * Limites conhecidos (o reinício do CRM zera o cursor e relê tudo que não tem recibo, então nada se perde de vez; watermark
+ * durável por lacuna de id fica na issue #48):
  * - transação que segura o INSERT do evento por mais que a janela (15 min; requisição HTTP cai muito antes);
  * - backlog de novos que lota o lote por mais que a janela;
  * Os relidos vêm do mais velho para o mais novo: uma transação tardia com mais eventos que o lote (distrato com muitas comissões)

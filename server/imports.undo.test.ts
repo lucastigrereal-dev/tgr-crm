@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -9,7 +9,7 @@ import { importsRouter } from "./routers/imports";
 type Batch = { id: number; kind: "customers" | "contracts" | "units"; status: "completed" | "reverted" };
 type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
 
-function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }> } = {}) {
+function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }> } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const tx = {
@@ -32,6 +32,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
           if (table === unitMaintenanceBlocks) return options.maintenance ?? [];
           if (table === reservationWaitlist) return options.waitlist ?? [];
           if (table === units) return options.units ?? [];
+          if (table === ownerPortalLinks) return options.portalLinks ?? [];
           return [];
         },
       };
@@ -74,6 +75,19 @@ describe("imports.undoLast", () => {
       expect.objectContaining({ table: csvImportBatches, values: expect.objectContaining({ status: "reverted", revertedByUserId: 9 }) }),
     ]));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(9, "csv_import", 81, "reverted", expect.stringContaining("1 item"));
+  });
+
+  it("bloqueia a reversão de associado que já recebeu link do portal", async () => {
+    const fixture = makeDb(
+      { id: 87, kind: "customers", status: "completed" },
+      [{ entityType: "customer", entityId: 107, action: "created", beforeSnapshot: null }],
+      [],
+      { portalLinks: [{ id: 3 }] },
+    );
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("portal") });
+    expect(fixture.deletes).toEqual([]);
   });
 
   it("restaura o snapshot do associado atualizado em vez de apagá-lo", async () => {
