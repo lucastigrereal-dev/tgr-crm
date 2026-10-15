@@ -15,6 +15,7 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
   let db: ReturnType<typeof drizzle>;
   let customerContactsRouter: typeof import("./routers/customerContacts")["customerContactsRouter"];
   let customersRouter: typeof import("./routers/customers")["customersRouter"];
+  let importsRouter: typeof import("./routers/imports")["importsRouter"];
   let userId: number;
   let customerId: number;
   const previousEnv = { ...process.env };
@@ -24,6 +25,7 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
     process.env.DATABASE_URL = integrationUrl;
     ({ customerContactsRouter } = await import("./routers/customerContacts"));
     ({ customersRouter } = await import("./routers/customers"));
+    ({ importsRouter } = await import("./routers/imports"));
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
     [{ id: userId }] = await db.insert(users).values({ openId: `contacts-${runId}`, name: "Atendente contatos", role: "admin" }).$returningId();
@@ -69,6 +71,17 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
     phones = (await caller().list({ customerId: edited })).filter(row => row.kind === "phone");
     expect(phones.filter(row => row.isPreferred).map(row => row.value)).toEqual(["84999990000"]);
     expect(phones).toHaveLength(3);
+  });
+
+  it("importação que regrava o telefone de associado existente atualiza o preferencial da lista", async () => {
+    const document = String(Date.now()).slice(-11);
+    const [{ id: imported }] = await db.insert(customers).values({ fullName: `Importa Sintético ${runId}`, documentNumber: document, phone: "84912340000", status: "active" }).$returningId();
+    await caller().add({ customerId: imported, kind: "phone", value: "84956780000" });
+    const admin = importsRouter.createCaller({ user: { id: userId, role: "admin" } } as never);
+    const result = await admin.commit({ kind: "customers", csv: `nome_completo;documento;telefone\nImporta Sintético ${runId};${document};84956780000` });
+    expect(result.committed).toBe(true);
+    const phones = (await caller().list({ customerId: imported })).filter(row => row.kind === "phone");
+    expect(phones.filter(row => row.isPreferred).map(row => row.value)).toEqual(["84956780000"]);
   });
 
   it("mesmo contato com outra máscara é recusado; e-mail inválido e telefone curto também", async () => {

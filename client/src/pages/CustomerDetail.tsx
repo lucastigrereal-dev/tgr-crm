@@ -55,6 +55,7 @@ export default function CustomerDetail() {
     onSuccess: () => {
       utils.customers.detail.invalidate({ id });
       utils.customers.list.invalidate();
+      utils.customerContacts.list.invalidate({ customerId: id });
       setEditOpen(false);
       toast.success("Cadastro atualizado.");
     },
