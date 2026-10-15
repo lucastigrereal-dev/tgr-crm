@@ -14,6 +14,7 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
   let pool: mysql.Pool;
   let db: ReturnType<typeof drizzle>;
   let customerContactsRouter: typeof import("./routers/customerContacts")["customerContactsRouter"];
+  let customersRouter: typeof import("./routers/customers")["customersRouter"];
   let userId: number;
   let customerId: number;
   const previousEnv = { ...process.env };
@@ -22,6 +23,7 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
     validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
     process.env.DATABASE_URL = integrationUrl;
     ({ customerContactsRouter } = await import("./routers/customerContacts"));
+    ({ customersRouter } = await import("./routers/customers"));
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
     [{ id: userId }] = await db.insert(users).values({ openId: `contacts-${runId}`, name: "Atendente contatos", role: "admin" }).$returningId();
@@ -32,16 +34,41 @@ describe.skipIf(!integrationUrl)("contatos múltiplos do associado em MySQL real
   const caller = (role = "seller") => customerContactsRouter.createCaller({ user: { id: userId, role } } as never);
   const customer = async () => (await db.select().from(customers).where(eq(customers.id, customerId)))[0]!;
 
-  it("primeiro telefone vira preferencial e o principal da ficha; trocar o preferencial deixa um só", async () => {
+  it("ficha antiga: o telefone principal entra na lista como preferencial e o novo não o sobrescreve; trocar deixa um preferencial só", async () => {
     const first = await caller().add({ customerId, kind: "phone", value: "(84) 98888-1111", label: "trabalho" });
-    expect((await customer()).phone).toBe("(84) 98888-1111");
+    expect((await customer()).phone).toBe("84900000000");
+    let phones = (await caller().list({ customerId })).filter(row => row.kind === "phone");
+    expect(phones.map(row => [row.value, row.isPreferred])).toEqual([["84900000000", true], ["(84) 98888-1111", false]]);
     const second = await caller().add({ customerId, kind: "phone", value: "+55 84 97777-2222" });
-    expect((await customer()).phone).toBe("(84) 98888-1111"); // segundo não muda o principal
     await caller().setPreferred({ contactId: second.contactId });
-    const phones = (await caller().list({ customerId })).filter(row => row.kind === "phone");
+    phones = (await caller().list({ customerId })).filter(row => row.kind === "phone");
     expect(phones.filter(row => row.isPreferred).map(row => row.id)).toEqual([second.contactId]);
     expect(phones.map(row => row.id)).toContain(first.contactId);
     expect((await customer()).phone).toBe("+55 84 97777-2222");
+  });
+
+  it("arquivar o preferencial passa o posto ao contato mais recente; sem nenhum, o principal da ficha fica vazio", async () => {
+    const [{ id: lonely }] = await db.insert(customers).values({ fullName: `Beltrano Sintético ${runId}`, status: "active" }).$returningId();
+    const a = await caller().add({ customerId: lonely, kind: "phone", value: "84911112222" });
+    const b = await caller().add({ customerId: lonely, kind: "phone", value: "84933334444" });
+    await caller().archive({ contactId: a.contactId });
+    expect((await db.select().from(customers).where(eq(customers.id, lonely)))[0]!.phone).toBe("84933334444");
+    expect((await caller().list({ customerId: lonely })).find(row => row.id === b.contactId)?.isPreferred).toBe(true);
+    await caller().archive({ contactId: b.contactId });
+    expect((await db.select().from(customers).where(eq(customers.id, lonely)))[0]!.phone).toBeNull();
+  });
+
+  it("editar o telefone na ficha atualiza o preferencial da lista", async () => {
+    const [{ id: edited }] = await db.insert(customers).values({ fullName: `Edita Sintético ${runId}`, phone: "84955556666", status: "active" }).$returningId();
+    await caller().add({ customerId: edited, kind: "phone", value: "84977778888" });
+    const profile = customersRouter.createCaller({ user: { id: userId, role: "seller" } } as never);
+    await profile.update({ id: edited, data: { fullName: `Edita Sintético ${runId}`, status: "active", phone: "84977778888" } });
+    let phones = (await caller().list({ customerId: edited })).filter(row => row.kind === "phone");
+    expect(phones.filter(row => row.isPreferred).map(row => row.value)).toEqual(["84977778888"]);
+    await profile.update({ id: edited, data: { fullName: `Edita Sintético ${runId}`, status: "active", phone: "84999990000" } });
+    phones = (await caller().list({ customerId: edited })).filter(row => row.kind === "phone");
+    expect(phones.filter(row => row.isPreferred).map(row => row.value)).toEqual(["84999990000"]);
+    expect(phones).toHaveLength(3);
   });
 
   it("mesmo contato com outra máscara é recusado; e-mail inválido e telefone curto também", async () => {

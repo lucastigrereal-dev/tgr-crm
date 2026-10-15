@@ -32,6 +32,25 @@ async function requireDb() {
 type Db = Awaited<ReturnType<typeof requireDb>>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
+type PrimaryKind = "phone" | "email";
+
+/**
+ * Quando o cadastro principal (customers.phone/email) muda pela edição da ficha, o preferencial dos contatos acompanha:
+ * se o novo valor já está na lista ele vira o preferencial; se a lista já está em uso, o novo valor entra nela como
+ * preferencial; valor vazio deixa o tipo sem preferencial. Sem contatos daquele tipo, nada a fazer (o cadastro basta).
+ */
+export async function syncPreferredFromProfile(tx: Tx, customerId: number, kind: PrimaryKind, value: string | null, actorUserId: number) {
+  const active = await tx.select({ id: customerContacts.id, value: customerContacts.value }).from(customerContacts)
+    .where(and(eq(customerContacts.customerId, customerId), eq(customerContacts.kind, kind), isNull(customerContacts.archivedAt)));
+  if (!active.length) return;
+  await tx.update(customerContacts).set({ isPreferred: false }).where(and(eq(customerContacts.customerId, customerId), eq(customerContacts.kind, kind)));
+  if (!value) return;
+  const key = contactKey(kind, value);
+  const match = active.find(row => contactKey(kind, row.value) === key);
+  if (match) await tx.update(customerContacts).set({ isPreferred: true }).where(eq(customerContacts.id, match.id));
+  else await tx.insert(customerContacts).values({ customerId, kind, value, isPreferred: true, createdByUserId: actorUserId });
+}
+
 /** Marca o contato como preferencial do tipo e, para telefone e e-mail, espelha no cadastro principal. */
 async function makePreferred(tx: Tx, contact: { id: number; customerId: number; kind: Kind; value: string }) {
   await tx.update(customerContacts).set({ isPreferred: false })
@@ -52,10 +71,18 @@ export const customerContactsRouter = router({
   add: internalProcedure.input(z.object({ customerId: z.number().int().positive(), label: z.string().trim().max(60).optional(), preferred: z.boolean().default(false) }).and(contactInput)).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const id = await db.transaction(async tx => {
-      const [customer] = await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1).for("update");
+      const [customer] = await tx.select({ id: customers.id, phone: customers.phone, email: customers.email }).from(customers).where(eq(customers.id, input.customerId)).limit(1).for("update");
       if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
-      const active = await tx.select({ id: customerContacts.id, value: customerContacts.value, isPreferred: customerContacts.isPreferred }).from(customerContacts)
+      const activeOf = () => tx.select({ id: customerContacts.id, value: customerContacts.value, isPreferred: customerContacts.isPreferred }).from(customerContacts)
         .where(and(eq(customerContacts.customerId, customer.id), eq(customerContacts.kind, input.kind), isNull(customerContacts.archivedAt)));
+      let active = await activeOf();
+      // Ficha anterior aos contatos: o telefone/e-mail principal entra na lista como preferencial antes do novo, para não ser sobrescrito.
+      const legacy = input.kind === "phone" ? customer.phone : input.kind === "email" ? customer.email : null;
+      if (legacy && !active.some(row => row.isPreferred)) {
+        if (!active.some(row => contactKey(input.kind, row.value) === contactKey(input.kind, legacy))) await tx.insert(customerContacts).values({ customerId: customer.id, kind: input.kind, value: legacy, label: "principal", isPreferred: true, createdByUserId: ctx.user.id });
+        else await syncPreferredFromProfile(tx, customer.id, input.kind as PrimaryKind, legacy, ctx.user.id);
+        active = await activeOf();
+      }
       const key = contactKey(input.kind, input.value);
       if (active.some(row => contactKey(input.kind, row.value) === key)) throw new TRPCError({ code: "CONFLICT", message: `Este ${kindLabel[input.kind]} já está na ficha.` });
       const [created] = await tx.insert(customerContacts).values({ customerId: customer.id, kind: input.kind, label: input.label || null, value: input.value, createdByUserId: ctx.user.id }).$returningId();
@@ -81,11 +108,23 @@ export const customerContactsRouter = router({
 
   archive: internalProcedure.input(z.object({ contactId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
-    const [row] = await db.select({ id: customerContacts.id, customerId: customerContacts.customerId, kind: customerContacts.kind }).from(customerContacts).where(eq(customerContacts.id, input.contactId)).limit(1);
-    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Contato não encontrado." });
-    const result = await db.update(customerContacts).set({ archivedAt: new Date(), archivedByUserId: ctx.user.id, isPreferred: false })
-      .where(and(eq(customerContacts.id, input.contactId), isNull(customerContacts.archivedAt)));
-    if (affectedRows(result) === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Contato já arquivado." });
+    const row = await db.transaction(async tx => {
+      const [contact] = await tx.select().from(customerContacts).where(eq(customerContacts.id, input.contactId)).limit(1).for("update");
+      if (!contact) throw new TRPCError({ code: "NOT_FOUND", message: "Contato não encontrado." });
+      const result = await tx.update(customerContacts).set({ archivedAt: new Date(), archivedByUserId: ctx.user.id, isPreferred: false })
+        .where(and(eq(customerContacts.id, input.contactId), isNull(customerContacts.archivedAt)));
+      if (affectedRows(result) === 0) throw new TRPCError({ code: "NOT_FOUND", message: "Contato já arquivado." });
+      // Arquivou o preferencial: o contato mais recente que sobrou assume; sem nenhum, o principal da ficha fica vazio.
+      if (contact.isPreferred) {
+        const [next] = await tx.select().from(customerContacts)
+          .where(and(eq(customerContacts.customerId, contact.customerId), eq(customerContacts.kind, contact.kind), isNull(customerContacts.archivedAt)))
+          .orderBy(desc(customerContacts.id)).limit(1);
+        if (next) await makePreferred(tx, next);
+        else if (contact.kind === "phone") await tx.update(customers).set({ phone: null }).where(eq(customers.id, contact.customerId));
+        else if (contact.kind === "email") await tx.update(customers).set({ email: null }).where(eq(customers.id, contact.customerId));
+      }
+      return contact;
+    });
     await recordAudit(ctx.user.id, "customer_contact", row.id, "archived", `${kindLabel[row.kind]} arquivado na ficha do associado ${row.customerId}.`);
     return { archived: true };
   }),

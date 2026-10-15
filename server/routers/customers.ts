@@ -16,6 +16,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { internalProcedure } from "./access";
+import { syncPreferredFromProfile } from "./customerContacts";
 import { buildRelationshipRadar } from "../relationshipRadar";
 import { decodeUpload } from "../uploadValidation";
 import { isDuplicateKeyError } from "../mysqlErrors";
@@ -112,24 +113,29 @@ export const customersRouter = router({
       const duplicate = (await db.select({ id: customers.id }).from(customers).where(and(eq(customers.documentNumber, documentNumber), ne(customers.id, input.id))).limit(1))[0];
       if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outro cliente com este documento." });
     }
-    await db.update(customers).set({
-      ...input.data,
-      documentNumber,
-      email: nullableText(input.data.email),
-      phone: nullableText(input.data.phone),
-      birthDate: input.data.birthDate ? new Date(`${input.data.birthDate}T12:00:00Z`) : null,
-      maritalStatus: nullableText(input.data.maritalStatus),
-      occupation: nullableText(input.data.occupation),
-      zipCode: nullableText(input.data.zipCode),
-      address: nullableText(input.data.address),
-      addressNumber: nullableText(input.data.addressNumber),
-      complement: nullableText(input.data.complement),
-      neighborhood: nullableText(input.data.neighborhood),
-      city: nullableText(input.data.city),
-      state: nullableText(input.data.state),
-      acquisitionSource: nullableText(input.data.acquisitionSource),
-      notes: nullableText(input.data.notes),
-    }).where(eq(customers.id, input.id));
+    await db.transaction(async tx => {
+      await tx.update(customers).set({
+        ...input.data,
+        documentNumber,
+        email: nullableText(input.data.email),
+        phone: nullableText(input.data.phone),
+        birthDate: input.data.birthDate ? new Date(`${input.data.birthDate}T12:00:00Z`) : null,
+        maritalStatus: nullableText(input.data.maritalStatus),
+        occupation: nullableText(input.data.occupation),
+        zipCode: nullableText(input.data.zipCode),
+        address: nullableText(input.data.address),
+        addressNumber: nullableText(input.data.addressNumber),
+        complement: nullableText(input.data.complement),
+        neighborhood: nullableText(input.data.neighborhood),
+        city: nullableText(input.data.city),
+        state: nullableText(input.data.state),
+        acquisitionSource: nullableText(input.data.acquisitionSource),
+        notes: nullableText(input.data.notes),
+      }).where(eq(customers.id, input.id));
+      // Telefone/e-mail editados na ficha: o preferencial da lista de contatos acompanha.
+      await syncPreferredFromProfile(tx, input.id, "phone", nullableText(input.data.phone), ctx.user.id);
+      await syncPreferredFromProfile(tx, input.id, "email", nullableText(input.data.email), ctx.user.id);
+    });
     await recordAudit(ctx.user.id, "customer", input.id, "updated", `Cadastro de ${input.data.fullName} atualizado.`);
     await recordDomainEvent({ eventName: "customer.updated", aggregateType: "customer", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.data.status, city: input.data.city ?? null, state: input.data.state ?? null } });
     return { success: true };

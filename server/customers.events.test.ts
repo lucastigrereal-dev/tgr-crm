@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { customers } from "../drizzle/schema";
+import { customerContacts, customers } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
@@ -10,9 +10,10 @@ import { customersRouter } from "./routers/customers";
 
 function makeDb(options: { existingId?: number | null; duplicateDocumentId?: number; insertDuplicate?: boolean } = {}) {
   let customerSelectCall = 0;
-  return {
+  const db = {
     select: vi.fn(() => ({
       from: (table: unknown) => {
+        if (table === customerContacts) return { where: async () => [] };
         if (table !== customers) throw new Error("Tabela não prevista neste teste");
         return { where: () => ({ limit: async () => {
           if (options.existingId === null) return [];
@@ -24,7 +25,9 @@ function makeDb(options: { existingId?: number | null; duplicateDocumentId?: num
     })),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => { if (options.insertDuplicate) throw { code: "ER_DUP_ENTRY", errno: 1062 }; return [{ id: 121 }]; } })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
+    transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(db)),
   };
+  return db;
 }
 
 function caller() {
