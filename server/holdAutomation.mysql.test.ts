@@ -22,6 +22,9 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
   let unitId: number;
   let proposalId: number;
   let seq = 0;
+  const mine: number[] = [];
+  // O sweep olha só as cotas deste arquivo: outros arquivos *.mysql.test.ts rodam em paralelo no mesmo banco.
+  const sweep = () => sweepExpiredHolds(db, { actorUserId: null, fractionIds: mine });
   const previousEnv = { ...process.env };
   const as = (id: number) => inventoryRouter.createCaller({ user: { id, role: "seller" } } as never);
 
@@ -45,6 +48,7 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
   async function newFraction() {
     seq += 1;
     const [fraction] = await db.insert(commercialFractions).values({ resortId, unitId, code: `F-HAUTO-${seq}-${runId}`, sequence: seq, status: "available", listPrice: "1000.00" }).$returningId();
+    mine.push(fraction.id);
     return fraction.id;
   }
   const fractionOf = async (id: number) => (await db.select().from(commercialFractions).where(eq(commercialFractions.id, id)))[0];
@@ -61,21 +65,21 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
     expect(await holdsOf(fractionId)).toEqual([expect.objectContaining({ id: holdId, proposalId, heldByUserId: sellerA, status: "active" })]);
     await expire(fractionId);
 
-    const outcome = await sweepExpiredHolds(db, { actorUserId: null });
-    expect(outcome.fractions).toContain(fractionId);
+    // O sweep do admin de outro arquivo de teste pode ter chegado antes; por isso a prova é o estado final, não a lista devolvida.
+    await sweep();
     expect(await fractionOf(fractionId)).toMatchObject({ status: "available", currentProposalId: null, heldUntil: null });
     // O hold não é apagado: fica expirado, com proposta e operador.
     expect(await holdsOf(fractionId)).toEqual([expect.objectContaining({ id: holdId, status: "expired", activeKey: null, proposalId, heldByUserId: sellerA })]);
     const history = await db.select().from(commercialFractionHistory).where(eq(commercialFractionHistory.fractionId, fractionId));
     expect(history.map(row => row.reason)).toEqual(["Hold comercial criado", "Sweep de hold expirado"]);
-    expect(history[1]).toMatchObject({ fromStatus: "held", toStatus: "available", proposalId, actorUserId: null });
+    expect(history[1]).toMatchObject({ fromStatus: "held", toStatus: "available", proposalId });
     const events = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commercial.fraction.status.changed"), eq(domainEvents.aggregateId, String(fractionId))));
     const released = events.find(event => JSON.parse(event.payload ?? "{}").reason === "TTL expirado");
     expect(JSON.parse(released?.payload ?? "{}")).toMatchObject({ fractionId, status: "available", holdId });
     const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "commercial_inventory"), eq(auditLogs.action, "swept"), eq(auditLogs.entityId, "expired_holds")));
     expect(audits.some(row => (row.summary ?? "").includes("cotas liberadas"))).toBe(true);
     // Repetir não muda nada (idempotente) e outro vendedor já consegue reservar.
-    expect((await sweepExpiredHolds(db, { actorUserId: null })).fractions).not.toContain(fractionId);
+    expect((await sweep()).fractions).not.toContain(fractionId);
     await expect(as(sellerB).createHold({ fractionId })).resolves.toMatchObject({ reused: false });
   });
 
@@ -91,7 +95,7 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
     await db.update(commercialFractions).set({ status: "sold" }).where(eq(commercialFractions.id, sold));
     await db.update(commercialFractions).set({ status: "blocked", blockedReason: "teste" }).where(eq(commercialFractions.id, blocked));
 
-    const outcome = await sweepExpiredHolds(db, { actorUserId: null });
+    const outcome = await sweep();
     expect(outcome.fractions).not.toContain(live);
     expect(outcome.fractions).not.toContain(sold);
     expect(outcome.fractions).not.toContain(blocked);
@@ -115,7 +119,7 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
         ids.push(id);
       }
       const settled = await Promise.allSettled([
-        sweepExpiredHolds(db, { actorUserId: null }),
+        sweep(),
         ...holds.map(holdId => as(sellerA).releaseHold({ holdId })),
       ]);
       expect((settled.filter(item => item.status === "rejected") as PromiseRejectedResult[]).map(item => String(item.reason?.message ?? item.reason))).toEqual([]);
@@ -147,8 +151,8 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
       fractions.push(id);
     }
     const work = [
-      sweepExpiredHolds(db, { actorUserId: null }),
-      sweepExpiredHolds(db, { actorUserId: null }),
+      sweep(),
+      sweep(),
       ...fractions.map(id => as(sellerB).createHold({ fractionId: id })),
     ];
     const settled = await Promise.allSettled(work);

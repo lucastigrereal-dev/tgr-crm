@@ -12,12 +12,12 @@ export type HoldSweepOutcome = { holds: number; fractions: number[] };
  * O hold fica como `expired` (histórico preservado); a cota só volta a `available` se ainda estiver `held`.
  * Cada cota liberada grava histórico, auditoria e o evento `commercial.fraction.status.changed` na mesma transação.
  */
-export async function sweepExpiredHolds(db: Db, options: { actorUserId: number | null; now?: Date }): Promise<HoldSweepOutcome> {
+export async function sweepExpiredHolds(db: Db, options: { actorUserId: number | null; now?: Date; /** Restringe a limpeza a estas cotas (usado por testes que dividem o banco com outros). */ fractionIds?: number[] }): Promise<HoldSweepOutcome> {
   const now = options.now ?? new Date();
   return db.transaction(async tx => {
     const candidates = await tx.select({ id: commercialFractionHolds.id, fractionId: commercialFractionHolds.fractionId })
       .from(commercialFractionHolds)
-      .where(and(eq(commercialFractionHolds.status, "active"), lte(commercialFractionHolds.expiresAt, now)));
+      .where(and(eq(commercialFractionHolds.status, "active"), lte(commercialFractionHolds.expiresAt, now), ...(options.fractionIds ? [inArray(commercialFractionHolds.fractionId, options.fractionIds)] : [])));
     if (!candidates.length) return { holds: 0, fractions: [] };
     const fractionIds = Array.from(new Set(candidates.map(item => item.fractionId))).sort((a, b) => a - b);
     const lockedFractions = await tx.select().from(commercialFractions).where(inArray(commercialFractions.id, fractionIds)).orderBy(commercialFractions.id).for("update");
