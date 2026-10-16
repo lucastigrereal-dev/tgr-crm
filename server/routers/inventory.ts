@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, like, lte, or, sql, SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, or, sql, SQL } from "drizzle-orm";
 import { z } from "zod";
 import {
   commercialFractionHistory,
@@ -10,6 +10,7 @@ import {
   units,
 } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { sweepExpiredHolds as sweepExpiredHoldsNow } from "../holdSweep";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, salesProcedure } from "./access";
 
@@ -195,12 +196,15 @@ export const inventoryRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const now = new Date();
     const result = await db.transaction(async tx => {
+      // Ordem de lock igual à da reserva e do sweep (cota primeiro, depois o hold): lê o hold sem trava, trava a cota, trava o hold e confere de novo.
+      const probe = (await tx.select({ fractionId: commercialFractionHolds.fractionId }).from(commercialFractionHolds).where(eq(commercialFractionHolds.id, input.holdId)).limit(1))[0];
+      if (!probe) throw new TRPCError({ code: "NOT_FOUND", message: "Hold não encontrado." });
+      const fraction = (await tx.select().from(commercialFractions).where(eq(commercialFractions.id, probe.fractionId)).limit(1).for("update"))[0];
+      if (!fraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota do hold não encontrada." });
       const hold = (await tx.select().from(commercialFractionHolds).where(eq(commercialFractionHolds.id, input.holdId)).limit(1).for("update"))[0];
       if (!hold) throw new TRPCError({ code: "NOT_FOUND", message: "Hold não encontrado." });
       if (ctx.user.role !== "admin" && hold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o dono do hold ou a administração pode liberar esta cota." });
       if (hold.status !== "active") return { fractionId: hold.fractionId, alreadyClosed: true };
-      const fraction = (await tx.select().from(commercialFractions).where(eq(commercialFractions.id, hold.fractionId)).limit(1).for("update"))[0];
-      if (!fraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota do hold não encontrada." });
       await tx.update(commercialFractionHolds).set({ status: "released", activeKey: null, releasedAt: now, releaseReason: input.reason }).where(and(eq(commercialFractionHolds.id, hold.id), eq(commercialFractionHolds.status, "active")));
       if (fraction.status === "held") {
         await tx.update(commercialFractions).set({ status: "available", currentProposalId: null, heldUntil: null }).where(eq(commercialFractions.id, fraction.id));
@@ -218,25 +222,7 @@ export const inventoryRouter = router({
   sweepExpiredHolds: adminProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const now = new Date();
-    const outcome = await db.transaction(async tx => {
-      const expired = await tx.select().from(commercialFractionHolds)
-        .where(and(eq(commercialFractionHolds.status, "active"), lte(commercialFractionHolds.expiresAt, now)))
-        .for("update");
-      if (!expired.length) return { holds: 0, fractions: [] as number[] };
-      const holdIds = expired.map(item => item.id);
-      const fractionIds = Array.from(new Set(expired.map(item => item.fractionId)));
-      await tx.update(commercialFractionHolds).set({ status: "expired", activeKey: null, releasedAt: now, releaseReason: "TTL expirado" }).where(inArray(commercialFractionHolds.id, holdIds));
-      const lockedFractions = await tx.select().from(commercialFractions).where(inArray(commercialFractions.id, fractionIds)).for("update");
-      const released = lockedFractions.filter(item => item.status === "held").map(item => item.id);
-      if (released.length) {
-        await tx.update(commercialFractions).set({ status: "available", currentProposalId: null, heldUntil: null }).where(and(inArray(commercialFractions.id, released), eq(commercialFractions.status, "held")));
-        await tx.insert(commercialFractionHistory).values(released.map(fractionId => ({ fractionId, fromStatus: "held", toStatus: "available", actorUserId: ctx.user.id, reason: "Sweep de hold expirado" })));
-      }
-      return { holds: expired.length, fractions: released };
-    });
-    await recordAudit(ctx.user.id, "commercial_inventory", "expired_holds", "swept", `${outcome.holds} holds expirados; ${outcome.fractions.length} cotas liberadas.`);
-    return outcome;
+    return sweepExpiredHoldsNow(db, { actorUserId: ctx.user.id });
   }),
 
   block: adminProcedure.input(z.object({ fractionId: z.number().int().positive(), reason: z.string().trim().min(3).max(255) })).mutation(async ({ ctx, input }) => {

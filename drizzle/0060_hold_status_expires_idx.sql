@@ -1,0 +1,1 @@
+CREATE INDEX `commercial_fraction_holds_status_expires_idx` ON `commercial_fraction_holds` (`status`,`expiresAt`);

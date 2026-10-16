@@ -421,6 +421,13 @@
       "when": 1792181487893,
       "tag": "0059_contracts_resort_id",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "5",
+      "when": 1792182935882,
+      "tag": "0060_hold_status_expires_idx",
+      "breakpoints": true
     }
   ]
 }
