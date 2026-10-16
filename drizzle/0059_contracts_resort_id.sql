@@ -1,0 +1,6 @@
+ALTER TABLE `contracts` ADD `resortId` int;--> statement-breakpoint
+ALTER TABLE `contracts` ADD CONSTRAINT `contracts_resortId_resorts_id_fk` FOREIGN KEY (`resortId`) REFERENCES `resorts`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX `contracts_resort_idx` ON `contracts` (`resortId`);--> statement-breakpoint
+UPDATE `contracts` `c` INNER JOIN (SELECT `currentContractId` AS `contractId`, MIN(`resortId`) AS `resortId` FROM `commercial_fractions` WHERE `currentContractId` IS NOT NULL GROUP BY `currentContractId` HAVING COUNT(DISTINCT `resortId`) = 1) `f` ON `f`.`contractId` = `c`.`id` SET `c`.`resortId` = `f`.`resortId` WHERE `c`.`resortId` IS NULL;
+--> statement-breakpoint
+UPDATE `contracts` `c` INNER JOIN (SELECT `p`.`id` AS `proposalId`, MIN(`cr`.`resortId`) AS `resortId` FROM `proposals` `p` INNER JOIN `capture_records` `cr` ON `cr`.`opportunityId` = `p`.`opportunityId` WHERE `cr`.`resortId` IS NOT NULL GROUP BY `p`.`id` HAVING COUNT(DISTINCT `cr`.`resortId`) = 1) `x` ON `x`.`proposalId` = `c`.`proposalId` SET `c`.`resortId` = `x`.`resortId` WHERE `c`.`resortId` IS NULL AND NOT EXISTS (SELECT 1 FROM `commercial_fractions` `cf` WHERE `cf`.`currentContractId` = `c`.`id`);

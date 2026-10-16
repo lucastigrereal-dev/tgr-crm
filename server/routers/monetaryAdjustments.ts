@@ -29,6 +29,9 @@ const monthStart = (value: Date | string) => {
 };
 
 async function resolveContractResortId(db: any, contract: typeof contracts.$inferSelect) {
+  // CRM-PK-04: o empreendimento gravado no contrato manda. A dedução abaixo só atende contrato antigo/importado sem resortId, e fica logada.
+  if (contract.resortId) return contract.resortId;
+  console.warn(`[monetaryAdjustments] contrato ${contract.id} sem resortId; deduzindo empreendimento por cota/captação (fallback).`);
   const fractionRows = await db.select({ resortId: commercialFractions.resortId }).from(commercialFractions)
     .where(eq(commercialFractions.currentContractId, contract.id)).limit(2);
   const fractionResorts = Array.from(new Set(fractionRows.map((row: { resortId: number }) => row.resortId).filter(Boolean)));

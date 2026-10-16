@@ -51,14 +51,16 @@ describe.skipIf(!integrationUrl)("monetaryAdjustments.applyAdjustment em MySQL r
   });
 
   /** Contrato assinado em 15/01/2026 com duas parcelas abertas de 1000,00 e uma paga; cota vendida liga o contrato ao empreendimento. */
-  async function seedContract(label: string) {
+  async function seedContract(label: string, options: { withFraction?: boolean; contractResortId?: number } = {}) {
     const [customer] = await db.insert(customers).values({ fullName: `Fulano Sintético ${label} ${runId}`, email: `fulano.${label}.${runId}@example.test`, status: "active" }).$returningId();
-    const [contract] = await db.insert(contracts).values({ number: `ADJ-${label}-${runId}`, customerId: customer.id, status: "active", totalAmount: "3000.00", signedAt: new Date("2026-01-15T12:00:00Z") }).$returningId();
+    const [contract] = await db.insert(contracts).values({ number: `ADJ-${label}-${runId}`, customerId: customer.id, resortId: options.contractResortId ?? null, status: "active", totalAmount: "3000.00", signedAt: new Date("2026-01-15T12:00:00Z") }).$returningId();
     const [paid] = await db.insert(installments).values({ contractId: contract.id, sequence: 1, dueDate: new Date("2026-02-10T12:00:00Z"), amount: "1000.00", status: "paid", paidAmount: "1000.00", paidAt: new Date() }).$returningId();
     const [open1] = await db.insert(installments).values({ contractId: contract.id, sequence: 2, dueDate: new Date("2026-06-10T12:00:00Z"), amount: "1000.00", status: "open" }).$returningId();
     const [open2] = await db.insert(installments).values({ contractId: contract.id, sequence: 3, dueDate: new Date("2026-07-10T12:00:00Z"), amount: "1000.00", status: "overdue" }).$returningId();
+    if (options.withFraction !== false) {
     const [unit] = await db.insert(units).values({ resortId, code: `U-ADJ-${label}-${runId}` }).$returningId();
     await db.insert(commercialFractions).values({ resortId, unitId: unit.id, code: `F-ADJ-${label}-${runId}`, sequence: 1, status: "sold", currentContractId: contract.id, listPrice: "3000.00" });
+    }
     return { contractId: contract.id, paidId: paid.id, open1Id: open1.id, open2Id: open2.id };
   }
   const amounts = async (contractId: number) => Object.fromEntries((await db.select().from(installments).where(eq(installments.contractId, contractId))).map(row => [row.id, row.amount]));
@@ -81,6 +83,12 @@ describe.skipIf(!integrationUrl)("monetaryAdjustments.applyAdjustment em MySQL r
       .map(row => JSON.parse(row.payload ?? "{}")).filter(payload => payload.contractId === seed.contractId);
     expect(scheduled.map(payload => [payload.installmentId, payload.amount]).sort()).toEqual([[seed.open1Id, "1030.30"], [seed.open2Id, "1030.30"]].sort());
     expect(scheduled[0]).toMatchObject({ customerId: expect.any(Number), sequence: expect.any(Number), dueDate: expect.stringMatching(/^2026-0[67]-10$/) });
+  });
+
+  it("CRM-PK-04: usa o empreendimento gravado no contrato, sem depender de cota nem de captação", async () => {
+    const seed = await seedContract("PK4", { withFraction: false, contractResortId: resortId });
+    const result = await finance().applyAdjustment(input(seed.contractId));
+    expect(result.calculation).toMatchObject({ eligible: true, afterTotal: 2060.6 });
   });
 
   it("repetir o mesmo reajuste (mesma data) é recusado e não mexe nas parcelas; o índice único também barra a linha duplicada", async () => {

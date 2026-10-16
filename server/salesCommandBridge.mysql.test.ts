@@ -137,6 +137,8 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
 
     const [contract] = await db.select().from(contracts).where(eq(contracts.id, result.contractId));
     expect(cents(contract.totalAmount)).toBe(1_000_001);
+    // CRM-PK-04: o contrato formalizado já nasce com o empreendimento da venda.
+    expect(contract.resortId).toBe(resortId);
     const [proposal] = await db.select().from(proposals).where(eq(proposals.id, result.proposalId));
     expect(cents(proposal.totalAmount)).toBe(1_000_001);
     expect(cents(proposal.downPaymentAmount)).toBe(100_000);
