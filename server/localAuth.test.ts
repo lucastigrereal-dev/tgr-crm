@@ -113,6 +113,18 @@ describe("local auth", () => {
     await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.0.9", 1_002)).resolves.toBeDefined();
   });
 
+  it("KAN-30: spray de usernames inventados não expulsa o contador por usuário de uma conta real", async () => {
+    vi.stubEnv("LOCAL_AUTH_MAX_TRACKED", "20");
+    for (let index = 0; index < 19; index++) {
+      await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, `10.0.2.${index}`, 1_000)).rejects.toMatchObject({ code: "INVALID" });
+    }
+    for (let index = 0; index < 60; index++) {
+      await expect(authenticateLocalUser({ username: `fake.${index}`, password: "x" }, "10.0.3.1", 1_000)).rejects.toMatchObject({ code: "INVALID" });
+    }
+    await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, "10.0.4.1", 1_001)).rejects.toMatchObject({ code: "INVALID" });
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.4.2", 1_002)).rejects.toMatchObject({ code: "LOCKED" });
+  });
+
   it("recusa login quando o recurso está desabilitado", async () => {
     vi.stubEnv("LOCAL_AUTH_ENABLED", "0");
     await expect(authenticateLocalUser(

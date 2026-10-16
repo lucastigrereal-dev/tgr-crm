@@ -20,7 +20,9 @@ function evictIfFull(now: number) {
   // Review: expulsar primeiro chaves NÃO bloqueadas — senão um atacante enche o map com usernames novos para apagar o próprio bloqueio.
   while (attempts.size >= limit) {
     let victim: string | undefined;
-    attempts.forEach((state, key) => { if (victim === undefined && state.count < state.max) victim = key; });
+    // Chaves por USUÁRIO (`user|`, só de contas que existem) são poucas e protegem contra tentativa distribuída: só caem por último.
+    attempts.forEach((state, key) => { if (victim === undefined && state.count < state.max && !key.startsWith("user|")) victim = key; });
+    attempts.forEach((state, key) => { if (victim === undefined && !key.startsWith("user|")) victim = key; });
     if (victim === undefined) victim = attempts.keys().next().value; // só bloqueadas: cai na mais antiga
     if (victim === undefined) break;
     attempts.delete(victim);
@@ -156,7 +158,8 @@ export async function authenticateLocalUser(
   const passwordMatches = verifyLocalPassword(input.password, account?.passwordHash ?? DUMMY_HASH);
   if (!account || !passwordMatches) {
     recordFailure(key, now, MAX_ATTEMPTS);
-    recordFailure(userKey, now, MAX_ATTEMPTS_PER_USER);
+    // Só conta por usuário quando a conta existe: usernames inventados não enchem o map nem expulsam o contador de uma conta real.
+    if (account) recordFailure(userKey, now, MAX_ATTEMPTS_PER_USER);
     throw new LocalAuthError("Usuário ou senha inválidos.", "INVALID");
   }
   clearFailures(key);
