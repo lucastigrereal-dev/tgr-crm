@@ -167,3 +167,15 @@ describe("CRM -> Financial bridge", () => {
     });
   });
 });
+
+describe("CRM -> Financial bridge: uma instalação = um projeto (ADR-011)", () => {
+  it("todo evento de contrato sai com o mesmo projeto da instalação, seja qual for o contrato", () => {
+    const project = { externalKey: "tgr-empresa-a", name: "Empresa A", timezone: "America/Recife" };
+    const envelope = (id: number, contractId: number) => financialBridgeEnvelope({
+      id, eventName: "installment.paid", aggregateType: "installment", aggregateId: String(id), actorUserId: 1, occurredAt: new Date("2026-10-16T12:00:00.000Z"),
+      payload: JSON.stringify({ installmentId: id, paidAmount: "100.00", contractId, customerId: 1, gatewayPaymentId: `pay_${id}` }),
+    }, project);
+    expect(envelope(1, 10).project).toEqual(project);
+    expect(envelope(2, 99).project).toEqual(project);
+  });
+});

@@ -414,6 +414,13 @@
       "when": 1792067221513,
       "tag": "0058_audit_logs_filter_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "5",
+      "when": 1792181487893,
+      "tag": "0059_contracts_resort_id",
+      "breakpoints": true
     }
   ]
 }

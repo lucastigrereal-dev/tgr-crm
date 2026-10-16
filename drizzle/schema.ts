@@ -473,6 +473,8 @@ export const contracts = mysqlTable(
     customerId: int("customerId").notNull().references(() => customers.id),
     proposalId: int("proposalId").references(() => proposals.id),
     sellerId: int("sellerId").references(() => users.id),
+    // CRM-PK-04 / ADR-011: empreendimento do contrato, gravado na criação. Nulo só em contrato antigo ou importado por CSV sem cota.
+    resortId: int("resortId").references(() => resorts.id),
     usageModel: mysqlEnum("usageModel", ["fixed_week", "flexible_week", "points"]).default("fixed_week").notNull(),
     status: mysqlEnum("status", ["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).default("draft").notNull(),
     totalAmount: decimal("totalAmount", { precision: 14, scale: 2 }).notNull(),
@@ -487,6 +489,7 @@ export const contracts = mysqlTable(
   table => [
     index("contracts_status_idx").on(table.status),
     index("contracts_customer_idx").on(table.customerId),
+    index("contracts_resort_idx").on(table.resortId),
     index("contracts_proposal_status_idx").on(table.proposalId, table.status),
     uniqueIndex("contracts_external_sale_unique").on(table.externalSource, table.externalSaleId),
   ],

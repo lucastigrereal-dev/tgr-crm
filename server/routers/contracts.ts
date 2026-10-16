@@ -89,10 +89,20 @@ export const contractsRouter = router({
           if (ctx.user.role !== "admin" && activeHold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "A cota está em hold de outro operador." });
         }
       }
+      // CRM-PK-04: o empreendimento nasce com o contrato. A cota manda; sem cota, vale o único empreendimento da captação da proposta.
+      let contractResortId: number | null = lockedFraction?.resortId ?? null;
+      if (contractResortId === null && input.proposalId) {
+        const captureResorts = await tx.select({ resortId: captureRecords.resortId }).from(proposals)
+          .innerJoin(captureRecords, eq(captureRecords.opportunityId, proposals.opportunityId))
+          .where(eq(proposals.id, input.proposalId)).limit(20);
+        const distinct = Array.from(new Set(captureResorts.map(row => row.resortId).filter((value): value is number => Boolean(value))));
+        if (distinct.length === 1) contractResortId = distinct[0]!;
+      }
       const created = await tx.insert(contracts).values({
         number: input.number,
         customerId: input.customerId,
         proposalId: input.proposalId ?? null,
+        resortId: contractResortId,
         sellerId,
         usageModel: input.usageModel,
         status: input.status,
@@ -180,7 +190,7 @@ export const contractsRouter = router({
     const contract = (await db.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0]; if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
     const paid = await db.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360); const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
     const context = await db.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
-    const resortId = context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
+    const resortId = contract.resortId ?? context[0]?.capture?.resortId; const settings = resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
     return { contractId: contract.id, resortId: resortId ?? null, policy: parseCancellationPolicy(settings?.cancellationPolicy), ...simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) }) };
   }),
 
@@ -196,7 +206,7 @@ export const contractsRouter = router({
       const paid = await tx.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360);
       const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
       const context = await tx.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
-      const resortId = context[0]?.capture?.resortId;
+      const resortId = contract.resortId ?? context[0]?.capture?.resortId;
       const settings = resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
       const simulation = simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) });
       const created = await tx.insert(contractCancellationRequests).values({ contractId: input.contractId, reason: input.reason, simulationSnapshot: JSON.stringify(simulation), requestedByUserId: ctx.user.id }).$returningId();

@@ -283,6 +283,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     externalSaleId: event.saleId,
     customerId,
     proposalId,
+    resortId: resort.id,
     sellerId: null,
     usageModel: terms.usageModel,
     status: "pending_signature",
