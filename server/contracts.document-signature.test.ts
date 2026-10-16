@@ -3,6 +3,10 @@ import { contractDocuments } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 
 import { contractsRouter } from "./routers/contracts";
 
@@ -21,10 +25,12 @@ function makeDb({ signed = false, affectedRows = 1 } = {}) {
       where: vi.fn(async () => ({ affectedRows })),
     })),
   }));
-  return {
+  const db: any = {
     select: vi.fn(() => query([{ id: 702, contractId: 701, signed }])),
     update,
   };
+  db.transaction = async (callback: (tx: unknown) => Promise<unknown>) => callback(db);
+  return db;
 }
 
 describe("confirmação administrativa de assinatura documental", () => {

@@ -131,8 +131,9 @@ describe("eventos e auditoria de contratos", () => {
 
     expect(txEvents(db.inserted)).toContainEqual(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: "701", actorUserId: 55, payload: { status: "closed", cancellationReason: null } }));
     expect(txAudits(db.inserted)).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract", entityId: "701", action: "status_updated" }));
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_document", 702, "uploaded", expect.stringContaining("contrato.pdf"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: true, filename: "contrato.pdf" } }));
+    // uploadDocument também é transacional: documento, auditoria e evento nascem no mesmo tx.
+    expect(txAudits(db.inserted)).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract_document", entityId: "701", action: "uploaded", summary: expect.stringContaining("contrato.pdf") }));
+    expect(txEvents(db.inserted)).toContainEqual(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: "701", actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: true, filename: "contrato.pdf" } }));
   });
 
   it("bloqueia cancelamento direto fora do workflow de distrato", async () => {

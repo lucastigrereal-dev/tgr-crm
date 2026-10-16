@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, paymentGatewayCustomers, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
-import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { getDb } from "../db";
 import { txAudit, txEvent } from "../txOutbox";
 import { protectedProcedure, router } from "../_core/trpc";
 import { assertCapability, financeProcedure } from "./access";
@@ -118,11 +118,12 @@ export const financeRouter = router({
       const paidAmountBaseline = Number(paidSnapshot?.paidAmountBaseline ?? 0).toFixed(2);
       await tx.update(financialPortfolioAssignments).set({ endsAt: now }).where(and(eq(financialPortfolioAssignments.contractId, input.contractId), isNull(financialPortfolioAssignments.endsAt)));
       const created = await tx.insert(financialPortfolioAssignments).values({ contractId: input.contractId, ownerUserId: input.ownerUserId, assignedByUserId: ctx.user.id, paidAmountBaseline, startsAt: now, notes: input.notes || null }).$returningId();
-      return created[0]?.id;
+      const newId = created[0]?.id;
+      if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível atribuir a carteira financeira." });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_portfolio_assignment", entityId: newId, action: "assigned", summary: `Carteira do contrato ${input.contractId} atribuída ao usuário ${input.ownerUserId}.` });
+      await txEvent(tx, { eventName: "financial.portfolio.assigned", aggregateType: "financial_portfolio_assignment", aggregateId: newId, actorUserId: ctx.user.id, payload: { contractId: input.contractId, ownerUserId: input.ownerUserId } });
+      return newId;
     });
-    if (!assignmentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível atribuir a carteira financeira." });
-    await recordAudit(ctx.user.id, "financial_portfolio_assignment", assignmentId, "assigned", `Carteira do contrato ${input.contractId} atribuída ao usuário ${input.ownerUserId}.`);
-    await recordDomainEvent({ eventName: "financial.portfolio.assigned", aggregateType: "financial_portfolio_assignment", aggregateId: assignmentId, actorUserId: ctx.user.id, payload: { contractId: input.contractId, ownerUserId: input.ownerUserId } });
     return { id: assignmentId, contractId: input.contractId, ownerUserId: input.ownerUserId, startsAt: now };
   }),
 
@@ -237,10 +238,10 @@ export const financeRouter = router({
       const created = await tx.insert(installmentRenegotiations).values({ contractId: installment.contractId, originalInstallmentId: installment.id, originalAmount: originalAmount.toFixed(2), proposedAmount: input.proposedAmount.toFixed(2), proposedDueDate: dateValue(input.proposedDueDate), discountAmount: (originalAmount - input.proposedAmount).toFixed(2), notes: input.notes || null, createdByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o acordo." });
-      return { id, sequence: installment.sequence, installmentId: installment.id, proposedAmount: input.proposedAmount };
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "installment_renegotiation", entityId: id, action: "created", summary: `Acordo proposto para parcela ${installment.sequence}.` });
+      await txEvent(tx, { eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: installment.id, proposalAmount: input.proposedAmount } });
+      return { id };
     });
-    await recordAudit(ctx.user.id, "installment_renegotiation", renegotiation.id, "created", `Acordo proposto para parcela ${renegotiation.sequence}.`);
-    await recordDomainEvent({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", aggregateId: renegotiation.id, actorUserId: ctx.user.id, payload: { installmentId: renegotiation.installmentId, proposalAmount: renegotiation.proposedAmount } });
     return { id: renegotiation.id };
   }),
 
@@ -285,15 +286,14 @@ export const financeRouter = router({
         const created = await tx.insert(billingRecords).values({ installmentId: input.installmentId, type: input.type, status: "generated", gatewayProvider: "asaas", gatewayPaymentId: payment.id, gatewayStatus: payment.status || "PENDING", amount: outstandingAmount.toFixed(2), dueDate: row.installment.dueDate, externalReference, digitableLine: identification?.identificationField || null, pixCopyPaste: pix?.payload || null, pixQrCodeBase64: pix?.encodedImage || null, invoiceUrl: payment.invoiceUrl || null, bankSlipUrl: payment.bankSlipUrl || null, generatedAt: new Date() }).$returningId();
         const id = created[0]?.id;
         if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Cobrança criada no gateway, mas não foi persistida no CRM." });
+          await txAudit(tx, { actorUserId: ctx.user.id, entityType: "billing_record", entityId: id, action: "gateway_issued", summary: `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.` });
+          await txEvent(tx, { eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: payment.id, type: input.type } });
           return { id, gatewayPaymentId: payment.id, reused: false };
         });
       } catch (error) {
         if (error instanceof TRPCError) throw error;
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "A cobrança foi processada, mas não foi possível confirmar o estado no CRM." });
       }
-      if (issued.reused) return issued;
-      await recordAudit(ctx.user.id, "billing_record", issued.id, "gateway_issued", `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.`);
-      await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: issued.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: issued.gatewayPaymentId, type: input.type } });
       return issued;
     }),
 
@@ -327,6 +327,8 @@ export const financeRouter = router({
           const inserted = await tx.insert(billingRecords).values({ idempotencyKey: input.idempotencyKey ?? null, installmentId: input.installmentId, type: input.type, gatewayProvider: "manual", amount: expectedAmount, dueDate: expectedDueDate, externalReference, digitableLine: null, pixCopyPaste: null, status: "generated", generatedAt: new Date() }).$returningId();
           const id = inserted[0]?.id;
           if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a cobrança." });
+          await txAudit(tx, { actorUserId: ctx.user.id, entityType: "billing_record", entityId: id, action: "registered", summary: `Cobrança ${input.type} registrada.` });
+          await txEvent(tx, { eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "manual", gatewayPaymentId: null, type: input.type } });
           return { id, reused: false };
         });
       } catch (error) {
@@ -337,8 +339,6 @@ export const financeRouter = router({
         created = { id: existing.id, reused: true };
       }
       if (created.reused) return created;
-      await recordAudit(ctx.user.id, "billing_record", created.id, "registered", `Cobrança ${input.type} registrada.`);
-      await recordDomainEvent({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: created.id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "manual", gatewayPaymentId: null, type: input.type } });
       return { id: created.id };
     }),
 
@@ -537,7 +537,14 @@ export const financeRouter = router({
       }
       let created;
       try {
-        created = await db.insert(financialTransfers).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: input.contractId ?? null, beneficiaryName: input.beneficiaryName, description: input.description || null, amount: expectedAmount, dueDate: expectedDueDate }).$returningId();
+        created = await db.transaction(async tx => {
+          const inserted = await tx.insert(financialTransfers).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: input.contractId ?? null, beneficiaryName: input.beneficiaryName, description: input.description || null, amount: expectedAmount, dueDate: expectedDueDate }).$returningId();
+          const newId = inserted[0]?.id;
+          if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o repasse." });
+          await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_transfer", entityId: newId, action: "created", summary: `Repasse para ${input.beneficiaryName} registrado.` });
+          await txEvent(tx, { eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: newId, actorUserId: ctx.user.id, payload: { recipient: input.beneficiaryName, amount: input.amount, contractId: input.contractId ?? null } });
+          return inserted;
+        });
       } catch (error) {
         if (!input.idempotencyKey || !isDuplicateKeyError(error)) throw error;
         const existing = (await db.select({ id: financialTransfers.id, contractId: financialTransfers.contractId, beneficiaryName: financialTransfers.beneficiaryName, description: financialTransfers.description, amount: financialTransfers.amount, dueDate: financialTransfers.dueDate }).from(financialTransfers).where(eq(financialTransfers.idempotencyKey, input.idempotencyKey)).limit(1))[0];
@@ -547,8 +554,6 @@ export const financeRouter = router({
       }
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o repasse." });
-      await recordAudit(ctx.user.id, "financial_transfer", id, "created", `Repasse para ${input.beneficiaryName} registrado.`);
-      await recordDomainEvent({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", aggregateId: id, actorUserId: ctx.user.id, payload: { recipient: input.beneficiaryName, amount: input.amount, contractId: input.contractId ?? null } });
       return { id, reused: false };
     }),
 
@@ -563,12 +568,10 @@ export const financeRouter = router({
       if (transfer.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Repasse cancelado não pode ser pago." });
       const updateResult = await tx.update(financialTransfers).set({ status: "paid", paidAt: new Date() }).where(and(eq(financialTransfers.id, input.id), eq(financialTransfers.status, "pending")));
       if (affectedRows(updateResult) === 0) return { success: true, alreadyPaid: true };
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_transfer", entityId: input.id, action: "paid", summary: "Repasse baixado como pago." });
+      await txEvent(tx, { eventName: "financial.transfer.paid", aggregateType: "financial_transfer", aggregateId: input.id, actorUserId: ctx.user.id, payload: { amount: transfer.amount, contractId: transfer.contractId } });
       return { success: true, alreadyPaid: false, amount: transfer.amount, contractId: transfer.contractId };
     });
-    if (!outcome.alreadyPaid) {
-      await recordAudit(ctx.user.id, "financial_transfer", input.id, "paid", "Repasse baixado como pago.");
-      await recordDomainEvent({ eventName: "financial.transfer.paid", aggregateType: "financial_transfer", aggregateId: input.id, actorUserId: ctx.user.id, payload: { amount: outcome.amount, contractId: outcome.contractId } });
-    }
     return { success: outcome.success, alreadyPaid: outcome.alreadyPaid };
   }),
 });

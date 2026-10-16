@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 
 import { financeRouter } from "./routers/finance";
 

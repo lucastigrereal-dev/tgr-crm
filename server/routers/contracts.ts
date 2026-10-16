@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, captureRecords, commercialFractionHistory, commercialFractionHolds, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, financialTransactions, financialTransfers, installments, opportunities, ownershipEntitlements, proposals, salesCommissions, users } from "../../drizzle/schema";
-import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { buildInstallmentSchedule } from "../domain";
@@ -202,20 +202,22 @@ export const contractsRouter = router({
       const created = await tx.insert(contractCancellationRequests).values({ contractId: input.contractId, reason: input.reason, simulationSnapshot: JSON.stringify(simulation), requestedByUserId: ctx.user.id }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível solicitar o distrato." });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_cancellation_request", entityId: id, action: "requested", summary: `Distrato solicitado para contrato ${input.contractId}.` });
+      await txEvent(tx, { eventName: "contract.cancellation.requested", aggregateType: "contract_cancellation_request", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, paidAmount: simulation.paidAmount } });
       return { id, simulation };
     });
-    await recordAudit(ctx.user.id, "contract_cancellation_request", requested.id, "requested", `Distrato solicitado para contrato ${input.contractId}.`);
-    await recordDomainEvent({ eventName: "contract.cancellation.requested", aggregateType: "contract_cancellation_request", aggregateId: requested.id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, paidAmount: requested.simulation.paidAmount } });
     return requested;
   }),
   decideCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approved", "rejected"]), notes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.decide");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const request = (await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, input.requestId)).limit(1))[0]; if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Solicitação de distrato não encontrada." }); if (request.status !== "requested") throw new TRPCError({ code: "CONFLICT", message: "Esta solicitação já recebeu uma decisão." });
-    const updateResult = await db.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(and(eq(contractCancellationRequests.id, input.requestId), eq(contractCancellationRequests.status, "requested")));
-    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
-    await recordAudit(ctx.user.id, "contract_cancellation_request", input.requestId, input.decision, `Distrato ${input.decision}.`);
-    await recordDomainEvent({ eventName: "contract.cancellation.decided", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { decision: input.decision } });
+    await db.transaction(async tx => {
+      const updateResult = await tx.update(contractCancellationRequests).set({ status: input.decision, decidedByUserId: ctx.user.id, decisionNotes: input.notes?.trim() || null, decidedAt: new Date() }).where(and(eq(contractCancellationRequests.id, input.requestId), eq(contractCancellationRequests.status, "requested")));
+      if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A solicitação de distrato foi alterada por outra operação." });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_cancellation_request", entityId: input.requestId, action: input.decision, summary: `Distrato ${input.decision}.` });
+      await txEvent(tx, { eventName: "contract.cancellation.decided", aggregateType: "contract_cancellation_request", aggregateId: input.requestId, actorUserId: ctx.user.id, payload: { decision: input.decision } });
+    });
     return { success: true };
   }),
 
@@ -352,24 +354,27 @@ export const contractsRouter = router({
     } catch {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do contrato." });
     }
-    const created = await db.insert(contractDocuments).values({
-      contractId: input.contractId,
-      category: input.category,
-      filename: input.filename,
-      storageKey: upload.key,
-      signed,
-      // Único caminho que cria arquivo assinado real (bytes acabaram de ir ao storage via storagePut, por quem tem document.sign).
-      signedArtifact: signed,
-      uploadedByUserId: ctx.user.id,
-    }).$returningId();
-    const id = created[0]?.id;
-    if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento." });
-    await recordAudit(ctx.user.id, "contract_document", id, "uploaded", `Documento ${input.filename} anexado.`);
-    await recordDomainEvent({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed, filename: input.filename } });
-    if (signed) {
-      await recordAudit(ctx.user.id, "contract_document", id, "signed", `Documento assinado ${input.filename} registrado pela administração.`);
-      await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId } });
-    }
+    const id = await db.transaction(async tx => {
+      const created = await tx.insert(contractDocuments).values({
+        contractId: input.contractId,
+        category: input.category,
+        filename: input.filename,
+        storageKey: upload.key,
+        signed,
+        // Único caminho que cria arquivo assinado real (bytes acabaram de ir ao storage via storagePut, por quem tem document.sign).
+        signedArtifact: signed,
+        uploadedByUserId: ctx.user.id,
+      }).$returningId();
+      const documentId = created[0]?.id;
+      if (!documentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento." });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_document", entityId: documentId, action: "uploaded", summary: `Documento ${input.filename} anexado.` });
+      await txEvent(tx, { eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: documentId, actorUserId: ctx.user.id, payload: { contractId: input.contractId, category: input.category, signed, filename: input.filename } });
+      if (signed) {
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_document", entityId: documentId, action: "signed", summary: `Documento assinado ${input.filename} registrado pela administração.` });
+        await txEvent(tx, { eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: documentId, actorUserId: ctx.user.id, payload: { contractId: input.contractId } });
+      }
+      return documentId;
+    });
     return { id, url: upload.url };
   }),
 
@@ -379,10 +384,14 @@ export const contractsRouter = router({
     const document = (await db.select({ id: contractDocuments.id, contractId: contractDocuments.contractId, signed: contractDocuments.signed }).from(contractDocuments).where(eq(contractDocuments.id, input.documentId)).limit(1))[0];
     if (!document) throw new TRPCError({ code: "NOT_FOUND", message: "Documento contratual não encontrado." });
     if (document.signed) return { success: true, alreadySigned: true } as const;
-    const updateResult = await db.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, input.documentId), eq(contractDocuments.signed, false)));
-    if (affectedRows(updateResult) === 0) return { success: true, alreadySigned: true } as const;
-    await recordAudit(ctx.user.id, "contract_document", input.documentId, "signed", `Assinatura do documento contratual #${input.documentId} confirmada.`);
-    await recordDomainEvent({ eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: input.documentId, actorUserId: ctx.user.id, payload: { contractId: document.contractId } });
+    const newlySigned = await db.transaction(async tx => {
+      const updateResult = await tx.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, input.documentId), eq(contractDocuments.signed, false)));
+      if (affectedRows(updateResult) === 0) return false;
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_document", entityId: input.documentId, action: "signed", summary: `Assinatura do documento contratual #${input.documentId} confirmada.` });
+      await txEvent(tx, { eventName: "contract.document.signed", aggregateType: "contract_document", aggregateId: input.documentId, actorUserId: ctx.user.id, payload: { contractId: document.contractId } });
+      return true;
+    });
+    if (!newlySigned) return { success: true, alreadySigned: true } as const;
     return { success: true, alreadySigned: false } as const;
   }),
 });

@@ -3,14 +3,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { and, eq, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, commercialFractions, contracts, customers, domainEvents, financialTransactions, installments, resorts, units, users } from "../drizzle/schema";
+import { auditLogs, commercialFractions, contractCancellationRequests, contractDocuments, contracts, customers, domainEvents, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, resorts, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
-// PKG F2-05 (CRM-PK-09): os emissores de contrato e financeiro gravam fato + auditoria + evento na MESMA transação.
+// PKG F2-05 (CRM-PK-09), 1ª e 2ª leva: os emissores de contrato e financeiro gravam fato + auditoria + evento na MESMA transação.
 // Prova no MySQL real: sucesso grava os três; falha no evento desfaz o fato (nada de contrato/lançamento sem aviso, nem aviso sem fato).
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const runId = randomUUID().slice(0, 8);
 const failure = vi.hoisted(() => ({ eventName: null as string | null }));
+vi.mock("./storage", () => ({ storagePut: async (key: string) => ({ key, url: `https://storage.example/${key}` }) }));
 
 vi.mock("./txOutbox", async importOriginal => {
   const original = await importOriginal<typeof import("./txOutbox")>();
@@ -119,5 +120,92 @@ describe.skipIf(!integrationUrl)("outbox transacional dos emissores de contrato 
     await expect(financeAdmin().reconcileEntry({ id, reconciliationReference: `OFX-${runId}` })).resolves.toEqual({ success: true, alreadyReconciled: true });
     expect(await eventsFor("financial.entry.reconciled", id)).toHaveLength(1);
     expect(await auditsFor("financial_transaction", id, "reconciled")).toHaveLength(1);
+  });
+  async function freshContract(label: string) {
+    const fractionId = await freshFraction(label);
+    const { id } = await admin().create(createInput(`OB-${label.toUpperCase()}-${runId}`, fractionId));
+    return id;
+  }
+
+  it("distrato: solicitar e decidir gravam solicitação, auditoria e evento juntos; falha no evento desfaz", async () => {
+    const contractId = await freshContract("ds");
+    failure.eventName = "contract.cancellation.requested";
+    await expect(admin().requestCancellation({ contractId, reason: "Pedido do cliente (sintético)" })).rejects.toThrow(/falha simulada/);
+    expect(await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, contractId))).toHaveLength(0);
+
+    failure.eventName = null;
+    const request = await admin().requestCancellation({ contractId, reason: "Pedido do cliente (sintético)" });
+    expect(await eventsFor("contract.cancellation.requested", request.id)).toHaveLength(1);
+    expect(await auditsFor("contract_cancellation_request", request.id, "requested")).toHaveLength(1);
+
+    failure.eventName = "contract.cancellation.decided";
+    await expect(admin().decideCancellation({ requestId: request.id, decision: "approved" })).rejects.toThrow(/falha simulada/);
+    expect((await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.id, request.id)))[0].status).toBe("requested");
+    failure.eventName = null;
+    await admin().decideCancellation({ requestId: request.id, decision: "approved" });
+    expect(await eventsFor("contract.cancellation.decided", request.id)).toHaveLength(1);
+    expect(await auditsFor("contract_cancellation_request", request.id, "approved")).toHaveLength(1);
+  });
+
+  it("documento do contrato: upload assinado e confirmação gravam documento, auditoria e evento juntos; falha desfaz", async () => {
+    const contractId = await freshContract("dc");
+    const upload = { contractId, category: "Contrato assinado", filename: `contrato-${runId}.pdf`, contentType: "application/pdf", signed: false, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" };
+    failure.eventName = "contract.document.uploaded";
+    await expect(admin().uploadDocument(upload)).rejects.toThrow(/falha simulada/);
+    expect(await db.select().from(contractDocuments).where(eq(contractDocuments.contractId, contractId))).toHaveLength(0);
+
+    failure.eventName = null;
+    const { id } = await admin().uploadDocument(upload);
+    expect(await eventsFor("contract.document.uploaded", id)).toHaveLength(1);
+    expect(await auditsFor("contract_document", id, "uploaded")).toHaveLength(1);
+
+    failure.eventName = "contract.document.signed";
+    await expect(admin().markDocumentSigned({ documentId: id })).rejects.toThrow(/falha simulada/);
+    expect((await db.select().from(contractDocuments).where(eq(contractDocuments.id, id)))[0].signed).toBe(false);
+    failure.eventName = null;
+    await expect(admin().markDocumentSigned({ documentId: id })).resolves.toEqual({ success: true, alreadySigned: false });
+    await expect(admin().markDocumentSigned({ documentId: id })).resolves.toEqual({ success: true, alreadySigned: true });
+    expect(await eventsFor("contract.document.signed", id)).toHaveLength(1);
+  });
+
+  it("repasse: criar e pagar gravam fato, auditoria e evento juntos; falha desfaz", async () => {
+    const beneficiaryName = `Parceiro Sintético ${runId}`;
+    failure.eventName = "financial.transfer.created";
+    await expect(financeAdmin().createTransfer({ beneficiaryName, amount: 80, dueDate: "2026-12-20" })).rejects.toThrow(/falha simulada/);
+    expect(await db.select().from(financialTransfers).where(eq(financialTransfers.beneficiaryName, beneficiaryName))).toHaveLength(0);
+
+    failure.eventName = null;
+    const { id } = await financeAdmin().createTransfer({ beneficiaryName, amount: 80, dueDate: "2026-12-20" });
+    expect(await eventsFor("financial.transfer.created", id)).toHaveLength(1);
+    expect(await auditsFor("financial_transfer", id, "created")).toHaveLength(1);
+
+    failure.eventName = "financial.transfer.paid";
+    await expect(financeAdmin().markTransferPaid({ id })).rejects.toThrow(/falha simulada/);
+    expect((await db.select().from(financialTransfers).where(eq(financialTransfers.id, id)))[0].status).toBe("pending");
+    failure.eventName = null;
+    await expect(financeAdmin().markTransferPaid({ id })).resolves.toMatchObject({ success: true, alreadyPaid: false });
+    await expect(financeAdmin().markTransferPaid({ id })).resolves.toMatchObject({ success: true, alreadyPaid: true });
+    expect(await eventsFor("financial.transfer.paid", id)).toHaveLength(1);
+    expect(await auditsFor("financial_transfer", id, "paid")).toHaveLength(1);
+  });
+
+  it("carteira financeira e acordo de parcela: fato, auditoria e evento juntos; falha desfaz", async () => {
+    const contractId = await freshContract("pf");
+    failure.eventName = "financial.portfolio.assigned";
+    await expect(financeAdmin().assignPortfolioOwner({ contractId, ownerUserId: adminId })).rejects.toThrow(/falha simulada/);
+    expect(await db.select().from(financialPortfolioAssignments).where(eq(financialPortfolioAssignments.contractId, contractId))).toHaveLength(0);
+    failure.eventName = null;
+    const assigned = await financeAdmin().assignPortfolioOwner({ contractId, ownerUserId: adminId });
+    expect(await eventsFor("financial.portfolio.assigned", assigned.id)).toHaveLength(1);
+    expect(await auditsFor("financial_portfolio_assignment", assigned.id, "assigned")).toHaveLength(1);
+
+    const [installment] = await db.select().from(installments).where(eq(installments.contractId, contractId));
+    failure.eventName = "installment.renegotiation.proposed";
+    await expect(financeAdmin().createRenegotiation({ installmentId: installment.id, proposedAmount: 500, proposedDueDate: "2026-12-30" })).rejects.toThrow(/falha simulada/);
+    expect(await db.select().from(installmentRenegotiations).where(eq(installmentRenegotiations.originalInstallmentId, installment.id))).toHaveLength(0);
+    failure.eventName = null;
+    const renegotiation = await financeAdmin().createRenegotiation({ installmentId: installment.id, proposedAmount: 500, proposedDueDate: "2026-12-30" });
+    expect(await eventsFor("installment.renegotiation.proposed", renegotiation.id)).toHaveLength(1);
+    expect(await auditsFor("installment_renegotiation", renegotiation.id, "created")).toHaveLength(1);
   });
 });

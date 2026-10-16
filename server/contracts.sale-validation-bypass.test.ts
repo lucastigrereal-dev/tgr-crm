@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 vi.mock("./storage", () => storageMocks);
 vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn() }));
 
@@ -17,7 +21,9 @@ function makeDb(currentStatus: string | null, validatedAt: Date | null = null) {
   const select = vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => reads.shift() ?? []) })) })) }));
   const update = vi.fn(() => ({ set: vi.fn((values: Record<string, unknown>) => { updates.push(values); return { where: vi.fn(async () => [{ affectedRows: 1 }]) }; }) }));
   const insert = vi.fn(() => ({ values: vi.fn((values: Record<string, unknown>) => { inserted.push(values); return { $returningId: async () => [{ id: 702 }] }; }) }));
-  return { db: { select, update, insert, transaction: vi.fn() }, inserted, updates };
+  const db: any = { select, update, insert };
+  db.transaction = vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(db));
+  return { db, inserted, updates };
 }
 const caller = (role: "admin" | "seller" = "admin") => contractsRouter.createCaller({ user: { id: 55, role } } as never);
 const upload = { contractId: 701, category: "Contrato assinado", filename: "contrato.pdf", contentType: "application/pdf", base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" };

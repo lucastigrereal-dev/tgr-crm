@@ -12,6 +12,10 @@ const gatewayMocks = vi.hoisted(() => ({
   getAsaasPixQrCode: vi.fn(async () => ({ payload: "pix-payload", encodedImage: "" })),
 }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 vi.mock("./paymentGateway", () => gatewayMocks);
 
 import { billingRecords, customers, installments, paymentGatewayCustomers } from "../drizzle/schema";
