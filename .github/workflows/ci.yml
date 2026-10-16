@@ -1,7 +1,14 @@
 name: TGR CRM CI
 
-# CI diet (2026-10-09): sem push em main/branches, sem PR em draft, sem rodar por mudanca so de docs.
+# CI diet (2026-10-09): sem push em branches, sem PR em draft, sem rodar por mudanca so de docs.
+# T-01 (2026-10-16): push na main roda a mesma CI, para existir prova no SHA da main (OPS-12); uma rodada por merge.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.claude/**'
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
@@ -15,7 +22,7 @@ permissions:
 
 concurrency:
   group: tgr-crm-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   quality:
