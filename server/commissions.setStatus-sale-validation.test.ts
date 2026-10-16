@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // COMMISSION_POLICY = NOT_APPROVED: nada de percentual/prazo/estorno é inventado aqui.
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn(async () => ({})) }));
 
 import { commissionsRouter } from "./routers/commissions";
@@ -17,7 +21,7 @@ function query(rows: unknown[]) {
 
 function scenario(commission: { contractId: number | null; status: string }, validation: Array<{ validatedAt: Date | null }>) {
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) }));
-  const db = { select: vi.fn().mockReturnValueOnce(query([commission])).mockReturnValue(query(validation)), update };
+  const db: { select: unknown; update: unknown; transaction: (callback: (tx: unknown) => Promise<unknown>) => Promise<unknown> } = { select: vi.fn().mockReturnValueOnce(query([commission])).mockReturnValue(query(validation)), update, transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(db) };
   dbMocks.getDb.mockResolvedValue(db);
   return { update, caller: commissionsRouter.createCaller({ user: { id: 71, role: "finance" } } as never) };
 }

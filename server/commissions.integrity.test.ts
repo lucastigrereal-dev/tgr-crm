@@ -3,6 +3,10 @@ import { contracts, saleValidations, salesCommissions } from "../drizzle/schema"
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 vi.mock("./revenueQualitySync", () => ({ syncRevenueQualityForContract: vi.fn(async () => ({})) }));
 
 import { commissionsRouter } from "./routers/commissions";
@@ -19,7 +23,8 @@ function makeDb(rows: unknown[], affectedRows = 1, linked: { contract?: unknown[
   const update = vi.fn(() => ({
     set: vi.fn((value: unknown) => { sets.push(value); return { where: vi.fn(async () => ({ affectedRows })) }; }),
   }));
-  return { db: { select, update }, update, sets };
+  const db = { select, update, transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(db) };
+  return { db, update, sets };
 }
 
 function caller() {
