@@ -15,17 +15,18 @@ const attempts: AttemptMap = new Map(); // por (IP, usuário)
 // Mapa separado do de IP, para o spray de IPs/usuários do outro lado não expulsar o contador.
 const userAttempts: AttemptMap = new Map();
 // WP10/E0.8: os mapas de tentativas são limitados — chaves distintas sem fim (spray de usuários/IPs) não podem crescer a memória.
-// Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta primeiro chaves NÃO bloqueadas (senão o atacante apaga o próprio
-// bloqueio), e só então a mais antiga (ordem de inserção do Map).
+// Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta a chave com menos falhas (bloqueadas ficam por último).
 const maxTrackedKeys = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRACKED ?? 1000) || 1000);
-const maxTrackedUsers = () => Math.max(10_000, maxTrackedKeys() * 10);
+const maxTrackedUsers = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRACKED_USERS ?? 10_000) || 10_000);
 function evictIfFull(map: AttemptMap, limit: number, now: number) {
   if (map.size < limit) return;
   map.forEach((state, key) => { if (now >= state.resetAt) map.delete(key); }); // tsconfig sem downlevelIteration: sem for-of no Map
   while (map.size >= limit) {
+    // Sai quem tem MENOS falhas (empate: o mais antigo, pela ordem de inserção). Spray de nomes/IPs novos entra com 1 falha e é o
+    // primeiro a cair; contador de alvo com 19 só cairia se o atacante repetisse ~19 vezes cada nome inventado (e bloqueados são os últimos).
     let victim: string | undefined;
-    map.forEach((state, key) => { if (victim === undefined && state.count < state.max) victim = key; });
-    if (victim === undefined) victim = map.keys().next().value; // só bloqueadas: cai na mais antiga
+    let lowest = Infinity;
+    map.forEach((state, key) => { if (state.count < lowest) { lowest = state.count; victim = key; } });
     if (victim === undefined) break;
     map.delete(victim);
   }

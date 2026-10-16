@@ -261,7 +261,8 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const rejected = outcomes.filter(item => item.status === "rejected") as PromiseRejectedResult[];
     expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(isDuplicateKeyError(rejected[0].reason)).toBe(true);
+    const loserCause = (rejected[0].reason as { cause?: { code?: string; message?: string } })?.cause;
+    expect(isDuplicateKeyError(rejected[0].reason), `perdedora caiu por ${loserCause?.code ?? ""} ${loserCause?.message ?? String(rejected[0].reason)}`).toBe(true);
     expect(await db.select().from(contracts).where(eq(contracts.externalSaleId, event.saleId))).toHaveLength(1);
     expect(await db.select().from(commercialFractions).where(and(eq(commercialFractions.resortId, resortId), eq(commercialFractions.status, "sold")))).toHaveLength(2);
   });

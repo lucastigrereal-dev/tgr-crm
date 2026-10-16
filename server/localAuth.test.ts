@@ -16,6 +16,7 @@ import {
   resetLocalAuthAttemptsForTests,
   verifyLocalPassword,
   localAuthAttemptsTracked,
+  localAuthUserAttemptsTracked,
 } from "./localAuth";
 
 const salt = "00112233445566778899aabbccddeeff";
@@ -131,6 +132,19 @@ describe("local auth", () => {
     await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, "10.0.4.1", 1_001)).rejects.toMatchObject({ code: "INVALID" });
     await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.4.2", 1_002)).rejects.toMatchObject({ code: "LOCKED" });
   });
+
+  it("KAN-30: com o mapa por usuário cheio, sai quem tem menos falhas (alvo com 19 sobrevive ao spray)", async () => {
+    vi.stubEnv("LOCAL_AUTH_MAX_TRACKED_USERS", "30");
+    for (let index = 0; index < 19; index++) {
+      await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, `10.0.7.${index}`, 1_000)).rejects.toMatchObject({ code: "INVALID" });
+    }
+    for (let index = 0; index < 100; index++) {
+      await expect(authenticateLocalUser({ username: `spray.${index}`, password: "x" }, `10.1.${Math.floor(index / 250)}.${index % 250}`, 1_000)).rejects.toMatchObject({ code: "INVALID" });
+    }
+    expect(localAuthUserAttemptsTracked()).toBeLessThanOrEqual(30);
+    await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, "10.0.8.1", 1_001)).rejects.toMatchObject({ code: "INVALID" });
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.8.2", 1_002)).rejects.toMatchObject({ code: "LOCKED" });
+  }, 60_000);
 
   it("recusa login quando o recurso está desabilitado", async () => {
     vi.stubEnv("LOCAL_AUTH_ENABLED", "0");
