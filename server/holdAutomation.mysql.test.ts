@@ -123,6 +123,11 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
     }
   });
 
+  it("o índice (status, expiresAt) existe para a busca periódica de holds vencidos", async () => {
+    const [rows] = await pool.query("SHOW INDEX FROM `commercial_fraction_holds` WHERE Key_name = 'commercial_fraction_holds_status_expires_idx'") as unknown as [Array<{ Column_name: string; Seq_in_index: number }>];
+    expect(rows.sort((a, b) => a.Seq_in_index - b.Seq_in_index).map(row => row.Column_name)).toEqual(["status", "expiresAt"]);
+  });
+
   it("duas sessões reservando a mesma cota ao mesmo tempo: só uma reserva", async () => {
     const fractionId = await newFraction();
     const results = await Promise.allSettled([as(sellerA).createHold({ fractionId }), as(sellerB).createHold({ fractionId })]);

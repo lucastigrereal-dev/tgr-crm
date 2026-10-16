@@ -620,6 +620,8 @@ export const commercialFractionHolds = mysqlTable(
     uniqueIndex("commercial_fraction_holds_active_key_unique").on(table.activeKey),
     index("commercial_fraction_holds_fraction_status_idx").on(table.fractionId, table.status, table.expiresAt),
     index("commercial_fraction_holds_proposal_status_idx").on(table.proposalId, table.status),
+    // CRM-PK-11: o job de vencimento busca holds ativos vencidos sem filtrar por cota.
+    index("commercial_fraction_holds_status_expires_idx").on(table.status, table.expiresAt),
     foreignKey({ name: "cfh_fraction_fk", columns: [table.fractionId], foreignColumns: [commercialFractions.id] }),
     foreignKey({ name: "cfh_proposal_fk", columns: [table.proposalId], foreignColumns: [proposals.id] }),
     foreignKey({ name: "cfh_user_fk", columns: [table.heldByUserId], foreignColumns: [users.id] }),
