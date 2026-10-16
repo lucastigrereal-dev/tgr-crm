@@ -196,12 +196,15 @@ export const inventoryRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const now = new Date();
     const result = await db.transaction(async tx => {
+      // Ordem de lock igual à da reserva e do sweep (cota primeiro, depois o hold): lê o hold sem trava, trava a cota, trava o hold e confere de novo.
+      const probe = (await tx.select({ fractionId: commercialFractionHolds.fractionId }).from(commercialFractionHolds).where(eq(commercialFractionHolds.id, input.holdId)).limit(1))[0];
+      if (!probe) throw new TRPCError({ code: "NOT_FOUND", message: "Hold não encontrado." });
+      const fraction = (await tx.select().from(commercialFractions).where(eq(commercialFractions.id, probe.fractionId)).limit(1).for("update"))[0];
+      if (!fraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota do hold não encontrada." });
       const hold = (await tx.select().from(commercialFractionHolds).where(eq(commercialFractionHolds.id, input.holdId)).limit(1).for("update"))[0];
       if (!hold) throw new TRPCError({ code: "NOT_FOUND", message: "Hold não encontrado." });
       if (ctx.user.role !== "admin" && hold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o dono do hold ou a administração pode liberar esta cota." });
       if (hold.status !== "active") return { fractionId: hold.fractionId, alreadyClosed: true };
-      const fraction = (await tx.select().from(commercialFractions).where(eq(commercialFractions.id, hold.fractionId)).limit(1).for("update"))[0];
-      if (!fraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota do hold não encontrada." });
       await tx.update(commercialFractionHolds).set({ status: "released", activeKey: null, releasedAt: now, releaseReason: input.reason }).where(and(eq(commercialFractionHolds.id, hold.id), eq(commercialFractionHolds.status, "active")));
       if (fraction.status === "held") {
         await tx.update(commercialFractions).set({ status: "available", currentProposalId: null, heldUntil: null }).where(eq(commercialFractions.id, fraction.id));

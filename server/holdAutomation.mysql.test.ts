@@ -72,11 +72,55 @@ describe.skipIf(!integrationUrl)("automação de holds de cota em MySQL real", (
     const events = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commercial.fraction.status.changed"), eq(domainEvents.aggregateId, String(fractionId))));
     const released = events.find(event => JSON.parse(event.payload ?? "{}").reason === "TTL expirado");
     expect(JSON.parse(released?.payload ?? "{}")).toMatchObject({ fractionId, status: "available", holdId });
-    const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "commercial_inventory"), eq(auditLogs.action, "swept")));
-    expect(audits.length).toBeGreaterThan(0);
+    const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "commercial_inventory"), eq(auditLogs.action, "swept"), eq(auditLogs.entityId, "expired_holds")));
+    expect(audits.some(row => (row.summary ?? "").includes("cotas liberadas"))).toBe(true);
     // Repetir não muda nada (idempotente) e outro vendedor já consegue reservar.
     expect((await sweepExpiredHolds(db, { actorUserId: null })).fractions).not.toContain(fractionId);
     await expect(as(sellerB).createHold({ fractionId })).resolves.toMatchObject({ reused: false });
+  });
+
+  it("não toca hold ativo no prazo de outro operador e não libera cota vendida ou bloqueada com hold vencido", async () => {
+    const live = await newFraction();
+    const sold = await newFraction();
+    const blocked = await newFraction();
+    const liveHold = await as(sellerB).createHold({ fractionId: live });
+    await as(sellerA).createHold({ fractionId: sold });
+    await as(sellerA).createHold({ fractionId: blocked });
+    await expire(sold);
+    await expire(blocked);
+    await db.update(commercialFractions).set({ status: "sold" }).where(eq(commercialFractions.id, sold));
+    await db.update(commercialFractions).set({ status: "blocked", blockedReason: "teste" }).where(eq(commercialFractions.id, blocked));
+
+    const outcome = await sweepExpiredHolds(db, { actorUserId: null });
+    expect(outcome.fractions).not.toContain(live);
+    expect(outcome.fractions).not.toContain(sold);
+    expect(outcome.fractions).not.toContain(blocked);
+    expect(await holdsOf(live)).toEqual([expect.objectContaining({ id: liveHold.holdId, status: "active", heldByUserId: sellerB })]);
+    expect(await fractionOf(live)).toMatchObject({ status: "held" });
+    // Os holds vencidos da cota vendida/bloqueada fecham como expirados, mas a cota fica como está.
+    expect((await holdsOf(sold))[0]).toMatchObject({ status: "expired" });
+    expect(await fractionOf(sold)).toMatchObject({ status: "sold" });
+    expect((await holdsOf(blocked))[0]).toMatchObject({ status: "expired" });
+    expect(await fractionOf(blocked)).toMatchObject({ status: "blocked" });
+  });
+
+  it("liberar hold vencido ao mesmo tempo que o sweep roda não dá deadlock", async () => {
+    for (let round = 0; round < 4; round += 1) {
+      const ids: number[] = [];
+      const holds: number[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        const id = await newFraction();
+        holds.push((await as(sellerA).createHold({ fractionId: id })).holdId);
+        await expire(id);
+        ids.push(id);
+      }
+      const settled = await Promise.allSettled([
+        sweepExpiredHolds(db, { actorUserId: null }),
+        ...holds.map(holdId => as(sellerA).releaseHold({ holdId })),
+      ]);
+      expect((settled.filter(item => item.status === "rejected") as PromiseRejectedResult[]).map(item => String(item.reason?.message ?? item.reason))).toEqual([]);
+      for (const id of ids) expect((await fractionOf(id))?.status).toBe("available");
+    }
   });
 
   it("duas sessões reservando a mesma cota ao mesmo tempo: só uma reserva", async () => {
