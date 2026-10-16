@@ -30,9 +30,11 @@ function makeDb(options: { legacySnapshot?: boolean; requestStatus?: "requested"
     };
     return chain;
   };
+  // PKG-FIN-03: leitura das parcelas recém-criadas para o aviso `installment.scheduled` (não consome a sequência de selects dos outros fluxos).
+  const scheduledChain = { innerJoin: () => ({ where: () => ({ orderBy: async () => [{ id: 71, sequence: 1, dueDate: new Date("2026-11-10T12:00:00Z"), amount: "500.00", customerId: 11 }] }) }) };
   const tx = {
     insert: vi.fn((table: unknown) => ({ values: vi.fn((values: unknown) => { if (Array.isArray(values)) financialEntries.push(...values as Array<{ type: string; category: string; amount: string }>); else inserted.push({ table, values: values as Record<string, unknown> }); const insertedCount = Array.isArray(values) ? values.length : 1; return { $returningId: async () => table ? Array.from({ length: insertedCount }, (_, index) => ({ id: 701 + index })) : [], onDuplicateKeyUpdate: async () => undefined }; }) })),
-    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => {
+    select: vi.fn(() => ({ from: vi.fn(() => Object.assign({ innerJoin: scheduledChain.innerJoin }, { where: vi.fn(() => {
       const data = [
         [{ id: 801, contractId: 701, status: options.requestStatus ?? "approved", reason: "Solicitação aprovada", decisionNotes: null, simulationSnapshot: JSON.stringify({ paidAmount: options.snapshotPaidAmount ?? 1000, penalty: 120, retained: 120, refund: 80, policyConfigured: options.legacySnapshot ? undefined : true }) }],
         [{ id: 701, status: "active" }],

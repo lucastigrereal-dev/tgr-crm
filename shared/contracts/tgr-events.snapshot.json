@@ -7,6 +7,7 @@
       "contract.status.updated",
       "contract.cancellation.executed",
       "sale.validated",
+      "installment.scheduled",
       "installment.paid",
       "commission.created",
       "commission.status.updated",
@@ -45,6 +46,14 @@
         "saleId",
         "validatedAt",
         "validatedBy"
+      ],
+      "installment.scheduled": [
+        "installmentId",
+        "contractId",
+        "customerId",
+        "sequence",
+        "dueDate",
+        "amount"
       ],
       "installment.paid": [
         "installmentId",
