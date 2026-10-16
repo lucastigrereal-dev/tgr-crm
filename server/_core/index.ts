@@ -21,6 +21,7 @@ import { processClicksignWebhook } from "../eSignatureService";
 import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
+import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -47,6 +48,7 @@ async function startServer() {
   let salesCancellationPump: SalesCancellationBridgePump | undefined;
   let financialPump: FinancialBridgePump | undefined;
   let pointsExpiryJob: PointsExpiryJob | undefined;
+  let holdExpiryJob: HoldExpiryJob | undefined;
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
@@ -140,6 +142,7 @@ async function startServer() {
     salesCancellationPump?.stop();
     financialPump?.stop();
     pointsExpiryJob?.stop();
+    holdExpiryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
     server.close(error => {
       if (error) {
@@ -171,6 +174,10 @@ async function startServer() {
     pointsExpiryJob = startPointsExpiryJob({
       onError: error => logger.error("Points expiry job failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       onRun: result => { if (result.settled > 0) logger.info("Points expiry job settled", result); },
+    });
+    holdExpiryJob = startHoldExpiryJob({
+      onError: error => logger.error("Hold expiry job failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+      onRun: result => { if (result.holds > 0) logger.info("Hold expiry job released", { holds: result.holds, fractions: result.fractions.length }); },
     });
     logger.info("Server running", { port });
   });
