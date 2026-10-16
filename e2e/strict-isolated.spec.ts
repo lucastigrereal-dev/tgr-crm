@@ -331,7 +331,7 @@ test.describe("homologação isolada estrita", () => {
   });
 
   // PK-17: telas do fluxo comercial no navegador: cadastro de cliente e portões de validação da venda (sem forjar assinatura).
-  test("cadastra cliente pela tela e confirma o pagamento nos portões da venda, sem validar sem assinatura", async ({ page }) => {
+  test("cadastra cliente pela tela e confirma o pagamento nos portões da venda, sem validar enquanto faltam assinatura e gerente", async ({ page }) => {
     const fx = fixture!;
     const fullName = `${fx.prefix}Cliente Tela`;
 
@@ -376,6 +376,7 @@ test.describe("homologação isolada estrita", () => {
     await expect(page.getByTestId("gate-paymentConfirmed").getByLabel("atendido")).toBeVisible();
     await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
     await expect(page.getByRole("button", { name: "Validar venda" })).toBeDisabled();
+    await expect(page.getByTestId("gate-managerValidated").getByLabel("pendente")).toBeVisible();
 
     const validation = await queryDatabase<Array<{ paymentConfirmedAt: Date | null; paymentConfirmationNote: string | null }>>(
       "SELECT paymentConfirmedAt, paymentConfirmationNote FROM sale_validations WHERE contractId = ?", [contract!.id],
@@ -423,11 +424,13 @@ test.describe("homologação isolada estrita", () => {
       "SELECT sequence, status FROM installments WHERE contractId = ? ORDER BY sequence", [Number(contractId)],
     );
     expect(installmentRows).toEqual([{ sequence: 1, status: "paid" }, { sequence: 2, status: "cancelled" }, { sequence: 3, status: "cancelled" }]);
-    const commissionRows = await queryDatabase<Array<{ commissionRole: string; status: string }>>(
-      "SELECT commissionRole, status FROM sales_commissions WHERE contractId = ?", [Number(contractId)],
+    const commissionRows = await queryDatabase<Array<{ commissionRole: string; status: string; reversalReviewStatus: string | null }>>(
+      "SELECT commissionRole, status, reversalReviewStatus FROM sales_commissions WHERE contractId = ?", [Number(contractId)],
     );
     expect(commissionRows).toHaveLength(2);
-    expect(commissionRows).toEqual(expect.arrayContaining([{ commissionRole: "closer", status: "cancelled" }, { commissionRole: "liner", status: "paid" }]));
+    expect(commissionRows.map(r => ({ commissionRole: r.commissionRole, status: r.status }))).toEqual(expect.arrayContaining([{ commissionRole: "closer", status: "cancelled" }, { commissionRole: "liner", status: "paid" }]));
+    // comissão já paga vai pra revisão manual de estorno
+    expect(commissionRows.find(r => r.commissionRole === "liner")?.reversalReviewStatus).toBe("pending");
     const fractionRows = await queryDatabase<Array<{ status: string; currentContractId: number | null }>>(
       "SELECT status, currentContractId FROM commercial_fractions WHERE code = ?", [`${fixture!.unitGuestCode}-D01`],
     );
