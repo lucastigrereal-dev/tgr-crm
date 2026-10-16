@@ -33,14 +33,25 @@ export function registerInlineScriptHashes(html: string) {
   inlineScriptHashes = inlineScriptHashesFromHtml(html);
 }
 
-export function buildContentSecurityPolicy(scriptHashes: string[] = inlineScriptHashes) {
+/** Origem do Umami (VITE_ANALYTICS_ENDPOINT, mesma que o client usa): libera script e envio de dados só para ela. */
+export function analyticsOrigin(endpoint = process.env.VITE_ANALYTICS_ENDPOINT): string | null {
+  if (!endpoint || !process.env.VITE_ANALYTICS_WEBSITE_ID) return null;
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+export function buildContentSecurityPolicy(scriptHashes: string[] = inlineScriptHashes, analytics: string | null = analyticsOrigin()) {
   return [
     "default-src 'self'",
-    ["script-src 'self'", ...scriptHashes].join(" "),
+    ["script-src 'self'", ...scriptHashes, ...(analytics ? [analytics] : [])].join(" "),
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' data: https://fonts.gstatic.com",
     "img-src 'self' data: blob: https:",
-    "connect-src 'self'",
+    ["connect-src 'self'", ...(analytics ? [analytics] : [])].join(" "),
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

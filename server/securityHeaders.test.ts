@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { applySecurityHeaders, buildContentSecurityPolicy, inlineScriptHashesFromHtml, registerInlineScriptHashes, securityHeaders } from "./securityHeaders";
+import { analyticsOrigin, applySecurityHeaders, buildContentSecurityPolicy, inlineScriptHashesFromHtml, registerInlineScriptHashes, securityHeaders } from "./securityHeaders";
 
 describe("headers de segurança", () => {
   it("aplica cabeçalhos defensivos sem interromper a requisição", () => {
@@ -41,6 +41,21 @@ describe("headers de segurança", () => {
       expect(buildContentSecurityPolicy()).toContain(`script-src 'self' ${hashes[0]};`);
     } finally {
       registerInlineScriptHashes("");
+    }
+  });
+
+  it("libera a origem do analytics configurado (e só ela) em script-src e connect-src", () => {
+    vi.stubEnv("VITE_ANALYTICS_WEBSITE_ID", "site-id");
+    try {
+      expect(analyticsOrigin("https://stats.example.com/base/")).toBe("https://stats.example.com");
+      expect(analyticsOrigin("javascript:alert(1)")).toBeNull();
+      expect(analyticsOrigin("não é url")).toBeNull();
+      const csp = buildContentSecurityPolicy([], "https://stats.example.com");
+      expect(csp).toContain("script-src 'self' https://stats.example.com;");
+      expect(csp).toContain("connect-src 'self' https://stats.example.com;");
+      expect(buildContentSecurityPolicy([], null)).toContain("connect-src 'self';");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });
