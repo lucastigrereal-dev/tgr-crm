@@ -81,7 +81,10 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     expect(paid).toHaveLength(1);
     expect(paid[0].values).toMatchObject({ aggregateType: "installment", aggregateId: "91", actorUserId: 71 });
     expect(JSON.parse(paid[0].values.payload as string)).toMatchObject({ contractId: 61, sequence: 2 });
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.entry.created", aggregateType: "financial_transaction", actorUserId: 71, payload: expect.objectContaining({ category: "Taxa", amount: 125 }) }));
+    const entry = txInserted.filter(row => row.table === domainEvents && row.values.eventName === "financial.entry.created");
+    expect(entry).toHaveLength(1);
+    expect(entry[0].values).toMatchObject({ aggregateType: "financial_transaction", actorUserId: 71 });
+    expect(JSON.parse(entry[0].values.payload as string)).toMatchObject({ category: "Taxa", amount: 125 });
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ recipient: "Parceiro Operacional", amount: 250 }) }));
   });
 

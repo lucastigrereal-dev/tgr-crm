@@ -71,7 +71,6 @@ export const contractsRouter = router({
       if (inventoryExists) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O estoque comercial está ativo. Selecione uma cota/fração antes de criar o contrato." });
     }
     const schedule = buildInstallmentSchedule(input.totalAmount, input.installmentCount, input.firstDueDate);
-    let allocatedFractionId: number | null = null;
     const result = await db.transaction(async tx => {
       let lockedFraction: typeof commercialFractions.$inferSelect | null = null;
       let activeHold: typeof commercialFractionHolds.$inferSelect | null = null;
@@ -110,6 +109,10 @@ export const contractsRouter = router({
         amount: item.amount,
         status: "open" as const,
       })));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract", entityId: contractId, action: "created", summary: `Contrato ${input.number} criado com ${input.installmentCount} parcelas.` });
+      await txEvent(tx, { eventName: "contract.created", aggregateType: "contract", aggregateId: contractId, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, usageModel: input.usageModel, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
+      // ADR-004: evento versionado com valor total do contrato (não é pagamento). v1 acima continua para quem já o consome.
+      await txEvent(tx, { eventName: "contract.created.v2", aggregateType: "contract", aggregateId: contractId, actorUserId: ctx.user.id, payload: { contractId, saleId: null, customerId: input.customerId, totalAmount: input.totalAmount.toFixed(2), currency: "BRL", status: input.status, usageModel: input.usageModel, source: "manual" } });
       await recordInstallmentsScheduled(tx, { contractId, actorUserId: ctx.user.id });
       if (lockedFraction) {
         const previousStatus = lockedFraction.status;
@@ -137,18 +140,11 @@ export const contractsRouter = router({
           actorUserId: ctx.user.id,
           reason: "Cota consumida na criação do contrato",
         });
-        allocatedFractionId = lockedFraction.id;
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "commercial_fraction", entityId: lockedFraction.id, action: "sold", summary: `Cota vinculada ao contrato ${input.number}.` });
+        await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: lockedFraction.id, actorUserId: ctx.user.id, payload: { fractionId: lockedFraction.id, status: "sold", proposalId: input.proposalId ?? null, contractId, reason: "Contrato criado" } });
       }
       return contractId;
     });
-    await recordAudit(ctx.user.id, "contract", result, "created", `Contrato ${input.number} criado com ${input.installmentCount} parcelas.`);
-    await recordDomainEvent({ eventName: "contract.created", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { customerId: input.customerId, proposalId: input.proposalId ?? null, usageModel: input.usageModel, status: input.status, totalAmount: input.totalAmount, installmentCount: input.installmentCount } });
-    // ADR-004: evento versionado com valor total do contrato (não é pagamento). v1 acima continua para quem já o consome.
-    await recordDomainEvent({ eventName: "contract.created.v2", aggregateType: "contract", aggregateId: result, actorUserId: ctx.user.id, payload: { contractId: result, saleId: null, customerId: input.customerId, totalAmount: input.totalAmount.toFixed(2), currency: "BRL", status: input.status, usageModel: input.usageModel, source: "manual" } });
-    if (allocatedFractionId) {
-      await recordAudit(ctx.user.id, "commercial_fraction", allocatedFractionId, "sold", `Cota vinculada ao contrato ${input.number}.`);
-      await recordDomainEvent({ eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: allocatedFractionId, actorUserId: ctx.user.id, payload: { fractionId: allocatedFractionId, status: "sold", proposalId: input.proposalId ?? null, contractId: result, reason: "Contrato criado" } });
-    }
     await syncRevenueQualityForContract({ contractId: result, actorUserId: ctx.user.id, trigger: "criação de contrato" });
     return { id: result };
   }),
@@ -319,15 +315,17 @@ export const contractsRouter = router({
     // overdue -> active só para contrato cuja venda foi validada (inclui importado em CSV como overdue: sem validação não ativa).
     if (input.status === "active" && !(await isSaleValidated(db, input.id))) throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "Contrato vencido só volta a ativo se a venda foi validada (saleValidation.validateSale). Valide a venda antes de regularizar.");
     if (!canTransitionContractStatus(current.status, input.status)) throw new TRPCError({ code: "CONFLICT", message: `Transição de contrato inválida: ${current.status} → ${input.status}.` });
-    const updateResult = await db.update(contracts).set({
-      status: input.status,
-      activatedAt: input.status === "active" ? new Date() : undefined,
-      cancelledAt: undefined,
-      cancellationReason: null,
-    }).where(and(eq(contracts.id, input.id), eq(contracts.status, current.status)));
-    if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
-    await recordAudit(ctx.user.id, "contract", input.id, "status_updated", `Status alterado para ${input.status}.`);
-    await recordDomainEvent({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
+    await db.transaction(async tx => {
+      const updateResult = await tx.update(contracts).set({
+        status: input.status,
+        activatedAt: input.status === "active" ? new Date() : undefined,
+        cancelledAt: undefined,
+        cancellationReason: null,
+      }).where(and(eq(contracts.id, input.id), eq(contracts.status, current.status)));
+      if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract", entityId: input.id, action: "status_updated", summary: `Status alterado para ${input.status}.` });
+      await txEvent(tx, { eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
+    });
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
     return { success: true };
   }),

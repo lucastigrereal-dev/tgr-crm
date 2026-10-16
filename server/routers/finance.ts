@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "dr
 import { z } from "zod";
 import { billingRecords, captureRecords, commercialProjectSettings, contractCancellationRequests, contracts, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, opportunities, paymentGatewayCustomers, proposals, revenueQualityLedger, salesCampaigns, salesCommissions, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { txAudit, txEvent } from "../txOutbox";
 import { protectedProcedure, router } from "../_core/trpc";
 import { assertCapability, financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
@@ -460,7 +461,14 @@ export const financeRouter = router({
       }
       let created;
       try {
-        created = await db.insert(financialTransactions).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: expectedContractId, campaignId: expectedCampaignId, type: input.type, category: input.category, description: input.description, amount: expectedAmount, dueDate: expectedDueDate, status: input.status, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
+        created = await db.transaction(async tx => {
+          const inserted = await tx.insert(financialTransactions).values({ idempotencyKey: input.idempotencyKey ?? null, contractId: expectedContractId, campaignId: expectedCampaignId, type: input.type, category: input.category, description: input.description, amount: expectedAmount, dueDate: expectedDueDate, status: input.status, paidAt: input.status === "paid" ? new Date() : null, createdByUserId: ctx.user.id }).$returningId();
+          const newId = inserted[0]?.id;
+          if (!newId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o lançamento." });
+          await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_transaction", entityId: newId, action: "created", summary: `Lançamento ${input.type} criado.` });
+          await txEvent(tx, { eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: newId, actorUserId: ctx.user.id, payload: { type: input.type, category: input.category, amount: input.amount, contractId: expectedContractId, campaignId: expectedCampaignId } });
+          return inserted;
+        });
       } catch (error) {
         if (!input.idempotencyKey || !isDuplicateKeyError(error)) throw error;
         const existing = (await db.select({ id: financialTransactions.id, contractId: financialTransactions.contractId, campaignId: financialTransactions.campaignId, type: financialTransactions.type, category: financialTransactions.category, description: financialTransactions.description, amount: financialTransactions.amount, dueDate: financialTransactions.dueDate, status: financialTransactions.status }).from(financialTransactions).where(eq(financialTransactions.idempotencyKey, input.idempotencyKey)).limit(1))[0];
@@ -470,8 +478,6 @@ export const financeRouter = router({
       }
       const id = created[0]?.id;
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o lançamento." });
-      await recordAudit(ctx.user.id, "financial_transaction", id, "created", `Lançamento ${input.type} criado.`);
-      await recordDomainEvent({ eventName: "financial.entry.created", aggregateType: "financial_transaction", aggregateId: id, actorUserId: ctx.user.id, payload: { type: input.type, category: input.category, amount: input.amount, contractId: expectedContractId, campaignId: expectedCampaignId } });
       return { id, reused: false };
     }),
 
@@ -486,14 +492,18 @@ export const financeRouter = router({
       throw new TRPCError({ code: "CONFLICT", message: "O lançamento já foi conciliado com outra referência." });
     }
     const reconciledAt = new Date();
-    const updateResult = await db.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt, reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
-    if (affectedRows(updateResult) === 0) {
-      const latest = (await db.select({ reconciliationReference: financialTransactions.reconciliationReference }).from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
-      if (latest?.reconciliationReference === input.reconciliationReference) return { success: true, alreadyReconciled: true };
-      throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi conciliado por outra operação com referência diferente." });
-    }
-    await recordAudit(ctx.user.id, "financial_transaction", input.id, "reconciled", `Lançamento conciliado pela referência ${input.reconciliationReference}.`);
-    await recordDomainEvent({ eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt } });
+    let alreadyReconciled = false;
+    await db.transaction(async tx => {
+      const updateResult = await tx.update(financialTransactions).set({ reconciliationReference: input.reconciliationReference, reconciledAt, reconciledByUserId: ctx.user.id }).where(and(eq(financialTransactions.id, input.id), isNull(financialTransactions.reconciledAt)));
+      if (affectedRows(updateResult) === 0) {
+        const latest = (await tx.select({ reconciliationReference: financialTransactions.reconciliationReference }).from(financialTransactions).where(eq(financialTransactions.id, input.id)).limit(1))[0];
+        if (latest?.reconciliationReference === input.reconciliationReference) { alreadyReconciled = true; return; }
+        throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi conciliado por outra operação com referência diferente." });
+      }
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_transaction", entityId: input.id, action: "reconciled", summary: `Lançamento conciliado pela referência ${input.reconciliationReference}.` });
+      await txEvent(tx, { eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt } });
+    });
+    if (alreadyReconciled) return { success: true, alreadyReconciled: true };
     return { success: true };
   }),
 

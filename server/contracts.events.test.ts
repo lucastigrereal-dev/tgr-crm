@@ -83,19 +83,26 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("registra criação contratual com valor, parcelas e ator", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+    const db = makeDb({ contractExists: false }); dbMocks.getDb.mockResolvedValue(db);
     await expect(caller().create({ number: "TS-2026-701", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 })).resolves.toEqual({ id: 701 });
 
-    expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract", 701, "created", expect.stringContaining("TS-2026-701"));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, installmentCount: 12 }) }));
+    // PKG F2-05: auditoria e evento nascem na MESMA transação do contrato (nada de gravar depois do commit).
+    expect(dbMocks.recordAudit).not.toHaveBeenCalledWith(55, "contract", 701, "created", expect.anything());
+    expect(dbMocks.recordDomainEvent).not.toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created" }));
+    expect(txAudits(db.inserted)).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract", entityId: "701", action: "created", summary: expect.stringContaining("TS-2026-701") }));
+    expect(txEvents(db.inserted)).toContainEqual(expect.objectContaining({ eventName: "contract.created", aggregateType: "contract", aggregateId: "701", actorUserId: 55, payload: expect.objectContaining({ customerId: 11, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, installmentCount: 12 }) }));
   });
 
   it("emite contract.created.v2 com valor total em BRL e mantém o v1 intacto (ADR-004)", async () => {
-    dbMocks.getDb.mockResolvedValue(makeDb({ contractExists: false }));
+    const db = makeDb({ contractExists: false }); dbMocks.getDb.mockResolvedValue(db);
     await caller().create({ number: "TS-2026-702", customerId: 11, proposalId: null, usageModel: "flexible_week", status: "pending_signature", totalAmount: 12000, firstDueDate: "2026-09-10", installmentCount: 12 });
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created" }));
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.created.v2", aggregateType: "contract", aggregateId: 701,
+    const events = txEvents(db.inserted);
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "contract.created" }));
+    expect(events).toContainEqual(expect.objectContaining({ eventName: "contract.created.v2", aggregateType: "contract", aggregateId: "701",
       payload: { contractId: 701, saleId: null, customerId: 11, totalAmount: "12000.00", currency: "BRL", status: "pending_signature", usageModel: "flexible_week", source: "manual" } }));
+    // contract.created entra no outbox antes das parcelas a vencer (ordem do id = ordem de consumo).
+    const names = events.map(event => event.eventName);
+    expect(names.indexOf("contract.created")).toBeLessThan(names.indexOf("installment.scheduled"));
   });
 
   it("exige cota quando o estoque comercial está materializado", async () => {
@@ -118,10 +125,12 @@ describe("eventos e auditoria de contratos", () => {
   });
 
   it("registra mudança de status e documento contratual com trilha de auditoria", async () => {
+    const db = makeDb(); dbMocks.getDb.mockResolvedValue(db);
     await caller().updateStatus({ id: 701, status: "closed" });
     await caller().uploadDocument({ contractId: 701, category: "Contrato assinado", filename: "contrato.pdf", contentType: "application/pdf", signed: true, base64: "data:application/pdf;base64,MTIzNDU2Nzg5MDEyMzQ1Njc4OTA=" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: 701, actorUserId: 55, payload: { status: "closed", cancellationReason: null } }));
+    expect(txEvents(db.inserted)).toContainEqual(expect.objectContaining({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: "701", actorUserId: 55, payload: { status: "closed", cancellationReason: null } }));
+    expect(txAudits(db.inserted)).toContainEqual(expect.objectContaining({ actorUserId: 55, entityType: "contract", entityId: "701", action: "status_updated" }));
     expect(dbMocks.recordAudit).toHaveBeenCalledWith(55, "contract_document", 702, "uploaded", expect.stringContaining("contrato.pdf"));
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "contract.document.uploaded", aggregateType: "contract_document", aggregateId: 702, actorUserId: 55, payload: { contractId: 701, category: "Contrato assinado", signed: true, filename: "contrato.pdf" } }));
   });
