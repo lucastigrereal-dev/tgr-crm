@@ -76,7 +76,10 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     await caller.createEntry({ type: "income", category: "Taxa", description: "Taxa operacional", amount: 125, status: "paid" });
     await caller.createTransfer({ beneficiaryName: "Parceiro Operacional", amount: 250, dueDate: "2026-09-20" });
 
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "installment.renegotiation.proposed", aggregateType: "installment_renegotiation", actorUserId: 71, payload: { installmentId: 91, proposalAmount: 900 } }));
+    const proposed = txInserted.filter(row => row.table === domainEvents && row.values.eventName === "installment.renegotiation.proposed");
+    expect(proposed).toHaveLength(1);
+    expect(proposed[0].values).toMatchObject({ aggregateType: "installment_renegotiation", actorUserId: 71 });
+    expect(JSON.parse(proposed[0].values.payload as string)).toEqual({ installmentId: 91, proposalAmount: 900 });
     const paid = txInserted.filter(entry => entry.table === domainEvents && entry.values.eventName === "installment.paid");
     expect(paid).toHaveLength(1);
     expect(paid[0].values).toMatchObject({ aggregateType: "installment", aggregateId: "91", actorUserId: 71 });
@@ -85,7 +88,10 @@ describe("emissores catalogados de comercial, financeiro e ownership", () => {
     expect(entry).toHaveLength(1);
     expect(entry[0].values).toMatchObject({ aggregateType: "financial_transaction", actorUserId: 71 });
     expect(JSON.parse(entry[0].values.payload as string)).toMatchObject({ category: "Taxa", amount: 125 });
-    expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.transfer.created", aggregateType: "financial_transfer", actorUserId: 71, payload: expect.objectContaining({ recipient: "Parceiro Operacional", amount: 250 }) }));
+    const transfer = txInserted.filter(row => row.table === domainEvents && row.values.eventName === "financial.transfer.created");
+    expect(transfer).toHaveLength(1);
+    expect(transfer[0].values).toMatchObject({ aggregateType: "financial_transfer", actorUserId: 71 });
+    expect(JSON.parse(transfer[0].values.payload as string)).toMatchObject({ recipient: "Parceiro Operacional", amount: 250 });
   });
 
   it("emite e audita direito de uso e bloqueio operacional de unidade", async () => {

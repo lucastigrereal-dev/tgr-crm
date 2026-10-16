@@ -4,6 +4,10 @@ import { contractDocuments } from "../drizzle/schema";
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 const storageMocks = vi.hoisted(() => ({ storagePut: vi.fn(async (key: string) => ({ key, url: `/manus-storage/${key}` })) }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 vi.mock("./storage", () => storageMocks);
 
 import { contractsRouter } from "./routers/contracts";
@@ -16,7 +20,9 @@ function makeDb() {
   const select = vi.fn(() => { const chain: Record<string, unknown> = {}; Object.assign(chain, { from: () => chain, where: () => chain, limit: async () => [{ id: 701, contractId: 701, signed: false }] }); return chain; });
   const insert = vi.fn((table: unknown) => ({ values: vi.fn((values: Record<string, unknown>) => { if (table === contractDocuments) inserted.push(values); return { $returningId: async () => [{ id: 702 }] }; }) }));
   const update = vi.fn(() => ({ set: vi.fn((values: Record<string, unknown>) => { updates.push(values); return { where: vi.fn(async () => ({ affectedRows: 1 })) }; }) }));
-  return { db: { select, insert, update }, inserted, updates };
+  const db: any = { select, insert, update };
+  db.transaction = async (callback: (tx: unknown) => Promise<unknown>) => callback(db);
+  return { db, inserted, updates };
 }
 
 describe("signedArtifact: só upload de admin com arquivo assinado cria artefato assinado", () => {

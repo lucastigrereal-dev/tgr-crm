@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 vi.mock("./db", () => dbMocks);
+vi.mock("./txOutbox", () => ({
+  txAudit: async (_tx: unknown, row: { actorUserId: number; entityType: string; entityId: number | string; action: string; summary: string }) => dbMocks.recordAudit(row.actorUserId, row.entityType, row.entityId, row.action, row.summary),
+  txEvent: async (_tx: unknown, row: unknown) => dbMocks.recordDomainEvent(row),
+}));
 
 import { financeRouter } from "./routers/finance";
 
@@ -76,10 +80,11 @@ describe("idempotência concorrente de repasse", () => {
     let selectCalls = 0;
     const inserted: unknown[] = [];
     const existing = { id: 51, contractId: null, beneficiaryName: "Parceiro", description: "Repasse comissão", amount: "125.50", dueDate: new Date("2026-09-10T12:00:00Z") };
-    const db = {
+    const db: any = {
       select: vi.fn(() => query(++selectCalls === 1 ? null : existing)),
       insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { inserted.push(value); return { $returningId: vi.fn(async () => [{ id: 51 }]) }; }) })),
     };
+    db.transaction = async (callback: (tx: unknown) => Promise<unknown>) => callback(db);
     dbMocks.getDb.mockResolvedValue(db);
     const caller = financeRouter.createCaller({ user: { id: 71, role: "admin" } } as never);
     const input = { idempotencyKey: "transfer-key-000051", beneficiaryName: "Parceiro", description: "Repasse comissão", amount: 125.5, dueDate: "2026-09-10" };
