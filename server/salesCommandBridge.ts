@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { recordInstallmentsScheduled } from "./installmentScheduledFacts";
 import type { Express, Request, Response } from "express";
 import { and, asc, desc, eq, gt, isNull, lte, or } from "drizzle-orm";
 import { z } from "zod";
@@ -344,7 +345,10 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
       paymentMethod: null,
     })),
   ];
-  if (installmentValues.length) await tx.insert(installments).values(installmentValues);
+  if (installmentValues.length) {
+    await tx.insert(installments).values(installmentValues);
+    await recordInstallmentsScheduled(tx, { contractId, actorUserId: null });
+  }
 
   if (event.sale.entryReceivedCents > 0) {
     await tx.insert(financialTransactions).values({

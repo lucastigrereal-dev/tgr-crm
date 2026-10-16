@@ -18,6 +18,7 @@ import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { buildMonetaryAdjustment, parseMonetaryAdjustmentPolicy } from "../monetaryAdjustment";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
+import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
 
 const day = (value: Date | string) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 // Coluna date volta do banco como meia-noite UTC; normaliza tudo para meio-dia UTC do mesmo dia antes de comparar.
@@ -221,6 +222,7 @@ export const monetaryAdjustmentsRouter = router({
       }
       const adjustmentId = created[0]?.id;
       if (!adjustmentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a memória de cálculo do reajuste." });
+      await recordInstallmentsScheduled(tx, { contractId: input.contractId, actorUserId: ctx.user.id, onlyIds: calculation.installments.map(item => item.id), transition: `adj${adjustmentId}` });
       return { adjustmentId, calculation, baseDate: day(prepared.baseDate), policyVersion: prepared.policy.version };
     });
     await recordAudit(ctx.user.id, "contract_monetary_adjustment", result.adjustmentId, "applied", `Contrato #${input.contractId} reajustado até ${input.throughDate}; fator ${result.calculation.totalFactor}; antes ${result.calculation.beforeTotal.toFixed(2)}; depois ${result.calculation.afterTotal.toFixed(2)}.`);

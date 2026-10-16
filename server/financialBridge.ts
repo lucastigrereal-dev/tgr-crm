@@ -14,6 +14,7 @@ export const FINANCIAL_EVENT_NAMES = [
   // KAN-31 V6: só `sale.validated` vai ao Financial (enum do receptor). `sale.payment.confirmed` é fato interno do CRM:
   // o Financial recusaria com 400 e o evento acabaria em recibo terminal.
   "sale.validated",
+  "installment.scheduled",
   "installment.paid",
   "commission.created",
   "commission.status.updated",

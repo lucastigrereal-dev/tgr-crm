@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { billingRecords, commercialFractions, commercialPolicyVersions, contractMonetaryAdjustments, contracts, customers, installments, monetaryIndexValues, resorts, units, users } from "../drizzle/schema";
+import { billingRecords, domainEvents, commercialFractions, commercialPolicyVersions, contractMonetaryAdjustments, contracts, customers, installments, monetaryIndexValues, resorts, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // applyAdjustment em MySQL real: aplica uma vez, recusa repetição, recusa série incompleta e cobrança ativa, e exige a confirmação literal.
@@ -76,6 +76,11 @@ describe.skipIf(!integrationUrl)("monetaryAdjustments.applyAdjustment em MySQL r
     expect(rows[0]).toMatchObject({ policyVersionId: policyId, indexCode, periodicityMonths: 3, appliedByUserId: financeId, beforeTotal: "2000.00", afterTotal: "2060.60", totalFactor: "1.0303010000" });
     expect(String(rows[0].baseDate)).toContain("2026");
     expect(result.adjustmentId).toBe(rows[0].id);
+    // PKG-FIN-03: o Financial recebe o novo valor das duas parcelas reajustadas (e nada da parcela paga).
+    const scheduled = (await db.select().from(domainEvents).where(eq(domainEvents.eventName, "installment.scheduled")))
+      .map(row => JSON.parse(row.payload ?? "{}")).filter(payload => payload.contractId === seed.contractId);
+    expect(scheduled.map(payload => [payload.installmentId, payload.amount]).sort()).toEqual([[seed.open1Id, "1030.30"], [seed.open2Id, "1030.30"]].sort());
+    expect(scheduled[0]).toMatchObject({ customerId: expect.any(Number), sequence: expect.any(Number), dueDate: expect.stringMatching(/^2026-0[67]-10$/) });
   });
 
   it("repetir o mesmo reajuste (mesma data) é recusado e não mexe nas parcelas; o índice único também barra a linha duplicada", async () => {

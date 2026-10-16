@@ -17,6 +17,7 @@ import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows, withDeadlockRetry } from "../mysqlErrors";
 import { txAudit, txEvent } from "../txOutbox";
+import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -109,6 +110,7 @@ export const contractsRouter = router({
         amount: item.amount,
         status: "open" as const,
       })));
+      await recordInstallmentsScheduled(tx, { contractId, actorUserId: ctx.user.id });
       if (lockedFraction) {
         const previousStatus = lockedFraction.status;
         await tx.update(commercialFractions).set({

@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { domainEvents, installments } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 import { materializeSalesCommandSale, type SalesCommandSale } from "./salesCommandBridge";
 
 // P-05: o seed da sala deixa o CRM pronto para a 1ª venda do Sales (empreendimento, UH, 10 cotas, política sale_terms), sem dado real.
@@ -78,5 +80,13 @@ describe.skipIf(!integrationUrl)("seed do piloto da sala em MySQL real", () => {
     expect(result.replay).toBe(false);
     expect(result.fractionIds).toHaveLength(2);
     expect(result.installmentCount).toBe(2 + 12);
+    // PKG-FIN-03: cada parcela nova vira um aviso "a receber" para o Financial, na mesma transação.
+    const scheduled = (await db.select().from(domainEvents).where(eq(domainEvents.eventName, "installment.scheduled"))).map(row => JSON.parse(row.payload ?? "{}")).filter(payload => payload.contractId === result.contractId);
+    // A entrada já recebida nasce paga e não é "a receber": os avisos cobrem exatamente as parcelas em aberto.
+    const open = (await db.select().from(installments).where(eq(installments.contractId, result.contractId))).filter(row => row.status === "open");
+    expect(open.length).toBeGreaterThan(0);
+    expect(scheduled).toHaveLength(open.length);
+    expect(scheduled.map(payload => payload.installmentId).sort()).toEqual(open.map(row => row.id).sort());
+    expect(scheduled[0]).toMatchObject({ installmentId: expect.any(Number), customerId: expect.any(Number), amount: expect.stringMatching(/^\d+\.\d{2}$/), dueDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
   });
 });
