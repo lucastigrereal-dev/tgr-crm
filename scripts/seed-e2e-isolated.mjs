@@ -185,6 +185,29 @@ try {
   const contractId = contractRows[0]?.id;
   if (!contractId) throw new Error("Contrato E2E não foi persistido.");
 
+  // PK-17: o contrato descartável do distrato nasce com parcela paga, parcelas abertas, comissões (pendente e paga) e uma cota vendida,
+  // para o E2E conferir os efeitos do distrato (parcelas, comissões e estoque) e não só o status do contrato.
+  await db.execute(
+    "INSERT INTO installments (contractId, sequence, dueDate, amount, paidAmount, status, paidAt) VALUES (?, 1, DATE_SUB(CURDATE(), INTERVAL 30 DAY), 4000, 4000, 'paid', NOW()), (?, 2, DATE_ADD(CURDATE(), INTERVAL 30 DAY), 4000, 0, 'open', NULL), (?, 3, DATE_ADD(CURDATE(), INTERVAL 60 DAY), 4000, 0, 'open', NULL)",
+    [contractId, contractId, contractId],
+  );
+  await db.execute(
+    "INSERT INTO sales_commissions (idempotencyKey, sellerId, contractId, commissionRole, baseAmount, rate, amount, status, lifecycleStatus) VALUES (?, ?, ?, 'closer', 12000, 5, 600, 'pending', 'expected'), (?, ?, ?, 'liner', 12000, 2, 240, 'paid', 'paid')",
+    [`e2e-comm-pending-${fixture.normalizedRunId}`, ownerId, contractId, `e2e-comm-paid-${fixture.normalizedRunId}`, ownerId, contractId],
+  );
+  // A cota do distrato mora em outro empreendimento: o da ponte do Sales precisa das 2 cotas disponíveis do principal.
+  const distratoResortName = `${fixture.resortName} Distrato`;
+  await db.execute("INSERT INTO resorts (name, city, state, status) VALUES (?, 'Natal', 'RN', 'active')", [distratoResortName]);
+  const [distratoResortRows] = await db.execute("SELECT id FROM resorts WHERE name = ? ORDER BY id DESC LIMIT 1", [distratoResortName]);
+  const distratoResortId = distratoResortRows[0]?.id;
+  if (!distratoResortId) throw new Error("Empreendimento do distrato E2E não foi persistido.");
+  await db.execute("INSERT INTO units (resortId, code, category, capacity, beds, status) VALUES (?, ?, 'Suite', 4, 2, 'active')", [distratoResortId, `${fixture.unitGuestCode}-D`]);
+  const [distratoUnitRows] = await db.execute("SELECT id FROM units WHERE resortId = ? LIMIT 1", [distratoResortId]);
+  await db.execute(
+    "INSERT INTO commercial_fractions (resortId, unitId, code, sequence, status, listPrice, priceTableVersion, currentContractId) VALUES (?, ?, ?, 1, 'sold', 19750, 'E2E-2026', ?)",
+    [distratoResortId, distratoUnitRows[0].id, `${fixture.unitGuestCode}-D01`, contractId],
+  );
+
   await db.execute(
     "INSERT INTO reservations (customerId, contractId, unitId, checkIn, checkOut, adults, status, createdByUserId) VALUES (?, ?, ?, ?, ?, 2, 'confirmed', ?)",
     [

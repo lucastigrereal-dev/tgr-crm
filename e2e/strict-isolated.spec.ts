@@ -330,6 +330,63 @@ test.describe("homologação isolada estrita", () => {
     await expect(counter("Disponível")).toHaveText("0");
   });
 
+  // PK-17: telas do fluxo comercial no navegador: cadastro de cliente e portões de validação da venda (sem forjar assinatura).
+  test("cadastra cliente pela tela e confirma o pagamento nos portões da venda, sem validar enquanto faltam assinatura e gerente", async ({ page }) => {
+    const fx = fixture!;
+    const fullName = `${fx.prefix}Cliente Tela`;
+
+    await page.goto("/clientes");
+    await page.getByRole("button", { name: "Novo cliente" }).click();
+    await page.getByPlaceholder("Nome do associado").fill(fullName);
+    await page.locator('input[name="phone"]').fill("(84) 99999-0101");
+    await page.locator('input[name="email"]').fill(`tela.${fx.normalizedRunId}@exemplo.invalid`);
+    const created = waitForMutation(page, "customers.create");
+    await page.getByRole("button", { name: /^Salvar/ }).click();
+    await created;
+    await expect(page.getByText("Cliente salvo no CRM.")).toBeVisible();
+    await expect(page.getByText(fullName).first()).toBeVisible();
+    const customerRows = await queryDatabase<Array<{ id: number; fullName: string }>>(
+      "SELECT id, fullName FROM customers WHERE fullName = ?", [fullName],
+    );
+    expect(customerRows).toHaveLength(1);
+
+    // detalhe do cliente abre pela lista
+    await page.getByText(fullName).first().click();
+    await expect(page).toHaveURL(new RegExp(`/clientes/${customerRows[0]!.id}$`));
+    await expect(page.getByRole("heading", { name: fullName })).toBeVisible();
+
+    // contrato da ponte do Sales: portões pendentes, confirma pagamento, e a venda NÃO valida sem assinatura
+    const saleId = `E2E-SALE-${fx.normalizedRunId}`;
+    const [contract] = await queryDatabase<Array<{ id: number }>>(
+      "SELECT id FROM contracts WHERE externalSource = 'sales-command' AND externalSaleId = ?", [saleId],
+    );
+    expect(contract).toBeDefined();
+    await page.goto(`/contratos/${contract!.id}`);
+    await expect(page.getByText("Portões de validação")).toBeVisible();
+    await expect(page.getByTestId("gate-paymentConfirmed").getByLabel("pendente")).toBeVisible();
+    await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Validar venda" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Confirmar pagamento" }).click();
+    await page.getByLabel("Nota de conferência").fill("Pagamento conferido no laboratório isolado.");
+    const confirmed = waitForMutation(page, "saleValidation.confirmPayment");
+    await page.getByRole("button", { name: "Confirmar", exact: true }).click();
+    await confirmed;
+    await expect(page.getByText("Pagamento confirmado.")).toBeVisible();
+    await expect(page.getByTestId("gate-paymentConfirmed").getByLabel("atendido")).toBeVisible();
+    await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Validar venda" })).toBeDisabled();
+    await expect(page.getByTestId("gate-managerValidated").getByLabel("pendente")).toBeVisible();
+
+    const validation = await queryDatabase<Array<{ paymentConfirmedAt: Date | null; paymentConfirmationNote: string | null }>>(
+      "SELECT paymentConfirmedAt, paymentConfirmationNote FROM sale_validations WHERE contractId = ?", [contract!.id],
+    );
+    expect(validation[0]?.paymentConfirmedAt).not.toBeNull();
+    expect(validation[0]?.paymentConfirmationNote).toBe("Pagamento conferido no laboratório isolado.");
+    const [contractRow] = await queryDatabase<Array<{ status: string }>>("SELECT status FROM contracts WHERE id = ?", [contract!.id]);
+    expect(contractRow!.status).toBe("pending_signature");
+  });
+
   test("solicita, aprova e executa distrato uma única vez", async ({ page }) => {
     const contractId = process.env.E2E_CANCELLATION_CONTRACT_ID;
     test.skip(
@@ -361,5 +418,22 @@ test.describe("homologação isolada estrita", () => {
       [Number(contractId)],
     );
     expect(rows[0]?.status).toBe("cancelled");
+
+    // efeitos do distrato: parcela paga preservada, abertas canceladas, comissão pendente cancelada, paga preservada, cota devolvida ao estoque
+    const installmentRows = await queryDatabase<Array<{ sequence: number; status: string }>>(
+      "SELECT sequence, status FROM installments WHERE contractId = ? ORDER BY sequence", [Number(contractId)],
+    );
+    expect(installmentRows).toEqual([{ sequence: 1, status: "paid" }, { sequence: 2, status: "cancelled" }, { sequence: 3, status: "cancelled" }]);
+    const commissionRows = await queryDatabase<Array<{ commissionRole: string; status: string; reversalReviewStatus: string | null }>>(
+      "SELECT commissionRole, status, reversalReviewStatus FROM sales_commissions WHERE contractId = ?", [Number(contractId)],
+    );
+    expect(commissionRows).toHaveLength(2);
+    expect(commissionRows.map(r => ({ commissionRole: r.commissionRole, status: r.status }))).toEqual(expect.arrayContaining([{ commissionRole: "closer", status: "cancelled" }, { commissionRole: "liner", status: "paid" }]));
+    // comissão já paga vai pra revisão manual de estorno
+    expect(commissionRows.find(r => r.commissionRole === "liner")?.reversalReviewStatus).toBe("pending");
+    const fractionRows = await queryDatabase<Array<{ status: string; currentContractId: number | null }>>(
+      "SELECT status, currentContractId FROM commercial_fractions WHERE code = ?", [`${fixture!.unitGuestCode}-D01`],
+    );
+    expect(fractionRows).toEqual([{ status: "available", currentContractId: null }]);
   });
 });
