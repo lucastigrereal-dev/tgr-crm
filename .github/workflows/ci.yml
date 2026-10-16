@@ -1,7 +1,7 @@
 name: TGR CRM CI
 
 # CI diet (2026-10-09): sem push em branches, sem PR em draft, sem rodar por mudanca so de docs.
-# T-01 (2026-10-16): push na main roda a mesma CI, para existir prova no SHA da main (OPS-12); uma rodada por merge.
+# T-01 (2026-10-16): push na main roda a mesma CI, para existir prova no SHA da main (OPS-12); uma rodada por SHA da main (grupo por SHA, sem cancelar).
 on:
   push:
     branches: [main]
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tgr-crm-${{ github.workflow }}-${{ github.ref }}
+  group: tgr-crm-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
