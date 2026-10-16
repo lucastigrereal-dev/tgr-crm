@@ -3,10 +3,12 @@ import type { User } from "../drizzle/schema";
 import * as db from "./db";
 
 const MAX_ATTEMPTS = 5;
+// KAN-30: teto por USUÁRIO (qualquer IP), contra tentativa distribuída/IP trocando. Fica em memória: reiniciar o servidor zera.
+const MAX_ATTEMPTS_PER_USER = 20;
 const WINDOW_MS = 15 * 60 * 1000;
 const KEY_LENGTH = 64;
 
-type AttemptState = { count: number; resetAt: number };
+type AttemptState = { count: number; resetAt: number; max: number };
 const attempts = new Map<string, AttemptState>();
 // WP10/E0.8: o map de tentativas é limitado — chaves distintas sem fim (spray de usuários/IPs) não podem crescer a memória.
 // Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta a chave mais antiga (ordem de inserção do Map).
@@ -18,7 +20,7 @@ function evictIfFull(now: number) {
   // Review: expulsar primeiro chaves NÃO bloqueadas — senão um atacante enche o map com usernames novos para apagar o próprio bloqueio.
   while (attempts.size >= limit) {
     let victim: string | undefined;
-    attempts.forEach((state, key) => { if (victim === undefined && state.count < MAX_ATTEMPTS) victim = key; });
+    attempts.forEach((state, key) => { if (victim === undefined && state.count < state.max) victim = key; });
     if (victim === undefined) victim = attempts.keys().next().value; // só bloqueadas: cai na mais antiga
     if (victim === undefined) break;
     attempts.delete(victim);
@@ -114,16 +116,16 @@ function assertAttemptAllowed(key: string, now: number) {
     attempts.delete(key);
     return;
   }
-  if (state.count >= MAX_ATTEMPTS) {
+  if (state.count >= state.max) {
     throw new LocalAuthError("Muitas tentativas. Aguarde alguns minutos.", "LOCKED");
   }
 }
 
-function recordFailure(key: string, now: number) {
+function recordFailure(key: string, now: number, max: number) {
   const current = attempts.get(key);
   if (!current || now >= current.resetAt) {
     if (!current) evictIfFull(now);
-    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
+    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS, max });
     return;
   }
   current.count += 1;
@@ -144,16 +146,21 @@ export async function authenticateLocalUser(
   }
 
   // Tentativas por (cliente, usuário): o login válido de uma persona não zera as tentativas contra outra.
-  const key = `${clientKey || "unknown"}|${input.username.trim().toLowerCase()}`;
+  const userName = input.username.trim().toLowerCase();
+  const key = `${clientKey || "unknown"}|${userName}`;
+  const userKey = `user|${userName}`;
   assertAttemptAllowed(key, now);
+  assertAttemptAllowed(userKey, now);
 
   const account = value.accounts.find(candidate => candidate.username === input.username.trim());
   const passwordMatches = verifyLocalPassword(input.password, account?.passwordHash ?? DUMMY_HASH);
   if (!account || !passwordMatches) {
-    recordFailure(key, now);
+    recordFailure(key, now, MAX_ATTEMPTS);
+    recordFailure(userKey, now, MAX_ATTEMPTS_PER_USER);
     throw new LocalAuthError("Usuário ou senha inválidos.", "INVALID");
   }
   clearFailures(key);
+  clearFailures(userKey);
 
   const openId = `local:${account.username}`;
   await db.upsertUser({

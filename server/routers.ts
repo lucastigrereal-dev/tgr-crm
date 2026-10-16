@@ -1,4 +1,4 @@
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { COOKIE_NAME, SESSION_MAX_AGE_MS } from "@shared/const";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -52,10 +52,10 @@ export const appRouter = router({
           const user = await authenticateLocalUser(input, clientKey);
           const sessionToken = await sdk.createSessionToken(user.openId, {
             name: user.name || user.openId,
-            expiresInMs: ONE_YEAR_MS,
+            expiresInMs: SESSION_MAX_AGE_MS,
           });
           const cookieOptions = getSessionCookieOptions(ctx.req);
-          ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+          ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: SESSION_MAX_AGE_MS });
           return { success: true, user };
         } catch (error) {
           if (error instanceof LocalAuthError) {

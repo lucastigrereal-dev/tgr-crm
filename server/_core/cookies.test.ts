@@ -9,15 +9,14 @@ describe("session cookie options (PIL-014)", () => {
     expect(getSessionCookieOptions(request("http"))).toMatchObject({ sameSite: "lax", secure: false, httpOnly: true, path: "/" });
   });
 
-  it("HTTPS keeps SameSite=None with Secure", () => {
-    expect(getSessionCookieOptions(request("https"))).toMatchObject({ sameSite: "none", secure: true });
-    expect(getSessionCookieOptions(request("http", "https"))).toMatchObject({ sameSite: "none", secure: true });
+  it("HTTPS uses SameSite=Lax with Secure (KAN-30: never None, the app is same-origin)", () => {
+    expect(getSessionCookieOptions(request("https"))).toMatchObject({ sameSite: "lax", secure: true });
+    expect(getSessionCookieOptions(request("http", "https"))).toMatchObject({ sameSite: "lax", secure: true });
   });
 
-  it("never emits SameSite=None without Secure (browsers reject that cookie)", () => {
+  it("never emits SameSite=None, in any protocol", () => {
     for (const r of [request("http"), request("https"), request("http", "https"), request("http", "http")]) {
-      const options = getSessionCookieOptions(r);
-      if (options.sameSite === "none") expect(options.secure).toBe(true);
+      expect(getSessionCookieOptions(r).sameSite).toBe("lax");
     }
   });
 });

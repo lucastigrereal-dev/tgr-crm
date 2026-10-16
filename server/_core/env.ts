@@ -13,6 +13,8 @@ export const ENV = {
   salesCommandEndpoint: process.env.SALES_COMMAND_ENDPOINT ?? "",
   salesCommandCancellationKey: process.env.SALES_COMMAND_CANCELLATION_KEY ?? "",
   host: process.env.HOST ?? "",
+  // Quantos proxies confiáveis existem na frente do app (0 = nenhum: req.ip é o IP da conexão). Só >0 atrás de proxy conhecido.
+  trustProxyHops: Math.max(0, Math.min(5, Math.trunc(Number(process.env.TRUST_PROXY_HOPS ?? 0)) || 0)),
   financialEndpoint: process.env.FINANCIAL_ENDPOINT ?? "",
   financialCrmIntegrationKey: process.env.FINANCIAL_CRM_INTEGRATION_KEY ?? "",
   financialProjectExternalKey: process.env.FINANCIAL_PROJECT_EXTERNAL_KEY ?? "",

@@ -92,6 +92,27 @@ describe("local auth", () => {
     )).rejects.toMatchObject({ code: "LOCKED" });
   });
 
+  it("KAN-30: trava o usuário em 20 falhas mesmo trocando de IP, inclusive com a senha certa", async () => {
+    for (let index = 0; index < 20; index++) {
+      await expect(authenticateLocalUser(
+        { username: "syn.admin", password: "Senha-Errada-123456!" },
+        `10.0.1.${index}`,
+        1_000,
+      )).rejects.toMatchObject({ code: "INVALID" });
+    }
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.9.9", 1_001)).rejects.toMatchObject({ code: "LOCKED" });
+    // passada a janela, volta a funcionar
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.9.9", 1_000 + 16 * 60 * 1000)).resolves.toBeDefined();
+  });
+
+  it("KAN-30: bloqueio de um IP não trava o mesmo usuário em outro IP antes do teto por usuário", async () => {
+    for (let index = 0; index < 5; index++) {
+      await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, "10.0.0.8", 1_000)).rejects.toMatchObject({ code: "INVALID" });
+    }
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.0.8", 1_001)).rejects.toMatchObject({ code: "LOCKED" });
+    await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.0.9", 1_002)).resolves.toBeDefined();
+  });
+
   it("recusa login quando o recurso está desabilitado", async () => {
     vi.stubEnv("LOCAL_AUTH_ENABLED", "0");
     await expect(authenticateLocalUser(

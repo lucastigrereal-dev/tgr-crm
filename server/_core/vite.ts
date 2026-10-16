@@ -1,3 +1,4 @@
+import { registerInlineScriptHashes } from "../securityHeaders";
 import express, { type Express } from "express";
 import fs from "fs";
 import { type Server } from "http";
@@ -55,6 +56,12 @@ export function serveStatic(app: Express) {
       : path.resolve(import.meta.dirname, "public");
   if (!fs.existsSync(distPath)) {
     logger.error("Static build directory not found", { buildReady: false });
+  } else {
+    try {
+      registerInlineScriptHashes(fs.readFileSync(path.resolve(distPath, "index.html"), "utf8"));
+    } catch {
+      logger.error("index.html ilegível: CSP sem hash do script inline", { buildReady: false });
+    }
   }
 
   app.use(express.static(distPath));
