@@ -236,7 +236,10 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const rejected = outcomes.filter(item => item.status === "rejected");
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/Insufficient commercial fraction inventory|claimed concurrently/);
+    // Inclui a causa do driver (deadlock/lock wait) na mensagem: "Failed query" sozinho não diz por que a venda perdedora caiu.
+    const loserReason = (rejected[0] as PromiseRejectedResult).reason as { cause?: { code?: string; message?: string } };
+    const loserText = `${String(loserReason)} | cause: ${loserReason?.cause?.code ?? ""} ${loserReason?.cause?.message ?? ""}`;
+    expect(loserText).toMatch(/Insufficient commercial fraction inventory|claimed concurrently/);
 
     const sold = await db.select().from(commercialFractions).where(and(eq(commercialFractions.resortId, resortId), eq(commercialFractions.status, "sold")));
     expect(sold).toHaveLength(2);
@@ -258,7 +261,8 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const rejected = outcomes.filter(item => item.status === "rejected") as PromiseRejectedResult[];
     expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(isDuplicateKeyError(rejected[0].reason)).toBe(true);
+    const loserCause = (rejected[0].reason as { cause?: { code?: string; message?: string } })?.cause;
+    expect(isDuplicateKeyError(rejected[0].reason), `perdedora caiu por ${loserCause?.code ?? ""} ${loserCause?.message ?? String(rejected[0].reason)}`).toBe(true);
     expect(await db.select().from(contracts).where(eq(contracts.externalSaleId, event.saleId))).toHaveLength(1);
     expect(await db.select().from(commercialFractions).where(and(eq(commercialFractions.resortId, resortId), eq(commercialFractions.status, "sold")))).toHaveLength(2);
   });

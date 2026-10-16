@@ -39,13 +39,12 @@ export function getSessionCookieOptions(
   //       ? hostname
   //       : undefined;
 
-  // PIL-014: SameSite=None exige Secure; sem HTTPS (piloto local em http://127.0.0.1) o navegador descartava o cookie e
-  // ninguém conseguia entrar pela tela. Em HTTP usa Lax (o app é same-origin); em HTTPS mantém None + Secure.
-  const secure = isSecureRequest(req);
+  // KAN-30: o app é same-origin, então a sessão usa SameSite=Lax sempre (None deixava o cookie ir em requisição
+  // cross-site e abria CSRF). Secure só quando a requisição é HTTPS (piloto local em http://127.0.0.1 continua entrando).
   return {
     httpOnly: true,
     path: "/",
-    sameSite: secure ? "none" : "lax",
-    secure,
+    sameSite: "lax",
+    secure: isSecureRequest(req),
   };
 }

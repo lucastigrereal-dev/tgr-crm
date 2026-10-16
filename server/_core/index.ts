@@ -23,6 +23,8 @@ import { startFinancialBridgePump, type FinancialBridgePump } from "../financial
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
 
+const SALES_ROOM_STREAM_ROLES = new Set(["admin", "seller", "service"]);
+
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer();
@@ -52,6 +54,8 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
+  // KAN-30: sem proxy confiável (padrão) req.ip é o IP da conexão e X-Forwarded-For forjado é ignorado; atrás de N proxies conhecidos, TRUST_PROXY_HOPS=N.
+  if (ENV.trustProxyHops > 0) app.set("trust proxy", ENV.trustProxyHops);
   app.use(attachRequestId);
   app.use(applySecurityHeaders);
   app.post("/api/webhooks/clicksign", express.raw({ type: "*/*", limit: "2mb" }), async (req, res) => {
@@ -78,6 +82,11 @@ async function startServer() {
       res.status(401).json({ error: "Não autenticado." });
       return;
     }
+    // KAN-30: mesmo recorte de perfil da fila da recepção (receptionProcedure); financeiro/outros perfis não escutam a sala.
+    if (!SALES_ROOM_STREAM_ROLES.has(context.user.role)) {
+      res.status(403).json({ error: "Acesso à sala de vendas não autorizado." });
+      return;
+    }
 
     const requestedRoom = typeof req.query.salesRoom === "string" ? req.query.salesRoom.trim() : "";
     res.status(200);
@@ -89,11 +98,11 @@ async function startServer() {
 
     const send = (event: Parameters<typeof subscribeSalesRoom>[0] extends (value: infer T) => void ? T : never) => {
       if (requestedRoom && event.salesRoom && event.salesRoom !== requestedRoom) return;
-      res.write(`event: ${event.type}\\ndata: ${JSON.stringify(event)}\\n\\n`);
+      res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     };
     const unsubscribe = subscribeSalesRoom(send);
-    res.write(`event: ready\\ndata: ${JSON.stringify({ topic: "sales-room", requestedRoom: requestedRoom || null, occurredAt: new Date().toISOString() })}\\n\\n`);
-    const heartbeat = setInterval(() => res.write(": ping\\n\\n"), 20_000);
+    res.write(`event: ready\ndata: ${JSON.stringify({ topic: "sales-room", requestedRoom: requestedRoom || null, occurredAt: new Date().toISOString() })}\n\n`);
+    const heartbeat = setInterval(() => res.write(": ping\n\n"), 20_000);
     req.on("close", () => {
       clearInterval(heartbeat);
       unsubscribe();
