@@ -222,7 +222,7 @@ export const monetaryAdjustmentsRouter = router({
       }
       const adjustmentId = created[0]?.id;
       if (!adjustmentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a memória de cálculo do reajuste." });
-      await recordInstallmentsScheduled(tx, { contractId: input.contractId, actorUserId: ctx.user.id, onlyIds: calculation.installments.map(item => item.id) });
+      await recordInstallmentsScheduled(tx, { contractId: input.contractId, actorUserId: ctx.user.id, onlyIds: calculation.installments.map(item => item.id), transition: `adj${adjustmentId}` });
       return { adjustmentId, calculation, baseDate: day(prepared.baseDate), policyVersion: prepared.policy.version };
     });
     await recordAudit(ctx.user.id, "contract_monetary_adjustment", result.adjustmentId, "applied", `Contrato #${input.contractId} reajustado até ${input.throughDate}; fator ${result.calculation.totalFactor}; antes ${result.calculation.beforeTotal.toFixed(2)}; depois ${result.calculation.afterTotal.toFixed(2)}.`);

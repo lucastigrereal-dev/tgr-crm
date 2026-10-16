@@ -56,6 +56,25 @@ describe.skipIf(!integrationUrl)("installment.scheduled em MySQL real", () => {
     expect(await eventsOf(s.contractId)).toHaveLength(0);
   });
 
+  it("parcela com recebimento parcial anuncia só o saldo; quitada pelo recebimento não gera aviso", async () => {
+    const s = await seed("d");
+    await db.update(installments).set({ paidAmount: "400.00" }).where(eq(installments.id, s.ids[0]));
+    await db.update(installments).set({ paidAmount: "1000.00" }).where(eq(installments.id, s.ids[1]));
+    expect(await run(s.contractId)).toBe(1);
+    expect((await eventsOf(s.contractId)).map(e => [e.installmentId, e.amount])).toEqual([[s.ids[0], "600.00"]]);
+  });
+
+  it("voltar a um valor já usado (100 -> 110 -> 100) gera aviso novo quando a transição é outra", async () => {
+    const s = await seed("e");
+    await run(s.contractId, [s.ids[0]]);
+    await db.update(installments).set({ amount: "1100.00" }).where(eq(installments.id, s.ids[0]));
+    await db.transaction(tx => recordInstallmentsScheduled(tx, { contractId: s.contractId, actorUserId: null, onlyIds: [s.ids[0]], transition: "adj1" }));
+    await db.update(installments).set({ amount: "1000.00" }).where(eq(installments.id, s.ids[0]));
+    await db.transaction(tx => recordInstallmentsScheduled(tx, { contractId: s.contractId, actorUserId: null, onlyIds: [s.ids[0]], transition: "adj2" }));
+    await db.transaction(tx => recordInstallmentsScheduled(tx, { contractId: s.contractId, actorUserId: null, onlyIds: [s.ids[0]], transition: "adj2" }));
+    expect((await eventsOf(s.contractId)).map(e => e.amount)).toEqual(["1000.00", "1100.00", "1000.00"]);
+  });
+
   it("mudar valor ou vencimento gera um evento novo da mesma parcela; onlyIds limita o alcance", async () => {
     const s = await seed("b");
     await run(s.contractId);

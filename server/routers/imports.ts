@@ -4,6 +4,7 @@ import { and, count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialPortfolioAssignments, financialTransactions, financialTransfers, installmentRenegotiations, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, revenueQualityLedger, saleValidationEvents, saleValidations, salesCommissions, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
 import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
+import { txEvent } from "../txOutbox";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
@@ -226,6 +227,8 @@ export const importsRouter = router({
           // ADR-007: validação da venda e sua trilha append-only nunca são apagadas; sem esta checagem o DELETE do contrato viraria erro de FK (500).
           if (saleValidationRows.length || saleValidationTrail.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: um contrato importado já tem validação de venda ou trilha de validação registrada (a trilha é imutável)." });
           if (docs.length || bookings.length || taskRows.length || financial.length || billings.length || entitlements.length || waitlistRows.length || renegotiations.length || portfolioAssignments.length || transfers.length || commissions.length || revenueLedger.length) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Não dá para desfazer: o contrato importado já possui documentos, reserva, tarefa, cobrança, lançamento, direito, fila, renegociação, carteira, repasse, comissão ou ledger vinculado." });
+          // PKG-FIN-03: o contrato some do CRM, então o Financial precisa cancelar os "a receber" já avisados (e os ainda na fila).
+          for (const contractId of contractIds) await txEvent(tx, { eventName: "contract.status.updated", aggregateType: "contract", aggregateId: contractId, actorUserId: ctx.user.id, payload: { status: "cancelled", cancellationReason: "Importação desfeita" }, idempotencyKey: `import-undo:${batch.id}:${contractId}` });
           await tx.delete(installments).where(inArray(installments.contractId, contractIds));
           await tx.delete(contracts).where(inArray(contracts.id, contractIds));
         }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { billingRecords, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, customerContacts, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { billingRecords, domainEvents, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, customerContacts, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -12,6 +12,7 @@ type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId:
 function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }>; deleteError?: unknown } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
+  const inserts: Array<{ table: unknown; values: Record<string, unknown> }> = [];
   const selected: unknown[] = [];
   const tx = {
     select: vi.fn(() => ({
@@ -40,6 +41,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
       };
       },
     })),
+    insert: vi.fn((table: unknown) => ({ values: vi.fn((values: Record<string, unknown>) => { inserts.push({ table, values }); return { onDuplicateKeyUpdate: async () => undefined }; }) })),
     delete: vi.fn((table: unknown) => ({ where: vi.fn(() => { if (options.deleteError) return Promise.reject(options.deleteError); deletes.push(table); return Promise.resolve(); }) })),
     update: vi.fn((table: unknown) => ({ set: vi.fn((values: unknown) => ({ where: vi.fn(() => { updates.push({ table, values }); return Promise.resolve(); }) })) })),
   };
@@ -53,7 +55,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
     })),
     transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<void>) => callback(tx)),
   };
-  return { db, deletes, updates, selected };
+  return { db, deletes, updates, selected, inserts };
 }
 
 function adminCaller() {
@@ -147,6 +149,8 @@ describe("imports.undoLast", () => {
     await expect(adminCaller().undoLast({ confirm: true })).resolves.toEqual({ batchId: 84, revertedItems: 1, kind: "contracts" });
 
     expect(fixture.deletes).toEqual(expect.arrayContaining([installments, contracts]));
+    // PKG-FIN-03: o Financial é avisado de que o contrato importado sumiu (cancela os "a receber" já agendados).
+    expect(fixture.inserts).toEqual([expect.objectContaining({ table: domainEvents, values: expect.objectContaining({ eventName: "contract.status.updated", aggregateId: "701", idempotencyKey: "import-undo:84:701", payload: expect.stringContaining("\"cancelled\"") }) })]);
     expect(fixture.updates).toEqual(expect.arrayContaining([
       expect.objectContaining({ table: csvImportBatches, values: expect.objectContaining({ status: "reverted", revertedByUserId: 9 }) }),
     ]));
