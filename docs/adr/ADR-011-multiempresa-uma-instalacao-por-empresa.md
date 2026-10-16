@@ -16,7 +16,7 @@ O CRM conhece **resort** (empreendimento) e configurações de projeto por resor
 
 - Não existe caminho para dados de uma empresa vazarem para outra pelo CRM: o isolamento é o banco.
 - Cada empresa custa mais para operar (backup, atualização, monitoramento próprios) e não há relatório que some empresas.
-- A ponte Financial usa **um projeto por instalação** (`FINANCIAL_PROJECT_*`); eventos de resort fora desse projeto são recusados e ficam visíveis (CRM-PK-04).
+- A ponte Financial usa **um projeto por instalação** (`FINANCIAL_PROJECT_*`); a ponte não tem verificação por empreendimento (não há mapa empreendimento→projeto). A recusa de projeto não mapeado acontece na entrada do Sales Command (`PROJECT_NOT_MAPPED`).
 - Dentro da instalação, vários resorts continuam possíveis (empreendimentos da mesma empresa). O resort passa a ser gravado no contrato (CRM-PK-04) para acabar com a dedução por cota/captação.
 - GuestPass também segue uma instalação por empresa (GP-15).
 - Revisitar a decisão se uma segunda empresa for assinada **e** pedir visão consolidada ou usuários que circulam entre empresas. Caminho então: opção (c) do confronto (empresa deduzida do resort), que o resort gravado no contrato já facilita.
@@ -35,5 +35,8 @@ O CRM conhece **resort** (empreendimento) e configurações de projeto por resor
 - `contracts.resortId` (migração `0059_contracts_resort_id.sql`): gravado na criação. A cota manda; sem cota, vale o único empreendimento da captação da proposta; a formalização do Sales Command grava o empreendimento da venda.
 - Backfill dentro da própria migração, em duas etapas idempotentes: pela cota vendida (`commercial_fractions.currentContractId`) e pela captação da proposta, sempre só quando há exatamente um empreendimento. Contrato sem origem (por exemplo, importado por CSV sem cota) fica em branco; o reajuste monetário usa a dedução antiga só nesses casos e registra um aviso no log.
 - Rollback testado: `docs/rollback/0059_contracts_resort_id.down.sql` (a FK sai antes do índice).
-- Ponte Financial: continua com um único projeto por instalação (identidade vem da configuração). Não há mapa empreendimento→projeto porque uma empresa tem um projeto só; por isso o payload dos eventos não mudou e não há re-pin do crm-pair. Teste em `financialBridge.test.ts` fixa que todo evento sai com o mesmo projeto.
+- Ponte Financial: continua com um único projeto por instalação (identidade vem da configuração). Não há mapa empreendimento→projeto porque uma empresa tem um projeto só; por isso o payload dos eventos não mudou e não há re-pin do crm-pair. 
 - Aplicar a migração em banco real continua sendo decisão do Lucas.
+- Mudança de comportamento: simulação e pedido de distrato passam a usar o empreendimento do contrato. Antes usavam o da primeira captação; só difere em contrato manual cuja cota e captação apontam para empreendimentos diferentes. Distrato já aberto não muda (a execução usa o retrato da simulação).
+- A migração não é atômica (DDL do MySQL). Se o backfill falhar depois da coluna criada, remover a coluna com o rollback antes de tentar de novo. O rollback também limpa a linha da migração na tabela de controle do drizzle.
+- A etapa de backfill pela captação ignora contrato que tem qualquer cota ligada, para não contornar a trava "cotas de mais de um empreendimento".

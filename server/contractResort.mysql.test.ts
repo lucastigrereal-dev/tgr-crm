@@ -76,6 +76,20 @@ describe.skipIf(!integrationUrl)("resort gravado no contrato em MySQL real", () 
     expect(await resortOf(orphan.id)).toBeNull();
   });
 
+  it("backfill: captação com mais de um empreendimento (mesmo com mais de 20 registros) deixa o contrato sem empreendimento", async () => {
+    // Captação ambígua (25 registros num empreendimento e 1 em outro): nenhum empreendimento é escolhido. A criação manual usa a mesma regra (selectDistinct sem limite).
+    const [resortOne] = await db.insert(resorts).values({ name: `Resort U1 ${runId}` } as never).$returningId();
+    const [resortTwo] = await db.insert(resorts).values({ name: `Resort U2 ${runId}` } as never).$returningId();
+    const [opportunity] = await db.insert(opportunities).values({ customerId, title: `Opp U ${runId}`, sellerId: adminId } as never).$returningId();
+    const [proposal] = await db.insert(proposals).values({ opportunityId: opportunity.id, reference: `P-U-${runId}`, productDescription: "Semana fixa", totalAmount: "5000.00", downPaymentAmount: "500.00", installmentCount: 3 }).$returningId();
+    for (let i = 0; i < 25; i += 1) await db.insert(captureRecords).values({ customerId, resortId: resortOne.id, opportunityId: opportunity.id } as never);
+    await db.insert(captureRecords).values({ customerId, resortId: resortTwo.id, opportunityId: opportunity.id } as never);
+    const [contract] = await db.insert(contracts).values({ number: `CR-U-${runId}`, customerId, proposalId: proposal.id, usageModel: "fixed_week", status: "draft", totalAmount: "5000.00" }).$returningId();
+    for (const statement of backfill()) await db.execute(sql.raw(statement));
+    const [row] = await db.select({ resortId: contracts.resortId }).from(contracts).where(eq(contracts.id, contract.id));
+    expect(row?.resortId).toBeNull();
+  });
+
   it("a migração 0059 sobe e desce limpo em banco descartável, e sobe de novo", async () => {
     const scratch = `tgr_pk04_${runId}`;
     const url = new URL(integrationUrl!);
@@ -85,6 +99,9 @@ describe.skipIf(!integrationUrl)("resort gravado no contrato em MySQL real", () 
       await admin.query(`USE \`${scratch}\``);
       await admin.query("CREATE TABLE `resorts` (`id` int AUTO_INCREMENT PRIMARY KEY)");
       await admin.query("CREATE TABLE `contracts` (`id` int AUTO_INCREMENT PRIMARY KEY)");
+      await admin.query("CREATE TABLE `__drizzle_migrations` (`id` int AUTO_INCREMENT PRIMARY KEY, `hash` text NOT NULL, `created_at` bigint)");
+      await admin.query("INSERT INTO `__drizzle_migrations` (`hash`, `created_at`) VALUES ('x', 1792181487893), ('y', 1792067221513)");
+      const control = async () => ((await admin.query("SELECT `created_at` FROM `__drizzle_migrations`"))[0] as unknown[]).length;
       const up = statements("drizzle/0059_contracts_resort_id.sql").filter(item => item.startsWith("ALTER") || item.startsWith("CREATE"));
       const down = statements("docs/rollback/0059_contracts_resort_id.down.sql").map(item => item.split("\n").filter(line => !line.trim().startsWith("--")).join("\n").trim()).filter(Boolean);
       const columns = async () => ((await admin.query("SHOW COLUMNS FROM `contracts` LIKE 'resortId'"))[0] as unknown[]).length;
@@ -92,6 +109,8 @@ describe.skipIf(!integrationUrl)("resort gravado no contrato em MySQL real", () 
       expect(await columns()).toBe(1);
       for (const statement of down) await admin.query(statement);
       expect(await columns()).toBe(0);
+      // A linha da 0059 sai da tabela de controle (senão o próximo deploy pularia a migração); a anterior fica.
+      expect(await control()).toBe(1);
       for (const statement of up) await admin.query(statement);
       expect(await columns()).toBe(1);
     } finally {

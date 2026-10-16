@@ -92,9 +92,10 @@ export const contractsRouter = router({
       // CRM-PK-04: o empreendimento nasce com o contrato. A cota manda; sem cota, vale o único empreendimento da captação da proposta.
       let contractResortId: number | null = lockedFraction?.resortId ?? null;
       if (contractResortId === null && input.proposalId) {
-        const captureResorts = await tx.select({ resortId: captureRecords.resortId }).from(proposals)
+        // Sem limite de linhas: a unicidade vale sobre TODA a captação da proposta (igual ao COUNT(DISTINCT) do backfill).
+        const captureResorts = await tx.selectDistinct({ resortId: captureRecords.resortId }).from(proposals)
           .innerJoin(captureRecords, eq(captureRecords.opportunityId, proposals.opportunityId))
-          .where(eq(proposals.id, input.proposalId)).limit(20);
+          .where(eq(proposals.id, input.proposalId));
         const distinct = Array.from(new Set(captureResorts.map(row => row.resortId).filter((value): value is number => Boolean(value))));
         if (distinct.length === 1) contractResortId = distinct[0]!;
       }
