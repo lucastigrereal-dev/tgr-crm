@@ -47,6 +47,15 @@ describe.skipIf(!integrationUrl)("installment.scheduled em MySQL real", () => {
     expect(events.find(e => e.sequence === 1)).toEqual({ installmentId: s.ids[0], contractId: s.contractId, customerId: s.customerId, sequence: 1, dueDate: "2026-11-05", amount: "1000.00" });
   });
 
+  it("contrato cancelado ou encerrado não gera aviso de parcela a receber", async () => {
+    const s = await seed("c");
+    await db.update(contracts).set({ status: "cancelled" }).where(eq(contracts.id, s.contractId));
+    expect(await run(s.contractId)).toBe(0);
+    await db.update(contracts).set({ status: "closed" }).where(eq(contracts.id, s.contractId));
+    expect(await run(s.contractId)).toBe(0);
+    expect(await eventsOf(s.contractId)).toHaveLength(0);
+  });
+
   it("mudar valor ou vencimento gera um evento novo da mesma parcela; onlyIds limita o alcance", async () => {
     const s = await seed("b");
     await run(s.contractId);

@@ -2,7 +2,7 @@
 // `installment.scheduled` avisa cada parcela em aberto (id, contrato, associado, nº, vencimento, valor) dentro da MESMA
 // transação que criou ou reajustou a parcela. A chave de idempotência inclui vencimento e valor: repetir o mesmo estado
 // não duplica; mudar data ou valor gera um evento novo, que o Financial aplica enquanto a parcela estiver pendente.
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import { contracts, installments } from "../drizzle/schema";
 import { txEvent, type Tx } from "./txOutbox";
 
@@ -10,12 +10,12 @@ const isoDate = (value: Date | string) => (value instanceof Date ? value.toISOSt
 
 export const installmentScheduledKey = (installmentId: number, dueDate: string, amount: string) => `installment-scheduled:${installmentId}:${dueDate}:${amount}`;
 
-/** Emite 1 evento por parcela aberta ou vencida do contrato (ou só das `onlyIds`). Parcela paga ou cancelada não é reagendada. */
+/** Emite 1 evento por parcela aberta ou vencida do contrato (ou só das `onlyIds`). Parcela paga ou cancelada, e contrato cancelado ou encerrado (ex.: importação CSV com status livre), não são reagendados. */
 export async function recordInstallmentsScheduled(tx: Tx, input: { contractId: number; actorUserId: number | null; onlyIds?: number[] }) {
   if (input.onlyIds && input.onlyIds.length === 0) return 0;
   const rows = await tx.select({ id: installments.id, sequence: installments.sequence, dueDate: installments.dueDate, amount: installments.amount, customerId: contracts.customerId })
     .from(installments).innerJoin(contracts, eq(contracts.id, installments.contractId))
-    .where(and(eq(installments.contractId, input.contractId), inArray(installments.status, ["open", "overdue"]), ...(input.onlyIds ? [inArray(installments.id, input.onlyIds)] : [])))
+    .where(and(eq(installments.contractId, input.contractId), inArray(installments.status, ["open", "overdue"]), notInArray(contracts.status, ["cancelled", "closed"]), ...(input.onlyIds ? [inArray(installments.id, input.onlyIds)] : [])))
     .orderBy(asc(installments.sequence));
   for (const row of rows) {
     const dueDate = isoDate(row.dueDate);
