@@ -17,6 +17,7 @@ import {
   verifyLocalPassword,
   localAuthAttemptsTracked,
   localAuthUserAttemptsTracked,
+  setMaxTrackedUsersForTests,
 } from "./localAuth";
 
 const salt = "00112233445566778899aabbccddeeff";
@@ -134,7 +135,7 @@ describe("local auth", () => {
   });
 
   it("KAN-30: com o mapa por usuário cheio, sai quem tem menos falhas (alvo com 19 sobrevive ao spray)", async () => {
-    vi.stubEnv("LOCAL_AUTH_MAX_TRACKED_USERS", "30");
+    setMaxTrackedUsersForTests(30);
     for (let index = 0; index < 19; index++) {
       await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, `10.0.7.${index}`, 1_000)).rejects.toMatchObject({ code: "INVALID" });
     }

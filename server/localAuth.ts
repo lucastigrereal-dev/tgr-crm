@@ -17,7 +17,12 @@ const userAttempts: AttemptMap = new Map();
 // WP10/E0.8: os mapas de tentativas são limitados — chaves distintas sem fim (spray de usuários/IPs) não podem crescer a memória.
 // Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta a chave com menos falhas (bloqueadas ficam por último).
 const maxTrackedKeys = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRACKED ?? 1000) || 1000);
-const maxTrackedUsers = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRACKED_USERS ?? 10_000) || 10_000);
+// Piso de 1000: com teto pequeno o atacante zeraria o contador do alvo com poucas centenas de requisições; com 1000+ ele precisa de
+// ~19 mil tentativas (scrypt em cada) dentro da janela de 15 min. Resíduo aceito: o contador é em memória (documentado no ADR/receipt).
+let maxTrackedUsersOverrideForTests: number | null = null;
+const maxTrackedUsers = () => maxTrackedUsersOverrideForTests ?? Math.max(1000, Number(process.env.LOCAL_AUTH_MAX_TRACKED_USERS ?? 10_000) || 10_000);
+/** Só para testes: teto pequeno do mapa por usuário (null volta ao normal). */
+export function setMaxTrackedUsersForTests(value: number | null) { maxTrackedUsersOverrideForTests = value; }
 function evictIfFull(map: AttemptMap, limit: number, now: number) {
   if (map.size < limit) return;
   map.forEach((state, key) => { if (now >= state.resetAt) map.delete(key); }); // tsconfig sem downlevelIteration: sem for-of no Map
@@ -180,6 +185,7 @@ export async function authenticateLocalUser(
 }
 
 export function resetLocalAuthAttemptsForTests() {
+  maxTrackedUsersOverrideForTests = null;
   attempts.clear();
   userAttempts.clear();
 }
