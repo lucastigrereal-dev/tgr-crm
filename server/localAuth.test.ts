@@ -113,7 +113,14 @@ describe("local auth", () => {
     await expect(authenticateLocalUser({ username: "syn.admin", password }, "10.0.0.9", 1_002)).resolves.toBeDefined();
   });
 
-  it("KAN-30: spray de usernames inventados não expulsa o contador por usuário de uma conta real", async () => {
+  it("KAN-30: usuário inexistente trava igual ao existente (sem oráculo de enumeração)", async () => {
+    for (let index = 0; index < 20; index++) {
+      await expect(authenticateLocalUser({ username: "nao.existe", password: "x" }, `10.0.5.${index}`, 1_000)).rejects.toMatchObject({ code: "INVALID" });
+    }
+    await expect(authenticateLocalUser({ username: "nao.existe", password: "x" }, "10.0.6.1", 1_001)).rejects.toMatchObject({ code: "LOCKED" });
+  });
+
+  it("KAN-30: spray de IPs e de usernames inventados não expulsa o contador por usuário", async () => {
     vi.stubEnv("LOCAL_AUTH_MAX_TRACKED", "20");
     for (let index = 0; index < 19; index++) {
       await expect(authenticateLocalUser({ username: "syn.admin", password: "Senha-Errada-123456!" }, `10.0.2.${index}`, 1_000)).rejects.toMatchObject({ code: "INVALID" });

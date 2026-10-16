@@ -9,27 +9,31 @@ const WINDOW_MS = 15 * 60 * 1000;
 const KEY_LENGTH = 64;
 
 type AttemptState = { count: number; resetAt: number; max: number };
-const attempts = new Map<string, AttemptState>();
-// WP10/E0.8: o map de tentativas é limitado — chaves distintas sem fim (spray de usuários/IPs) não podem crescer a memória.
-// Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta a chave mais antiga (ordem de inserção do Map).
+type AttemptMap = Map<string, AttemptState>;
+const attempts: AttemptMap = new Map(); // por (IP, usuário)
+// Por usuário (qualquer IP). Vale para QUALQUER nome, existente ou não, senão o 429 depois de 20 falhas revela quais contas existem.
+// Mapa separado do de IP, para o spray de IPs/usuários do outro lado não expulsar o contador.
+const userAttempts: AttemptMap = new Map();
+// WP10/E0.8: os mapas de tentativas são limitados — chaves distintas sem fim (spray de usuários/IPs) não podem crescer a memória.
+// Ao bater o teto: descarta janelas expiradas; se ainda cheio, descarta primeiro chaves NÃO bloqueadas (senão o atacante apaga o próprio
+// bloqueio), e só então a mais antiga (ordem de inserção do Map).
 const maxTrackedKeys = () => Math.max(10, Number(process.env.LOCAL_AUTH_MAX_TRACKED ?? 1000) || 1000);
-function evictIfFull(now: number) {
-  const limit = maxTrackedKeys();
-  if (attempts.size < limit) return;
-  attempts.forEach((state, key) => { if (now >= state.resetAt) attempts.delete(key); }); // tsconfig sem downlevelIteration: sem for-of no Map
-  // Review: expulsar primeiro chaves NÃO bloqueadas — senão um atacante enche o map com usernames novos para apagar o próprio bloqueio.
-  while (attempts.size >= limit) {
+const maxTrackedUsers = () => Math.max(10_000, maxTrackedKeys() * 10);
+function evictIfFull(map: AttemptMap, limit: number, now: number) {
+  if (map.size < limit) return;
+  map.forEach((state, key) => { if (now >= state.resetAt) map.delete(key); }); // tsconfig sem downlevelIteration: sem for-of no Map
+  while (map.size >= limit) {
     let victim: string | undefined;
-    // Chaves por USUÁRIO (`user|`, só de contas que existem) são poucas e protegem contra tentativa distribuída: só caem por último.
-    attempts.forEach((state, key) => { if (victim === undefined && state.count < state.max && !key.startsWith("user|")) victim = key; });
-    attempts.forEach((state, key) => { if (victim === undefined && !key.startsWith("user|")) victim = key; });
-    if (victim === undefined) victim = attempts.keys().next().value; // só bloqueadas: cai na mais antiga
+    map.forEach((state, key) => { if (victim === undefined && state.count < state.max) victim = key; });
+    if (victim === undefined) victim = map.keys().next().value; // só bloqueadas: cai na mais antiga
     if (victim === undefined) break;
-    attempts.delete(victim);
+    map.delete(victim);
   }
 }
 /** Só para testes: quantas chaves estão sendo acompanhadas. */
 export function localAuthAttemptsTracked() { return attempts.size; }
+/** Só para testes: quantos usuários distintos têm contador. */
+export function localAuthUserAttemptsTracked() { return userAttempts.size; }
 
 export class LocalAuthError extends Error {
   constructor(
@@ -111,11 +115,11 @@ export function verifyLocalPassword(password: string, encoded: string): boolean 
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function assertAttemptAllowed(key: string, now: number) {
-  const state = attempts.get(key);
+function assertAttemptAllowed(map: AttemptMap, key: string, now: number) {
+  const state = map.get(key);
   if (!state) return;
   if (now >= state.resetAt) {
-    attempts.delete(key);
+    map.delete(key);
     return;
   }
   if (state.count >= state.max) {
@@ -123,19 +127,16 @@ function assertAttemptAllowed(key: string, now: number) {
   }
 }
 
-function recordFailure(key: string, now: number, max: number) {
-  const current = attempts.get(key);
+function recordFailure(map: AttemptMap, limit: number, key: string, now: number, max: number) {
+  const current = map.get(key);
   if (!current || now >= current.resetAt) {
-    if (!current) evictIfFull(now);
-    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS, max });
+    if (!current) evictIfFull(map, limit, now);
+    map.set(key, { count: 1, resetAt: now + WINDOW_MS, max });
     return;
   }
   current.count += 1;
 }
 
-function clearFailures(key: string) {
-  attempts.delete(key);
-}
 export async function authenticateLocalUser(
   input: { username: string; password: string },
   clientKey: string,
@@ -150,20 +151,18 @@ export async function authenticateLocalUser(
   // Tentativas por (cliente, usuário): o login válido de uma persona não zera as tentativas contra outra.
   const userName = input.username.trim().toLowerCase();
   const key = `${clientKey || "unknown"}|${userName}`;
-  const userKey = `user|${userName}`;
-  assertAttemptAllowed(key, now);
-  assertAttemptAllowed(userKey, now);
+  assertAttemptAllowed(attempts, key, now);
+  assertAttemptAllowed(userAttempts, userName, now);
 
   const account = value.accounts.find(candidate => candidate.username === input.username.trim());
   const passwordMatches = verifyLocalPassword(input.password, account?.passwordHash ?? DUMMY_HASH);
   if (!account || !passwordMatches) {
-    recordFailure(key, now, MAX_ATTEMPTS);
-    // Só conta por usuário quando a conta existe: usernames inventados não enchem o map nem expulsam o contador de uma conta real.
-    if (account) recordFailure(userKey, now, MAX_ATTEMPTS_PER_USER);
+    recordFailure(attempts, maxTrackedKeys(), key, now, MAX_ATTEMPTS);
+    recordFailure(userAttempts, maxTrackedUsers(), userName, now, MAX_ATTEMPTS_PER_USER);
     throw new LocalAuthError("Usuário ou senha inválidos.", "INVALID");
   }
-  clearFailures(key);
-  clearFailures(userKey);
+  attempts.delete(key);
+  userAttempts.delete(userName);
 
   const openId = `local:${account.username}`;
   await db.upsertUser({
@@ -181,4 +180,5 @@ export async function authenticateLocalUser(
 
 export function resetLocalAuthAttemptsForTests() {
   attempts.clear();
+  userAttempts.clear();
 }
