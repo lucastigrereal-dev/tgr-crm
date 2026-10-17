@@ -6,6 +6,7 @@ import { ENV } from "../_core/env";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, receptionProcedure, salesProcedure } from "./access";
+import { txAudit } from "../txOutbox";
 import { arrivalOrder, isCoupleCode, normalizeCoupleCode, relationshipDays } from "../captureSheetDomain";
 import { isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
@@ -40,10 +41,10 @@ export const captureSheetRouter = router({
     if (!isCoupleCode(code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Código inválido: use de 4 a 64 letras, números, - ou _ (nunca CPF ou telefone)." });
     const db = await requireDb();
     // Ficha travada na leitura e na gravação: duas ligações ao mesmo tempo não passam as duas como "primeira ligação".
-    const previous = await db.transaction(async tx => {
+    await db.transaction(async tx => {
       const [capture] = await tx.select({ id: captureRecords.id, coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
-      if (capture.coupleCode === code) return { unchanged: true as const, coupleCode: capture.coupleCode };
+      if (capture.coupleCode === code) return;
       if (capture.coupleCode && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só a administração troca o código de uma ficha que já tem código." });
       try {
         await tx.update(captureRecords).set({ coupleCode: code }).where(eq(captureRecords.id, input.captureId));
@@ -51,11 +52,9 @@ export const captureSheetRouter = router({
         if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Este código já está ligado a outra ficha." });
         throw error;
       }
-      return { unchanged: false as const, coupleCode: capture.coupleCode };
+      // A trilha entra na mesma transação da troca: se uma falhar, a outra não fica.
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: input.captureId, action: "couple_code_set", summary: capture.coupleCode ? `Ficha ${input.captureId}: código do casal trocado de ${capture.coupleCode} para ${code}.` : `Ficha ${input.captureId}: código do casal ${code} ligado.` });
     });
-    if (previous.unchanged) return { code };
-    const capture = { coupleCode: previous.coupleCode };
-    await recordAudit(ctx.user.id, "capture", input.captureId, "couple_code_set", capture.coupleCode ? `Ficha ${input.captureId}: código do casal trocado de ${capture.coupleCode} para ${code}.` : `Ficha ${input.captureId}: código do casal ${code} ligado.`);
     return { code };
   }),
 
