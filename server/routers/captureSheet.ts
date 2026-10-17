@@ -191,7 +191,7 @@ export const captureSheetRouter = router({
       if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
       if (Object.keys(patch).length) await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
       if (titularBirthDate !== undefined) {
-        await tx.update(customers).set({ birthDate: titularBirthDate ? new Date(`${titularBirthDate}T00:00:00Z`) : null }).where(eq(customers.id, existing.customerId));
+        await tx.update(customers).set({ birthDate: titularBirthDate ? new Date(`${titularBirthDate}T12:00:00Z`) : null }).where(eq(customers.id, existing.customerId));
         await txAudit(tx, { actorUserId: ctx.user.id, entityType: "customer", entityId: existing.customerId, action: "birth_date_set_from_sheet", summary: `Ficha ${captureId}: nascimento do titular ${titularBirthDate ? "informado" : "limpo"}.` });
       }
       if (Object.keys(patch).length) await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: captureId, action: "sheet_extras_updated", summary: `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).` });
