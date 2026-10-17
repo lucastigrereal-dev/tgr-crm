@@ -8,6 +8,8 @@ export const ENV = {
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
   salesCommandIntegrationKey: process.env.SALES_COMMAND_INTEGRATION_KEY ?? "",
+  // Endpoint de leitura do NQ para o Sales Command: DESLIGADO por padrão; só liga depois do aceite do Lucas.
+  nqReadEndpointEnabled: process.env.NQ_READ_ENDPOINT_ENABLED === "true",
   relationshipEndpoint: process.env.RELATIONSHIP_ENDPOINT ?? "",
   relationshipCrmIntegrationKey: process.env.RELATIONSHIP_CRM_INTEGRATION_KEY ?? "",
   salesCommandEndpoint: process.env.SALES_COMMAND_ENDPOINT ?? "",

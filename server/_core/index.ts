@@ -16,6 +16,7 @@ import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
+import { registerNqReadEndpoint } from "../nqReadEndpoint";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
 import { processClicksignWebhook } from "../eSignatureService";
@@ -70,6 +71,7 @@ async function startServer() {
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
   registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey);
+  registerNqReadEndpoint(app, ENV.salesCommandIntegrationKey, ENV.nqReadEndpointEnabled);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
