@@ -22,6 +22,7 @@ import { integrationsRouter } from "./routers/integrations";
 import { auditTrailRouter } from "./routers/auditTrail";
 import { aiRouter } from "./routers/ai";
 import { capturesRouter } from "./routers/captures";
+import { captureSheetRouter } from "./routers/captureSheet";
 import { projectSettingsRouter } from "./routers/projectSettings";
 import { commercialPoliciesRouter } from "./routers/commercialPolicies";
 import { policyRegistryRouter } from "./routers/policyRegistry";
@@ -91,6 +92,7 @@ export const appRouter = router({
   auditTrail: auditTrailRouter,
   ai: aiRouter,
   captures: capturesRouter,
+  captureSheet: captureSheetRouter,
   projectSettings: projectSettingsRouter,
   commercialPolicies: commercialPoliciesRouter,
   policyRegistry: policyRegistryRouter,

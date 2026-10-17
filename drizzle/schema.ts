@@ -321,10 +321,23 @@ export const captureRecords = mysqlTable(
     socialNetworks: text("socialNetworks"),
     giftDescription: varchar("giftDescription", { length: 255 }),
     notes: text("notes"),
+    /** Ficha impressa (TSE x CRM): código legível do casal (publicCode do Sales Command); a ficha abre por ele. Nunca CPF, telefone ou id sequencial. */
+    coupleCode: varchar("coupleCode", { length: 64 }),
+    secondVehicleModel: varchar("secondVehicleModel", { length: 120 }),
+    secondVehicleYear: int("secondVehicleYear"),
+    retiredPrimary: boolean("retiredPrimary"),
+    retiredPartner: boolean("retiredPartner"),
+    guest1Name: varchar("guest1Name", { length: 180 }),
+    guest2Name: varchar("guest2Name", { length: 180 }),
+    /** PEP: a ficha guarda a oferta e o resultado. O tempo do PEP (decisão do Lucas, 17/10) chega pelo evento de tempos do Sales Command. */
+    pepOffered: boolean("pepOffered"),
+    pepOfferedBy: varchar("pepOfferedBy", { length: 180 }),
+    pepResult: mysqlEnum("pepResult", ["accepted", "declined"]),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   table => [
+    uniqueIndex("captures_couple_code_unique").on(table.coupleCode),
     index("captures_customer_idx").on(table.customerId, table.createdAt),
     index("captures_promoter_status_idx").on(table.promoterId, table.presentationStatus, table.createdAt),
     index("captures_qualifier_status_idx").on(table.qualifierId, table.presentationStatus, table.createdAt),
@@ -337,6 +350,49 @@ export const captureRecords = mysqlTable(
     index("captures_profile_numeric_idx").on(table.childrenCount, table.averageIncome, table.createdAt),
     index("captures_travel_idx").on(table.usualTravelSeason, table.travelWeeksPerYear, table.createdAt),
   ],
+);
+
+/** Papéis da equipe da ficha (promotor de telemarketing, líder de marketing, recepção...). Lista editável: papel novo não exige migration. */
+export const captureTeamRoles = mysqlTable(
+  "capture_team_roles",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    code: varchar("code", { length: 40 }).notNull(),
+    label: varchar("label", { length: 120 }).notNull(),
+    /** presentation: aparece no atendimento e no tempo; support: apoio (login), fora do tempo da ficha. */
+    kind: mysqlEnum("kind", ["presentation", "support"]).default("presentation").notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [uniqueIndex("capture_team_roles_code_unique").on(table.code)],
+);
+
+/** Quem ocupou cada papel na ficha: pessoa com login ou só o nome (promotor sem acesso ao sistema). */
+export const captureTeamMembers = mysqlTable(
+  "capture_team_members",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    captureId: int("captureId").notNull().references(() => captureRecords.id),
+    roleId: int("roleId").notNull().references(() => captureTeamRoles.id),
+    userId: int("userId").references(() => users.id),
+    personName: varchar("personName", { length: 180 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => [uniqueIndex("capture_team_members_capture_role_unique").on(table.captureId, table.roleId), index("capture_team_members_user_idx").on(table.userId)],
+);
+
+/** Cada impressão da ficha: quem, quando e se foi reimpressão. O QR é o mesmo em todas. */
+export const captureSheetPrints = mysqlTable(
+  "capture_sheet_prints",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    captureId: int("captureId").notNull().references(() => captureRecords.id),
+    printedByUserId: int("printedByUserId").references(() => users.id),
+    reprint: boolean("reprint").default(false).notNull(),
+    printedAt: timestamp("printedAt").defaultNow().notNull(),
+  },
+  table => [index("capture_sheet_prints_capture_idx").on(table.captureId, table.printedAt)],
 );
 
 /**

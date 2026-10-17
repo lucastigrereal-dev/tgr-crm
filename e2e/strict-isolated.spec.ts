@@ -581,4 +581,49 @@ test.describe("homologação isolada estrita", () => {
       await fake.close();
     }
   });
+  test("ficha impressa: liga o código do casal, mostra o código e o espaço do QR, registra impressão e reimpressão e monta a equipe", async ({ page }) => {
+    const code = `FICHA-${Date.now().toString(36)}`;
+    const [customer] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM customers ORDER BY id LIMIT 1");
+    const inserted = await queryDatabase<{ insertId: number }>(
+      "INSERT INTO capture_records (customerId, salesRoom, presentationStatus, qualificationStatus, childrenCount) VALUES (?, 'Sala ficha E2E', 'captured', 'pending', 0)", [customer!.id],
+    );
+    const captureId = inserted.insertId;
+    await page.addInitScript(() => { (window as unknown as { __printed: number }).__printed = 0; window.print = () => { (window as unknown as { __printed: number }).__printed += 1; }; });
+
+    await page.goto(`/ficha?captura=${captureId}`);
+    await expect(page.getByText("Esta ficha ainda não tem o código do casal.")).toBeVisible();
+    const linked = waitForMutation(page, "captureSheet.setCoupleCode");
+    await page.getByLabel("Código do casal").fill(code);
+    await page.getByRole("button", { name: "Ligar à ficha" }).click();
+    await linked;
+    await expect(page.getByLabel(`Código do casal ${code}`)).toBeVisible();
+    await expect(page.getByText("Cole aqui o QR da recepção")).toBeVisible();
+    await expect(page.getByText("Ainda não impressa.")).toBeVisible();
+
+    const printed = waitForMutation(page, "captureSheet.recordPrint");
+    await page.getByRole("button", { name: "Imprimir ficha" }).click();
+    await printed;
+    await expect(page.getByText("Impressa 1x.")).toBeVisible();
+    const reprinted = waitForMutation(page, "captureSheet.recordPrint");
+    await page.getByRole("button", { name: "Reimprimir ficha" }).click();
+    await reprinted;
+    await expect(page.getByText("Impressa 2x.")).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __printed: number }).__printed)).toBe(2);
+    const prints = await queryDatabase<Array<{ reprint: number }>>("SELECT reprint FROM capture_sheet_prints WHERE captureId = ? ORDER BY id", [captureId]);
+    expect(prints.map(row => Number(row.reprint))).toEqual([0, 1]);
+
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Recepção 1" }).click();
+    await page.getByLabel("Nome da pessoa").fill("Recepção E2E");
+    const assigned = waitForMutation(page, "captureSheet.team.set");
+    await page.getByRole("button", { name: "Atribuir" }).click();
+    await assigned;
+    await expect(page.locator("#ficha-print").getByText("Recepção E2E")).toBeVisible();
+    const members = await queryDatabase<Array<{ personName: string }>>("SELECT personName FROM capture_team_members WHERE captureId = ?", [captureId]);
+    expect(members.map(row => row.personName)).toEqual(["Recepção E2E"]);
+
+    // código inexistente não abre ficha nenhuma
+    await page.goto("/ficha?codigo=NAO-EXISTE-1");
+    await expect(page.getByText("Ficha não encontrada")).toBeVisible();
+  });
 });
