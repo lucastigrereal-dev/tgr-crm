@@ -1,13 +1,13 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
-import { captureRecords, captureSheetPrints, captureTeamMembers, captureTeamRoles, customers, users } from "../../drizzle/schema";
+import { captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, receptionProcedure, salesProcedure } from "./access";
 import { txAudit } from "../txOutbox";
-import { arrivalOrder, isCoupleCode, normalizeCoupleCode, relationshipDays } from "../captureSheetDomain";
+import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, ageInYears, arrivalOrder, computeNq, isCoupleCode, normalizeCoupleCode, relationshipDays, type NqSettings } from "../captureSheetDomain";
 import { isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
 
@@ -22,6 +22,19 @@ async function requireDb() {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
   return db;
+}
+
+const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "brand_name"] as const;
+
+const SETTING_RANGES = { nq_min_man_age: [0, 120], nq_min_relationship_months: [0, 600], nq_min_vehicle_year: [1950, 2100], nq_min_income: [0, 1_000_000], nq_max_items_accepted: [0, 7], min_presentation_minutes: [0, 600] } as const;
+
+/** Limites provisórios gravados (ou o padrão quando a linha não existe): nada aqui é regra homologada. */
+async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
+  const rows = await db.select().from(captureSheetSettings);
+  const map = new Map(rows.map(row => [row.key, row]));
+  const num = (key: string, fallback: number) => { const value = Number(map.get(key)?.value); return Number.isFinite(value) && map.get(key)?.value !== "" ? value : fallback; };
+  const nq: NqSettings = { minManAge: num("nq_min_man_age", DEFAULT_NQ_SETTINGS.minManAge), minRelationshipMonths: num("nq_min_relationship_months", DEFAULT_NQ_SETTINGS.minRelationshipMonths), minVehicleYear: num("nq_min_vehicle_year", DEFAULT_NQ_SETTINGS.minVehicleYear), minIncome: num("nq_min_income", DEFAULT_NQ_SETTINGS.minIncome), maxItemsAccepted: num("nq_max_items_accepted", DEFAULT_NQ_SETTINGS.maxItemsAccepted) };
+  return { nq, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", rows };
 }
 
 async function captureByCode(rawCode: string) {
@@ -87,16 +100,31 @@ export const captureSheetRouter = router({
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
     const [{ prints }] = await db.select({ prints: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
+    // Todos os contatos ativos; o que já está no cadastro principal (telefone/e-mail do cliente) não repete, mas o WhatsApp preferido, que não espelha no cadastro, entra.
+    const allContacts = await db.select({ kind: customerContacts.kind, label: customerContacts.label, value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customer.id), isNull(customerContacts.archivedAt), sql`${customerContacts.kind} IN ('phone', 'whatsapp', 'email')`)).orderBy(desc(customerContacts.isPreferred), asc(customerContacts.id)).limit(20);
+    const digits = (value?: string | null) => (value ?? "").replace(/\D/g, "");
+    const contacts = allContacts.filter(contact => (contact.kind === "email" ? contact.value.trim().toLowerCase() !== (customer.email ?? "").trim().toLowerCase() : digits(contact.value) !== digits(customer.phone))).slice(0, 10);
+    const gifts = await db.select({ description: vouchers.description, status: vouchers.status }).from(vouchers).where(and(eq(vouchers.captureId, capture.id), sql`${vouchers.status} <> 'cancelled'`)).orderBy(asc(vouchers.id)).limit(20);
+    const settings = await loadSettings(db);
+    // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
+    const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
+    const nq = computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
     return {
       captureId: capture.id,
       coupleCode: code,
-      customer: { fullName: customer.fullName, documentNumber: customer.documentNumber, phone: customer.phone, city: customer.city, state: customer.state },
+      customer: { fullName: customer.fullName, documentNumber: customer.documentNumber, phone: customer.phone, email: customer.email, occupation: customer.occupation, age: primaryAge, city: customer.city, state: customer.state },
+      contacts,
+      gifts: gifts.map(gift => gift.description),
+      nq,
+      sheetSettings: { minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName },
       capture: {
         salesRoom: capture.salesRoom, captureLocation: capture.captureLocation, lodgingLocation: capture.lodgingLocation, transportation: capture.transportation, averageIncome: capture.averageIncome, createdAt: capture.createdAt, checkedInAt: capture.checkedInAt, presentationStatus: capture.presentationStatus, qualificationStatus: capture.qualificationStatus,
         partnerName: capture.partnerName, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, childrenCount: capture.childrenCount,
         vehicleBrand: capture.vehicleBrand, vehicleModel: capture.vehicleModel, vehicleYear: capture.vehicleYear, secondVehicleModel: capture.secondVehicleModel, secondVehicleYear: capture.secondVehicleYear,
         retiredPrimary: capture.retiredPrimary, retiredPartner: capture.retiredPartner, guest1Name: capture.guest1Name, guest2Name: capture.guest2Name,
         pepOffered: capture.pepOffered, pepOfferedBy: capture.pepOfferedBy, pepResult: capture.pepResult, notes: capture.notes,
+        partnerProfession: capture.partnerProfession, partnerProfessionNotes: capture.partnerProfessionNotes, primaryProfessionNotes: capture.primaryProfessionNotes, childrenNames: capture.childrenNames, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome, ownsPropertyInCity: capture.ownsPropertyInCity, lastTrip: capture.lastTrip, dreamTrips: capture.dreamTrips, giftDescription: capture.giftDescription,
+        maleSpouse: capture.maleSpouse, vehicleKind: capture.vehicleKind, secondVehicleKind: capture.secondVehicleKind, watchedVacationPresentation: capture.watchedVacationPresentation, captureKind: capture.captureKind,
       },
       team: { promoter: nameOf(capture.promoterId), qualifier: nameOf(capture.qualifierId), liner: nameOf(capture.linerId), closer: nameOf(capture.closerId), roomManager: nameOf(capture.roomManagerId), members: members.map(member => ({ roleId: member.roleId, code: member.code, label: member.label, kind: member.kind, name: member.userName ?? member.personName })) },
       derived: { relationshipDays: relationshipDays(capture.relationshipYears, capture.relationshipMonths), arrivalOrder: order },
@@ -134,26 +162,64 @@ export const captureSheetRouter = router({
     pepOffered: z.boolean().optional(),
     pepOfferedBy: optionalName,
     pepResult: z.enum(["accepted", "declined"]).optional().nullable(),
+    maleSpouse: z.enum(["titular", "conjuge"]).optional().nullable(),
+    vehicleKind: z.enum(["carro", "moto", "nenhum"]).optional().nullable(),
+    secondVehicleKind: z.enum(["carro", "moto", "nenhum"]).optional().nullable(),
+    watchedVacationPresentation: z.boolean().optional().nullable(),
+    captureKind: z.string().trim().max(60).optional().nullable(),
+    /** Nascimento do titular (a captação não pede): grava no cadastro do cliente para a idade do NQ fechar. */
+    titularBirthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a data como AAAA-MM-DD.").optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
-    const { captureId, ...fields } = input;
+    const { captureId, titularBirthDate, ...fields } = input;
+    if (titularBirthDate) {
+      const parsed = new Date(`${titularBirthDate}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== titularBirthDate || parsed.getTime() > Date.now()) throw new TRPCError({ code: "BAD_REQUEST", message: "Data de nascimento inválida." });
+    }
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
       if (value === undefined) continue;
       patch[key] = typeof value === "string" ? (value.trim() || null) : value;
     }
     if (patch.pepResult && patch.pepOffered === false) throw new TRPCError({ code: "BAD_REQUEST", message: "Resultado do PEP só vale quando a oferta foi feita." });
-    if (!Object.keys(patch).length) return { updated: false };
+    if (!Object.keys(patch).length && titularBirthDate === undefined) return { updated: false };
     await db.transaction(async tx => {
       // Leitura e gravação juntas, com a ficha travada: duas abas não furam a regra "resultado só com oferta".
-      const [existing] = await tx.select({ id: captureRecords.id, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
+      const [existing] = await tx.select({ id: captureRecords.id, customerId: captureRecords.customerId, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
       if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
       if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
-      await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
-      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: captureId, action: "sheet_extras_updated", summary: `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).` });
+      if (Object.keys(patch).length) await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
+      if (titularBirthDate !== undefined) {
+        await tx.update(customers).set({ birthDate: titularBirthDate ? new Date(`${titularBirthDate}T12:00:00Z`) : null }).where(eq(customers.id, existing.customerId));
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "customer", entityId: existing.customerId, action: "birth_date_set_from_sheet", summary: `Ficha ${captureId}: nascimento do titular ${titularBirthDate ? "informado" : "limpo"}.` });
+      }
+      if (Object.keys(patch).length) await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: captureId, action: "sheet_extras_updated", summary: `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).` });
     });
     return { updated: true };
+  }),
+
+  /** Limites provisórios do casal qualificado e do termo de ciência. Qualquer um da recepção lê; só a administração altera, com trilha do valor antigo e do novo. */
+  settings: router({
+    get: receptionProcedure.query(async () => {
+      const db = await requireDb();
+      const settings = await loadSettings(db);
+      return { nq: settings.nq, minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName, provisional: true };
+    }),
+    set: adminProcedure.input(z.object({ key: z.enum(SETTING_KEYS), value: z.string().trim().max(255) })).mutation(async ({ ctx, input }) => {
+      if (input.key !== "brand_name") {
+        const value = Number(input.value);
+        const range = SETTING_RANGES[input.key as keyof typeof SETTING_RANGES];
+        if (input.value === "" || !Number.isInteger(value) || value < range[0] || value > range[1]) throw new TRPCError({ code: "BAD_REQUEST", message: `Informe um número inteiro entre ${range[0]} e ${range[1]}.` });
+      }
+      const db = await requireDb();
+      await db.transaction(async tx => {
+        const [old] = await tx.select().from(captureSheetSettings).where(eq(captureSheetSettings.key, input.key)).limit(1).for("update");
+        await tx.insert(captureSheetSettings).values({ key: input.key, value: input.value, provisional: true, updatedByUserId: ctx.user.id }).onDuplicateKeyUpdate({ set: { value: input.value, updatedByUserId: ctx.user.id } });
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture_sheet_setting", entityId: input.key, action: "updated", summary: `Limite da ficha "${input.key}" mudou de "${old?.value ?? "(padrão)"}" para "${input.value}".` });
+      });
+      return { ok: true };
+    }),
   }),
 
   roles: router({

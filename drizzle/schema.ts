@@ -333,6 +333,15 @@ export const captureRecords = mysqlTable(
     pepOffered: boolean("pepOffered"),
     pepOfferedBy: varchar("pepOfferedBy", { length: 180 }),
     pepResult: mysqlEnum("pepResult", ["accepted", "declined"]),
+    /** Casal qualificado (regra provisória do Lucas, 17/10): a regra de idade é do homem, então a ficha guarda qual cônjuge é o homem. */
+    maleSpouse: mysqlEnum("maleSpouse", ["titular", "conjuge"]),
+    /** Só carro vale na qualificação; moto é sempre item de NQ. Tipo separado do ano. */
+    vehicleKind: mysqlEnum("vehicleKind", ["carro", "moto", "nenhum"]),
+    secondVehicleKind: mysqlEnum("secondVehicleKind", ["carro", "moto", "nenhum"]),
+    /** Pesquisa rápida da ficha de papel: já assistiu a uma apresentação voltada a férias. */
+    watchedVacationPresentation: boolean("watchedVacationPresentation"),
+    /** Tipo de captação (ex.: tour direto). Texto livre curto; lista fechada só se o Lucas mandar. */
+    captureKind: varchar("captureKind", { length: 60 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -381,6 +390,15 @@ export const captureTeamMembers = mysqlTable(
   },
   table => [uniqueIndex("capture_team_members_capture_role_unique").on(table.captureId, table.roleId), index("capture_team_members_user_idx").on(table.userId)],
 );
+
+/** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
+export const captureSheetSettings = mysqlTable("capture_sheet_settings", {
+  key: varchar("key", { length: 60 }).primaryKey(),
+  value: varchar("value", { length: 255 }).notNull(),
+  provisional: boolean("provisional").default(true).notNull(),
+  updatedByUserId: int("updatedByUserId").references(() => users.id),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
 
 /** Cada impressão da ficha: quem, quando e se foi reimpressão. O QR é o mesmo em todas. */
 export const captureSheetPrints = mysqlTable(
