@@ -11,6 +11,7 @@ import { adminProcedure, assertCapability, internalProcedure, receptionProcedure
 import { txAudit, txEvent } from "../txOutbox";
 import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustodyOfSheet, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
 import type { CaptureExportSource } from "../../shared/captureSheetExport";
+import { buildAverageTimeByConsultant, buildSalesByOrigin } from "../../shared/captureSheetReports";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
 
@@ -418,6 +419,7 @@ export const captureSheetRouter = router({
         captureId: captureRecords.id, coupleCode: captureRecords.coupleCode, createdAt: captureRecords.createdAt, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom, captureLocation: captureRecords.captureLocation,
         presentationStatus: captureRecords.presentationStatus, qualificationStatus: captureRecords.qualificationStatus, commercialOutcome: captureRecords.commercialOutcome, customerName: customers.fullName, documentNumber: customers.documentNumber, city: customers.city, state: customers.state,
         partnerName: captureRecords.partnerName, averageIncome: captureRecords.averageIncome, promoterName: promoter.name, linerName: liner.name, closerName: closer.name,
+        ntKind: captureRecords.ntKind, noTourReason: captureRecords.noTourReason, presentationStartedAt: captureRecords.presentationStartedAt, presentationEndedAt: captureRecords.presentationEndedAt,
       }).from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId))
         .leftJoin(promoter, eq(promoter.id, captureRecords.promoterId)).leftJoin(liner, eq(liner.id, captureRecords.linerId)).leftJoin(closer, eq(closer.id, captureRecords.closerId))
         .where(and(...conditions)).orderBy(asc(captureRecords.createdAt), asc(captureRecords.id)).limit(limit + 1);
@@ -515,6 +517,41 @@ export const captureSheetRouter = router({
       if (!result.alreadyRecorded) publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.captureId, salesRoom: result.salesRoom });
       return { ok: true as const, alreadyRecorded: result.alreadyRecorded };
     });
+  }),
+
+  /**
+   * Primeiros relatórios (vendas por origem e tempo médio por consultor), sem dado pessoal: só administração e
+   * financeiro. "Vendeu" é o que a sala marcou, não venda validada. A trilha guarda período, sala e número de fichas.
+   */
+  reports: router({
+    run: internalProcedure.input(z.object({
+      from: z.string().date(),
+      to: z.string().date(),
+      salesRoom: z.string().trim().max(180).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      if (!canOpenArchivedSheet(ctx.user.role)) throw new TRPCError({ code: "FORBIDDEN", message: "Os relatórios da sala são só da administração e do financeiro." });
+      if (input.to < input.from) throw new TRPCError({ code: "BAD_REQUEST", message: "O fim do período vem antes do início." });
+      if (addCalendarDays(input.from, 366) < input.to) throw new TRPCError({ code: "BAD_REQUEST", message: "Use no máximo um ano por vez." });
+      const db = await requireDb();
+      const tz = projectTimezone();
+      const start = localDayStart(input.from, tz, localDateInTimezone), end = localDayStart(addCalendarDays(input.to, 1), tz, localDateInTimezone);
+      const limit = 5000;
+      // Dia da visita (check-in, senão agendamento, senão criação), como na vista da sala: ficha marcada antes cai no dia em que aconteceu.
+      const visitRef = sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.scheduledAt}, ${captureRecords.createdAt})`;
+      // Limites como texto UTC (igual a roomVisibleCondition): um Date cru seria serializado no fuso do processo.
+      const utcText = (date: Date) => date.toISOString().slice(0, 23).replace("T", " ");
+      const conditions = [sql`${visitRef} >= ${utcText(start)}`, sql`${visitRef} < ${utcText(end)}`];
+      if (input.salesRoom?.trim()) conditions.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
+      const liner = alias(users, "liner");
+      const rows = await db.select({
+        captureLocation: captureRecords.captureLocation, presentationStatus: captureRecords.presentationStatus, commercialOutcome: captureRecords.commercialOutcome, ntKind: captureRecords.ntKind,
+        linerId: captureRecords.linerId, linerName: liner.name, presentationStartedAt: captureRecords.presentationStartedAt, presentationEndedAt: captureRecords.presentationEndedAt,
+      }).from(captureRecords).leftJoin(liner, eq(liner.id, captureRecords.linerId)).where(and(...conditions)).orderBy(asc(visitRef), asc(captureRecords.id)).limit(limit + 1);
+      const truncated = rows.length > limit;
+      const page = rows.slice(0, limit);
+      await recordAudit(ctx.user.id, "capture_report", `${input.from}_${input.to}`, "report_run", `Relatório da sala: ${page.length} ficha(s)${truncated ? " (corte em " + limit + ")" : ""}, período ${input.from} a ${input.to}${input.salesRoom?.trim() ? `, sala "${input.salesRoom.trim()}"` : ""}.`);
+      return { fichas: page.length, truncated, limit, byOrigin: buildSalesByOrigin(page), byConsultant: buildAverageTimeByConsultant(page) };
+    }),
   }),
 
   roles: router({
