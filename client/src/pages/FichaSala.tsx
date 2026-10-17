@@ -133,12 +133,15 @@ function PapeisAdmin() {
 }
 
 function LigarCodigo({ captureId }: { captureId: number }) {
+  const { user } = useAuth();
+  const canLink = user?.role === "admin" || user?.role === "seller";
   const utils = trpc.useUtils();
   const current = trpc.captureSheet.codeOf.useQuery({ captureId });
   const [code, setCode] = useState("");
   const link = trpc.captureSheet.setCoupleCode.useMutation({ onSuccess: () => { toast.success("Código ligado à ficha."); void utils.captureSheet.codeOf.invalidate({ captureId }); }, onError: error => toast.error(error.message) });
   if (current.isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>;
   if (current.data?.coupleCode) return <FichaImpressa code={current.data.coupleCode} />;
+  if (!canLink) return <Card className="border-[#e8e1d4]"><CardContent className="p-5"><p className="text-sm">Esta ficha ainda não tem o código do casal. Peça para o gerente ou o vendedor ligar o código.</p></CardContent></Card>;
   return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5">
     <p className="text-sm">Esta ficha ainda não tem o código do casal. Leia o QR do casal (o mesmo do Sales Command) ou digite o código abaixo.</p>
     <div className="flex flex-wrap items-end gap-3"><div className="grid gap-1"><Label htmlFor="ficha-couple-code">Código do casal</Label><Input id="ficha-couple-code" className="w-64" value={code} onChange={event => setCode(event.target.value)} /></div><Button disabled={link.isPending || code.trim().length < 4} onClick={() => link.mutate({ captureId, coupleCode: code })}>Ligar à ficha</Button></div>
