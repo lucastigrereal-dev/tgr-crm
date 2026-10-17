@@ -4,7 +4,8 @@ import { alias } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { captureMotives, captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
-import { getDb, recordAudit } from "../db";
+import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { publishSalesRoomEvent } from "../realtime";
 import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { txAudit } from "../txOutbox";
@@ -179,6 +180,7 @@ export const captureSheetRouter = router({
       contacts,
       gifts: gifts.map(gift => gift.description),
       nq,
+      ntOpen: !capture.ntKind && !capture.commercialOutcome && !(["no_tour", "presented", "closed"] as string[]).includes(capture.presentationStatus),
       nt: capture.ntKind ? { kind: capture.ntKind, motive: ntMotiveLabel, complement: capture.ntComplement, captorName: capture.ntCaptorName, recordedAt: capture.ntRecordedAt } : null,
       sheetSettings: { minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName },
       // LGPD: estado do papel, vista da sala e o aviso v1 (provisório) que sai na faixa destacável.
@@ -460,8 +462,8 @@ export const captureSheetRouter = router({
     return db.transaction(async tx => {
       const [capture] = await tx.select({
         id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome,
-        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterName: users.name,
-      }).from(captureRecords).leftJoin(users, eq(users.id, captureRecords.promoterId)).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
+        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom,
+      }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
       await assertCaptureInRoomView(db, ctx.user.role, capture);
       if (capture.ntKind) {
@@ -469,17 +471,27 @@ export const captureSheetRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "NT_IMMUTABLE: o não tour desta ficha já foi registrado e não pode ser alterado." });
       }
       if (capture.commercialOutcome) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já tem resultado comercial; não dá para marcar não tour." });
+      if (capture.presentationStatus === "no_tour") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já está como não tour; o motivo gravado antes não é reescrito." });
       if (capture.presentationStatus === "presented" || capture.presentationStatus === "closed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O casal já entrou na apresentação; o caminho é o CAIU EM MESA." });
       const [motive] = await tx.select().from(captureMotives).where(eq(captureMotives.id, input.motiveId)).limit(1);
       if (!motive || !motive.active || motive.kind !== `nt_${input.kind}`) throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para este tipo de não tour." });
       if (motive.requiresComplement && (complement?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
       const now = new Date();
+      // Nome do captador lido sem travar a linha do usuário.
+      const captorName = capture.promoterId ? (await tx.select({ name: users.name }).from(users).where(eq(users.id, capture.promoterId)).limit(1))[0]?.name ?? null : null;
       await tx.update(captureRecords).set({
-        ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: capture.promoterName ?? null, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id,
+        ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: captorName, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id, presentationEndedAt: now,
         presentationStatus: "no_tour", noTourReason: complement ? `${motive.label}: ${complement}` : motive.label,
       }).where(eq(captureRecords.id, capture.id));
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
-      return { ok: true as const, alreadyRecorded: false as const };
+      return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom, reason: complement ? `${motive.label}: ${complement}` : motive.label };
+    }).then(async result => {
+      if (!result.alreadyRecorded) {
+        // Mesmo caminho do markNoTour: o painel da sala atualiza e quem escuta capture.no_tour vê este NT.
+        await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.captureId, actorUserId: ctx.user.id, payload: { salesRoom: result.salesRoom, reason: result.reason, ntKind: input.kind } });
+        publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.captureId, salesRoom: result.salesRoom });
+      }
+      return { ok: true as const, alreadyRecorded: result.alreadyRecorded };
     });
   }),
 

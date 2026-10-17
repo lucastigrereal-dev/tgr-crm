@@ -49,6 +49,7 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     await expect(caller("seller").captureSheet.recordNt({ captureId, kind: "perfil", motiveId: motive.id })).resolves.toMatchObject({ ok: true, alreadyRecorded: false });
     const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, captureId));
     expect(row).toMatchObject({ ntKind: "perfil", ntMotiveId: motive.id, ntCaptorName: `Captador ${runId}`, presentationStatus: "no_tour", noTourReason: "Renda abaixo do mínimo" });
+    expect(row.presentationEndedAt).toBeInstanceOf(Date);
     await expect(caller().captureSheet.recordNt({ captureId, kind: "perfil", motiveId: motive.id })).resolves.toMatchObject({ alreadyRecorded: true });
     const other = await motiveOf("nt_perfil", "idade");
     await expect(caller().captureSheet.recordNt({ captureId, kind: "perfil", motiveId: other.id })).rejects.toMatchObject({ code: "CONFLICT" });
@@ -69,6 +70,8 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     const tempo = await motiveOf("nt_tempo", "sem_tempo");
     const presented = await newCapture({ presentationStatus: "presented" });
     await expect(caller().captureSheet.recordNt({ captureId: presented, kind: "tempo", motiveId: tempo.id })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    const alreadyNt = await newCapture({ presentationStatus: "no_tour", noTourReason: "motivo antigo" });
+    await expect(caller().captureSheet.recordNt({ captureId: alreadyNt, kind: "tempo", motiveId: tempo.id })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     const sold = await newCapture({ commercialOutcome: "vendeu" });
     await expect(caller().captureSheet.recordNt({ captureId: sold, kind: "tempo", motiveId: tempo.id })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
@@ -79,6 +82,10 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     await caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "achou caro o plano 3" });
     const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, captureId));
     expect(row).toMatchObject({ commercialOutcome: "caiu_em_mesa", commercialOutcomeMotiveId: motive.id, commercialOutcomeReason: "Valor acima do que o casal quer pagar: achou caro o plano 3" });
+    // Repetir a mesma chamada continua idempotente mesmo se o motivo for desativado depois.
+    await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: false });
+    await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "achou caro o plano 3" })).resolves.toMatchObject({ alreadyRecorded: true });
+    await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: true });
     const wrongKind = await motiveOf("nt_perfil", "renda");
     const second = await newCapture({ presentationStatus: "presented", closerId: adminId });
     await expect(caller().captures.recordCommercialOutcome({ id: second, outcome: "caiu_em_mesa", motiveId: wrongKind.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });

@@ -145,7 +145,7 @@ function FichaImpressa({ code }: { code: string }) {
         <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepResult: "declined" })}>PEP recusado</Button>
       </div>
     </CardContent></Card> : null}
-    {canEdit ? <NaoTourCard captureId={data.captureId} code={code} nt={data.nt} /> : null}
+    {canEdit && data.ntOpen || data.nt ? <NaoTourCard captureId={data.captureId} code={code} nt={data.nt} /> : null}
     {isAdmin ? <><TrocarCodigo captureId={data.captureId} onDone={newCode => { window.location.href = `/ficha?codigo=${encodeURIComponent(newCode)}`; }} /><PapeisAdmin /><MotivosAdmin /><LimitesAdmin /></> : null}
   </div>;
 }
@@ -213,6 +213,7 @@ function MotivosAdmin() {
       <div className="grid gap-1"><Label>Tipo</Label><Select value={form.kind} onValueChange={value => setForm({ ...form, kind: value as typeof form.kind })}><SelectTrigger className="w-44"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(MOTIVE_KIND_LABELS).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div>
       <div className="grid gap-1"><Label htmlFor="motive-code">Código (a-z, 0-9, _)</Label><Input id="motive-code" className="w-40" value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} /></div>
       <div className="grid gap-1"><Label htmlFor="motive-label">Texto do motivo</Label><Input id="motive-label" className="w-64" value={form.label} onChange={event => setForm({ ...form, label: event.target.value })} /></div>
+      <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={form.requiresComplement} onChange={event => setForm({ ...form, requiresComplement: event.target.checked })} />Pede complemento</label>
       <Button disabled={upsert.isPending || form.code.trim().length < 2 || form.label.trim().length < 3} onClick={() => upsert.mutate({ kind: form.kind, code: form.code, label: form.label, requiresComplement: form.requiresComplement, sortOrder: 500, active: true })}>Criar motivo</Button>
     </div>
   </CardContent></Card>;

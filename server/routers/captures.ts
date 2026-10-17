@@ -385,6 +385,11 @@ export const capturesRouter = router({
     if (ctx.user.role !== "admin" && capture.closerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o closer designado da ficha (ou a administração) registra o resultado comercial." });
     let reason = nullIfBlank(input.reason);
     let motiveId: number | null = null;
+    // Já gravado com este motivo: repetir é idempotente mesmo que o motivo tenha sido desativado ou renomeado depois.
+    if (capture.commercialOutcome && input.motiveId) {
+      if (capture.commercialOutcome === input.outcome && capture.commercialOutcomeMotiveId === input.motiveId) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
+      throw new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
+    }
     if (input.outcome === "caiu_em_mesa" && input.motiveId) {
       const [motive] = await db.select().from(captureMotives).where(eq(captureMotives.id, input.motiveId)).limit(1);
       if (!motive || !motive.active || motive.kind !== "nt_mesa") throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para CAIU EM MESA." });
