@@ -16,7 +16,8 @@ import { logger } from "./logger";
  */
 export const ENCOUNTER_TIMES_PATH = "/api/integrations/sales-command/encounter-times";
 
-const instant = z.string().datetime();
+// Colunas timestamp do MySQL só vão de 1970 a 2038: fora da faixa vira 400 (recusa), não 503 (que o Sales repetiria para sempre).
+const instant = z.string().datetime().refine(value => { const ms = Date.parse(value); return ms >= Date.parse("2000-01-01T00:00:00Z") && ms <= Date.parse("2037-12-31T23:59:59Z"); }, "Horário fora da faixa aceita.");
 export const encounterTimesSchema = z.strictObject({
   eventId: z.string().trim().min(1).max(120),
   eventName: z.literal("encounter.times_recorded.v1"),

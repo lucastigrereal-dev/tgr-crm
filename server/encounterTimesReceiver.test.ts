@@ -18,6 +18,8 @@ describe("encounter.times_recorded.v1: contrato", () => {
     expect(encounterTimesSchema.safeParse({ ...base(), times: {} }).success).toBe(false);
     expect(encounterTimesSchema.safeParse({ ...base(), times: { waitStartedAt: "2026-10-17T14:10:00Z", waitEndedAt: "2026-10-17T14:00:00Z" } }).success).toBe(false);
     expect(encounterTimesSchema.safeParse({ ...base(), times: { waitStartedAt: "ontem" } }).success).toBe(false);
+    expect(encounterTimesSchema.safeParse({ ...base(), times: { endedAt: "2040-01-01T00:00:00Z" } }).success).toBe(false);
+    expect(encounterTimesSchema.safeParse({ ...base(), occurredAt: "1960-01-01T00:00:00Z" }).success).toBe(false);
     expect(encounterTimesSchema.safeParse({ ...base(), times: { waitStartedAt: "2026-10-17T14:00:00Z", endedAt: "2026-10-17T13:00:00Z" } }).success).toBe(false);
     expect(encounterTimesSchema.safeParse({ ...base(), times: { closerEndedAt: "2026-10-17T15:30:00Z", endedAt: "2026-10-17T15:30:00Z" } }).success).toBe(true);
   });
