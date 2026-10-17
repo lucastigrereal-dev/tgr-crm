@@ -13,14 +13,24 @@ import { nqByCoupleCode } from "./routers/captureSheet";
  */
 export const NQ_READ_PATH = "/api/integrations/sales-command/nq/:coupleCode";
 
-/** Remove do cálculo o que não pode sair: o valor da renda do casal (o detalhe vira só "dentro/abaixo do mínimo"). */
+/**
+ * Detalhe sem dado pessoal: a tela mostra idade, tempo de relacionamento e o texto livre do relacionamento, mas o Sales
+ * só recebe frases fixas por critério e status (renda, idade, relacionamento e tempo nunca saem com o valor).
+ */
+const FIXED_DETAIL: Record<string, { ok: string; nq: string; missing: string; fixedMissing: string[] }> = {
+  idade_homem: { ok: "Idade do homem acima do mínimo.", nq: "Idade do homem abaixo do mínimo.", missing: "Idade do homem a confirmar.", fixedMissing: ["Marque qual cônjuge é o homem.", "Idade do homem não informada."] },
+  relacionamento: { ok: "Casado ou união estável.", nq: "Fora de casado ou união estável.", missing: "Relacionamento a confirmar pelo gerente.", fixedMissing: ["Relacionamento não informado."] },
+  tempo_relacionamento: { ok: "Tempo de relacionamento acima do mínimo.", nq: "Tempo de relacionamento abaixo do mínimo.", missing: "Tempo de relacionamento a confirmar.", fixedMissing: ["Tempo de relacionamento não informado."] },
+  renda: { ok: "Renda dentro do mínimo.", nq: "Renda abaixo do mínimo.", missing: "Renda a confirmar.", fixedMissing: ["Renda não informada."] },
+};
+
 export function toIntegrationNq(nq: NqResult) {
   return {
-    criteria: nq.criteria.map(criterion => ({
-      key: criterion.key,
-      status: criterion.status,
-      detail: criterion.key === "renda" && criterion.status !== "missing" ? (criterion.status === "ok" ? "Renda dentro do mínimo." : "Renda abaixo do mínimo.") : criterion.detail,
-    })),
+    criteria: nq.criteria.map(criterion => {
+      const fixed = FIXED_DETAIL[criterion.key];
+      const detail = !fixed ? criterion.detail : criterion.status === "missing" ? (fixed.fixedMissing.includes(criterion.detail) ? criterion.detail : fixed.missing) : fixed[criterion.status];
+      return { key: criterion.key, status: criterion.status, detail };
+    }),
     nqItems: nq.nqItems,
     missing: nq.missing,
     outcome: nq.outcome,

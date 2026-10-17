@@ -30,7 +30,7 @@ describe.skipIf(!integrationUrl)("endpoint de leitura do NQ em MySQL real", () =
     const db = drizzle({ client: pool });
     const [{ id: userId }] = await db.insert(users).values({ openId: `nq-user-${runId}`, name: "Gerente", role: "admin" }).$returningId();
     const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal NQ ${runId}`, documentNumber: `98765432100`, phone: "11977776666", birthDate: new Date("1980-01-01"), status: "active" } as never).$returningId();
-    await db.insert(captureRecords).values({ customerId, promoterId: userId, salesRoom: `Sala NQ ${runId}`, coupleCode, maleSpouse: "titular", relationshipStatus: "Casado", relationshipYears: 5, relationshipMonths: 0, vehicleKind: "carro", vehicleYear: 2022, averageIncome: "23456.78", hasCreditCard: true, ownsHome: false } as never);
+    await db.insert(captureRecords).values({ customerId, promoterId: userId, salesRoom: `Sala NQ ${runId}`, coupleCode, maleSpouse: "titular", relationshipStatus: "Casado com Maria Souza", relationshipYears: 5, relationshipMonths: 0, vehicleKind: "carro", vehicleYear: 2022, averageIncome: "23456.78", hasCreditCard: true, ownsHome: false } as never);
     const appOn = express(); registerNqReadEndpoint(appOn, KEY, true);
     const appOff = express(); registerNqReadEndpoint(appOff, KEY, false);
     ({ server: on, url: onUrl } = await listen(appOn));
@@ -60,6 +60,6 @@ describe.skipIf(!integrationUrl)("endpoint de leitura do NQ em MySQL real", () =
     expect(body.nq.criteria.find((c: { key: string }) => c.key === "casa_propria")).toMatchObject({ status: "nq" });
     expect(body.nq.criteria.find((c: { key: string }) => c.key === "renda")).toEqual({ key: "renda", status: "ok", detail: "Renda dentro do mínimo." });
     const text = JSON.stringify(body);
-    for (const secret of ["98765432100", "11977776666", `Casal NQ ${runId}`, "23456", "23.456"]) expect(text).not.toContain(secret);
+    for (const secret of ["98765432100", "11977776666", `Casal NQ ${runId}`, "23456", "23.456", "Maria", "Souza", "5 ano", "45 anos", "46 anos"]) expect(text).not.toContain(secret);
   });
 });
