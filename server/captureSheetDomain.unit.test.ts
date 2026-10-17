@@ -51,6 +51,10 @@ describe("casal qualificado: itens de NQ (regra provisória)", () => {
     expect(status("União estável")).toBe("ok");
     expect(status("Uniao Estavel")).toBe("ok");
     expect(status("Casal")).toBe("missing");
+    expect(status("Não casados")).toBe("nq");
+    expect(status("não tem união estável")).toBe("nq");
+    expect(status("Separados")).toBe("missing");
+    expect(status("Casados")).toBe("ok");
   });
 
   it("tempo de relacionamento precisa passar de 12 meses (12 exatos é NQ)", () => {

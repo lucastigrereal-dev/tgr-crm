@@ -79,7 +79,8 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
 
   const status = input.relationshipStatus ? fold(input.relationshipStatus) : "";
   if (!status) add("relacionamento", "Casado ou união estável", "missing", "Relacionamento não informado.");
-  else if (/namor|solteir|noiv|ficante/.test(status)) add("relacionamento", "Casado ou união estável", "nq", input.relationshipStatus!);
+  else if (/\b(nao|sem)\b.*(casad|uniao|estavel)|namor|solteir|noiv|ficante/.test(status)) add("relacionamento", "Casado ou união estável", "nq", input.relationshipStatus!);
+  else if (/separad|divorci|viuv|\bex\b/.test(status)) add("relacionamento", "Casado ou união estável", "missing", `Relacionamento "${input.relationshipStatus}": o gerente confirma se vale.`);
   else if (/casad|uniao|estavel|marit|convive|amasi/.test(status)) add("relacionamento", "Casado ou união estável", "ok", input.relationshipStatus!);
   else add("relacionamento", "Casado ou união estável", "missing", `Relacionamento "${input.relationshipStatus}" não reconhecido: o gerente confirma.`);
 

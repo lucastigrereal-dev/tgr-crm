@@ -196,6 +196,7 @@ function LimitesAdmin() {
   return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5">
     <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Limites provisórios do casal qualificado e do termo (administração)</p>
     <div className="grid gap-3 sm:grid-cols-3">{settingLabels.map(item => <div key={item.key} className="grid gap-1"><Label htmlFor={`limit-${item.key}`}>{item.label}</Label><div className="flex gap-2"><Input id={`limit-${item.key}`} type="number" value={draft[item.key] ?? String(item.pick(settings.data))} onChange={event => setDraft({ ...draft, [item.key]: event.target.value })} /><Button size="sm" variant="outline" disabled={save.isPending || draft[item.key] == null} onClick={() => save.mutate({ key: item.key, value: draft[item.key] })}>Salvar</Button></div></div>)}</div>
+    <div className="flex flex-wrap items-end gap-2 border-t border-[#ece6da] pt-3"><div className="grid gap-1"><Label htmlFor="limit-brand">Marca no cabeçalho da ficha</Label><Input id="limit-brand" className="w-64" value={draft.brand_name ?? settings.data.brandName} onChange={event => setDraft({ ...draft, brand_name: event.target.value })} /></div><Button size="sm" variant="outline" disabled={save.isPending || draft.brand_name == null} onClick={() => save.mutate({ key: "brand_name", value: draft.brand_name })}>Salvar marca</Button></div>
     <p className="text-xs text-muted-foreground">Tudo provisório até o Lucas homologar. Cada troca fica na trilha com o valor antigo e o novo.</p>
   </CardContent></Card>;
 }
