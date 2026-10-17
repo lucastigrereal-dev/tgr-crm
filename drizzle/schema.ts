@@ -400,6 +400,29 @@ export const captureTeamMembers = mysqlTable(
   table => [uniqueIndex("capture_team_members_capture_role_unique").on(table.captureId, table.roleId), index("capture_team_members_user_idx").on(table.userId)],
 );
 
+/** Tempos de sala recebidos do Sales Command por evento (`encounter.times_recorded.v1`). Só adiciona: cada evento é uma linha; o mais recente por ficha vale. */
+export const encounterTimeRecords = mysqlTable("encounter_time_records", {
+  id: int("id").autoincrement().primaryKey(),
+  eventId: varchar("eventId", { length: 120 }).notNull(),
+  captureId: int("captureId").notNull().references(() => captureRecords.id),
+  coupleCode: varchar("coupleCode", { length: 64 }).notNull(),
+  correlationId: varchar("correlationId", { length: 120 }).notNull(),
+  payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+  occurredAt: timestamp("occurredAt").notNull(),
+  waitStartedAt: timestamp("waitStartedAt"),
+  waitEndedAt: timestamp("waitEndedAt"),
+  consultantStartedAt: timestamp("consultantStartedAt"),
+  consultantEndedAt: timestamp("consultantEndedAt"),
+  consultantDispensed: boolean("consultantDispensed").default(false).notNull(),
+  closerStartedAt: timestamp("closerStartedAt"),
+  closerEndedAt: timestamp("closerEndedAt"),
+  endedAt: timestamp("endedAt"),
+  receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("encounter_time_records_event_unique").on(table.eventId),
+  index("encounter_time_records_capture_idx").on(table.captureId, table.occurredAt),
+]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {
