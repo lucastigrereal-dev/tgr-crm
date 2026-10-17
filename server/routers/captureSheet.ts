@@ -62,8 +62,10 @@ export const captureSheetRouter = router({
   }),
 
   /** Ficha completa para a tela e a impressão. Só quem tem login e permissão chega aqui. */
-  byCode: receptionProcedure.input(z.object({ code: z.string().max(64) })).query(async ({ input }) => {
+  byCode: receptionProcedure.input(z.object({ code: z.string().max(64) })).query(async ({ ctx, input }) => {
     const { db, code, capture, customer } = await captureByCode(input.code);
+    // Trilha de abertura no mesmo caminho que devolve CPF e renda; recargas no mesmo minuto da mesma pessoa contam uma vez só.
+    await recordAudit(ctx.user.id, "capture", capture.id, "sheet_opened", `Ficha ${capture.id} aberta.`, { idempotencyKey: `sheet_opened:${capture.id}:${ctx.user.id}:${Math.floor(Date.now() / 60_000)}` });
     const members = await db.select({ roleId: captureTeamRoles.id, code: captureTeamRoles.code, label: captureTeamRoles.label, kind: captureTeamRoles.kind, userId: captureTeamMembers.userId, personName: captureTeamMembers.personName, userName: users.name })
       .from(captureTeamMembers).innerJoin(captureTeamRoles, eq(captureTeamRoles.id, captureTeamMembers.roleId)).leftJoin(users, eq(users.id, captureTeamMembers.userId)).where(eq(captureTeamMembers.captureId, capture.id)).orderBy(asc(captureTeamRoles.sortOrder));
     const staffIds = [capture.promoterId, capture.qualifierId, capture.linerId, capture.closerId, capture.roomManagerId].filter((id): id is number => id != null);
@@ -93,13 +95,6 @@ export const captureSheetRouter = router({
       derived: { relationshipDays: relationshipDays(capture.relationshipYears, capture.relationshipMonths), arrivalOrder: order },
       printCount: Number(prints),
     };
-  }),
-
-  /** Trilha de abertura: quem abriu a ficha e quando (decisão do Lucas: CPF e renda completos, com trilha). Sem CPF nem telefone no texto. */
-  recordOpen: receptionProcedure.input(z.object({ code: z.string().max(64) })).mutation(async ({ ctx, input }) => {
-    const { capture } = await captureByCode(input.code);
-    await recordAudit(ctx.user.id, "capture", capture.id, "sheet_opened", `Ficha ${capture.id} aberta.`);
-    return { ok: true };
   }),
 
   /** Registra a impressão. A primeira é a original; as seguintes são reimpressões. O QR é sempre o mesmo. */

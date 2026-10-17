@@ -74,7 +74,6 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     expect(prints.map(row => row.reprint).sort()).toEqual([false, true]);
     expect((await caller().captureSheet.byCode({ code })).printCount).toBe(2);
     const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "capture"), eq(auditLogs.entityId, String(captureId))));
-    await caller().captureSheet.recordOpen({ code });
     const audits2 = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "capture"), eq(auditLogs.entityId, String(captureId))));
     expect(audits2.map(row => row.action)).toEqual(expect.arrayContaining(["sheet_printed", "sheet_reprinted", "couple_code_set", "sheet_opened"]));
     // CPF e telefone nunca entram no texto da trilha

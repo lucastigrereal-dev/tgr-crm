@@ -34,11 +34,9 @@ function FichaImpressa({ code }: { code: string }) {
   const saved = sheet.data?.capture;
   const savedKey = saved ? `${sheet.data?.captureId}|${saved.secondVehicleModel}|${saved.secondVehicleYear}|${saved.guest1Name}|${saved.guest2Name}|${saved.pepOfferedBy}` : "";
   // Mostra o que já está gravado nos campos da sala; recarrega quando a ficha muda no servidor.
-  useEffect(() => { void recordOpen.mutateAsync({ code }).catch(() => undefined); }, [code]);
   useEffect(() => { if (saved) setExtras({ secondVehicleModel: saved.secondVehicleModel ?? "", secondVehicleYear: saved.secondVehicleYear ? String(saved.secondVehicleYear) : "", guest1Name: saved.guest1Name ?? "", guest2Name: saved.guest2Name ?? "", pepOfferedBy: saved.pepOfferedBy ?? "" }); }, [savedKey]);
   const refresh = () => utils.captureSheet.byCode.invalidate({ code });
   const fail = (error: { message: string }) => toast.error(error.message);
-  const recordOpen = trpc.captureSheet.recordOpen.useMutation();
   const recordPrint = trpc.captureSheet.recordPrint.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
   const setMember = trpc.captureSheet.team.set.useMutation({ onSuccess: () => { setPerson(""); toast.success("Equipe atualizada."); void refresh(); }, onError: fail });
   const clearMember = trpc.captureSheet.team.clear.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
