@@ -29,6 +29,7 @@ function FichaImpressa({ code }: { code: string }) {
   const sheet = trpc.captureSheet.byCode.useQuery({ code });
   const roles = trpc.captureSheet.roles.list.useQuery();
   const [roleId, setRoleId] = useState("");
+  const [birth, setBirth] = useState("");
   const [person, setPerson] = useState("");
   const [extras, setExtras] = useState({ secondVehicleModel: "", secondVehicleYear: "", guest1Name: "", guest2Name: "", pepOfferedBy: "", captureKind: "" });
   const saved = sheet.data?.capture;
@@ -104,6 +105,10 @@ function FichaImpressa({ code }: { code: string }) {
         <div className="grid gap-1"><Label>Convidado 1</Label><Input value={extras.guest1Name} onChange={event => setExtras({ ...extras, guest1Name: event.target.value })} /></div>
         <div className="grid gap-1"><Label>Convidado 2</Label><Input value={extras.guest2Name} onChange={event => setExtras({ ...extras, guest2Name: event.target.value })} /></div>
         <div className="grid gap-1"><Label htmlFor="ficha-capture-kind">Tipo de captação</Label><Input id="ficha-capture-kind" value={extras.captureKind} onChange={event => setExtras({ ...extras, captureKind: event.target.value })} placeholder="Ex.: tour direto" /></div>
+      </div>
+      <div className="flex flex-wrap items-end gap-2 text-xs">
+        <div className="grid gap-1"><Label htmlFor="ficha-birth">Nascimento do titular (idade: {text(customer.age)})</Label><Input id="ficha-birth" type="date" className="w-44" value={birth} onChange={event => setBirth(event.target.value)} /></div>
+        <Button size="sm" variant="outline" disabled={!birth || updateExtras.isPending} onClick={() => updateExtras.mutate({ captureId: data.captureId, titularBirthDate: birth }, { onSuccess: () => setBirth("") })}>Salvar nascimento</Button>
       </div>
       <div className="flex flex-wrap gap-3 text-xs">
         <label className="grid gap-1">Qual cônjuge é o homem<select aria-label="Cônjuge homem" className="rounded border px-2 py-1 text-sm" value={capture.maleSpouse ?? ""} onChange={event => updateExtras.mutate({ captureId: data.captureId, maleSpouse: event.target.value ? (event.target.value as "titular" | "conjuge") : null })}><option value="">Não informado</option><option value="titular">Titular</option><option value="conjuge">Cônjuge</option></select></label>

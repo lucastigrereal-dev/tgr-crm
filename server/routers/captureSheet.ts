@@ -167,24 +167,34 @@ export const captureSheetRouter = router({
     secondVehicleKind: z.enum(["carro", "moto", "nenhum"]).optional().nullable(),
     watchedVacationPresentation: z.boolean().optional().nullable(),
     captureKind: z.string().trim().max(60).optional().nullable(),
+    /** Nascimento do titular (a captação não pede): grava no cadastro do cliente para a idade do NQ fechar. */
+    titularBirthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a data como AAAA-MM-DD.").optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
-    const { captureId, ...fields } = input;
+    const { captureId, titularBirthDate, ...fields } = input;
+    if (titularBirthDate) {
+      const parsed = new Date(`${titularBirthDate}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== titularBirthDate || parsed.getTime() > Date.now()) throw new TRPCError({ code: "BAD_REQUEST", message: "Data de nascimento inválida." });
+    }
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
       if (value === undefined) continue;
       patch[key] = typeof value === "string" ? (value.trim() || null) : value;
     }
     if (patch.pepResult && patch.pepOffered === false) throw new TRPCError({ code: "BAD_REQUEST", message: "Resultado do PEP só vale quando a oferta foi feita." });
-    if (!Object.keys(patch).length) return { updated: false };
+    if (!Object.keys(patch).length && titularBirthDate === undefined) return { updated: false };
     await db.transaction(async tx => {
       // Leitura e gravação juntas, com a ficha travada: duas abas não furam a regra "resultado só com oferta".
-      const [existing] = await tx.select({ id: captureRecords.id, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
+      const [existing] = await tx.select({ id: captureRecords.id, customerId: captureRecords.customerId, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
       if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
       if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
-      await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
-      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: captureId, action: "sheet_extras_updated", summary: `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).` });
+      if (Object.keys(patch).length) await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
+      if (titularBirthDate !== undefined) {
+        await tx.update(customers).set({ birthDate: titularBirthDate ? new Date(`${titularBirthDate}T00:00:00Z`) : null }).where(eq(customers.id, existing.customerId));
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "customer", entityId: existing.customerId, action: "birth_date_set_from_sheet", summary: `Ficha ${captureId}: nascimento do titular ${titularBirthDate ? "informado" : "limpo"}.` });
+      }
+      if (Object.keys(patch).length) await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: captureId, action: "sheet_extras_updated", summary: `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).` });
     });
     return { updated: true };
   }),

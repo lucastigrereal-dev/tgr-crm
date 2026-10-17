@@ -140,6 +140,14 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     const sheet = await caller("service").captureSheet.byCode({ code: nqCode });
     expect(sheet.capture).toMatchObject({ maleSpouse: "titular", vehicleKind: "moto", secondVehicleKind: "carro", watchedVacationPresentation: false, captureKind: "tour direto" });
     expect(sheet.customer.age).toBeGreaterThan(40);
+    await expect(caller("seller").captureSheet.updateExtras({ captureId: nqCapture, titularBirthDate: "2999-01-01" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller("seller").captureSheet.updateExtras({ captureId: nqCapture, titularBirthDate: "1999-02-31" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await caller("seller").captureSheet.updateExtras({ captureId: nqCapture, titularBirthDate: "1999-06-15" });
+    const young = await caller("service").captureSheet.byCode({ code: nqCode });
+    expect(young.customer.age).toBeLessThan(30);
+    expect(young.nq.criteria.find(c => c.key === "idade_homem")?.status).toBe("nq");
+    await caller("seller").captureSheet.updateExtras({ captureId: nqCapture, titularBirthDate: "1980-01-01" });
+    expect((await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "customer"), eq(auditLogs.action, "birth_date_set_from_sheet")))).length).toBeGreaterThanOrEqual(2);
     expect(sheet.nq).toMatchObject({ nqItems: 1, outcome: "nq_aceito" });
     expect(sheet.nq.criteria.find(c => c.key === "casa_propria")?.status).toBe("nq");
     expect(sheet.nq.criteria.find(c => c.key === "veiculo")?.status).toBe("ok");
