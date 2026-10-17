@@ -152,8 +152,13 @@ export const captureSheetRouter = router({
       const near = await db.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom }).from(captureRecords).where(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, from), lt(captureRecords.checkedInAt, to), sameRoom));
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
-    const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(500);
-    // printCount real: o limit(500) acima serve só para a custódia e não pode travar a contagem.
+    const printFields = { id: captureSheetPrints.id, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays };
+    // Custódia olha a última impressão e TODA cópia ainda não destruída (sem corte): papel pendente nunca fica de fora.
+    const [latestPrints, pendingPrints] = await Promise.all([
+      db.select(printFields).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(1),
+      db.select(printFields).from(captureSheetPrints).where(and(eq(captureSheetPrints.captureId, capture.id), isNull(captureSheetPrints.destroyedAt))),
+    ]);
+    const printRows = [...latestPrints, ...pendingPrints.filter(row => row.id !== latestPrints[0]?.id)];
     const [{ total: prints }] = await db.select({ total: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
     const lastPrint = printRows[0] ?? null;
     const paper = paperCustodyOfSheet(printRows.map(row => ({ printedDay: localDateInTimezone(row.printedAt, projectTimezone()), collectedAt: row.collectedAt, destroyedAt: row.destroyedAt, destroyDeadlineDays: row.destroyDeadlineDays })), todayLocal(), settings.paperDestroyDeadlineDays);

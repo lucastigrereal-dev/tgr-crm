@@ -8,6 +8,8 @@ import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { isDuplicateKeyError } from "../mysqlErrors";
+import { assertCaptureInRoomView, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { localDateInTimezone } from "../saleTermsPolicy";
 
 /**
@@ -68,9 +70,10 @@ export const vouchersRouter = router({
   /** Fichas de captação do associado, para ligar o brinde ao tour/venda que o originou. */
   // Em páginas, da mais nova para a mais antiga: com beforeId, as anteriores a ela. nextBeforeId abre a página seguinte,
   // para que qualquer ficha antiga possa ser escolhida.
-  captureOptions: internalProcedure.input(z.object({ customerId: z.number().int().positive(), beforeId: z.number().int().positive().optional() })).query(async ({ input }) => {
+  captureOptions: internalProcedure.input(z.object({ customerId: z.number().int().positive(), beforeId: z.number().int().positive().optional() })).query(async ({ ctx, input }) => {
     const db = await requireDb();
-    const filter = input.beforeId ? and(eq(captureRecords.customerId, input.customerId), lt(captureRecords.id, input.beforeId)) : eq(captureRecords.customerId, input.customerId);
+    const base = input.beforeId ? and(eq(captureRecords.customerId, input.customerId), lt(captureRecords.id, input.beforeId)) : eq(captureRecords.customerId, input.customerId);
+    const filter = canOpenArchivedSheet(ctx.user.role) ? base : and(base, roomVisibleCondition(await roomVisibilityCutoff()));
     const rows = await db.select({ id: captureRecords.id, createdAt: captureRecords.createdAt, scheduledAt: captureRecords.scheduledAt, captureLocation: captureRecords.captureLocation, presentationStatus: captureRecords.presentationStatus })
       .from(captureRecords).where(filter).orderBy(desc(captureRecords.id)).limit(CAPTURE_PAGE_SIZE + 1);
     const hasMore = rows.length > CAPTURE_PAGE_SIZE;
@@ -133,8 +136,10 @@ export const vouchersRouter = router({
     const [customer] = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1);
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
     if (input.captureId) {
-      const [capture] = await db.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
+      const [capture] = await db.select({ customerId: captureRecords.customerId, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
       if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
+      // Ficha que saiu da vista da sala (casal não comprou) não pode ser escolhida por quem não é do administrativo.
+      await assertCaptureInRoomView(db, ctx.user.role, capture);
     }
     const auditIssued = (actorUserId: number | null, id: number, code: string, customerId: number, description: string) =>
       recordAudit(actorUserId, "voucher", id, "issued", `Voucher ${code} emitido para o associado ${customerId}: ${description}.`, { idempotencyKey: `voucher_issued:${id}` });

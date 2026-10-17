@@ -234,4 +234,13 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     expect(after).toEqual(before);
     expect((await caller("seller").captureSheet.byCode({ code: oldCode }).catch(error => error)).code).toBe("FORBIDDEN");
   });
+
+  it("opções de ficha do brinde e emissão seguem a vista da sala", async () => {
+    const [{ customerId }] = await db.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, oldId));
+    const sellerIds = (await caller("seller").vouchers.captureOptions({ customerId })).captures.map(row => row.id);
+    expect(sellerIds).toEqual(expect.arrayContaining([todayId, soldId]));
+    expect(sellerIds).not.toContain(oldId);
+    expect((await caller("admin").vouchers.captureOptions({ customerId })).captures.map(row => row.id)).toContain(oldId);
+    await expect(caller("service").vouchers.issue({ customerId, captureId: oldId, description: "Brinde sintético", costAmount: 0, requestId: randomUUID() })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
 });
