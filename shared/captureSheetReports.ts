@@ -14,6 +14,11 @@ export type ReportSource = {
   presentationEndedAt: Date | string | null;
 };
 
+/** Tour de verdade: status de apresentação E início registrado (capturas importadas já nascem "closed" sem apresentação). */
+function isRealTour(row: ReportSource) {
+  return (row.presentationStatus === "presented" || row.presentationStatus === "closed") && !!row.presentationStartedAt;
+}
+
 export const NO_ORIGIN_LABEL = "(sem origem)";
 export const NO_CONSULTANT_LABEL = "(sem consultor)";
 
@@ -35,7 +40,7 @@ export function buildSalesByOrigin(rows: ReportSource[]): OriginRow[] {
     const key = originKey(row.captureLocation);
     const item = map.get(key) ?? { origin: key, fichas: 0, tours: 0, vendeu: 0, caiuEmMesa: 0, naoTour: 0, conversaoPct: null };
     item.fichas += 1;
-    if (row.presentationStatus === "presented" || row.presentationStatus === "closed") item.tours += 1;
+    if (isRealTour(row)) item.tours += 1;
     if (row.presentationStatus === "no_tour" || row.ntKind) item.naoTour += 1;
     if (row.commercialOutcome === "vendeu") item.vendeu += 1;
     if (row.commercialOutcome === "caiu_em_mesa") item.caiuEmMesa += 1;
@@ -49,7 +54,7 @@ export function buildSalesByOrigin(rows: ReportSource[]): OriginRow[] {
 export function buildAverageTimeByConsultant(rows: ReportSource[]): ConsultantRow[] {
   const map = new Map<string, { item: ConsultantRow; minutes: number[] }>();
   for (const row of rows) {
-    if (row.presentationStatus !== "presented" && row.presentationStatus !== "closed") continue;
+    if (!isRealTour(row)) continue;
     const label = row.linerName?.trim() || NO_CONSULTANT_LABEL;
     // Nomes de usuário não são únicos: agrupa pelo id do consultor e usa o nome só como rótulo.
     const key = row.linerId != null ? `id:${row.linerId}` : `nome:${label}`;

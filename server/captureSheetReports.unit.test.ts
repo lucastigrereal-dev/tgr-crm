@@ -45,6 +45,12 @@ describe("relatórios da sala: funções puras", () => {
     expect(result.map(item => item.apresentacoes).sort()).toEqual([1, 2]);
   });
 
+  it("captura importada (closed sem início de apresentação) não vira tour nem apresentação", () => {
+    const imported = row({ presentationStatus: "closed", presentationStartedAt: null, presentationEndedAt: null, linerName: null });
+    expect(buildSalesByOrigin([imported])[0]).toMatchObject({ fichas: 1, tours: 0, conversaoPct: null });
+    expect(buildAverageTimeByConsultant([imported])).toEqual([]);
+  });
+
   it("a exportação traz tipo e motivo do NT e o tempo da apresentação", () => {
     const [exported] = buildCaptureExportRows([{ customerName: "Casal Teste", ntKind: "perfil", noTourReason: "Idade fora do perfil: x", presentationStartedAt: at("12:00"), presentationEndedAt: at("12:30") } as never], { withCpf: false, timeZone: "UTC" });
     expect(exported).toMatchObject({ Tipo_NT: expect.any(String), Motivo_sem_tour: "Idade fora do perfil: x", Minutos_apresentacao: 30 });
