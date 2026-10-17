@@ -37,7 +37,7 @@ export default function ContractDetail() {
   const cancellationSimulation = trpc.contracts.simulateCancellation.useQuery({ contractId: id }, { enabled: Boolean(id) });
   const updateStatus = trpc.contracts.updateStatus.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); utils.contracts.list.invalidate(); toast.success("Status do contrato atualizado."); }, onError: error => toast.error(error.message) });
   const upload = trpc.contracts.uploadDocument.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); utils.saleValidation.getValidationStatus.invalidate({ contractId: id }); setUploadOpen(false); setFile(null); toast.success("Documento contratual anexado para conferência."); }, onError: error => toast.error(error.message) });
-  const signDocument = trpc.contracts.markDocumentSigned.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); toast.success("Assinatura confirmada com trilha de auditoria."); }, onError: error => toast.error(error.message) });
+  const signDocument = trpc.contracts.markDocumentSigned.useMutation({ onSuccess: () => { utils.contracts.detail.invalidate({ id }); utils.saleValidation.getValidationStatus.invalidate({ contractId: id }); toast.success("Assinatura confirmada com trilha de auditoria."); }, onError: error => toast.error(error.message) });
   const startElectronicSignature = trpc.electronicSignatures.start.useMutation({
     onSuccess: async data => {
       await Promise.all([utils.electronicSignatures.listByContract.invalidate({ contractId: id, limit: 20 }), utils.contracts.detail.invalidate({ id })]);

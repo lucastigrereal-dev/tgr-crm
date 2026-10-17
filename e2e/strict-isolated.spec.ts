@@ -458,7 +458,10 @@ test.describe("homologação isolada estrita", () => {
     await page.getByRole("button", { name: "Confirmar manualmente" }).click();
     await signed;
     await expect(page.getByText(/assinatura confirmada \(falta enviar o arquivo assinado\)/)).toBeVisible();
-    // ADR-007: confirmação manual é só exibição; sem o arquivo assinado real, o portão da assinatura não abre e a venda não valida
+    // ADR-007: confirmação manual é só exibição; sem o arquivo assinado real, o portão da assinatura não abre e a venda não valida.
+    // Recarrega a tela pra o portão vir do servidor, não de cache.
+    await page.reload();
+    await expect(page.getByText(/assinatura confirmada \(falta enviar o arquivo assinado\)/)).toBeVisible();
     await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
     await expect(page.getByRole("button", { name: "Validar venda" })).toBeDisabled();
 
@@ -474,8 +477,9 @@ test.describe("homologação isolada estrita", () => {
       "SELECT eventName FROM domain_events WHERE aggregateType = 'contract_document' AND aggregateId = ? AND eventName = 'contract.document.signed'", [String(doc!.id)],
     );
     expect(events).toHaveLength(1);
-    const [contractRow] = await queryDatabase<Array<{ status: string }>>("SELECT status FROM contracts WHERE id = ?", [contract!.id]);
+    const [contractRow] = await queryDatabase<Array<{ status: string; signedAt: Date | null }>>("SELECT status, signedAt FROM contracts WHERE id = ?", [contract!.id]);
     expect(contractRow!.status).toBe("pending_signature");
+    expect(contractRow!.signedAt).toBeNull();
   });
 
   test("pontos: credita o ano, lança uso e confere o saldo no extrato", async ({ page }) => {
@@ -503,7 +507,7 @@ test.describe("homologação isolada estrita", () => {
     await dialog.getByRole("button", { name: /Creditar/ }).click();
     await credited;
     await expect(dialog.getByText("+1000")).toBeVisible();
-    await expect(dialog.getByText(/Disponível:/)).toContainText("1000");
+    await expect(dialog.getByText(/Disponível:/).locator("strong")).toHaveText("1000");
 
     await dialog.getByLabel("Pontos").fill("250");
     await dialog.getByPlaceholder("Observação ou motivo").fill("Uso de laboratório E2E");
@@ -511,7 +515,7 @@ test.describe("homologação isolada estrita", () => {
     await dialog.getByRole("button", { name: "Lançar uso" }).click();
     await used;
     await expect(dialog.getByText("-250")).toBeVisible();
-    await expect(dialog.getByText(/Disponível:/)).toContainText("750");
+    await expect(dialog.getByText(/Disponível:/).locator("strong")).toHaveText("750");
 
     const ledger = await queryDatabase<Array<{ entryType: string; points: number }>>(
       "SELECT entryType, points FROM points_ledger WHERE entitlementId = ? ORDER BY id", [entitlement!.id],
@@ -537,33 +541,44 @@ test.describe("homologação isolada estrita", () => {
     expect(url).toMatch(/\/portal\/[A-Za-z0-9_-]{43}$/);
 
     // o associado abre o link sem sessão: contexto novo, sem cookie do admin
-    const guest = await page.context().browser()!.newContext();
-    const guestPage = await guest.newPage();
-    await guestPage.goto(url);
-    await expect(guestPage.getByRole("heading", { name: /^Olá,/ })).toBeVisible();
-    await expect(guestPage.getByText(`Contrato ${contract!.number}`)).toBeVisible();
-    await expect(guestPage.getByText(/Parcela 1 ·/).first()).toBeVisible();
-    // só tem o hash no banco, nunca o token
+    const browser = page.context().browser()!;
     const token = url.split("/portal/")[1]!;
-    const links = await queryDatabase<Array<{ tokenHash: string; revokedAt: Date | null }>>(
-      "SELECT tokenHash, revokedAt FROM owner_portal_links WHERE customerId = ?", [contract!.customerId],
-    );
-    expect(links).toHaveLength(1);
-    expect(links[0]!.tokenHash).toBe(createHash("sha256").update(token, "utf8").digest("hex"));
-    expect(links[0]!.tokenHash).not.toContain(token);
+    const guest = await browser.newContext();
+    try {
+      const guestPage = await guest.newPage();
+      await guestPage.goto(url);
+      await expect(guestPage.getByRole("heading", { name: /^Olá,/ })).toBeVisible();
+      await expect(guestPage.getByText(`Contrato ${contract!.number}`)).toBeVisible();
+      await expect(guestPage.getByText(/Parcela 1 ·/).first()).toBeVisible();
+      // só o hash fica no banco, e o link nasce ativo
+      const linksBefore = await queryDatabase<Array<{ tokenHash: string; revokedAt: Date | null }>>(
+        "SELECT tokenHash, revokedAt FROM owner_portal_links WHERE customerId = ?", [contract!.customerId],
+      );
+      expect(linksBefore).toHaveLength(1);
+      expect(linksBefore[0]!.tokenHash).toBe(createHash("sha256").update(token, "utf8").digest("hex"));
+      expect(linksBefore[0]!.revokedAt).toBeNull();
 
-    const revoked = waitForMutation(page, "ownerPortal.revokeLink");
-    await page.getByRole("button", { name: "Revogar" }).click();
-    await revoked;
-    await guestPage.reload();
-    await expect(guestPage.getByRole("heading", { name: "Link indisponível" })).toBeVisible();
-    await guest.close();
+      const revoked = waitForMutation(page, "ownerPortal.revokeLink");
+      await page.getByRole("button", { name: "Revogar" }).click();
+      await revoked;
+      const linksAfter = await queryDatabase<Array<{ revokedAt: Date | null }>>(
+        "SELECT revokedAt FROM owner_portal_links WHERE customerId = ?", [contract!.customerId],
+      );
+      expect(linksAfter[0]!.revokedAt).not.toBeNull();
+      await guestPage.reload();
+      await expect(guestPage.getByRole("heading", { name: "Link indisponível" })).toBeVisible();
+    } finally {
+      await guest.close();
+    }
 
     // link inventado também não abre
-    const fake = await page.context().browser()!.newContext();
-    const fakePage = await fake.newPage();
-    await fakePage.goto(new URL("/portal/" + "A".repeat(43), url).toString());
-    await expect(fakePage.getByRole("heading", { name: "Link indisponível" })).toBeVisible();
-    await fake.close();
+    const fake = await browser.newContext();
+    try {
+      const fakePage = await fake.newPage();
+      await fakePage.goto(new URL("/portal/" + "A".repeat(43), url).toString());
+      await expect(fakePage.getByRole("heading", { name: "Link indisponível" })).toBeVisible();
+    } finally {
+      await fake.close();
+    }
   });
 });
