@@ -142,8 +142,10 @@ test.describe("homologação isolada estrita", () => {
       .getByTestId("room-card")
       .filter({ hasText: fx.roomNoTourCustomerName });
     await noTourCard.getByRole("button", { name: "Registrar sem-tour" }).click();
+    await noTourCard.getByRole("combobox").nth(1).click();
+    await page.getByRole("option", { name: "Idade fora do perfil" }).click();
     await noTourCard
-      .getByLabel("Motivo do sem-tour *")
+      .getByLabel("Complemento")
       .fill("Casal desistiu da apresentação no teste isolado.");
     await noTourCard.getByRole("button", { name: "Confirmar sem-tour" }).click();
     await expect(noTourCard).toHaveCount(0);
@@ -177,7 +179,8 @@ test.describe("homologação isolada estrita", () => {
     expect(tour?.presentationEndedAt).toBeTruthy();
     expect(noTour).toMatchObject({
       presentationStatus: "no_tour",
-      noTourReason: "Casal desistiu da apresentação no teste isolado.",
+      noTourReason: "Idade fora do perfil: Casal desistiu da apresentação no teste isolado.",
+      ntKind: "perfil",
     });
   });
 

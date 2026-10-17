@@ -27,6 +27,28 @@ async function requireDb() {
   return db;
 }
 
+type SheetDb = Awaited<ReturnType<typeof requireDb>>;
+
+/** Motivo de NT conferido: ativo, do tipo certo e com complemento quando o motivo pede. */
+export async function resolveNtMotive(db: SheetDb, kind: "perfil" | "tempo" | "consultor", motiveId: number, complement: string | null) {
+  const [motive] = await db.select().from(captureMotives).where(eq(captureMotives.id, motiveId)).limit(1);
+  if (!motive || !motive.active || motive.kind !== `nt_${kind}`) throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para este tipo de não tour." });
+  if (motive.requiresComplement && (complement?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
+  return { motive, reason: complement ? `${motive.label}: ${complement}` : motive.label };
+}
+
+/** Nome do captador no momento do NT: o promotor da ficha ou, sem ele, o promotor de marketing da equipe por papel (a mesma regra da ficha impressa). */
+export async function captorNameOf(db: SheetDb, captureId: number, promoterId: number | null) {
+  if (promoterId) {
+    const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, promoterId)).limit(1);
+    if (user?.name) return user.name;
+  }
+  const [member] = await db.select({ personName: captureTeamMembers.personName, userName: users.name }).from(captureTeamMembers)
+    .innerJoin(captureTeamRoles, eq(captureTeamRoles.id, captureTeamMembers.roleId)).leftJoin(users, eq(users.id, captureTeamMembers.userId))
+    .where(and(eq(captureTeamMembers.captureId, captureId), eq(captureTeamRoles.code, "promotor_marketing"))).limit(1);
+  return member?.personName ?? member?.userName ?? null;
+}
+
 const PANEL_LIMIT = 2000;
 const MOTIVE_KINDS = ["nt_perfil", "nt_tempo", "nt_consultor", "nt_mesa", "qualificacao"] as const;
 const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "room_visibility_days", "paper_destroy_deadline_days", "brand_name", ...PRIVACY_TEXT_KEYS] as const;
@@ -473,18 +495,15 @@ export const captureSheetRouter = router({
       if (capture.commercialOutcome) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já tem resultado comercial; não dá para marcar não tour." });
       if (capture.presentationStatus === "no_tour") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já está como não tour; o motivo gravado antes não é reescrito." });
       if (capture.presentationStatus === "presented" || capture.presentationStatus === "closed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O casal já entrou na apresentação; o caminho é o CAIU EM MESA." });
-      const [motive] = await tx.select().from(captureMotives).where(eq(captureMotives.id, input.motiveId)).limit(1);
-      if (!motive || !motive.active || motive.kind !== `nt_${input.kind}`) throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para este tipo de não tour." });
-      if (motive.requiresComplement && (complement?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
+      const { motive, reason } = await resolveNtMotive(db, input.kind, input.motiveId, complement);
       const now = new Date();
-      // Nome do captador lido sem travar a linha do usuário.
-      const captorName = capture.promoterId ? (await tx.select({ name: users.name }).from(users).where(eq(users.id, capture.promoterId)).limit(1))[0]?.name ?? null : null;
+      const captorName = await captorNameOf(db, capture.id, capture.promoterId);
       await tx.update(captureRecords).set({
         ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: captorName, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id, presentationEndedAt: now,
-        presentationStatus: "no_tour", noTourReason: complement ? `${motive.label}: ${complement}` : motive.label,
+        presentationStatus: "no_tour", noTourReason: reason,
       }).where(eq(captureRecords.id, capture.id));
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
-      return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom, reason: complement ? `${motive.label}: ${complement}` : motive.label };
+      return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom, reason };
     }).then(async result => {
       if (!result.alreadyRecorded) {
         // Mesmo caminho do markNoTour: o painel da sala atualiza e quem escuta capture.no_tour vê este NT.

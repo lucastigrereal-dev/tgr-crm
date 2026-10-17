@@ -5,7 +5,7 @@ import { captureMotives, captureRecords, commercialProjectSettings, customers, o
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
-import { assertCaptureInRoomView, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { assertCaptureInRoomView, captorNameOf, resolveNtMotive, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
 import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
 import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfile } from "../captureSegmentation";
@@ -420,14 +420,22 @@ export const capturesRouter = router({
     return { success: true as const, alreadyRecorded: false as const, outcome: input.outcome, recordedAt };
   }),
 
-  markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(3).max(5000), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
+  // Com `ntKind` + `motiveId` o sem-tour usa o motivo padronizado da lista (captador gravado); sem eles segue o texto livre de antes.
+  markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().max(5000).optional(), ntKind: z.enum(["perfil", "tempo", "consultor"]).optional(), motiveId: z.number().int().positive().optional(), receptionNotes: optionalText }).superRefine((value, issueContext) => {
+    if (!value.motiveId !== !value.ntKind) issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["motiveId"], message: "Tipo e motivo do não tour vêm juntos." });
+    if (!value.motiveId && (value.reason?.length ?? 0) < 3) issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres)." });
+  })).mutation(async ({ ctx, input }) => {
     const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "mark_no_tour");
+    const complement = nullIfBlank(input.reason);
+    const nt = input.motiveId && input.ntKind ? await resolveNtMotive(db, input.ntKind, input.motiveId, complement) : null;
+    const finalReason = nt?.reason ?? input.reason!;
+    const ntColumns = nt && input.ntKind ? { ntKind: input.ntKind, ntMotiveId: nt.motive.id, ntComplement: complement, ntCaptorName: await captorNameOf(db, capture.id, capture.promoterId), ntRecordedAt: new Date(), ntRecordedByUserId: ctx.user.id } : {};
     const endedAt = new Date();
-    const updateResult = await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    const updateResult = await db.update(captureRecords).set({ ...ntColumns, presentationStatus: "no_tour", noTourReason: finalReason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
     assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
-    await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: input.reason } });
+    await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: finalReason } });
     publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, endedAt };
   }),

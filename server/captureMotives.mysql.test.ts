@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { captureMotives, captureRecords, customers, users } from "../drizzle/schema";
+import { captureMotives, captureRecords, captureTeamMembers, captureTeamRoles, customers, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Motivos padronizados e NT de perfil/tempo/consultor em MySQL real: lista provisória semeada, motivo obrigatório, imutável, captador gravado.
@@ -53,6 +53,20 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     await expect(caller().captureSheet.recordNt({ captureId, kind: "perfil", motiveId: motive.id })).resolves.toMatchObject({ alreadyRecorded: true });
     const other = await motiveOf("nt_perfil", "idade");
     await expect(caller().captureSheet.recordNt({ captureId, kind: "perfil", motiveId: other.id })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("markNoTour da sala com motivo da lista grava o NT padronizado; o captador vem do papel de promotor de marketing quando a ficha não tem promotor", async () => {
+    const captureId = await newCapture({ promoterId: null });
+    const [role] = await db.select().from(captureTeamRoles).where(eq(captureTeamRoles.code, "promotor_marketing"));
+    await db.insert(captureTeamMembers).values({ captureId, roleId: role.id, personName: `Promotor sem conta ${runId}` });
+    const motive = await motiveOf("nt_consultor", "sem_consultor");
+    await expect(caller().captures.markNoTour({ id: captureId, motiveId: motive.id })).rejects.toThrow();
+    await caller().captures.markNoTour({ id: captureId, ntKind: "consultor", motiveId: motive.id });
+    const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, captureId));
+    expect(row).toMatchObject({ ntKind: "consultor", ntMotiveId: motive.id, ntCaptorName: `Promotor sem conta ${runId}`, presentationStatus: "no_tour", noTourReason: "Sem consultor disponível" });
+    const free = await newCapture();
+    await caller().captures.markNoTour({ id: free, reason: "texto livre antigo" });
+    expect((await db.select().from(captureRecords).where(eq(captureRecords.id, free)))[0]).toMatchObject({ ntKind: null, noTourReason: "texto livre antigo" });
   });
 
   it("motivo de outro tipo, motivo 'outro' sem complemento e papel sem permissão são recusados", async () => {
