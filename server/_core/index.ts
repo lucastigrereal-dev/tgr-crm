@@ -15,6 +15,7 @@ import { processAsaasWebhook } from "../paymentGatewayWebhook";
 import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
+import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
 import { processClicksignWebhook } from "../eSignatureService";
@@ -68,6 +69,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
+  registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
