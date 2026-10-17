@@ -403,7 +403,7 @@ export const capturesRouter = router({
       complement = reason;
       reason = reason ? `${motive.label}: ${reason}` : motive.label;
     }
-    const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null; commercialOutcomeMotiveId: number | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || ((existing.commercialOutcomeReason ?? null) === reason && (existing.commercialOutcomeMotiveId ?? null) === motiveId));
+    const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null; commercialOutcomeMotiveId: number | null; commercialOutcomeComplement: string | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || (motiveId !== null ? (existing.commercialOutcomeMotiveId ?? null) === motiveId && (existing.commercialOutcomeComplement ?? null) === complement : (existing.commercialOutcomeReason ?? null) === reason && (existing.commercialOutcomeMotiveId ?? null) === null));
     const rejectChange = () => new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
     if (capture.commercialOutcome) {
       if (sameAs(capture)) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
