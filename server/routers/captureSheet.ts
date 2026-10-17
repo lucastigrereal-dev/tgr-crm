@@ -536,13 +536,15 @@ export const captureSheetRouter = router({
       const tz = projectTimezone();
       const start = localDayStart(input.from, tz, localDateInTimezone), end = localDayStart(addCalendarDays(input.to, 1), tz, localDateInTimezone);
       const limit = 5000;
-      const conditions = [gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end)];
+      // Dia da visita (check-in, senão agendamento, senão criação), como na vista da sala: ficha marcada antes cai no dia em que aconteceu.
+      const visitRef = sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.scheduledAt}, ${captureRecords.createdAt})`;
+      const conditions = [sql`${visitRef} >= ${start}`, sql`${visitRef} < ${end}`];
       if (input.salesRoom?.trim()) conditions.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
       const liner = alias(users, "liner");
       const rows = await db.select({
         captureLocation: captureRecords.captureLocation, presentationStatus: captureRecords.presentationStatus, commercialOutcome: captureRecords.commercialOutcome, ntKind: captureRecords.ntKind,
         linerId: captureRecords.linerId, linerName: liner.name, presentationStartedAt: captureRecords.presentationStartedAt, presentationEndedAt: captureRecords.presentationEndedAt,
-      }).from(captureRecords).leftJoin(liner, eq(liner.id, captureRecords.linerId)).where(and(...conditions)).orderBy(asc(captureRecords.createdAt), asc(captureRecords.id)).limit(limit + 1);
+      }).from(captureRecords).leftJoin(liner, eq(liner.id, captureRecords.linerId)).where(and(...conditions)).orderBy(asc(visitRef), asc(captureRecords.id)).limit(limit + 1);
       const truncated = rows.length > limit;
       const page = rows.slice(0, limit);
       await recordAudit(ctx.user.id, "capture_report", `${input.from}_${input.to}`, "report_run", `Relatório da sala: ${page.length} ficha(s)${truncated ? " (corte em " + limit + ")" : ""}, período ${input.from} a ${input.to}${input.salesRoom?.trim() ? `, sala "${input.salesRoom.trim()}"` : ""}.`);

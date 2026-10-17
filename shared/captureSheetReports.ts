@@ -25,7 +25,7 @@ export function presentationMinutes(start: Date | string | null, end: Date | str
 }
 
 export type OriginRow = { origin: string; fichas: number; tours: number; vendeu: number; caiuEmMesa: number; naoTour: number; conversaoPct: number | null };
-export type ConsultantRow = { consultant: string; apresentacoes: number; comTempo: number; mediaMin: number | null; minimoMin: number | null; maximoMin: number | null };
+export type ConsultantRow = { consultantKey: string; consultant: string; apresentacoes: number; comTempo: number; mediaMin: number | null; minimoMin: number | null; maximoMin: number | null };
 
 const originKey = (value: string | null) => value?.trim() || NO_ORIGIN_LABEL;
 
@@ -53,7 +53,7 @@ export function buildAverageTimeByConsultant(rows: ReportSource[]): ConsultantRo
     const label = row.linerName?.trim() || NO_CONSULTANT_LABEL;
     // Nomes de usuário não são únicos: agrupa pelo id do consultor e usa o nome só como rótulo.
     const key = row.linerId != null ? `id:${row.linerId}` : `nome:${label}`;
-    const entry = map.get(key) ?? { item: { consultant: label, apresentacoes: 0, comTempo: 0, mediaMin: null, minimoMin: null, maximoMin: null }, minutes: [] };
+    const entry = map.get(key) ?? { item: { consultantKey: key, consultant: label, apresentacoes: 0, comTempo: 0, mediaMin: null, minimoMin: null, maximoMin: null }, minutes: [] };
     entry.item.apresentacoes += 1;
     const minutes = presentationMinutes(row.presentationStartedAt, row.presentationEndedAt);
     if (minutes !== null) entry.minutes.push(minutes);

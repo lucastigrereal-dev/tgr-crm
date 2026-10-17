@@ -50,6 +50,15 @@ describe.skipIf(!integrationUrl)("relatórios da sala em MySQL real", () => {
     expect(text).not.toContain(`Casal Rel ${runId}`);
   });
 
+  it("a ficha entra no dia da visita (check-in), não no dia em que foi criada", async () => {
+    const [{ id }] = await db.insert(captureRecords).values({ customerId, promoterId: adminId, salesRoom: `${room} visita`, captureLocation: "Shopping Visita", presentationStatus: "presented", createdAt: new Date(Date.now() - 10 * 86400000), checkedInAt: new Date() } as never).$returningId();
+    expect(id).toBeGreaterThan(0);
+    const hoje = await caller("admin").captureSheet.reports.run({ from: day(-1), to: day(1), salesRoom: `${room} visita` });
+    expect(hoje.fichas).toBe(1);
+    const dia10 = await caller("admin").captureSheet.reports.run({ from: day(-11), to: day(-9), salesRoom: `${room} visita` });
+    expect(dia10.fichas).toBe(0);
+  });
+
   it("vendedor e recepção não abrem o relatório; período invertido é recusado", async () => {
     await expect(caller("seller").captureSheet.reports.run({ from: day(-1), to: day(1) })).rejects.toThrow();
     await expect(caller("service").captureSheet.reports.run({ from: day(-1), to: day(1) })).rejects.toThrow();
