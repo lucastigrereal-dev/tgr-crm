@@ -107,6 +107,22 @@ export function roomVisibleCondition(cutoff: Date) {
   return or(eq(captureRecords.commercialOutcome, "vendeu"), sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.scheduledAt}, ${captureRecords.createdAt}) >= ${utc}`);
 }
 
+/** NQ da ficha com a mesma conta da tela (idade no calendário do projeto): a tela e o endpoint do Sales leem do mesmo lugar. */
+export function nqOfSheet(capture: typeof captureRecords.$inferSelect, customer: { birthDate: Date | string | null }, settings: { nq: NqSettings }) {
+  const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
+  return computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
+}
+
+/** NQ de uma ficha pelo código do casal, para o endpoint server-to-server do Sales. Código inválido ou sem ficha dá nulo. */
+export async function nqByCoupleCode(rawCode: string) {
+  const code = normalizeCoupleCode(rawCode);
+  if (!isCoupleCode(code)) return null;
+  const db = await requireDb();
+  const [row] = await db.select({ capture: captureRecords, customer: customers }).from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId)).where(eq(captureRecords.coupleCode, code)).limit(1);
+  if (!row) return null;
+  return { coupleCode: row.capture.coupleCode ?? code, nq: nqOfSheet(row.capture, row.customer, await loadSettings(db)) };
+}
+
 async function captureByCode(rawCode: string) {
   const code = normalizeCoupleCode(rawCode);
   if (!isCoupleCode(code)) throw new TRPCError({ code: "NOT_FOUND", message: "Código da ficha inválido." });
@@ -194,7 +210,7 @@ export const captureSheetRouter = router({
     const gifts = await db.select({ description: vouchers.description, status: vouchers.status }).from(vouchers).where(and(eq(vouchers.captureId, capture.id), sql`${vouchers.status} <> 'cancelled'`)).orderBy(asc(vouchers.id)).limit(20);
     // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
     const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
-    const nq = computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
+    const nq = nqOfSheet(capture, customer, settings);
     // Rótulo do momento do registro (o snapshot em noTourReason), não o texto atual do catálogo: renomear o motivo depois não reescreve o histórico.
     const ntMotiveLabel = capture.ntKind ? (capture.ntComplement && capture.noTourReason?.endsWith(`: ${capture.ntComplement}`) ? capture.noTourReason.slice(0, -(capture.ntComplement.length + 2)) : capture.noTourReason) ?? null : null;
     return {
