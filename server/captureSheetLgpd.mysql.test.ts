@@ -133,7 +133,9 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     await db.insert(captureSheetPrints).values({ captureId: todayId, printedByUserId: userId, printedAt: daysAgo(3), destroyedAt: daysAgo(3), destroyedByUserId: userId, reprint: false });
     await db.insert(captureSheetPrints).values({ captureId: todayId, printedByUserId: userId, reprint: true });
     const panel = (await caller("service").captureSheet.paper.outstanding()) as { sheets: Array<{ coupleCode: string | null; reprintAlert: boolean }> };
-    expect(panel.sheets.find(sheet => sheet.coupleCode === todayCode)?.reprintAlert).toBe(true);
+    const line = panel.sheets.find(sheet => sheet.coupleCode === todayCode) as { reprintAlert: boolean; printCount: number } | undefined;
+    expect(line?.reprintAlert).toBe(true);
+    expect(line?.printCount).toBe(2);
     await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, todayId));
   });
 

@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
@@ -313,13 +313,17 @@ export const captureSheetRouter = router({
         .where(and(lt(captureSheetPrints.printedAt, end), or(gte(captureSheetPrints.printedAt, start), isNull(captureSheetPrints.destroyedAt)))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
       const byCapture = new Map<number, typeof rows>();
       for (const row of rows) byCapture.set(row.captureId, [...(byCapture.get(row.captureId) ?? []), row]);
+      // Total de impressões por ficha, sem o filtro de dia/destruição: a cópia antiga destruída em outro dia também conta.
+      const captureIds = Array.from(byCapture.keys());
+      const totals = captureIds.length ? await db.select({ captureId: captureSheetPrints.captureId, total: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(inArray(captureSheetPrints.captureId, captureIds)).groupBy(captureSheetPrints.captureId) : [];
+      const totalByCapture = new Map(totals.map(row => [row.captureId, Number(row.total)]));
       const today = todayLocal();
       const sheets = Array.from(byCapture.entries()).map(([captureId, prints]) => {
         const last = prints[0]!;
         const custody = paperCustody({ printedDay: localDateInTimezone(last.printedAt, tz), collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: settings.paperDestroyDeadlineDays });
         // Ficha fora da vista da sala: o papel continua na lista (alguém precisa destruí-lo), mas sem o nome do casal para quem não é administrativo.
         const hidden = !canOpenArchivedSheet(ctx.user.role) && !visibilityOf(last, settings).visibleToRoom;
-        return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: prints.length >= REPRINT_ALERT_THRESHOLD || prints.some(print => print.reprint) };
+        return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: totalByCapture.get(captureId) ?? prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: (totalByCapture.get(captureId) ?? prints.length) >= REPRINT_ALERT_THRESHOLD || prints.some(print => print.reprint) };
       });
       return {
         date: day,
