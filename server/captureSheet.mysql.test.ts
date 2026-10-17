@@ -57,6 +57,11 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     await expect(caller("user").captureSheet.byCode({ code })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("abrir com outra caixa devolve o código como foi gravado", async () => {
+    const sheet = await caller().captureSheet.byCode({ code: code.toLowerCase() });
+    expect(sheet.coupleCode).toBe(code);
+  });
+
   it("ordem de chegada conta quem chegou antes na mesma sala e no mesmo dia", async () => {
     const sheet = await caller().captureSheet.byCode({ code });
     expect(sheet.derived.arrivalOrder).toBe(2);

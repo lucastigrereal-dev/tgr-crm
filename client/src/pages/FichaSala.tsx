@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState, PageHeader } from "@/components/crm/ui";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Printer } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearch } from "wouter";
@@ -22,6 +23,9 @@ function Field({ label, value }: { label: string; value: string }) {
 
 function FichaImpressa({ code }: { code: string }) {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
+  const canEdit = user?.role === "admin" || user?.role === "seller";
+  const isAdmin = user?.role === "admin";
   const sheet = trpc.captureSheet.byCode.useQuery({ code });
   const roles = trpc.captureSheet.roles.list.useQuery();
   const [roleId, setRoleId] = useState("");
@@ -73,7 +77,7 @@ function FichaImpressa({ code }: { code: string }) {
       <p className="mt-3 text-[10px] leading-snug text-[#6b756f]">Aviso de privacidade (texto provisório, a aprovar): seus dados, incluindo CPF e renda, são usados para o atendimento e a proposta comercial desta visita e ficam guardados com segurança. Esta ficha em papel deve ser devolvida à gerência no fim do dia. Pedidos sobre seus dados: fale com a recepção.</p>
       <div className="mt-6 grid grid-cols-2 gap-8 text-xs"><div className="border-t border-[#1d2b2a] pt-1">Ciente do casal (assinatura)</div><div className="border-t border-[#1d2b2a] pt-1">Gerente de sala</div></div>
     </div>
-    <Card className="border-[#e8e1d4]"><CardContent className="space-y-4 p-5">
+    {canEdit ? <Card className="border-[#e8e1d4]"><CardContent className="space-y-4 p-5">
       <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Equipe por papel</p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1"><Label>Papel</Label><Select value={roleId || undefined} onValueChange={setRoleId}><SelectTrigger className="w-60"><SelectValue placeholder="Escolha o papel" /></SelectTrigger><SelectContent>{(roles.data ?? []).map(role => <SelectItem key={role.id} value={String(role.id)}>{role.label}</SelectItem>)}</SelectContent></Select></div>
@@ -93,12 +97,40 @@ function FichaImpressa({ code }: { code: string }) {
         <Button onClick={() => updateExtras.mutate({ captureId: data.captureId, secondVehicleModel: extras.secondVehicleModel, secondVehicleYear: extras.secondVehicleYear ? Number(extras.secondVehicleYear) : null, guest1Name: extras.guest1Name, guest2Name: extras.guest2Name })} disabled={updateExtras.isPending}>Salvar campos</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, retiredPrimary: !capture.retiredPrimary })}>Titular aposentado: {yesNo(capture.retiredPrimary)}</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, retiredPartner: !capture.retiredPartner })}>Cônjuge aposentado: {yesNo(capture.retiredPartner)}</Button>
-        <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, pepOffered: true, pepOfferedBy: extras.pepOfferedBy || undefined })}>Registrar oferta de PEP</Button>
+        <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, pepOffered: true, pepOfferedBy: extras.pepOfferedBy })}>Registrar oferta de PEP</Button>
         <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepResult: "accepted" })}>PEP aceito</Button>
         <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepResult: "declined" })}>PEP recusado</Button>
       </div>
-    </CardContent></Card>
+    </CardContent></Card> : null}
+    {isAdmin ? <><TrocarCodigo captureId={data.captureId} onDone={newCode => { window.location.href = `/ficha?codigo=${encodeURIComponent(newCode)}`; }} /><PapeisAdmin /></> : null}
   </div>;
+}
+
+function TrocarCodigo({ captureId, onDone }: { captureId: number; onDone: (code: string) => void }) {
+  const [code, setCode] = useState("");
+  const change = trpc.captureSheet.setCoupleCode.useMutation({ onSuccess: result => { toast.success("Código trocado."); onDone(result.code); }, onError: error => toast.error(error.message) });
+  return <Card className="border-[#e8e1d4]"><CardContent className="flex flex-wrap items-end gap-3 p-5">
+    <div className="grid gap-1"><Label htmlFor="ficha-new-code">Corrigir código do casal (só administração)</Label><Input id="ficha-new-code" className="w-64" value={code} onChange={event => setCode(event.target.value)} /></div>
+    <Button variant="outline" disabled={change.isPending || code.trim().length < 4} onClick={() => change.mutate({ captureId, coupleCode: code })}>Trocar código</Button>
+    <p className="w-full text-xs text-muted-foreground">Fichas já impressas com o código antigo deixam de abrir por ele. A troca fica na trilha.</p>
+  </CardContent></Card>;
+}
+
+function PapeisAdmin() {
+  const utils = trpc.useUtils();
+  const roles = trpc.captureSheet.roles.list.useQuery({ includeInactive: true });
+  const [form, setForm] = useState({ code: "", label: "", kind: "support" as "presentation" | "support" });
+  const refresh = () => { void utils.captureSheet.roles.list.invalidate(); };
+  const upsert = trpc.captureSheet.roles.upsert.useMutation({ onSuccess: () => { toast.success("Papéis atualizados."); setForm({ code: "", label: "", kind: "support" }); refresh(); }, onError: error => toast.error(error.message) });
+  return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5">
+    <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Papéis da equipe (administração)</p>
+    <ul className="space-y-1 text-sm">{(roles.data ?? []).map(role => <li key={role.id} className="flex items-center justify-between gap-3"><span className={role.active ? "" : "text-muted-foreground line-through"}>{role.label} <span className="text-xs text-muted-foreground">({role.code} · {role.kind === "support" ? "apoio" : "atendimento"})</span></span><Button size="sm" variant="outline" onClick={() => upsert.mutate({ id: role.id, code: role.code, label: role.label, kind: role.kind, sortOrder: role.sortOrder, active: !role.active })}>{role.active ? "Desativar" : "Reativar"}</Button></li>)}</ul>
+    <div className="flex flex-wrap items-end gap-3 border-t border-[#ece6da] pt-3">
+      <div className="grid gap-1"><Label htmlFor="role-code">Código (a-z, 0-9, _)</Label><Input id="role-code" className="w-44" value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} /></div>
+      <div className="grid gap-1"><Label htmlFor="role-label">Nome do papel</Label><Input id="role-label" className="w-56" value={form.label} onChange={event => setForm({ ...form, label: event.target.value })} /></div>
+      <Button disabled={upsert.isPending || form.code.trim().length < 2 || form.label.trim().length < 2} onClick={() => upsert.mutate({ code: form.code, label: form.label, kind: form.kind, sortOrder: 500, active: true })}>Criar papel</Button>
+    </div>
+  </CardContent></Card>;
 }
 
 function LigarCodigo({ captureId }: { captureId: number }) {

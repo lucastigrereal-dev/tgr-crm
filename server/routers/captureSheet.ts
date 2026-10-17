@@ -29,7 +29,8 @@ async function captureByCode(rawCode: string) {
   const db = await requireDb();
   const [row] = await db.select({ capture: captureRecords, customer: customers }).from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId)).where(eq(captureRecords.coupleCode, code)).limit(1);
   if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
-  return { db, code, ...row };
+  // Devolve a grafia gravada: a busca ignora maiúsculas, mas a folha tem que imprimir o código como o Sales Command o emitiu.
+  return { db, code: row.capture.coupleCode ?? code, ...row };
 }
 
 export const captureSheetRouter = router({
