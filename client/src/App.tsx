@@ -21,6 +21,7 @@ const Commissions = lazy(() => import("./pages/Commissions"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
 const Capture = lazy(() => import("./pages/Capture"));
 const SalesRoom = lazy(() => import("./pages/SalesRoom"));
+const FichaSala = lazy(() => import("./pages/FichaSala"));
 const SalesAnalytics = lazy(() => import("./pages/SalesAnalytics"));
 const ProjectSettings = lazy(() => import("./pages/ProjectSettings"));
 const Intelligence = lazy(() => import("./pages/Intelligence"));
@@ -53,6 +54,7 @@ function InternalRouter() {
     <Route path="/vendas" component={Sales} />
     <Route path="/captacao" component={Capture} />
     <Route path="/sala-de-vendas" component={SalesRoom} />
+    <Route path="/ficha" component={FichaSala} />
     <Route path="/analise-de-vendas" component={SalesAnalytics} />
     <Route path="/comissoes" component={Commissions} />
     <Route path="/campanhas" component={Campaigns} />
