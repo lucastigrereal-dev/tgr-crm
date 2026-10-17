@@ -26,6 +26,8 @@ async function requireDb() {
 
 const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "brand_name"] as const;
 
+const SETTING_RANGES = { nq_min_man_age: [0, 120], nq_min_relationship_months: [0, 600], nq_min_vehicle_year: [1950, 2100], nq_min_income: [0, 1_000_000], nq_max_items_accepted: [0, 7], min_presentation_minutes: [0, 600] } as const;
+
 /** Limites provisórios gravados (ou o padrão quando a linha não existe): nada aqui é regra homologada. */
 async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
   const rows = await db.select().from(captureSheetSettings);
@@ -161,8 +163,8 @@ export const captureSheetRouter = router({
     pepOfferedBy: optionalName,
     pepResult: z.enum(["accepted", "declined"]).optional().nullable(),
     maleSpouse: z.enum(["titular", "conjuge"]).optional().nullable(),
-    vehicleKind: z.enum(["carro", "moto"]).optional().nullable(),
-    secondVehicleKind: z.enum(["carro", "moto"]).optional().nullable(),
+    vehicleKind: z.enum(["carro", "moto", "nenhum"]).optional().nullable(),
+    secondVehicleKind: z.enum(["carro", "moto", "nenhum"]).optional().nullable(),
     watchedVacationPresentation: z.boolean().optional().nullable(),
     captureKind: z.string().trim().max(60).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
@@ -197,7 +199,8 @@ export const captureSheetRouter = router({
     set: adminProcedure.input(z.object({ key: z.enum(SETTING_KEYS), value: z.string().trim().max(255) })).mutation(async ({ ctx, input }) => {
       if (input.key !== "brand_name") {
         const value = Number(input.value);
-        if (input.value === "" || !Number.isFinite(value) || value < 0 || value > 1_000_000) throw new TRPCError({ code: "BAD_REQUEST", message: "Informe um número válido." });
+        const range = SETTING_RANGES[input.key as keyof typeof SETTING_RANGES];
+        if (input.value === "" || !Number.isInteger(value) || value < range[0] || value > range[1]) throw new TRPCError({ code: "BAD_REQUEST", message: `Informe um número inteiro entre ${range[0]} e ${range[1]}.` });
       }
       const db = await requireDb();
       await db.transaction(async tx => {

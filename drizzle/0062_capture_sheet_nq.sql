@@ -8,11 +8,12 @@ CREATE TABLE `capture_sheet_settings` (
 );
 --> statement-breakpoint
 ALTER TABLE `capture_records` ADD `maleSpouse` enum('titular','conjuge');--> statement-breakpoint
-ALTER TABLE `capture_records` ADD `vehicleKind` enum('carro','moto');--> statement-breakpoint
-ALTER TABLE `capture_records` ADD `secondVehicleKind` enum('carro','moto');--> statement-breakpoint
+ALTER TABLE `capture_records` ADD `vehicleKind` enum('carro','moto','nenhum');--> statement-breakpoint
+ALTER TABLE `capture_records` ADD `secondVehicleKind` enum('carro','moto','nenhum');--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `watchedVacationPresentation` boolean;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `captureKind` varchar(60);--> statement-breakpoint
 ALTER TABLE `capture_sheet_settings` ADD CONSTRAINT `capture_sheet_settings_updatedByUserId_users_id_fk` FOREIGN KEY (`updatedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;
+
 --> statement-breakpoint
 INSERT IGNORE INTO `capture_sheet_settings` (`key`, `value`, `provisional`) VALUES
 	('nq_min_man_age', '30', true),

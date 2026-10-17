@@ -61,6 +61,11 @@ describe("casal qualificado: itens de NQ (regra provisória)", () => {
     const status = (years: number | null, months: number | null) => computeNq({ ...good, relationshipYears: years, relationshipMonths: months }).criteria.find(c => c.key === "tempo_relacionamento")?.status;
     expect(status(1, 0)).toBe("nq");
     expect(status(1, 1)).toBe("ok");
+    expect(status(0, 11)).toBe("nq");
+    expect(status(2, null)).toBe("ok");
+    expect(status(0, null)).toBe("nq");
+    // só anos: "1" pode ser 1 ano e 8 meses, então não decide sozinho
+    expect(status(1, null)).toBe("missing");
     expect(status(null, null)).toBe("missing");
   });
 
@@ -71,6 +76,8 @@ describe("casal qualificado: itens de NQ (regra provisória)", () => {
     expect(status({ vehicleKind: "carro", vehicleYear: 2018 })).toBe("ok");
     expect(status({ vehicleKind: "carro", vehicleYear: null })).toBe("missing");
     expect(status({})).toBe("missing");
+    expect(status({ vehicleKind: "nenhum" })).toBe("nq");
+    expect(computeNq({ ...good, vehicleKind: "nenhum", vehicleYear: null, averageIncome: "5000" })).toMatchObject({ nqItems: 2, outcome: "nt_perfil" });
     expect(status({ vehicleKind: "moto", vehicleYear: 2027, secondVehicleKind: "carro", secondVehicleYear: 2019 })).toBe("ok");
     // ano gravado sem o tipo (ficha antiga) pode ser um carro bom: fica faltando, mesmo com o outro veículo sendo moto
     expect(status({ vehicleKind: "moto", vehicleYear: 2010, secondVehicleKind: null, secondVehicleYear: 2021 })).toBe("missing");

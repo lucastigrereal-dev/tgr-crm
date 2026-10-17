@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "4fe089dc-d8e3-4fe8-bffb-566d67ad8763",
+  "id": "7c6c9b6d-2746-4903-965f-0df769e66d64",
   "prevId": "3819f20c-7a7c-4350-93cb-4e1424c1dc44",
   "tables": {
     "audit_logs": {
@@ -810,14 +810,14 @@
         },
         "vehicleKind": {
           "name": "vehicleKind",
-          "type": "enum('carro','moto')",
+          "type": "enum('carro','moto','nenhum')",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
         "secondVehicleKind": {
           "name": "secondVehicleKind",
-          "type": "enum('carro','moto')",
+          "type": "enum('carro','moto','nenhum')",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

@@ -7,4 +7,4 @@ DROP TABLE `capture_sheet_settings`;
 --> statement-breakpoint
 ALTER TABLE `capture_records` DROP COLUMN `maleSpouse`, DROP COLUMN `vehicleKind`, DROP COLUMN `secondVehicleKind`, DROP COLUMN `watchedVacationPresentation`, DROP COLUMN `captureKind`;
 --> statement-breakpoint
-DELETE FROM `__drizzle_migrations` WHERE `created_at` = 1792251099371;
+DELETE FROM `__drizzle_migrations` WHERE `created_at` = 1792252638771;

@@ -40,9 +40,9 @@ export type NqInput = {
   relationshipStatus?: string | null;
   relationshipYears?: number | null;
   relationshipMonths?: number | null;
-  vehicleKind?: "carro" | "moto" | null;
+  vehicleKind?: "carro" | "moto" | "nenhum" | null;
   vehicleYear?: number | null;
-  secondVehicleKind?: "carro" | "moto" | null;
+  secondVehicleKind?: "carro" | "moto" | "nenhum" | null;
   secondVehicleYear?: number | null;
   averageIncome?: number | string | null;
   hasCreditCard?: boolean | null;
@@ -84,9 +84,16 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
   else if (/casad|uniao|estavel|marit|convive|amasi/.test(status)) add("relacionamento", "Casado ou união estável", "ok", input.relationshipStatus!);
   else add("relacionamento", "Casado ou união estável", "missing", `Relacionamento "${input.relationshipStatus}" não reconhecido: o gerente confirma.`);
 
-  const months = input.relationshipYears == null && input.relationshipMonths == null ? null : (input.relationshipYears ?? 0) * 12 + (input.relationshipMonths ?? 0);
-  if (months == null) add("tempo_relacionamento", `Relacionamento acima de ${settings.minRelationshipMonths} meses`, "missing", "Tempo de relacionamento não informado.");
-  else add("tempo_relacionamento", `Relacionamento acima de ${settings.minRelationshipMonths} meses`, months > settings.minRelationshipMonths ? "ok" : "nq", `${months} meses`);
+  // O cadastro só tem o campo em anos: "1 ano" pode ser 12 a 23 meses. Só vira NQ ou OK quando todo o intervalo cai do mesmo lado do limite.
+  const relLabel = `Relacionamento acima de ${settings.minRelationshipMonths} meses`;
+  if (input.relationshipYears == null && input.relationshipMonths == null) add("tempo_relacionamento", relLabel, "missing", "Tempo de relacionamento não informado.");
+  else {
+    const low = (input.relationshipYears ?? 0) * 12 + (input.relationshipMonths ?? 0);
+    const high = input.relationshipMonths == null ? low + 11 : low;
+    if (low > settings.minRelationshipMonths) add("tempo_relacionamento", relLabel, "ok", `${input.relationshipMonths == null ? `${input.relationshipYears} ano(s) ou mais` : `${low} meses`}`);
+    else if (high <= settings.minRelationshipMonths) add("tempo_relacionamento", relLabel, "nq", `${input.relationshipMonths == null ? `${input.relationshipYears} ano(s)` : `${low} meses`}`);
+    else add("tempo_relacionamento", relLabel, "missing", `${input.relationshipYears} ano(s) sem os meses: informe os meses para decidir.`);
+  }
 
   const vehicles = [{ kind: input.vehicleKind, year: input.vehicleYear }, { kind: input.secondVehicleKind, year: input.secondVehicleYear }];
   const label = `Carro de ${settings.minVehicleYear} ou mais novo`;
@@ -95,7 +102,7 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
   else if (vehicles.every(v => v.kind == null && v.year == null)) add("veiculo", label, "missing", "Tipo do veículo não informado (carro ou moto).");
   else if (vehicles.some(v => v.kind == null && v.year != null)) add("veiculo", label, "missing", "Veículo com ano mas sem o tipo (carro ou moto).");
   else if (vehicles.some(v => v.kind === "carro" && v.year == null)) add("veiculo", label, "missing", "Ano do carro não informado.");
-  else add("veiculo", label, "nq", vehicles.every(v => v.kind !== "carro") ? "Só moto (moto não vale)." : "Carro mais velho que o ano mínimo.");
+  else add("veiculo", label, "nq", vehicles.every(v => v.kind !== "carro") ? (vehicles.some(v => v.kind === "moto") ? "Só moto (moto não vale)." : "Sem veículo.") : "Carro mais velho que o ano mínimo.");
 
   const income = input.averageIncome == null || input.averageIncome === "" ? null : Number(input.averageIncome);
   if (income == null || !Number.isFinite(income)) add("renda", `Renda a partir de R$ ${settings.minIncome.toLocaleString("pt-BR")}`, "missing", "Renda não informada.");

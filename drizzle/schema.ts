@@ -336,8 +336,8 @@ export const captureRecords = mysqlTable(
     /** Casal qualificado (regra provisória do Lucas, 17/10): a regra de idade é do homem, então a ficha guarda qual cônjuge é o homem. */
     maleSpouse: mysqlEnum("maleSpouse", ["titular", "conjuge"]),
     /** Só carro vale na qualificação; moto é sempre item de NQ. Tipo separado do ano. */
-    vehicleKind: mysqlEnum("vehicleKind", ["carro", "moto"]),
-    secondVehicleKind: mysqlEnum("secondVehicleKind", ["carro", "moto"]),
+    vehicleKind: mysqlEnum("vehicleKind", ["carro", "moto", "nenhum"]),
+    secondVehicleKind: mysqlEnum("secondVehicleKind", ["carro", "moto", "nenhum"]),
     /** Pesquisa rápida da ficha de papel: já assistiu a uma apresentação voltada a férias. */
     watchedVacationPresentation: boolean("watchedVacationPresentation"),
     /** Tipo de captação (ex.: tour direto). Texto livre curto; lista fechada só se o Lucas mandar. */
