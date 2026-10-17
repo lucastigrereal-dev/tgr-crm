@@ -21,6 +21,7 @@ describe("menu segue o RBAC do servidor", () => {
     ["/integracoes", ["admin"]],
     ["/auditoria", ["admin"]],
     ["/vouchers", ["admin", "seller", "service"]],
+    ["/ficha", ["admin", "seller", "finance", "service"]], // captureSheet.byCode = internalProcedure (finance abre a ficha arquivada)
   ];
   it.each(cases)("%s só para %j", (path, roles) => {
     for (const role of ["admin", "seller", "finance", "service", "user"] as const) {

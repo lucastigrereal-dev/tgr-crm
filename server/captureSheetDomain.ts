@@ -1,3 +1,4 @@
+import { paperDestroyPromise } from "../shared/paperPromise";
 /**
  * Código do casal: o código legível (publicCode) do Sales Command, que fica na tela da sala; o QR de bip é outro (token secreto só na Suite). A ficha abre por ele, só para quem tem login e permissão
  * (o código não é segredo: o acesso é controlado pelo login). Aceita só letras, números, "-" e "_"; nunca CPF ou telefone.
@@ -116,4 +117,105 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
   const outcome = nqItems === 0 ? "qualificado" : nqItems <= settings.maxItemsAccepted ? "nq_aceito" : "nt_perfil";
   const text = `NQ: ${nqItems} ${nqItems === 1 ? "item" : "itens"}`;
   return { criteria, nqItems, missing, outcome, label: missing ? `${text} (faltam ${missing} dados)` : text };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// LGPD da ficha (parecer 17/10 + decisões do Lucas 16:14Z): o papel se destrói, a ficha digital nunca; ficha de quem não
+// comprou sai da vista da sala e fica só com o administrativo; exportar com CPF é só de quem tem `export.pii`.
+// Tudo abaixo é regra pura (sem banco) para o teste unitário cobrir sem MySQL. Dias e textos são provisórios e configuráveis.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Papéis que continuam abrindo a ficha depois que ela sai da vista da sala ("administrativo", decisão do Lucas). */
+export const ARCHIVED_SHEET_ROLES = ["admin", "finance"] as const;
+export const canOpenArchivedSheet = (role: string | null | undefined) => (ARCHIVED_SHEET_ROLES as readonly string[]).includes(role ?? "");
+
+/** Soma dias a uma data local AAAA-MM-DD (sem fuso: aritmética de calendário em UTC). */
+export function addCalendarDays(day: string, days: number) {
+  const base = new Date(`${day}T00:00:00Z`);
+  base.setUTCDate(base.getUTCDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+export type RoomVisibilityInput = {
+  /** Dia da visita no calendário do projeto (check-in; sem check-in, o dia da criação). */
+  visitDay: string | null;
+  /** Hoje no calendário do projeto. */
+  today: string;
+  /** Dias extras em que a ficha ainda aparece para a sala depois do dia da visita (0 = só no dia). */
+  roomVisibilityDays: number;
+  commercialOutcome: "vendeu" | "caiu_em_mesa" | null | undefined;
+};
+export type RoomVisibility = { visibleToRoom: boolean; reason: "dia_da_visita" | "vendeu" | "arquivada"; lastRoomDay: string | null };
+
+/**
+ * A ficha de quem NÃO comprou sai da vista da sala depois do dia da visita (mais os dias configurados) e passa a abrir
+ * só para admin e finance. VENDEU (aceite comercial) mantém a ficha visível: a venda segue no CRM. Nada é apagado.
+ */
+export function roomVisibility(input: RoomVisibilityInput): RoomVisibility {
+  if (input.commercialOutcome === "vendeu") return { visibleToRoom: true, reason: "vendeu", lastRoomDay: null };
+  if (!input.visitDay) return { visibleToRoom: true, reason: "dia_da_visita", lastRoomDay: null };
+  const days = Number.isFinite(input.roomVisibilityDays) && input.roomVisibilityDays > 0 ? Math.floor(input.roomVisibilityDays) : 0;
+  const lastRoomDay = addCalendarDays(input.visitDay, days);
+  return input.today <= lastRoomDay ? { visibleToRoom: true, reason: "dia_da_visita", lastRoomDay } : { visibleToRoom: false, reason: "arquivada", lastRoomDay };
+}
+
+export type PaperStatus = "nao_impressa" | "em_circulacao" | "recolhida" | "destruida";
+export type PaperCustody = { status: PaperStatus; overdue: boolean; deadlineDay: string | null };
+
+/**
+ * Estado do papel pela última impressão: em circulação até ser recolhido; recolhido até ser destruído. O prazo para destruir
+ * conta do dia da impressão mais os dias configurados (0 = no mesmo dia); passou e não destruiu = atrasada.
+ */
+export function paperCustody(input: { printedDay: string | null; collectedAt: Date | null; destroyedAt: Date | null; today: string; destroyDeadlineDays: number }): PaperCustody {
+  if (!input.printedDay) return { status: "nao_impressa", overdue: false, deadlineDay: null };
+  const days = Number.isFinite(input.destroyDeadlineDays) && input.destroyDeadlineDays > 0 ? Math.floor(input.destroyDeadlineDays) : 0;
+  const deadlineDay = addCalendarDays(input.printedDay, days);
+  if (input.destroyedAt) return { status: "destruida", overdue: false, deadlineDay };
+  return { status: input.collectedAt ? "recolhida" : "em_circulacao", overdue: input.today > deadlineDay, deadlineDay };
+}
+
+/**
+ * Custódia da ficha inteira: cada impressão tem o próprio prazo (o gravado nela, ou o configurado hoje quando antiga).
+ * Enquanto existir cópia não destruída, vale a pior: atrasada se QUALQUER cópia pendente passou do prazo, em circulação
+ * se alguma ainda não foi recolhida, e o prazo mostrado é o mais cedo entre as pendentes. Todas destruídas = destruída.
+ */
+export function paperCustodyOfSheet(prints: Array<{ printedDay: string; collectedAt: Date | null; destroyedAt: Date | null; destroyDeadlineDays: number | null }>, today: string, fallbackDeadlineDays: number): PaperCustody {
+  if (!prints.length) return { status: "nao_impressa", overdue: false, deadlineDay: null };
+  const each = prints.map(print => ({ print, custody: paperCustody({ printedDay: print.printedDay, collectedAt: print.collectedAt, destroyedAt: print.destroyedAt, today, destroyDeadlineDays: print.destroyDeadlineDays ?? fallbackDeadlineDays }) }));
+  const pending = each.filter(item => item.custody.status !== "destruida");
+  if (!pending.length) return { status: "destruida", overdue: false, deadlineDay: each.map(item => item.custody.deadlineDay!).sort().at(-1) ?? null };
+  return {
+    status: pending.some(item => item.custody.status === "em_circulacao") ? "em_circulacao" : "recolhida",
+    overdue: pending.some(item => item.custody.overdue),
+    deadlineDay: pending.map(item => item.custody.deadlineDay!).sort()[0] ?? null,
+  };
+}
+
+/** Acima deste número de impressões a ficha entra no alerta de reimpressão do painel (parecer A1.4). */
+export const REPRINT_ALERT_THRESHOLD = 2;
+
+/** Configurações de texto do aviso de privacidade: vazias até o Lucas/advogado mandarem; a ficha imprime o marcador entre colchetes. */
+export const PRIVACY_TEXT_KEYS = ["privacy_controller_name", "privacy_controller_cnpj", "privacy_contact_channel", "privacy_full_text_url", "privacy_retention_text"] as const;
+export type PrivacyTextKey = (typeof PRIVACY_TEXT_KEYS)[number];
+export type PrivacySettings = Record<PrivacyTextKey, string>;
+
+/**
+ * Texto v1 do aviso de privacidade (parecer, seção 4): provisório, não aprovado por advogado. Campos vazios saem como
+ * [●] para ninguém assinar um aviso com dado inventado. Não usa a palavra "consentimento": em sala de vendas o campo é "ciente".
+ */
+export function privacyNoticeText(settings: Partial<PrivacySettings>, destroyDeadlineDays = 0) {
+  const pick = (key: PrivacyTextKey, placeholder: string) => (settings[key]?.trim() ? settings[key]!.trim() : placeholder);
+  return `Os dados desta ficha (identificação, contato, CPF, renda, veículo, família e preferências de viagem) são tratados por ${pick("privacy_controller_name", "[RAZÃO SOCIAL DA OPERADORA]")}, CNPJ ${pick("privacy_controller_cnpj", "[●]")}, para realizar esta visita, avaliar a proposta comercial e, se houver interesse, dar seguimento ao contato. Base legal: procedimentos preliminares de contrato e legítimo interesse. Os dados podem ser compartilhados com os sistemas da operação (cadastro de visita, sala de vendas, CRM) e, em caso de contratação, com parceiros de pagamento e assinatura eletrônica. Guardamos os dados pelo prazo de ${pick("privacy_retention_text", "[●]")}; esta folha em papel é recolhida e destruída ${paperDestroyPromise(destroyDeadlineDays)}. Você pode pedir acesso, correção, informação sobre compartilhamento ou oposição ao tratamento pelo canal ${pick("privacy_contact_channel", "[canal do encarregado]")}. Texto completo em ${pick("privacy_full_text_url", "[endereço]")}.`;
+}
+
+/** Primeiro instante (UTC) do dia local AAAA-MM-DD no fuso dado; fusos com passo de 15 min cobertos. */
+export function localDayStart(day: string, timezone: string, localDate: (value: Date, tz: string) => string) {
+  // O dia local começa entre 26 h antes e 0 h depois do meio-dia UTC (fusos de -12 a +14); o primeiro instante que cai no dia é o início.
+  const noonUtc = new Date(`${day}T12:00:00Z`).getTime();
+  let start = new Date(noonUtc - 26 * 3600_000);
+  for (let step = -26 * 4; step <= 0; step += 1) {
+    const candidate = new Date(noonUtc + step * 900_000);
+    if (localDate(candidate, timezone) === day) { start = candidate; break; }
+  }
+  return start;
 }

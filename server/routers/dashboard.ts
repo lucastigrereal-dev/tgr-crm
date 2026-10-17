@@ -5,6 +5,8 @@ import { captureRecords, commercialProjectSettings, contractCancellationRequests
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure } from "./access";
+import { roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { buildCommercialCharts, filterFunnelDetails, funnelStages, latestCaptureByOpportunity } from "../commercialMetrics";
 import { buildOperationalInsights } from "../operationalAnalytics";
 import { buildConversionBreakdown, calculateConversionMetrics, filterConversionCaptures } from "../salesRoomAnalytics";
@@ -231,9 +233,11 @@ export const dashboardRouter = router({
       filters: { resorts: resortRows, salesRooms: Array.from(new Set(captureRows.map(row => row.capture.salesRoom).filter((value): value is string => Boolean(value)))).sort(), operators: userRows.map(item => ({ id: item.id, name: item.name || item.email || `Usuário #${item.id}` })) }, range: { start, end }, truncated: truncatedSources.length > 0, truncatedSources,
     };
   }),
-  operationalPulse: internalProcedure.query(async () => {
+  operationalPulse: internalProcedure.query(async ({ ctx }) => {
     const db = await getDb(); if (!db) return { exceptions: [], adoption: { eventsLast30Days: 0, activeOperators: 0, interactionsLast30Days: 0 }, truncated: false, truncatedSources: [] };
     const now = new Date(); const cutoff = new Date(now.getTime() - 30 * 86_400_000);
+    // LGPD: capturas antigas sem compra saem da vista da sala também no painel do dia (só admin e finance as veem).
+    const roomCutoff = canOpenArchivedSheet(ctx.user.role) ? null : await roomVisibilityCutoff();
     const [installmentRows, taskRows, maintenanceRows, waitlistRows, eventRows, interactionRows, captureRows, opportunityRows, cancellationRows, commissionRows, contractRows, documentRows, settingsRows, rhythmCaptureRows, userRows, customerRows, opportunityEventRows, discountApprovalRows] = await Promise.all([
       db.select({ installment: installments, customerName: customers.fullName, contractNumber: contracts.number }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id)).orderBy(desc(installments.dueDate)).limit(MAX_OPERATIONAL_ROWS),
       db.select({ task: tasks, customerName: customers.fullName }).from(tasks).leftJoin(customers, eq(tasks.customerId, customers.id)).orderBy(tasks.dueAt).limit(MAX_OPERATIONAL_ROWS),
@@ -241,7 +245,7 @@ export const dashboardRouter = router({
       db.select({ item: reservationWaitlist, customerName: customers.fullName }).from(reservationWaitlist).innerJoin(customers, eq(reservationWaitlist.customerId, customers.id)).orderBy(reservationWaitlist.desiredCheckIn).limit(MAX_OPERATIONAL_ROWS),
       db.select({ actorUserId: domainEvents.actorUserId }).from(domainEvents).where(sql`${domainEvents.occurredAt} >= ${cutoff}`).limit(MAX_OPERATIONAL_ROWS),
       db.select({ id: customerInteractions.id }).from(customerInteractions).where(sql`${customerInteractions.occurredAt} >= ${cutoff}`).limit(MAX_OPERATIONAL_ROWS),
-      db.select({ capture: captureRecords, customerName: customers.fullName }).from(captureRecords).innerJoin(customers, eq(captureRecords.customerId, customers.id)).where(eq(captureRecords.presentationStatus, "captured")).limit(MAX_OPERATIONAL_ROWS),
+      db.select({ capture: captureRecords, customerName: customers.fullName }).from(captureRecords).innerJoin(customers, eq(captureRecords.customerId, customers.id)).where(and(eq(captureRecords.presentationStatus, "captured"), roomCutoff ? roomVisibleCondition(roomCutoff) : undefined)).limit(MAX_OPERATIONAL_ROWS),
       db.select({ opportunity: opportunities, customerName: customers.fullName }).from(opportunities).innerJoin(customers, eq(opportunities.customerId, customers.id)).where(inArray(opportunities.stage, ["proposal", "negotiation"])).limit(MAX_OPERATIONAL_ROWS),
       db.select({ request: contractCancellationRequests, contractNumber: contracts.number }).from(contractCancellationRequests).innerJoin(contracts, eq(contractCancellationRequests.contractId, contracts.id)).where(eq(contractCancellationRequests.status, "requested")).limit(1000),
       db.select({ commission: salesCommissions, sellerName: users.name, sourceInstallmentStatus: installments.status }).from(salesCommissions).leftJoin(users, eq(salesCommissions.sellerId, users.id)).leftJoin(installments, eq(salesCommissions.sourceInstallmentId, installments.id)).limit(MAX_OPERATIONAL_ROWS),

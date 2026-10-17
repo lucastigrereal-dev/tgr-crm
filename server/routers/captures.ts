@@ -5,6 +5,8 @@ import { captureRecords, commercialProjectSettings, customers, opportunities, re
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
+import { assertCaptureInRoomView, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
 import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfile } from "../captureSegmentation";
 import { getProjectCaptureReadiness } from "../projectPolicy";
@@ -91,11 +93,12 @@ const profileAnalysisInput = z.object({
   limit: z.number().int().min(1).max(500).default(100),
 });
 
-async function findCaptureOrThrow(id: number) {
+async function findCaptureOrThrow(id: number, role: string) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
   const capture = (await db.select().from(captureRecords).where(eq(captureRecords.id, id)).limit(1))[0];
   if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+  await assertCaptureInRoomView(db, role, capture);
   return { db, capture };
 }
 
@@ -128,24 +131,27 @@ export const capturesRouter = router({
     return { campaigns: envelope(rawCampaigns, "campanhas de captação"), sellers: envelope(rawSellers, "vendedores de captação"), resorts: envelope(rawResorts, "empreendimentos de captação") };
   }),
 
-  list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ input }) => {
+  list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const limit = 120;
     const rawRows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
-      .where(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined)
+      // LGPD (decisão do Lucas 17/10): ficha de quem não comprou sai da vista da sala depois do dia; só admin e finance seguem vendo.
+      .where(and(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined, canOpenArchivedSheet(ctx.user.role) ? undefined : roomVisibleCondition(await roomVisibilityCutoff())))
       .orderBy(desc(captureRecords.createdAt)).limit(limit + 1);
     const rows = rawRows.slice(0, limit).map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
     const truncated = rawRows.length > limit;
     return { rows, truncated, truncatedSources: truncated ? ["fichas de captação"] : [] };
   }),
 
-  profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ input }) => {
+  profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { summary: buildCaptureProfileAnalytics([]), rows: [], totalMatches: 0, truncated: false, filters: { cities: [], states: [], salesRooms: [], vehicleBrands: [], vehicleModels: [], travelSeasons: [], relationshipStatuses: [] } };
     const conditions = [];
+    // LGPD: a análise de perfil traz CPF, renda e notas; para a sala, só fichas dentro da vista (mesma regra da lista).
+    if (!canOpenArchivedSheet(ctx.user.role)) conditions.push(roomVisibleCondition(await roomVisibilityCutoff())!);
     if (input.startDate) conditions.push(gte(captureRecords.createdAt, new Date(`${input.startDate}T00:00:00Z`)));
     if (input.endDate) conditions.push(lt(captureRecords.createdAt, new Date(new Date(`${input.endDate}T00:00:00Z`).getTime() + 86_400_000)));
     if (input.campaignId) conditions.push(eq(captureRecords.campaignId, input.campaignId));
@@ -279,7 +285,7 @@ export const capturesRouter = router({
   }),
 
   updateStatus: salesProcedure.input(z.object({ id: z.number().int().positive(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]), qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).optional(), qualificationReason: optionalText, noTourReason: optionalText })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     if (!canTransitionPresentationStatus(capture.presentationStatus, input.presentationStatus)) throw new TRPCError({ code: "BAD_REQUEST", message: `Transição inválida: ${capture.presentationStatus} → ${input.presentationStatus}.` });
     const updateResult = await db.update(captureRecords).set({ presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), noTourReason: nullIfBlank(input.noTourReason), checkedInAt: input.presentationStatus === "checked_in" ? new Date() : undefined }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
     if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A ficha de captação foi alterada por outra operação. Recarregue e tente novamente." });
@@ -289,7 +295,7 @@ export const capturesRouter = router({
     return { success: true };
   }),
 
-  receptionQueue: receptionProcedure.input(z.object({ date: z.string().date().optional(), salesRoom: optionalShort, includeCompleted: z.boolean().default(false) }).optional()).query(async ({ input }) => {
+  receptionQueue: receptionProcedure.input(z.object({ date: z.string().date().optional(), salesRoom: optionalShort, includeCompleted: z.boolean().default(false) }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
     const date = input?.date ?? new Date().toISOString().slice(0, 10);
@@ -297,6 +303,8 @@ export const capturesRouter = router({
     const end = new Date(`${date}T23:59:59.999-03:00`);
     const filters = [gte(captureRecords.scheduledAt, start), lt(captureRecords.scheduledAt, end)];
     if (input?.salesRoom?.trim()) filters.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
+    // LGPD: data passada não abre a ficha de quem não comprou para a sala; admin e finance seguem vendo.
+    if (!canOpenArchivedSheet(ctx.user.role)) filters.push(roomVisibleCondition(await roomVisibilityCutoff())!);
     if (!input?.includeCompleted) filters.push(inArray(captureRecords.presentationStatus, activeRoomStatuses));
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
@@ -306,7 +314,7 @@ export const capturesRouter = router({
   }),
 
   checkIn: receptionProcedure.input(z.object({ id: z.number().int().positive(), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "check_in");
     const checkedInAt = new Date();
     const updateResult = await db.update(captureRecords).set({ presentationStatus: "checked_in", checkedInAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
@@ -318,7 +326,7 @@ export const capturesRouter = router({
   }),
 
   assignRoom: receptionProcedure.input(z.object({ id: z.number().int().positive(), salesTable: z.string().trim().min(1).max(64), linerId: z.number().int().positive().optional().nullable(), closerId: z.number().int().positive().optional().nullable(), roomManagerId: z.number().int().positive().optional().nullable(), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "assign_table");
     const staffIds = [input.linerId, input.closerId, input.roomManagerId].filter((id): id is number => id !== undefined && id !== null);
     if (staffIds.length) {
@@ -336,7 +344,7 @@ export const capturesRouter = router({
   }),
 
   startPresentation: receptionProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "start_presentation");
     const presentationStartedAt = new Date();
     const updateResult = await db.update(captureRecords).set({ presentationStatus: "presented", presentationStartedAt, presentationEndedAt: null }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
@@ -348,7 +356,7 @@ export const capturesRouter = router({
   }),
 
   endPresentation: receptionProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "end_presentation");
     const presentationEndedAt = new Date();
     const durationMinutes = tourDurationMinutes(capture.presentationStartedAt, presentationEndedAt);
@@ -371,7 +379,7 @@ export const capturesRouter = router({
       issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres) para CAIU EM MESA." });
     }
   })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     // O closer designado grava o próprio resultado; admin (gerente) pode registrar por qualquer ficha.
     if (ctx.user.role !== "admin" && capture.closerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o closer designado da ficha (ou a administração) registra o resultado comercial." });
     const reason = nullIfBlank(input.reason);
@@ -399,7 +407,7 @@ export const capturesRouter = router({
   }),
 
   markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(3).max(5000), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await findCaptureOrThrow(input.id);
+    const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "mark_no_tour");
     const endedAt = new Date();
     const updateResult = await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));

@@ -16,6 +16,8 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
 import { internalProcedure } from "./access";
+import { roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { syncPreferredFromProfile } from "./customerContacts";
 import { buildRelationshipRadar } from "../relationshipRadar";
 import { decodeUpload } from "../uploadValidation";
@@ -141,11 +143,12 @@ export const customersRouter = router({
     return { success: true };
   }),
 
-  detail: internalProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ input }) => {
+  detail: internalProcedure.input(z.object({ id: z.number().int().positive() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return null;
     const customer = (await db.select().from(customers).where(eq(customers.id, input.id)).limit(1))[0];
     if (!customer) return null;
+    const roomCutoff = await roomVisibilityCutoff();
     const [interactions, documents, customerContracts, customerOpportunities, customerReservations, customerInstallments, relationshipTasks, captures] = await Promise.all([
       db.select().from(customerInteractions).where(eq(customerInteractions.customerId, input.id)).orderBy(desc(customerInteractions.occurredAt)).limit(50),
       db.select().from(customerDocuments).where(eq(customerDocuments.customerId, input.id)).orderBy(desc(customerDocuments.createdAt)).limit(100),
@@ -154,7 +157,8 @@ export const customersRouter = router({
       db.select().from(reservations).where(eq(reservations.customerId, input.id)).orderBy(desc(reservations.checkIn)).limit(200),
       db.select({ status: installments.status }).from(installments).innerJoin(contracts, eq(installments.contractId, contracts.id)).where(eq(contracts.customerId, input.id)).limit(500),
       db.select().from(tasks).where(and(eq(tasks.customerId, input.id), inArray(tasks.status, ["open", "in_progress"]))).orderBy(tasks.dueAt).limit(20),
-      db.select().from(captureRecords).where(eq(captureRecords.customerId, input.id)).orderBy(desc(captureRecords.createdAt)).limit(20),
+      // LGPD: fichas de visitas que não compraram saem da vista da sala; só admin e finance as leem aqui.
+      db.select().from(captureRecords).where(and(eq(captureRecords.customerId, input.id), canOpenArchivedSheet(ctx.user.role) ? undefined : roomVisibleCondition(roomCutoff))).orderBy(desc(captureRecords.createdAt)).limit(20),
     ]);
     const radar = buildRelationshipRadar({ hasEmail: Boolean(customer.email), hasPhone: Boolean(customer.phone), interactionDates: interactions.map(item => item.occurredAt), documentCount: documents.length, contractStatuses: customerContracts.map(item => item.status), reservationDates: customerReservations.map(item => item.checkIn), installmentStatuses: customerInstallments.map(item => item.status) });
     const truncatedSources = [

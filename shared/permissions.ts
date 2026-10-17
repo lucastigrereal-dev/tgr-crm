@@ -57,7 +57,8 @@ export function canCapability(role: InternalPermissionRole | "user", capability:
 export const menuPathRoles: Record<string, readonly InternalPermissionRole[]> = {
   "/sala-de-vendas": ["admin", "seller", "service"],
   "/vouchers": ["admin", "seller", "service"],
-  "/ficha": ["admin", "seller", "service"],
+  // LGPD (17/10): o financeiro é "administrativo" e abre a ficha arquivada; captureSheet.byCode = internalProcedure + regra de vista.
+  "/ficha": ["admin", "seller", "finance", "service"],
   "/captacao": ["admin", "seller"],
   "/vendas": ["admin", "seller"],
   "/campanhas": ["admin", "seller"],
