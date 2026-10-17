@@ -160,9 +160,10 @@ test.describe("homologação isolada estrita", () => {
         presentationStartedAt: Date | null;
         presentationEndedAt: Date | null;
         noTourReason: string | null;
+        ntKind: string | null;
       }>
     >(
-      "SELECT c.fullName, cr.presentationStatus, cr.salesTable, cr.linerId, cr.closerId, cr.presentationStartedAt, cr.presentationEndedAt, cr.noTourReason FROM capture_records cr JOIN customers c ON c.id = cr.customerId WHERE c.documentNumber IN (?, ?) ORDER BY c.documentNumber",
+      "SELECT c.fullName, cr.presentationStatus, cr.salesTable, cr.linerId, cr.closerId, cr.presentationStartedAt, cr.presentationEndedAt, cr.noTourReason, cr.ntKind FROM capture_records cr JOIN customers c ON c.id = cr.customerId WHERE c.documentNumber IN (?, ?) ORDER BY c.documentNumber",
       [fx.documents.roomTour, fx.documents.roomNoTour],
     );
     const tour = records.find(record => record.fullName === fx.roomTourCustomerName);
