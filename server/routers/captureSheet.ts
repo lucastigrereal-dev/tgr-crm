@@ -91,10 +91,12 @@ export const captureSheetRouter = router({
     const code = normalizeCoupleCode(input.coupleCode);
     if (!isCoupleCode(code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Código inválido: use de 4 a 64 letras, números, - ou _ (nunca CPF ou telefone)." });
     const db = await requireDb();
+    const sheetSettings = await loadSettings(db);
     // Ficha travada na leitura e na gravação: duas ligações ao mesmo tempo não passam as duas como "primeira ligação".
     await db.transaction(async tx => {
-      const [capture] = await tx.select({ id: captureRecords.id, coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
+      const [capture] = await tx.select({ id: captureRecords.id, coupleCode: captureRecords.coupleCode, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+      assertSheetVisibleTo(ctx.user.role, capture, sheetSettings);
       if (capture.coupleCode === code) return;
       if (capture.coupleCode && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só a administração troca o código de uma ficha que já tem código." });
       try {
@@ -110,6 +112,9 @@ export const captureSheetRouter = router({
   }),
 
   /** Código da ficha pelo id, para a lista abrir a impressão. */
+  /** Dia de hoje no calendário do projeto (fuso configurado no servidor): o painel e a exportação do navegador partem daqui. */
+  today: internalProcedure.query(() => ({ today: todayLocal() })),
+
   codeOf: internalProcedure.input(z.object({ captureId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await requireDb();
     const [capture] = await db.select({ coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
@@ -162,7 +167,7 @@ export const captureSheetRouter = router({
       nq,
       sheetSettings: { minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName },
       // LGPD: estado do papel, vista da sala e o aviso v1 (provisório) que sai na faixa destacável.
-      paper: { ...paper, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
+      paper: { ...paper, destroyDeadlineDays: settings.paperDestroyDeadlineDays, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
       roomVisibility: visibility,
       privacyNotice: privacyNoticeText(settings.privacy, settings.paperDestroyDeadlineDays),
       capture: {

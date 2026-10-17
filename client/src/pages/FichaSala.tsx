@@ -7,6 +7,7 @@ import { EmptyState, PageHeader } from "@/components/crm/ui";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Printer } from "lucide-react";
+import { paperDestroyPromise } from "@shared/paperPromise";
 import { buildCaptureExportFilename, buildCaptureExportRows, downloadBlob, toCsv, writeCaptureExportXlsx } from "@shared/captureSheetExport";
 import { useEffect, useState } from "react";
 import { useSearch } from "wouter";
@@ -90,7 +91,7 @@ function FichaImpressa({ code }: { code: string }) {
       <p className="whitespace-pre-wrap text-sm">{text(capture.notes)}</p>
       <div className="mt-3 h-24 rounded border border-dashed border-[#c9c2b2]" aria-label="Espaço para anotação à mão" />
       <div className="mt-6 grid grid-cols-2 gap-8 text-xs"><div className="border-t border-[#1d2b2a] pt-1">Gerente de sala</div><div className="border-t border-[#1d2b2a] pt-1">Recepção (ficha recolhida em ___/___ ___:___)</div></div>
-      <p className="mt-3 text-[9px] text-[#6b756f]">Esta parte da folha é recolhida pela gerência e destruída no fim do dia da visita. A faixa abaixo é destacada e guardada.</p>
+      <p className="mt-3 text-[9px] text-[#6b756f]">Esta parte da folha é recolhida pela gerência e destruída {paperDestroyPromise(data.paper.destroyDeadlineDays)}. A faixa abaixo é destacada e guardada.</p>
       <div className="mt-4 border-t-2 border-dashed border-[#1d2b2a] pt-3" aria-label="Faixa destacável do ciente" data-testid="ficha-faixa-ciente">
         <p className="text-[9px] uppercase tracking-[.14em] text-[#6b756f]">✂ destacar aqui · faixa do ciente (sem CPF e sem renda)</p>
         <div className="mt-1 flex items-baseline justify-between gap-4"><p className="text-sm font-semibold">{customer.fullName}{capture.partnerName ? ` e ${capture.partnerName}` : ""}</p><p className="font-mono text-sm">{code}</p></div>
@@ -254,8 +255,10 @@ function PapelCustodia({ code, paper, canAct }: { code: string; canAct: boolean;
 /** Sem ficha na URL: painel do papel do dia (impressas e não recolhidas, atrasadas, reimpressões) e exportação das fichas. */
 function PainelPapel() {
   const { user } = useAuth();
-  const today = projectToday();
-  const [date, setDate] = useState(today);
+  const todayQuery = trpc.captureSheet.today.useQuery();
+  const today = todayQuery.data?.today ?? projectToday();
+  const [picked, setPicked] = useState<string | null>(null);
+  const date = picked ?? today;
   const outstanding = trpc.captureSheet.paper.outstanding.useQuery({ date }, { enabled: user?.role !== "finance" });
   const data = outstanding.data;
   // Recolher e destruir direto da linha: a ficha fora da vista da sala não abre para a recepção, mas o papel dela precisa sair.
@@ -264,7 +267,7 @@ function PainelPapel() {
   const destroyRow = trpc.captureSheet.paper.destroy.useMutation({ onSuccess: () => { toast.success("Papel destruído. A ficha digital continua."); refreshPanel(); }, onError: error => toast.error(error.message) });
   return <div className="space-y-6">
     {user?.role !== "finance" ? <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5" aria-label="Papel do dia">
-      <div className="flex flex-wrap items-end justify-between gap-3"><p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Papel do dia: impressas e não recolhidas</p><div className="grid gap-1"><Label htmlFor="papel-dia">Dia</Label><Input id="papel-dia" type="date" className="w-44" value={date} onChange={event => setDate(event.target.value || today)} /></div></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Papel do dia: impressas e não recolhidas</p><div className="grid gap-1"><Label htmlFor="papel-dia">Dia</Label><Input id="papel-dia" type="date" className="w-44" value={date} onChange={event => setPicked(event.target.value || null)} /></div></div>
       {data ? <>
         <p className="text-sm" data-testid="papel-resumo">Impressas: <b>{data.printed}</b> · em circulação: <b>{data.notCollected}</b> · não destruídas: <b>{data.notDestroyed}</b> · atrasadas: <b className={data.overdue ? "text-red-700" : ""}>{data.overdue}</b> · com reimpressão: <b>{data.reprintAlerts}</b></p>
         {data.sheets.length ? <ul className="divide-y divide-[#ece6da] text-sm">{data.sheets.map(sheet => <li key={sheet.captureId} className="flex flex-wrap items-center justify-between gap-2 py-1.5"><span><a className="font-mono underline" href={`/ficha?codigo=${encodeURIComponent(sheet.coupleCode ?? "")}`}>{sheet.coupleCode ?? `#${sheet.captureId}`}</a> · {sheet.customerName ?? "(ficha fora da vista da sala)"}{sheet.salesRoom ? ` · ${sheet.salesRoom}` : ""}</span><span className={`text-xs ${sheet.overdue ? "text-red-700" : "text-muted-foreground"}`}>{sheet.status === "em_circulacao" ? "em circulação" : sheet.status === "recolhida" ? "recolhida" : "destruída"}{sheet.overdue ? " · atrasada" : ""}{sheet.reprintAlert ? ` · impressa ${sheet.printCount}x` : ""}</span>{sheet.coupleCode && sheet.status !== "destruida" ? <span className="flex gap-2">{sheet.status === "em_circulacao" ? <Button size="sm" variant="outline" disabled={collectRow.isPending} onClick={() => collectRow.mutate({ code: sheet.coupleCode! })}>Recolhido</Button> : null}<Button size="sm" variant="outline" disabled={destroyRow.isPending} onClick={() => destroyRow.mutate({ code: sheet.coupleCode! })}>Destruído</Button></span> : null}</li>)}</ul> : <p className="text-sm text-muted-foreground">Nenhuma ficha impressa neste dia.</p>}
@@ -278,8 +281,10 @@ function PainelPapel() {
 function ExportarFichas() {
   const { user } = useAuth();
   const canPii = user?.role === "admin" || user?.role === "finance";
-  const today = projectToday();
-  const [form, setForm] = useState({ from: today, to: today, salesRoom: "", withCpf: false });
+  const todayQuery = trpc.captureSheet.today.useQuery();
+  const today = todayQuery.data?.today ?? projectToday();
+  const [edited, setForm] = useState({ from: "", to: "", salesRoom: "", withCpf: false });
+  const form = { ...edited, from: edited.from || today, to: edited.to || today };
   const run = trpc.captureSheet.export.rows.useMutation({ onError: error => toast.error(error.message) });
   const exportAs = async (format: "csv" | "xlsx") => {
     const result = await run.mutateAsync({ from: form.from, to: form.to, salesRoom: form.salesRoom || undefined, withCpf: canPii && form.withCpf, format });
@@ -292,10 +297,10 @@ function ExportarFichas() {
   return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5" aria-label="Exportar fichas">
     <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Exportar fichas (CSV ou Excel)</p>
     <div className="flex flex-wrap items-end gap-3">
-      <div className="grid gap-1"><Label htmlFor="export-from">De</Label><Input id="export-from" type="date" className="w-40" value={form.from} onChange={event => setForm({ ...form, from: event.target.value })} /></div>
-      <div className="grid gap-1"><Label htmlFor="export-to">Até</Label><Input id="export-to" type="date" className="w-40" value={form.to} onChange={event => setForm({ ...form, to: event.target.value })} /></div>
-      <div className="grid gap-1"><Label htmlFor="export-room">Sala (opcional)</Label><Input id="export-room" className="w-48" value={form.salesRoom} onChange={event => setForm({ ...form, salesRoom: event.target.value })} /></div>
-      {canPii ? <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.withCpf} onChange={event => setForm({ ...form, withCpf: event.target.checked })} />Incluir CPF completo</label> : null}
+      <div className="grid gap-1"><Label htmlFor="export-from">De</Label><Input id="export-from" type="date" className="w-40" value={form.from} onChange={event => setForm({ ...edited, from: event.target.value })} /></div>
+      <div className="grid gap-1"><Label htmlFor="export-to">Até</Label><Input id="export-to" type="date" className="w-40" value={form.to} onChange={event => setForm({ ...edited, to: event.target.value })} /></div>
+      <div className="grid gap-1"><Label htmlFor="export-room">Sala (opcional)</Label><Input id="export-room" className="w-48" value={form.salesRoom} onChange={event => setForm({ ...edited, salesRoom: event.target.value })} /></div>
+      {canPii ? <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.withCpf} onChange={event => setForm({ ...edited, withCpf: event.target.checked })} />Incluir CPF completo</label> : null}
       <Button variant="outline" disabled={run.isPending || !form.from || !form.to} onClick={() => void exportAs("csv")}>Baixar CSV</Button>
       <Button variant="outline" disabled={run.isPending || !form.from || !form.to} onClick={() => void exportAs("xlsx")}>Baixar Excel</Button>
     </div>

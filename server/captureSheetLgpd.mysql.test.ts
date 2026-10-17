@@ -146,6 +146,8 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     await expect(caller("seller").captureSheet.updateExtras({ captureId: archivedId, pepOffered: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller("seller").captureSheet.team.set({ captureId: archivedId, roleId: 1, personName: "Pessoa Teste" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller("seller").captureSheet.team.clear({ captureId: archivedId, roleId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("seller").captureSheet.setCoupleCode({ captureId: archivedId, coupleCode: `LGPD-TROCA-${runId}` })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await caller("seller").captureSheet.today()).today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect((await db.select({ pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, archivedId)))[0].pepOffered).toBeFalsy();
     // Admin segue podendo corrigir a ficha arquivada.
     expect(await caller("admin").captureSheet.updateExtras({ captureId: archivedId, pepOffered: true })).toMatchObject({ updated: true });
