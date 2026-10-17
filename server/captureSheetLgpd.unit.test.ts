@@ -58,6 +58,10 @@ describe("aviso de privacidade v1 (provisório)", () => {
     expect(empty).toContain("CNPJ [●]");
     expect(empty).toContain("[canal do encarregado]");
     expect(empty.toLowerCase()).not.toContain("consent");
+    expect(empty).toContain("no fim do dia da visita");
+    expect(privacyNoticeText({}, 3)).toContain("em até 3 dias depois do dia da visita");
+    expect(privacyNoticeText({}, 3)).not.toContain("no fim do dia da visita");
+    expect(privacyNoticeText({}, 1)).toContain("em até 1 dia depois do dia da visita");
     const filled = privacyNoticeText({ privacy_controller_name: " Operadora Exemplo Ltda ", privacy_controller_cnpj: "00.000.000/0001-00", privacy_contact_channel: "privacidade@exemplo.test", privacy_retention_text: "5 anos", privacy_full_text_url: "exemplo.test/privacidade" });
     expect(filled).toContain("tratados por Operadora Exemplo Ltda, CNPJ 00.000.000/0001-00");
     expect(filled).toContain("pelo prazo de 5 anos");

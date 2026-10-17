@@ -164,7 +164,7 @@ export const captureSheetRouter = router({
       // LGPD: estado do papel, vista da sala e o aviso v1 (provisório) que sai na faixa destacável.
       paper: { ...paper, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
       roomVisibility: visibility,
-      privacyNotice: privacyNoticeText(settings.privacy),
+      privacyNotice: privacyNoticeText(settings.privacy, settings.paperDestroyDeadlineDays),
       capture: {
         salesRoom: capture.salesRoom, captureLocation: capture.captureLocation, lodgingLocation: capture.lodgingLocation, transportation: capture.transportation, averageIncome: capture.averageIncome, createdAt: capture.createdAt, checkedInAt: capture.checkedInAt, presentationStatus: capture.presentationStatus, qualificationStatus: capture.qualificationStatus,
         partnerName: capture.partnerName, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, childrenCount: capture.childrenCount,
@@ -232,10 +232,12 @@ export const captureSheetRouter = router({
     }
     if (patch.pepResult && patch.pepOffered === false) throw new TRPCError({ code: "BAD_REQUEST", message: "Resultado do PEP só vale quando a oferta foi feita." });
     if (!Object.keys(patch).length && titularBirthDate === undefined) return { updated: false };
+    const sheetSettings = await loadSettings(db);
     await db.transaction(async tx => {
       // Leitura e gravação juntas, com a ficha travada: duas abas não furam a regra "resultado só com oferta".
-      const [existing] = await tx.select({ id: captureRecords.id, customerId: captureRecords.customerId, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
+      const [existing] = await tx.select({ id: captureRecords.id, customerId: captureRecords.customerId, pepOffered: captureRecords.pepOffered, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+      assertSheetVisibleTo(ctx.user.role, existing, sheetSettings);
       if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
       if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
       if (Object.keys(patch).length) await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
@@ -415,9 +417,11 @@ export const captureSheetRouter = router({
       const personName = input.personName?.trim() || null;
       if (!input.userId && !personName) throw new TRPCError({ code: "BAD_REQUEST", message: "Informe a pessoa (login) ou o nome." });
       const db = await requireDb();
+      const sheetSettings = await loadSettings(db);
       await db.transaction(async tx => {
-        const [capture] = await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
+        const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
         if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+        assertSheetVisibleTo(ctx.user.role, capture, sheetSettings);
         const [role] = await tx.select({ id: captureTeamRoles.id, active: captureTeamRoles.active }).from(captureTeamRoles).where(eq(captureTeamRoles.id, input.roleId)).limit(1);
         if (!role || !role.active) throw new TRPCError({ code: "NOT_FOUND", message: "Papel da equipe não encontrado ou desativado." });
         if (input.userId) {
@@ -431,7 +435,11 @@ export const captureSheetRouter = router({
     }),
     clear: salesProcedure.input(z.object({ captureId: z.number().int().positive(), roleId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      const sheetSettings = await loadSettings(db);
       await db.transaction(async tx => {
+        const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
+        if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+        assertSheetVisibleTo(ctx.user.role, capture, sheetSettings);
         await tx.delete(captureTeamMembers).where(and(eq(captureTeamMembers.captureId, input.captureId), eq(captureTeamMembers.roleId, input.roleId)));
         await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: input.captureId, action: "team_member_cleared", summary: `Ficha ${input.captureId}: papel ${input.roleId} liberado.` });
       });

@@ -139,6 +139,21 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, todayId));
   });
 
+  it("ficha arquivada não aceita escrita da sala (extras e equipe) nem aparece no painel do dia; a linha do painel tem as ações do papel", async () => {
+    const name = `Casal Painel ${runId}`;
+    const [{ id: panelCustomerId }] = await db.insert(customers).values({ fullName: name, documentNumber: `PN-${runId}`, phone: "11966665555", city: "Natal", state: "RN", status: "active" }).$returningId();
+    const [{ id: archivedId }] = await db.insert(captureRecords).values({ customerId: panelCustomerId, salesRoom: `Painel ${runId}`, coupleCode: `LGPD-PAINEL-${runId}`, checkedInAt: daysAgo(3), createdAt: daysAgo(3) }).$returningId();
+    await expect(caller("seller").captureSheet.updateExtras({ captureId: archivedId, pepOffered: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("seller").captureSheet.team.set({ captureId: archivedId, roleId: 1, personName: "Pessoa Teste" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("seller").captureSheet.team.clear({ captureId: archivedId, roleId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await db.select({ pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, archivedId)))[0].pepOffered).toBeFalsy();
+    // Admin segue podendo corrigir a ficha arquivada.
+    expect(await caller("admin").captureSheet.updateExtras({ captureId: archivedId, pepOffered: true })).toMatchObject({ updated: true });
+    const pulse = await caller("seller").dashboard.operationalPulse();
+    expect(JSON.stringify(pulse).includes(name)).toBe(false);
+    expect(JSON.stringify(await caller("admin").dashboard.operationalPulse()).includes(name)).toBe(true);
+  });
+
   it("custódia do papel: imprime, recolhe, destrói, com trilha; o painel do dia conta e o alerta de reimpressão dispara", async () => {
     await expect(caller("service").captureSheet.paper.collect({ code: todayCode })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await caller("service").captureSheet.recordPrint({ code: todayCode });
