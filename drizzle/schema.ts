@@ -321,7 +321,7 @@ export const captureRecords = mysqlTable(
     socialNetworks: text("socialNetworks"),
     giftDescription: varchar("giftDescription", { length: 255 }),
     notes: text("notes"),
-    /** Ficha impressa (TSE x CRM): código do casal que o Sales Command já emite no QR; a ficha abre por ele. Nunca CPF, telefone ou id sequencial. */
+    /** Ficha impressa (TSE x CRM): código legível do casal (publicCode do Sales Command); a ficha abre por ele. Nunca CPF, telefone ou id sequencial. */
     coupleCode: varchar("coupleCode", { length: 64 }),
     secondVehicleModel: varchar("secondVehicleModel", { length: 120 }),
     secondVehicleYear: int("secondVehicleYear"),

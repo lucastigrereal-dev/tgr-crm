@@ -1,9 +1,15 @@
 /**
- * Código do casal: o mesmo que o Sales Command já imprime no QR. A ficha abre por ele, só para quem tem login e permissão
+ * Código do casal: o código legível (publicCode) do Sales Command, que fica na tela da sala; o QR de bip é outro (token secreto só na Suite). A ficha abre por ele, só para quem tem login e permissão
  * (o código não é segredo: o acesso é controlado pelo login). Aceita só letras, números, "-" e "_"; nunca CPF ou telefone.
  */
 export const normalizeCoupleCode = (value: string) => value.trim();
-export const isCoupleCode = (value: string) => /^[A-Za-z0-9_-]{4,64}$/.test(value) && !/^\d{10,}$/.test(value);
+/** Código só de números (mesmo com - ou _) com 8 a 13 dígitos parece telefone ou CPF e é recusado. */
+export function isCoupleCode(value: string) {
+  if (!/^[A-Za-z0-9_-]{4,64}$/.test(value)) return false;
+  const onlyNumeric = /^[\d_-]+$/.test(value);
+  const digits = value.replace(/\D/g, "").length;
+  return !(onlyNumeric && digits >= 8 && digits <= 13);
+}
 
 /** Tempo de relacionamento em dias, derivado de anos e meses da ficha (aproximação de 365 e 30 dias; vazio quando não informado). */
 export function relationshipDays(years?: number | null, months?: number | null) {

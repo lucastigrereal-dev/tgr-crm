@@ -7,6 +7,9 @@ describe("ficha impressa: regras puras", () => {
     expect(isCoupleCode("abc")).toBe(false);
     expect(isCoupleCode("a b c d")).toBe(false);
     expect(isCoupleCode("12345678901")).toBe(false);
+    expect(isCoupleCode("81-99999-9999")).toBe(false);
+    expect(isCoupleCode("999998888")).toBe(false);
+    expect(isCoupleCode("CP-0001")).toBe(true);
     expect(isCoupleCode("x".repeat(65))).toBe(false);
     expect(isCoupleCode("../etc/passwd")).toBe(false);
   });

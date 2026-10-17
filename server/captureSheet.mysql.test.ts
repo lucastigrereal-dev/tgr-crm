@@ -48,6 +48,7 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     await caller().captureSheet.setCoupleCode({ captureId, coupleCode: ` ${code} ` });
     await caller().captureSheet.setCoupleCode({ captureId, coupleCode: code });
     await expect(caller().captureSheet.setCoupleCode({ captureId: otherCaptureId, coupleCode: code })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(caller("seller").captureSheet.setCoupleCode({ captureId, coupleCode: `${code}-X` })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await caller().captureSheet.codeOf({ captureId })).toEqual({ coupleCode: code });
     const sheet = await caller().captureSheet.byCode({ code });
     expect(sheet).toMatchObject({ captureId, coupleCode: code, customer: { fullName: `Casal Ficha ${runId}` }, derived: { relationshipDays: 3 * 365 + 60 } });
@@ -102,6 +103,7 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
   it("guarda segundo carro, aposentado, convidado e PEP; resultado de PEP exige oferta", async () => {
     await expect(caller().captureSheet.updateExtras({ captureId, pepResult: "accepted" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await caller().captureSheet.updateExtras({ captureId, secondVehicleModel: " Civic ", secondVehicleYear: 2019, retiredPrimary: true, retiredPartner: false, guest1Name: "Convidada Um", guest2Name: "  " });
+    await expect(caller().captureSheet.updateExtras({ captureId, pepOffered: null as never })).rejects.toBeTruthy();
     await caller().captureSheet.updateExtras({ captureId, pepOffered: true, pepOfferedBy: "Fechador Teste" });
     await caller().captureSheet.updateExtras({ captureId, pepResult: "declined" });
     const { capture } = await caller().captureSheet.byCode({ code });

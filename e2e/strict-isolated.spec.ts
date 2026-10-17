@@ -581,7 +581,7 @@ test.describe("homologação isolada estrita", () => {
       await fake.close();
     }
   });
-  test("ficha impressa: liga o código do casal, mostra o QR, registra impressão e reimpressão e monta a equipe", async ({ page }) => {
+  test("ficha impressa: liga o código do casal, mostra o código e o espaço do QR, registra impressão e reimpressão e monta a equipe", async ({ page }) => {
     const code = `FICHA-${Date.now().toString(36)}`;
     const [customer] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM customers ORDER BY id LIMIT 1");
     const inserted = await queryDatabase<{ insertId: number }>(
@@ -596,7 +596,8 @@ test.describe("homologação isolada estrita", () => {
     await page.getByLabel("Código do casal").fill(code);
     await page.getByRole("button", { name: "Ligar à ficha" }).click();
     await linked;
-    await expect(page.getByRole("img", { name: `QR da ficha ${code}` })).toBeVisible();
+    await expect(page.getByLabel(`Código do casal ${code}`)).toBeVisible();
+    await expect(page.getByText("Cole aqui o QR da recepção")).toBeVisible();
     await expect(page.getByText("Ainda não impressa.")).toBeVisible();
 
     const printed = waitForMutation(page, "captureSheet.recordPrint");

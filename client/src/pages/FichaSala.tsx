@@ -6,7 +6,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { EmptyState, PageHeader } from "@/components/crm/ui";
 import { trpc } from "@/lib/trpc";
 import { Printer } from "lucide-react";
-import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import { useSearch } from "wouter";
 import { toast } from "sonner";
@@ -25,17 +24,19 @@ function FichaImpressa({ code }: { code: string }) {
   const utils = trpc.useUtils();
   const sheet = trpc.captureSheet.byCode.useQuery({ code });
   const roles = trpc.captureSheet.roles.list.useQuery();
-  const [qr, setQr] = useState("");
   const [roleId, setRoleId] = useState("");
   const [person, setPerson] = useState("");
   const [extras, setExtras] = useState({ secondVehicleModel: "", secondVehicleYear: "", guest1Name: "", guest2Name: "", pepOfferedBy: "" });
+  const saved = sheet.data?.capture;
+  const savedKey = saved ? `${sheet.data?.captureId}|${saved.secondVehicleModel}|${saved.secondVehicleYear}|${saved.guest1Name}|${saved.guest2Name}|${saved.pepOfferedBy}` : "";
+  // Mostra o que já está gravado nos campos da sala; recarrega quando a ficha muda no servidor.
+  useEffect(() => { if (saved) setExtras({ secondVehicleModel: saved.secondVehicleModel ?? "", secondVehicleYear: saved.secondVehicleYear ? String(saved.secondVehicleYear) : "", guest1Name: saved.guest1Name ?? "", guest2Name: saved.guest2Name ?? "", pepOfferedBy: saved.pepOfferedBy ?? "" }); }, [savedKey]);
   const refresh = () => utils.captureSheet.byCode.invalidate({ code });
   const fail = (error: { message: string }) => toast.error(error.message);
   const recordPrint = trpc.captureSheet.recordPrint.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
   const setMember = trpc.captureSheet.team.set.useMutation({ onSuccess: () => { setPerson(""); toast.success("Equipe atualizada."); void refresh(); }, onError: fail });
   const clearMember = trpc.captureSheet.team.clear.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
   const updateExtras = trpc.captureSheet.updateExtras.useMutation({ onSuccess: () => { toast.success("Ficha atualizada."); void refresh(); }, onError: fail });
-  useEffect(() => { void QRCode.toDataURL(code, { margin: 1, width: 220, errorCorrectionLevel: "M" }).then(setQr).catch(() => setQr("")); }, [code]);
   if (sheet.isLoading) return <p className="text-sm text-muted-foreground">Carregando a ficha...</p>;
   if (!sheet.data) return <EmptyState title="Ficha não encontrada" body={sheet.error?.message ?? "Nenhuma ficha com este código."} />;
   const data = sheet.data;
@@ -49,7 +50,7 @@ function FichaImpressa({ code }: { code: string }) {
     </div>
     <div id="ficha-print" className="rounded-xl border border-[#e8e1d4] bg-white p-6 text-[#1d2b2a]">
       <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Ficha de atendimento</p><h2 className="font-serif text-2xl">{customer.fullName}</h2><p className="text-sm">{text(customer.phone)} · {text(customer.city)}{customer.state ? `/${customer.state}` : ""}</p></div>
-        <div className="text-center">{qr ? <img src={qr} alt={`QR da ficha ${code}`} width={110} height={110} /> : null}<p className="font-mono text-xs">{code}</p></div></div>
+        <div className="text-center"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#6b756f]">Código do casal</p><p aria-label={`Código do casal ${code}`} className="font-mono text-3xl font-bold tracking-wider">{code}</p><div className="mt-2 flex h-28 w-28 items-center justify-center rounded border border-dashed border-[#c9c2b2] p-1 text-[10px] text-[#6b756f] ml-auto">Cole aqui o QR da recepção</div></div></div>
       <div className="mt-4 grid grid-cols-2 gap-x-6 sm:grid-cols-3">
         <Field label="Sala" value={text(capture.salesRoom)} /><Field label="Agendada" value={when(capture.scheduledAt)} /><Field label="Check-in" value={when(capture.checkedInAt)} />
         <Field label="Ordem de chegada" value={text(derived.arrivalOrder)} /><Field label="Local de captação" value={text(capture.captureLocation)} /><Field label="Locomoção" value={text(capture.transportation)} />
@@ -85,7 +86,7 @@ function FichaImpressa({ code }: { code: string }) {
         <div className="grid gap-1"><Label>Convidado 2</Label><Input value={extras.guest2Name} onChange={event => setExtras({ ...extras, guest2Name: event.target.value })} /></div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => updateExtras.mutate({ captureId: data.captureId, secondVehicleModel: extras.secondVehicleModel || undefined, secondVehicleYear: extras.secondVehicleYear ? Number(extras.secondVehicleYear) : undefined, guest1Name: extras.guest1Name || undefined, guest2Name: extras.guest2Name || undefined })} disabled={updateExtras.isPending}>Salvar campos</Button>
+        <Button onClick={() => updateExtras.mutate({ captureId: data.captureId, secondVehicleModel: extras.secondVehicleModel, secondVehicleYear: extras.secondVehicleYear ? Number(extras.secondVehicleYear) : null, guest1Name: extras.guest1Name, guest2Name: extras.guest2Name })} disabled={updateExtras.isPending}>Salvar campos</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, retiredPrimary: !capture.retiredPrimary })}>Titular aposentado: {yesNo(capture.retiredPrimary)}</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, retiredPartner: !capture.retiredPartner })}>Cônjuge aposentado: {yesNo(capture.retiredPartner)}</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, pepOffered: true, pepOfferedBy: extras.pepOfferedBy || undefined })}>Registrar oferta de PEP</Button>
@@ -114,7 +115,7 @@ export default function FichaSala() {
   const code = params.get("codigo");
   const captureId = Number(params.get("captura"));
   return <div className="space-y-6">
-    <PageHeader eyebrow="Controle de sala" title="Ficha impressa" description="Ficha A4 do casal com QR, equipe por papel e campos da sala. A impressão e a reimpressão ficam registradas." />
+    <PageHeader eyebrow="Controle de sala" title="Ficha impressa" description="Ficha A4 do casal com o código do casal e espaço para o QR da recepção, equipe por papel e campos da sala. A impressão e a reimpressão ficam registradas." />
     {code ? <FichaImpressa code={code} /> : Number.isInteger(captureId) && captureId > 0 ? <LigarCodigo captureId={captureId} /> : <EmptyState title="Ficha não informada" body="Abra a ficha pela fila de captação." />}
   </div>;
 }

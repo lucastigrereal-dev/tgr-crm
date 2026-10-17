@@ -11,7 +11,7 @@ import { isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
 
 /**
- * Ficha impressa com QR (TSE x CRM, pacotes 2, 3 e 5): a ficha abre pelo código do casal do Sales Command (um só QR na folha), equipe por papel, PEP e campos novos.
+ * Ficha impressa com QR (TSE x CRM, pacotes 2, 3 e 5): a ficha abre pelo código do casal do Sales Command; o QR de bip é o da recepção (token secreto só na Suite), a folha só tem o espaço dele, equipe por papel, PEP e campos novos.
  * Versão nova, fora do piloto. O tempo por papel (bip) é do Sales Command; aqui só mora a ficha e o QR.
  */
 const projectTimezone = () => ENV.financialProjectTimezone.trim() || "America/Recife";
@@ -41,13 +41,14 @@ export const captureSheetRouter = router({
     const [capture] = await db.select({ id: captureRecords.id, coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
     if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
     if (capture.coupleCode === code) return { code };
+    if (capture.coupleCode && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só a administração troca o código de uma ficha que já tem código." });
     try {
       await db.update(captureRecords).set({ coupleCode: code }).where(eq(captureRecords.id, input.captureId));
     } catch (error) {
       if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Este código já está ligado a outra ficha." });
       throw error;
     }
-    await recordAudit(ctx.user.id, "capture", input.captureId, "couple_code_set", capture.coupleCode ? `Ficha ${input.captureId}: código do casal trocado.` : `Ficha ${input.captureId}: código do casal ligado.`);
+    await recordAudit(ctx.user.id, "capture", input.captureId, "couple_code_set", capture.coupleCode ? `Ficha ${input.captureId}: código do casal trocado de ${capture.coupleCode} para ${code}.` : `Ficha ${input.captureId}: código do casal ${code} ligado.`);
     return { code };
   }),
 
@@ -116,7 +117,7 @@ export const captureSheetRouter = router({
     retiredPartner: z.boolean().optional().nullable(),
     guest1Name: optionalName,
     guest2Name: optionalName,
-    pepOffered: z.boolean().optional().nullable(),
+    pepOffered: z.boolean().optional(),
     pepOfferedBy: optionalName,
     pepResult: z.enum(["accepted", "declined"]).optional().nullable(),
   })).mutation(async ({ ctx, input }) => {
@@ -129,11 +130,14 @@ export const captureSheetRouter = router({
     }
     if (patch.pepResult && patch.pepOffered === false) throw new TRPCError({ code: "BAD_REQUEST", message: "Resultado do PEP só vale quando a oferta foi feita." });
     if (!Object.keys(patch).length) return { updated: false };
-    const [existing] = await db.select({ id: captureRecords.id, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1);
-    if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
-    if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
-    if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
-    await db.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
+    await db.transaction(async tx => {
+      // Leitura e gravação juntas, com a ficha travada: duas abas não furam a regra "resultado só com oferta".
+      const [existing] = await tx.select({ id: captureRecords.id, pepOffered: captureRecords.pepOffered }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+      if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
+      if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
+      await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
+    });
     await recordAudit(ctx.user.id, "capture", captureId, "sheet_extras_updated", `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).`);
     return { updated: true };
   }),
