@@ -4,11 +4,11 @@ import { alias } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { captureMotives, captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
-import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { getDb, recordAudit } from "../db";
 import { publishSalesRoomEvent } from "../realtime";
 import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, internalProcedure, receptionProcedure, salesProcedure } from "./access";
-import { txAudit } from "../txOutbox";
+import { txAudit, txEvent } from "../txOutbox";
 import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustodyOfSheet, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
 import type { CaptureExportSource } from "../../shared/captureSheetExport";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
@@ -503,13 +503,12 @@ export const captureSheetRouter = router({
         presentationStatus: "no_tour", noTourReason: reason,
       }).where(eq(captureRecords.id, capture.id));
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
-      return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom, reason };
-    }).then(async result => {
-      if (!result.alreadyRecorded) {
-        // Mesmo caminho do markNoTour: o painel da sala atualiza e quem escuta capture.no_tour vê este NT.
-        await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.captureId, actorUserId: ctx.user.id, payload: { salesRoom: result.salesRoom, reason: result.reason, ntKind: input.kind } });
-        publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.captureId, salesRoom: result.salesRoom });
-      }
+      // O evento entra na mesma transação do status: o fato e a saída para quem escuta capture.no_tour saem juntos.
+      await txEvent(tx, { eventName: "capture.no_tour", aggregateType: "capture", aggregateId: capture.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason, ntKind: input.kind } });
+      return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom };
+    }).then(result => {
+      // O painel da sala atualiza em tempo real (mesmo caminho do markNoTour).
+      if (!result.alreadyRecorded) publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.captureId, salesRoom: result.salesRoom });
       return { ok: true as const, alreadyRecorded: result.alreadyRecorded };
     });
   }),

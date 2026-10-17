@@ -387,7 +387,9 @@ export const capturesRouter = router({
     let motiveId: number | null = null;
     // Já gravado com este motivo: repetir é idempotente mesmo que o motivo tenha sido desativado ou renomeado depois.
     if (capture.commercialOutcome && input.motiveId) {
-      if (capture.commercialOutcome === input.outcome && capture.commercialOutcomeMotiveId === input.motiveId) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
+      const savedReason = capture.commercialOutcomeReason ?? "";
+      const sameComplement = reason ? savedReason.endsWith(`: ${reason}`) : !savedReason.includes(": ");
+      if (capture.commercialOutcome === input.outcome && capture.commercialOutcomeMotiveId === input.motiveId && sameComplement) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
       throw new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
     }
     if (input.outcome === "caiu_em_mesa" && input.motiveId) {

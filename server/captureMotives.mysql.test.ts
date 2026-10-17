@@ -99,6 +99,7 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     // Repetir a mesma chamada continua idempotente mesmo se o motivo for desativado depois.
     await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: false });
     await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "achou caro o plano 3" })).resolves.toMatchObject({ alreadyRecorded: true });
+    await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "outro complemento" })).rejects.toMatchObject({ code: "CONFLICT" });
     await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: true });
     const wrongKind = await motiveOf("nt_perfil", "renda");
     const second = await newCapture({ presentationStatus: "presented", closerId: adminId });
