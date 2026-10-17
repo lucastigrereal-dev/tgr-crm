@@ -444,9 +444,10 @@ export const captureSheetRouter = router({
       kind: z.enum(MOTIVE_KINDS),
       code: z.string().trim().toLowerCase().regex(/^[a-z0-9_]{2,60}$/, "Use só letras minúsculas, números e _."),
       label: z.string().trim().min(3).max(160),
-      requiresComplement: z.boolean().default(false),
-      sortOrder: z.number().int().min(0).max(9999).default(0),
-      active: z.boolean().default(true),
+      // Na edição o que não vier fica como está; só a criação usa os padrões.
+      requiresComplement: z.boolean().optional(),
+      sortOrder: z.number().int().min(0).max(9999).optional(),
+      active: z.boolean().optional(),
     })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       try {
@@ -456,9 +457,9 @@ export const captureSheetRouter = router({
             if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Motivo não encontrado." });
             // Tipo e código são a identidade do motivo no histórico: não mudam depois de criado.
             if (current.kind !== input.kind || current.code !== input.code) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo e código do motivo não mudam; crie outro motivo e desative este." });
-            await tx.update(captureMotives).set({ label: input.label, requiresComplement: input.requiresComplement, sortOrder: input.sortOrder, active: input.active, provisional: false }).where(eq(captureMotives.id, input.id));
+            await tx.update(captureMotives).set({ label: input.label, ...(input.requiresComplement !== undefined ? { requiresComplement: input.requiresComplement } : {}), ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}), ...(input.active !== undefined ? { active: input.active } : {}), provisional: false }).where(eq(captureMotives.id, input.id));
           } else {
-            await tx.insert(captureMotives).values({ kind: input.kind, code: input.code, label: input.label, requiresComplement: input.requiresComplement, sortOrder: input.sortOrder, active: input.active, provisional: false });
+            await tx.insert(captureMotives).values({ kind: input.kind, code: input.code, label: input.label, requiresComplement: input.requiresComplement ?? false, sortOrder: input.sortOrder ?? 0, active: input.active ?? true, provisional: false });
           }
           await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture_motive", entityId: input.id ?? `${input.kind}:${input.code}`, action: input.id ? "updated" : "created", summary: `Motivo "${input.label}" (${input.kind}) ${input.id ? "atualizado" : "criado"}.` });
         });

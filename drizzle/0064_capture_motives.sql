@@ -13,6 +13,7 @@ CREATE TABLE `capture_motives` (
 );
 --> statement-breakpoint
 ALTER TABLE `capture_records` ADD `commercialOutcomeMotiveId` int;--> statement-breakpoint
+ALTER TABLE `capture_records` ADD `commercialOutcomeComplement` text;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `ntKind` enum('perfil','tempo','consultor');--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `ntMotiveId` int;--> statement-breakpoint
 ALTER TABLE `capture_records` ADD `ntComplement` text;--> statement-breakpoint

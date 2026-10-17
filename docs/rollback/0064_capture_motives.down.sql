@@ -5,6 +5,7 @@ ALTER TABLE `capture_records` DROP COLUMN `ntCaptorName`;
 ALTER TABLE `capture_records` DROP COLUMN `ntComplement`;
 ALTER TABLE `capture_records` DROP COLUMN `ntMotiveId`;
 ALTER TABLE `capture_records` DROP COLUMN `ntKind`;
+ALTER TABLE `capture_records` DROP COLUMN `commercialOutcomeComplement`;
 ALTER TABLE `capture_records` DROP COLUMN `commercialOutcomeMotiveId`;
 DROP TABLE `capture_motives`;
-DELETE FROM __drizzle_migrations WHERE created_at = 1792259550445;
+DELETE FROM __drizzle_migrations WHERE created_at = 1792261967301;

@@ -388,10 +388,10 @@ export const capturesRouter = router({
     if (ctx.user.role !== "admin" && capture.closerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o closer designado da ficha (ou a administração) registra o resultado comercial." });
     let reason = nullIfBlank(input.reason);
     let motiveId: number | null = null;
+    let complement: string | null = null;
     // Já gravado com este motivo: repetir é idempotente mesmo que o motivo tenha sido desativado ou renomeado depois.
     if (capture.commercialOutcome && input.motiveId) {
-      const savedReason = capture.commercialOutcomeReason ?? "";
-      const sameComplement = reason ? savedReason.endsWith(`: ${reason}`) : !savedReason.includes(": ");
+      const sameComplement = (capture.commercialOutcomeComplement ?? null) === reason;
       if (capture.commercialOutcome === input.outcome && capture.commercialOutcomeMotiveId === input.motiveId && sameComplement) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
       throw new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
     }
@@ -400,6 +400,7 @@ export const capturesRouter = router({
       if (!motive || !motive.active || motive.kind !== "nt_mesa") throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para CAIU EM MESA." });
       if (motive.requiresComplement && (reason?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
       motiveId = motive.id;
+      complement = reason;
       reason = reason ? `${motive.label}: ${reason}` : motive.label;
     }
     const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null; commercialOutcomeMotiveId: number | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || ((existing.commercialOutcomeReason ?? null) === reason && (existing.commercialOutcomeMotiveId ?? null) === motiveId));
@@ -412,7 +413,7 @@ export const capturesRouter = router({
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `COMMERCIAL_OUTCOME_REQUIRES_PRESENTATION: o resultado comercial só pode ser registrado depois que a apresentação começou (atual: ${capture.presentationStatus}).` });
     }
     const recordedAt = new Date();
-    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id, commercialOutcomeMotiveId: motiveId })
+    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id, commercialOutcomeMotiveId: motiveId, commercialOutcomeComplement: complement })
       .where(and(eq(captureRecords.id, input.id), isNull(captureRecords.commercialOutcome)));
     if (affectedRows(updateResult) === 0) {
       const current = (await db.select().from(captureRecords).where(eq(captureRecords.id, input.id)).limit(1))[0];

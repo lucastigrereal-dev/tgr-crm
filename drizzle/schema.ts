@@ -294,6 +294,7 @@ export const captureRecords = mysqlTable(
     commercialOutcomeAt: timestamp("commercialOutcomeAt"),
     commercialOutcomeByUserId: int("commercialOutcomeByUserId").references(() => users.id),
     commercialOutcomeMotiveId: int("commercialOutcomeMotiveId"),
+    commercialOutcomeComplement: text("commercialOutcomeComplement"),
     // Não tour (NT) de perfil, tempo ou consultor, com motivo padronizado; o de mesa é o CAIU EM MESA acima. Imutável depois de gravado.
     ntKind: mysqlEnum("ntKind", ["perfil", "tempo", "consultor"]),
     ntMotiveId: int("ntMotiveId"),

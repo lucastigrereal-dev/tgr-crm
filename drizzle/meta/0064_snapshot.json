@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "59a823c7-78a5-4267-b19b-f36d836b76e4",
+  "id": "3a60a007-1eea-4ded-a1f9-fed9afa43e85",
   "prevId": "ce97240a-11a1-4044-8235-a9fec042351d",
   "tables": {
     "audit_logs": {
@@ -631,6 +631,13 @@
         "commercialOutcomeMotiveId": {
           "name": "commercialOutcomeMotiveId",
           "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "commercialOutcomeComplement": {
+          "name": "commercialOutcomeComplement",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

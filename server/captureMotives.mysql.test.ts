@@ -110,6 +110,8 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     // Repetir a mesma chamada continua idempotente mesmo se o motivo for desativado depois.
     await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: false });
     await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "achou caro o plano 3" })).resolves.toMatchObject({ alreadyRecorded: true });
+    // O complemento é comparado inteiro, não pelo fim do texto.
+    await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "caro o plano 3" })).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "outro complemento" })).rejects.toMatchObject({ code: "CONFLICT" });
     await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: true });
     await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "vendeu", motiveId: motive.id })).rejects.toThrow();
@@ -127,5 +129,10 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     expect((await caller("seller").captureSheet.motives.list({ kind: "nt_tempo", includeInactive: true })).some(motive => motive.id === created.id)).toBe(false);
     expect((await caller().captureSheet.motives.list({ kind: "nt_tempo", includeInactive: true })).some(motive => motive.id === created.id)).toBe(true);
     await expect(caller().captureSheet.motives.upsert({ kind: "nt_tempo", code: `x_${runId}`, label: "Duplicado" })).rejects.toMatchObject({ code: "CONFLICT" });
+    // Edição só do texto preserva complemento obrigatório, ordem e estado.
+    const outro = await motiveOf("nt_tempo", "outro");
+    await caller().captureSheet.motives.upsert({ id: outro.id, kind: "nt_tempo", code: "outro", label: "Outro motivo de tempo (ajustado)" });
+    expect(await motiveOf("nt_tempo", "outro")).toMatchObject({ requiresComplement: true, sortOrder: 99, active: true, label: "Outro motivo de tempo (ajustado)" });
+    await caller().captureSheet.motives.upsert({ id: outro.id, kind: "nt_tempo", code: "outro", label: outro.label });
   });
 });
