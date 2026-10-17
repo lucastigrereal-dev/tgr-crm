@@ -331,6 +331,8 @@ function RelatoriosSala() {
   const form = { ...edited, from: edited.from || today, to: edited.to || today };
   const run = trpc.captureSheet.reports.run.useMutation({ onError: error => toast.error(error.message) });
   const data = run.data;
+  // Período do relatório já gerado: os CSVs usam este, não os campos que podem ter sido editados depois.
+  const [submitted, setSubmitted] = useState({ from: "", to: "" });
   const pct = (value: number | null) => value === null ? "—" : `${value}%`;
   const min = (value: number | null) => value === null ? "—" : `${value} min`;
   return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5" aria-label="Relatórios da sala">
@@ -339,7 +341,7 @@ function RelatoriosSala() {
       <div className="grid gap-1"><Label htmlFor="rel-from">De</Label><Input id="rel-from" type="date" className="w-40" value={form.from} onChange={event => setForm({ ...edited, from: event.target.value })} /></div>
       <div className="grid gap-1"><Label htmlFor="rel-to">Até</Label><Input id="rel-to" type="date" className="w-40" value={form.to} onChange={event => setForm({ ...edited, to: event.target.value })} /></div>
       <div className="grid gap-1"><Label htmlFor="rel-room">Sala (opcional)</Label><Input id="rel-room" className="w-48" value={form.salesRoom} onChange={event => setForm({ ...edited, salesRoom: event.target.value })} /></div>
-      <Button variant="outline" disabled={run.isPending || !form.from || !form.to} onClick={() => run.mutate({ from: form.from, to: form.to, salesRoom: form.salesRoom || undefined })}>Gerar</Button>
+      <Button variant="outline" disabled={run.isPending || !form.from || !form.to} onClick={() => run.mutate({ from: form.from, to: form.to, salesRoom: form.salesRoom || undefined }, { onSuccess: () => setSubmitted({ from: form.from, to: form.to }) })}>Gerar</Button>
     </div>
     {data ? <div className="space-y-4" data-testid="relatorios-resultado">
       {data.truncated ? <p role="alert" className="text-sm font-semibold text-red-700">Relatório incompleto: passou de {data.limit} fichas. Reduza o período.</p> : null}
@@ -347,8 +349,8 @@ function RelatoriosSala() {
       <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="pb-1 text-left font-semibold">Vendas por origem</caption><thead><tr className="text-left text-xs text-muted-foreground"><th>Origem</th><th>Fichas</th><th>Tours</th><th>Vendeu</th><th>Caiu em mesa</th><th>NT</th><th>Conversão</th></tr></thead><tbody>{data.byOrigin.map(row => <tr key={row.origin} className="border-t border-[#ece6da]"><td>{row.origin}</td><td>{row.fichas}</td><td>{row.tours}</td><td>{row.vendeu}</td><td>{row.caiuEmMesa}</td><td>{row.naoTour}</td><td>{pct(row.conversaoPct)}</td></tr>)}</tbody></table></div>
       <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="pb-1 text-left font-semibold">Tempo médio de apresentação por consultor</caption><thead><tr className="text-left text-xs text-muted-foreground"><th>Consultor</th><th>Apresentações</th><th>Com tempo</th><th>Média</th><th>Mínimo</th><th>Máximo</th></tr></thead><tbody>{data.byConsultant.map(row => <tr key={row.consultant} className="border-t border-[#ece6da]"><td>{row.consultant}</td><td>{row.apresentacoes}</td><td>{row.comTempo}</td><td>{min(row.mediaMin)}</td><td>{min(row.minimoMin)}</td><td>{min(row.maximoMin)}</td></tr>)}</tbody></table></div>
       <div className="flex gap-2">
-        <Button size="sm" variant="outline" onClick={() => downloadBlob(toCsv(data.byOrigin.map(row => ({ Origem: row.origin, Fichas: row.fichas, Tours: row.tours, Vendeu: row.vendeu, Caiu_em_mesa: row.caiuEmMesa, NT: row.naoTour, Conversao_pct: row.conversaoPct ?? "" }))), `vendas-por-origem-${form.from}-${form.to}.csv`, "text/csv;charset=utf-8")}>CSV vendas por origem</Button>
-        <Button size="sm" variant="outline" onClick={() => downloadBlob(toCsv(data.byConsultant.map(row => ({ Consultor: row.consultant, Apresentacoes: row.apresentacoes, Com_tempo: row.comTempo, Media_min: row.mediaMin ?? "", Minimo_min: row.minimoMin ?? "", Maximo_min: row.maximoMin ?? "" }))), `tempo-medio-consultor-${form.from}-${form.to}.csv`, "text/csv;charset=utf-8")}>CSV tempo por consultor</Button>
+        <Button size="sm" variant="outline" disabled={run.isPending} onClick={() => downloadBlob(toCsv(data.byOrigin.map(row => ({ Origem: row.origin, Fichas: row.fichas, Tours: row.tours, Vendeu: row.vendeu, Caiu_em_mesa: row.caiuEmMesa, NT: row.naoTour, Conversao_pct: row.conversaoPct ?? "" }))), `vendas-por-origem-${submitted.from}-${submitted.to}.csv`, "text/csv;charset=utf-8")}>CSV vendas por origem</Button>
+        <Button size="sm" variant="outline" disabled={run.isPending} onClick={() => downloadBlob(toCsv(data.byConsultant.map(row => ({ Consultor: row.consultant, Apresentacoes: row.apresentacoes, Com_tempo: row.comTempo, Media_min: row.mediaMin ?? "", Minimo_min: row.minimoMin ?? "", Maximo_min: row.maximoMin ?? "" }))), `tempo-medio-consultor-${submitted.from}-${submitted.to}.csv`, "text/csv;charset=utf-8")}>CSV tempo por consultor</Button>
       </div>
     </div> : null}
   </CardContent></Card>;

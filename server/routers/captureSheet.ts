@@ -541,7 +541,7 @@ export const captureSheetRouter = router({
       const liner = alias(users, "liner");
       const rows = await db.select({
         captureLocation: captureRecords.captureLocation, presentationStatus: captureRecords.presentationStatus, commercialOutcome: captureRecords.commercialOutcome, ntKind: captureRecords.ntKind,
-        linerName: liner.name, presentationStartedAt: captureRecords.presentationStartedAt, presentationEndedAt: captureRecords.presentationEndedAt,
+        linerId: captureRecords.linerId, linerName: liner.name, presentationStartedAt: captureRecords.presentationStartedAt, presentationEndedAt: captureRecords.presentationEndedAt,
       }).from(captureRecords).leftJoin(liner, eq(liner.id, captureRecords.linerId)).where(and(...conditions)).orderBy(asc(captureRecords.createdAt), asc(captureRecords.id)).limit(limit + 1);
       const truncated = rows.length > limit;
       const page = rows.slice(0, limit);

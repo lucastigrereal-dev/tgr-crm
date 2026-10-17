@@ -8,6 +8,7 @@ export type ReportSource = {
   presentationStatus: string;
   commercialOutcome: "vendeu" | "caiu_em_mesa" | null;
   ntKind: string | null;
+  linerId?: number | null;
   linerName: string | null;
   presentationStartedAt: Date | string | null;
   presentationEndedAt: Date | string | null;
@@ -49,8 +50,10 @@ export function buildAverageTimeByConsultant(rows: ReportSource[]): ConsultantRo
   const map = new Map<string, { item: ConsultantRow; minutes: number[] }>();
   for (const row of rows) {
     if (row.presentationStatus !== "presented" && row.presentationStatus !== "closed") continue;
-    const key = row.linerName?.trim() || NO_CONSULTANT_LABEL;
-    const entry = map.get(key) ?? { item: { consultant: key, apresentacoes: 0, comTempo: 0, mediaMin: null, minimoMin: null, maximoMin: null }, minutes: [] };
+    const label = row.linerName?.trim() || NO_CONSULTANT_LABEL;
+    // Nomes de usuário não são únicos: agrupa pelo id do consultor e usa o nome só como rótulo.
+    const key = row.linerId != null ? `id:${row.linerId}` : `nome:${label}`;
+    const entry = map.get(key) ?? { item: { consultant: label, apresentacoes: 0, comTempo: 0, mediaMin: null, minimoMin: null, maximoMin: null }, minutes: [] };
     entry.item.apresentacoes += 1;
     const minutes = presentationMinutes(row.presentationStartedAt, row.presentationEndedAt);
     if (minutes !== null) entry.minutes.push(minutes);
