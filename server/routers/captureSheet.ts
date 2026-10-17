@@ -110,9 +110,9 @@ export const captureSheetRouter = router({
       const [{ count }] = await tx.select({ count: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
       const isReprint = Number(count) > 0;
       await tx.insert(captureSheetPrints).values({ captureId: capture.id, printedByUserId: ctx.user.id, reprint: isReprint });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: isReprint ? "sheet_reprinted" : "sheet_printed", summary: isReprint ? `Ficha ${capture.id} reimpressa.` : `Ficha ${capture.id} impressa.` });
       return isReprint;
     });
-    await recordAudit(ctx.user.id, "capture", capture.id, reprint ? "sheet_reprinted" : "sheet_printed", reprint ? `Ficha ${capture.id} reimpressa.` : `Ficha ${capture.id} impressa.`);
     return { reprint };
   }),
 
@@ -145,8 +145,8 @@ export const captureSheetRouter = router({
       if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
       if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
       await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, captureId));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: captureId, action: "sheet_extras_updated", summary: `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).` });
     });
-    await recordAudit(ctx.user.id, "capture", captureId, "sheet_extras_updated", `Ficha ${captureId}: campos da sala atualizados (${Object.keys(patch).join(", ")}).`);
     return { updated: true };
   }),
 
@@ -166,13 +166,15 @@ export const captureSheetRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       try {
-        if (input.id) await db.update(captureTeamRoles).set({ code: input.code, label: input.label, kind: input.kind, sortOrder: input.sortOrder, active: input.active }).where(eq(captureTeamRoles.id, input.id));
-        else await db.insert(captureTeamRoles).values({ code: input.code, label: input.label, kind: input.kind, sortOrder: input.sortOrder, active: input.active });
+        await db.transaction(async tx => {
+          if (input.id) await tx.update(captureTeamRoles).set({ code: input.code, label: input.label, kind: input.kind, sortOrder: input.sortOrder, active: input.active }).where(eq(captureTeamRoles.id, input.id));
+          else await tx.insert(captureTeamRoles).values({ code: input.code, label: input.label, kind: input.kind, sortOrder: input.sortOrder, active: input.active });
+          await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture_team_role", entityId: input.id ?? input.code, action: input.id ? "updated" : "created", summary: `Papel da equipe "${input.label}" ${input.id ? "atualizado" : "criado"}.` });
+        });
       } catch (error) {
         if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: `O código "${input.code}" já existe.` });
         throw error;
       }
-      await recordAudit(ctx.user.id, "capture_team_role", input.id ?? input.code, input.id ? "updated" : "created", `Papel da equipe "${input.label}" ${input.id ? "atualizado" : "criado"}.`);
       return { ok: true };
     }),
   }),
@@ -197,14 +199,16 @@ export const captureSheetRouter = router({
           if (!person) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado." });
         }
         await tx.insert(captureTeamMembers).values({ captureId: input.captureId, roleId: input.roleId, userId: input.userId ?? null, personName }).onDuplicateKeyUpdate({ set: { userId: input.userId ?? null, personName } });
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: input.captureId, action: "team_member_set", summary: `Ficha ${input.captureId}: papel ${input.roleId} atribuído.` });
       });
-      await recordAudit(ctx.user.id, "capture", input.captureId, "team_member_set", `Ficha ${input.captureId}: papel ${input.roleId} atribuído.`);
       return { ok: true };
     }),
     clear: salesProcedure.input(z.object({ captureId: z.number().int().positive(), roleId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      await db.delete(captureTeamMembers).where(and(eq(captureTeamMembers.captureId, input.captureId), eq(captureTeamMembers.roleId, input.roleId)));
-      await recordAudit(ctx.user.id, "capture", input.captureId, "team_member_cleared", `Ficha ${input.captureId}: papel ${input.roleId} liberado.`);
+      await db.transaction(async tx => {
+        await tx.delete(captureTeamMembers).where(and(eq(captureTeamMembers.captureId, input.captureId), eq(captureTeamMembers.roleId, input.roleId)));
+        await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: input.captureId, action: "team_member_cleared", summary: `Ficha ${input.captureId}: papel ${input.roleId} liberado.` });
+      });
       return { ok: true };
     }),
   }),
