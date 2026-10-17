@@ -26,7 +26,7 @@ import {
   parseSaleTermsPolicy,
 } from "./saleTermsPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
-import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { logger } from "./logger";
 
 // PIL-008: recusa de DOMÍNIO (não vale a pena o Sales reenviar) vs falha de INFRAESTRUTURA (transitória, 503).
@@ -458,7 +458,8 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
 
   let result: Awaited<ReturnType<typeof materializeSalesCommandSale>>;
   try {
-    result = await db.transaction(tx => materializeSalesCommandSale(tx, event));
+    // Deadlock do InnoDB derruba a transação inteira e manda repetir; a materialização é idempotente por saleId, então repetir é seguro.
+    result = await withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, event)));
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       const raced = await findFormalization(db, event.saleId);
@@ -477,8 +478,9 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
     return;
   }
 
-  await syncRevenueQualityForContract({ contractId: result.contractId, actorUserId: null, trigger: "formalização Sales Command" });
-  response.status(201).json({ accepted: true, ...result, saleId: event.saleId });
+  // Depois de um deadlock repetido, a nova tentativa pode achar a venda já formalizada por uma requisição concorrente: é replay (200), não criação (201).
+  await syncRevenueQualityForContract({ contractId: result.contractId, actorUserId: null, trigger: result.replay ? "race replay Sales Command" : "formalização Sales Command" });
+  response.status(result.replay ? 200 : 201).json({ accepted: true, ...result, saleId: event.saleId });
 }
 
 export function registerSalesCommandBridge(app: Express, integrationKey: string | undefined) {
