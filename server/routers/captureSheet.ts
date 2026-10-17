@@ -1,14 +1,16 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
-import { adminProcedure, receptionProcedure, salesProcedure } from "./access";
+import { adminProcedure, assertCapability, internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { txAudit } from "../txOutbox";
-import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, ageInYears, arrivalOrder, computeNq, isCoupleCode, normalizeCoupleCode, relationshipDays, type NqSettings } from "../captureSheetDomain";
-import { isDuplicateKeyError } from "../mysqlErrors";
+import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustody, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
+import type { CaptureExportSource } from "../../shared/captureSheetExport";
+import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
 
 /**
@@ -24,9 +26,11 @@ async function requireDb() {
   return db;
 }
 
-const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "brand_name"] as const;
+const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "room_visibility_days", "paper_destroy_deadline_days", "brand_name", ...PRIVACY_TEXT_KEYS] as const;
+/** Chaves de texto livre (marca e aviso de privacidade): sem validação numérica. */
+const TEXT_SETTING_KEYS: ReadonlySet<string> = new Set(["brand_name", ...PRIVACY_TEXT_KEYS]);
 
-const SETTING_RANGES = { nq_min_man_age: [0, 120], nq_min_relationship_months: [0, 600], nq_min_vehicle_year: [1950, 2100], nq_min_income: [0, 1_000_000], nq_max_items_accepted: [0, 7], min_presentation_minutes: [0, 600] } as const;
+const SETTING_RANGES = { nq_min_man_age: [0, 120], nq_min_relationship_months: [0, 600], nq_min_vehicle_year: [1950, 2100], nq_min_income: [0, 1_000_000], nq_max_items_accepted: [0, 7], min_presentation_minutes: [0, 600], room_visibility_days: [0, 3650], paper_destroy_deadline_days: [0, 365] } as const;
 
 /** Limites provisórios gravados (ou o padrão quando a linha não existe): nada aqui é regra homologada. */
 async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
@@ -34,7 +38,39 @@ async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
   const map = new Map(rows.map(row => [row.key, row]));
   const num = (key: string, fallback: number) => { const value = Number(map.get(key)?.value); return Number.isFinite(value) && map.get(key)?.value !== "" ? value : fallback; };
   const nq: NqSettings = { minManAge: num("nq_min_man_age", DEFAULT_NQ_SETTINGS.minManAge), minRelationshipMonths: num("nq_min_relationship_months", DEFAULT_NQ_SETTINGS.minRelationshipMonths), minVehicleYear: num("nq_min_vehicle_year", DEFAULT_NQ_SETTINGS.minVehicleYear), minIncome: num("nq_min_income", DEFAULT_NQ_SETTINGS.minIncome), maxItemsAccepted: num("nq_max_items_accepted", DEFAULT_NQ_SETTINGS.maxItemsAccepted) };
-  return { nq, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", rows };
+  const privacy = Object.fromEntries(PRIVACY_TEXT_KEYS.map(key => [key, map.get(key)?.value ?? ""])) as PrivacySettings;
+  // LGPD (decisão do Lucas 17/10): 0 dias = ficha de quem não comprou sai da vista da sala depois do dia da visita; papel destruído no mesmo dia.
+  return { nq, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", roomVisibilityDays: num("room_visibility_days", 0), paperDestroyDeadlineDays: num("paper_destroy_deadline_days", 0), privacy, rows };
+}
+type SheetSettings = Awaited<ReturnType<typeof loadSettings>>;
+
+const todayLocal = () => localDateInTimezone(new Date(), projectTimezone());
+/** Dia da visita no calendário do projeto: check-in; sem check-in, criação da ficha. */
+const visitDayOf = (capture: { checkedInAt: Date | null; createdAt: Date }) => localDateInTimezone(capture.checkedInAt ?? capture.createdAt, projectTimezone());
+
+function visibilityOf(capture: { checkedInAt: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }, settings: SheetSettings) {
+  return roomVisibility({ visitDay: visitDayOf(capture), today: todayLocal(), roomVisibilityDays: settings.roomVisibilityDays, commercialOutcome: capture.commercialOutcome });
+}
+
+/** Ficha fora da vista da sala só abre (e só imprime) para o administrativo. A ficha digital não é apagada: só muda quem a vê. */
+function assertSheetVisibleTo(role: string, capture: { checkedInAt: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }, settings: SheetSettings) {
+  const visibility = visibilityOf(capture, settings);
+  if (!visibility.visibleToRoom && !canOpenArchivedSheet(role)) throw new TRPCError({ code: "FORBIDDEN", message: "Esta ficha saiu da vista da sala (o casal não comprou). Só a administração e o financeiro abrem." });
+  return visibility;
+}
+
+/**
+ * Corte da vista da sala para consultas em lote (lista e exportação): fichas visitadas antes deste instante só aparecem
+ * para a sala se tiveram VENDEU. Mesma regra de `roomVisibility`, em SQL.
+ */
+export async function roomVisibilityCutoff() {
+  const db = await requireDb();
+  const settings = await loadSettings(db);
+  const firstRoomDay = addCalendarDays(todayLocal(), -settings.roomVisibilityDays);
+  return localDayStart(firstRoomDay, projectTimezone(), localDateInTimezone);
+}
+export function roomVisibleCondition(cutoff: Date) {
+  return or(eq(captureRecords.commercialOutcome, "vendeu"), gte(sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.createdAt})`, cutoff));
 }
 
 async function captureByCode(rawCode: string) {
@@ -72,7 +108,7 @@ export const captureSheetRouter = router({
   }),
 
   /** Código da ficha pelo id, para a lista abrir a impressão. */
-  codeOf: receptionProcedure.input(z.object({ captureId: z.number().int().positive() })).query(async ({ input }) => {
+  codeOf: internalProcedure.input(z.object({ captureId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await requireDb();
     const [capture] = await db.select({ coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
     if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
@@ -80,8 +116,11 @@ export const captureSheetRouter = router({
   }),
 
   /** Ficha completa para a tela e a impressão. Só quem tem login e permissão chega aqui. */
-  byCode: receptionProcedure.input(z.object({ code: z.string().max(64) })).query(async ({ ctx, input }) => {
+  byCode: internalProcedure.input(z.object({ code: z.string().max(64) })).query(async ({ ctx, input }) => {
     const { db, code, capture, customer } = await captureByCode(input.code);
+    const settings = await loadSettings(db);
+    // A conferência de vista vem ANTES da trilha e de qualquer dado: quem não pode abrir não gera "aberta" nem vê CPF.
+    const visibility = assertSheetVisibleTo(ctx.user.role, capture, settings);
     // Trilha de abertura no mesmo caminho que devolve CPF e renda; recargas no mesmo minuto da mesma pessoa contam uma vez só.
     await recordAudit(ctx.user.id, "capture", capture.id, "sheet_opened", `Ficha ${capture.id} aberta.`, { idempotencyKey: `sheet_opened:${capture.id}:${ctx.user.id}:${Math.floor(Date.now() / 60_000)}` });
     const members = await db.select({ roleId: captureTeamRoles.id, code: captureTeamRoles.code, label: captureTeamRoles.label, kind: captureTeamRoles.kind, userId: captureTeamMembers.userId, personName: captureTeamMembers.personName, userName: users.name })
@@ -99,13 +138,15 @@ export const captureSheetRouter = router({
       const near = await db.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom }).from(captureRecords).where(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, from), lt(captureRecords.checkedInAt, to), sameRoom));
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
-    const [{ prints }] = await db.select({ prints: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
+    const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(50);
+    const prints = printRows.length;
+    const lastPrint = printRows[0] ?? null;
+    const paper = paperCustody({ printedDay: lastPrint ? localDateInTimezone(lastPrint.printedAt, projectTimezone()) : null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null, today: todayLocal(), destroyDeadlineDays: settings.paperDestroyDeadlineDays });
     // Todos os contatos ativos; o que já está no cadastro principal (telefone/e-mail do cliente) não repete, mas o WhatsApp preferido, que não espelha no cadastro, entra.
     const allContacts = await db.select({ kind: customerContacts.kind, label: customerContacts.label, value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customer.id), isNull(customerContacts.archivedAt), sql`${customerContacts.kind} IN ('phone', 'whatsapp', 'email')`)).orderBy(desc(customerContacts.isPreferred), asc(customerContacts.id)).limit(20);
     const digits = (value?: string | null) => (value ?? "").replace(/\D/g, "");
     const contacts = allContacts.filter(contact => (contact.kind === "email" ? contact.value.trim().toLowerCase() !== (customer.email ?? "").trim().toLowerCase() : digits(contact.value) !== digits(customer.phone))).slice(0, 10);
     const gifts = await db.select({ description: vouchers.description, status: vouchers.status }).from(vouchers).where(and(eq(vouchers.captureId, capture.id), sql`${vouchers.status} <> 'cancelled'`)).orderBy(asc(vouchers.id)).limit(20);
-    const settings = await loadSettings(db);
     // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
     const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
     const nq = computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
@@ -117,6 +158,10 @@ export const captureSheetRouter = router({
       gifts: gifts.map(gift => gift.description),
       nq,
       sheetSettings: { minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName },
+      // LGPD: estado do papel, vista da sala e o aviso v1 (provisório) que sai na faixa destacável.
+      paper: { ...paper, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
+      roomVisibility: visibility,
+      privacyNotice: privacyNoticeText(settings.privacy),
       capture: {
         salesRoom: capture.salesRoom, captureLocation: capture.captureLocation, lodgingLocation: capture.lodgingLocation, transportation: capture.transportation, averageIncome: capture.averageIncome, createdAt: capture.createdAt, checkedInAt: capture.checkedInAt, presentationStatus: capture.presentationStatus, qualificationStatus: capture.qualificationStatus,
         partnerName: capture.partnerName, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, childrenCount: capture.childrenCount,
@@ -139,8 +184,9 @@ export const captureSheetRouter = router({
     const db = await requireDb();
     const reprint = await db.transaction(async tx => {
       // O código é conferido com a ficha travada: se a administração trocar o código no meio, a impressão com o código velho é recusada.
-      const [capture] = await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
+      const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
+      assertSheetVisibleTo(ctx.user.role, capture, await loadSettings(db));
       const [{ count }] = await tx.select({ count: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
       const isReprint = Number(count) > 0;
       await tx.insert(captureSheetPrints).values({ captureId: capture.id, printedByUserId: ctx.user.id, reprint: isReprint });
@@ -204,10 +250,10 @@ export const captureSheetRouter = router({
     get: receptionProcedure.query(async () => {
       const db = await requireDb();
       const settings = await loadSettings(db);
-      return { nq: settings.nq, minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName, provisional: true };
+      return { nq: settings.nq, minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName, roomVisibilityDays: settings.roomVisibilityDays, paperDestroyDeadlineDays: settings.paperDestroyDeadlineDays, privacy: settings.privacy, provisional: true };
     }),
     set: adminProcedure.input(z.object({ key: z.enum(SETTING_KEYS), value: z.string().trim().max(255) })).mutation(async ({ ctx, input }) => {
-      if (input.key !== "brand_name") {
+      if (!TEXT_SETTING_KEYS.has(input.key)) {
         const value = Number(input.value);
         const range = SETTING_RANGES[input.key as keyof typeof SETTING_RANGES];
         if (input.value === "" || !Number.isInteger(value) || value < range[0] || value > range[1]) throw new TRPCError({ code: "BAD_REQUEST", message: `Informe um número inteiro entre ${range[0]} e ${range[1]}.` });
@@ -219,6 +265,104 @@ export const captureSheetRouter = router({
         await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture_sheet_setting", entityId: input.key, action: "updated", summary: `Limite da ficha "${input.key}" mudou de "${old?.value ?? "(padrão)"}" para "${input.value}".` });
       });
       return { ok: true };
+    }),
+  }),
+
+  /**
+   * Cadeia de custódia do papel (parecer LGPD A1, decisão do Lucas 17/10): recolhido e destruído ficam gravados em cada
+   * impressão. Recolher e destruir não devolvem dado pessoal, então valem mesmo depois que a ficha saiu da vista da sala.
+   */
+  paper: router({
+    collect: receptionProcedure.input(z.object({ code: z.string().max(64) })).mutation(async ({ ctx, input }) => {
+      const { db, capture } = await captureByCode(input.code);
+      const updated = await db.transaction(async tx => {
+        const result = await tx.update(captureSheetPrints).set({ collectedAt: new Date(), collectedByUserId: ctx.user.id }).where(and(eq(captureSheetPrints.captureId, capture.id), isNull(captureSheetPrints.collectedAt)));
+        const rows = affectedRows(result) ?? 0;
+        if (rows) await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "sheet_paper_collected", summary: `Ficha ${capture.id}: papel recolhido (${rows} impressão(ões)).` });
+        return rows;
+      });
+      if (!updated) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhuma impressão em circulação para recolher." });
+      return { collected: updated };
+    }),
+    destroy: receptionProcedure.input(z.object({ code: z.string().max(64) })).mutation(async ({ ctx, input }) => {
+      const { db, capture } = await captureByCode(input.code);
+      const now = new Date();
+      const updated = await db.transaction(async tx => {
+        // Destruir sem ter recolhido também vale (o papel chegou direto na fragmentadora): recolhimento fica marcado junto.
+        const result = await tx.update(captureSheetPrints).set({ destroyedAt: now, destroyedByUserId: ctx.user.id, collectedAt: sql`COALESCE(${captureSheetPrints.collectedAt}, ${now})`, collectedByUserId: sql`COALESCE(${captureSheetPrints.collectedByUserId}, ${ctx.user.id})` }).where(and(eq(captureSheetPrints.captureId, capture.id), isNull(captureSheetPrints.destroyedAt)));
+        const rows = affectedRows(result) ?? 0;
+        if (rows) await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "sheet_paper_destroyed", summary: `Ficha ${capture.id}: papel destruído (${rows} impressão(ões)). A ficha digital permanece.` });
+        return rows;
+      });
+      if (!updated) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhuma impressão pendente de destruição." });
+      return { destroyed: updated };
+    }),
+    /** Painel do gerente: fichas impressas no dia e ainda não recolhidas ou não destruídas, mais o alerta de reimpressão. Sem CPF nem renda. */
+    outstanding: receptionProcedure.input(z.object({ date: z.string().date().optional() }).optional()).query(async ({ input }) => {
+      const db = await requireDb();
+      const settings = await loadSettings(db);
+      const tz = projectTimezone();
+      const day = input?.date ?? todayLocal();
+      const start = localDayStart(day, tz, localDateInTimezone), end = localDayStart(addCalendarDays(day, 1), tz, localDateInTimezone);
+      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName })
+        .from(captureSheetPrints).innerJoin(captureRecords, eq(captureRecords.id, captureSheetPrints.captureId)).innerJoin(customers, eq(customers.id, captureRecords.customerId))
+        .where(and(gte(captureSheetPrints.printedAt, start), lt(captureSheetPrints.printedAt, end))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
+      const byCapture = new Map<number, typeof rows>();
+      for (const row of rows) byCapture.set(row.captureId, [...(byCapture.get(row.captureId) ?? []), row]);
+      const today = todayLocal();
+      const sheets = Array.from(byCapture.entries()).map(([captureId, prints]) => {
+        const last = prints[0]!;
+        const custody = paperCustody({ printedDay: day, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: settings.paperDestroyDeadlineDays });
+        return { captureId, coupleCode: last.coupleCode, customerName: last.customerName, salesRoom: last.salesRoom, printCount: prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: prints.length >= REPRINT_ALERT_THRESHOLD };
+      });
+      return {
+        date: day,
+        printed: sheets.length,
+        notCollected: sheets.filter(sheet => sheet.status === "em_circulacao").length,
+        notDestroyed: sheets.filter(sheet => sheet.status !== "destruida").length,
+        overdue: sheets.filter(sheet => sheet.overdue).length,
+        reprintAlerts: sheets.filter(sheet => sheet.reprintAlert).length,
+        sheets: sheets.sort((a, b) => Number(b.overdue) - Number(a.overdue) || (a.status === "destruida" ? 1 : 0) - (b.status === "destruida" ? 1 : 0)),
+      };
+    }),
+  }),
+
+  /**
+   * Exportação CSV/Excel das fichas (decisões 34 e 48; parecer M1): CPF só com `export.pii` (admin e finance, padrão
+   * confirmado pelo Lucas 17/10 16:14Z); quem não tem o administrativo só vê o que a sala vê; a trilha guarda filtros,
+   * formato, com/sem CPF e número de linhas. O arquivo é montado na tela (shared/captureSheetExport.ts).
+   */
+  export: router({
+    rows: internalProcedure.input(z.object({
+      from: z.string().date(),
+      to: z.string().date(),
+      salesRoom: z.string().trim().max(180).optional(),
+      withCpf: z.boolean().default(false),
+      format: z.enum(["csv", "xlsx"]),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.withCpf) assertCapability(ctx.user.role as never, "export.pii", "Exportar com CPF é só da administração e do financeiro.");
+      if (input.to < input.from) throw new TRPCError({ code: "BAD_REQUEST", message: "O fim do período vem antes do início." });
+      if (addCalendarDays(input.from, 366) < input.to) throw new TRPCError({ code: "BAD_REQUEST", message: "Exporte no máximo um ano por vez." });
+      const db = await requireDb();
+      const tz = projectTimezone();
+      const start = localDayStart(input.from, tz, localDateInTimezone), end = localDayStart(addCalendarDays(input.to, 1), tz, localDateInTimezone);
+      const limit = 5000;
+      const conditions = [gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end)];
+      if (input.salesRoom?.trim()) conditions.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
+      if (!canOpenArchivedSheet(ctx.user.role)) conditions.push(roomVisibleCondition(await roomVisibilityCutoff())!);
+      const promoter = alias(users, "promoter"), liner = alias(users, "liner"), closer = alias(users, "closer");
+      const rows = await db.select({
+        captureId: captureRecords.id, coupleCode: captureRecords.coupleCode, createdAt: captureRecords.createdAt, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom, captureLocation: captureRecords.captureLocation,
+        presentationStatus: captureRecords.presentationStatus, qualificationStatus: captureRecords.qualificationStatus, commercialOutcome: captureRecords.commercialOutcome, customerName: customers.fullName, documentNumber: customers.documentNumber, city: customers.city, state: customers.state,
+        partnerName: captureRecords.partnerName, averageIncome: captureRecords.averageIncome, promoterName: promoter.name, linerName: liner.name, closerName: closer.name,
+      }).from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId))
+        .leftJoin(promoter, eq(promoter.id, captureRecords.promoterId)).leftJoin(liner, eq(liner.id, captureRecords.linerId)).leftJoin(closer, eq(closer.id, captureRecords.closerId))
+        .where(and(...conditions)).orderBy(asc(captureRecords.createdAt), asc(captureRecords.id)).limit(limit + 1);
+      const truncated = rows.length > limit;
+      const page: CaptureExportSource[] = rows.slice(0, limit).map(row => ({ ...row, documentNumber: input.withCpf ? row.documentNumber : null }));
+      // Trilha sem dado pessoal: filtros, formato, com/sem CPF e quantas linhas saíram (parecer M1.b).
+      await recordAudit(ctx.user.id, "capture_export", `${input.from}_${input.to}`, "sheet_exported", `Fichas exportadas em ${input.format.toUpperCase()}: ${page.length} linha(s)${truncated ? " (corte em " + limit + ")" : ""}, período ${input.from} a ${input.to}${input.salesRoom?.trim() ? `, sala "${input.salesRoom.trim()}"` : ""}, ${input.withCpf ? "COM CPF" : "sem CPF"}.`);
+      return { rows: page, truncated, limit };
     }),
   }),
 

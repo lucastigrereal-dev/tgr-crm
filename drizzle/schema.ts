@@ -400,7 +400,11 @@ export const captureSheetSettings = mysqlTable("capture_sheet_settings", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
-/** Cada impressão da ficha: quem, quando e se foi reimpressão. O QR é o mesmo em todas. */
+/**
+ * Cada impressão da ficha: quem, quando e se foi reimpressão. O QR é o mesmo em todas.
+ * LGPD (parecer 17/10, A1): o papel tem cadeia de custódia. Recolhido e destruído ficam gravados por impressão;
+ * a ficha digital nunca é apagada, só o papel.
+ */
 export const captureSheetPrints = mysqlTable(
   "capture_sheet_prints",
   {
@@ -409,8 +413,12 @@ export const captureSheetPrints = mysqlTable(
     printedByUserId: int("printedByUserId").references(() => users.id),
     reprint: boolean("reprint").default(false).notNull(),
     printedAt: timestamp("printedAt").defaultNow().notNull(),
+    collectedAt: timestamp("collectedAt"),
+    collectedByUserId: int("collectedByUserId").references(() => users.id),
+    destroyedAt: timestamp("destroyedAt"),
+    destroyedByUserId: int("destroyedByUserId").references(() => users.id),
   },
-  table => [index("capture_sheet_prints_capture_idx").on(table.captureId, table.printedAt)],
+  table => [index("capture_sheet_prints_capture_idx").on(table.captureId, table.printedAt), index("capture_sheet_prints_printed_idx").on(table.printedAt, table.destroyedAt)],
 );
 
 /**

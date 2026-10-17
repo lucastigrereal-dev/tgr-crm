@@ -5,6 +5,8 @@ import { captureRecords, commercialProjectSettings, customers, opportunities, re
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
+import { roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
 import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfile } from "../captureSegmentation";
 import { getProjectCaptureReadiness } from "../projectPolicy";
@@ -128,14 +130,15 @@ export const capturesRouter = router({
     return { campaigns: envelope(rawCampaigns, "campanhas de captação"), sellers: envelope(rawSellers, "vendedores de captação"), resorts: envelope(rawResorts, "empreendimentos de captação") };
   }),
 
-  list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ input }) => {
+  list: salesProcedure.input(z.object({ status: z.enum(presentationStatuses).optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { rows: [], truncated: false, truncatedSources: [] };
     const limit = 120;
     const rawRows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
-      .where(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined)
+      // LGPD (decisão do Lucas 17/10): ficha de quem não comprou sai da vista da sala depois do dia; só admin e finance seguem vendo.
+      .where(and(input?.status ? eq(captureRecords.presentationStatus, input.status) : undefined, canOpenArchivedSheet(ctx.user.role) ? undefined : roomVisibleCondition(await roomVisibilityCutoff())))
       .orderBy(desc(captureRecords.createdAt)).limit(limit + 1);
     const rows = rawRows.slice(0, limit).map(row => ({ ...row, readiness: getCaptureReadiness({ customerName: row.customer.fullName, phone: row.customer.phone, city: row.customer.city, promoterId: row.capture.promoterId, captureLocation: row.capture.captureLocation, averageIncome: row.capture.averageIncome ? Number(row.capture.averageIncome) : null, travelWeeksPerYear: row.capture.travelWeeksPerYear ? Number(row.capture.travelWeeksPerYear) : null, qualificationStatus: row.capture.qualificationStatus }) }));
     const truncated = rawRows.length > limit;

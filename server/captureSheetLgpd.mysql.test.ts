@@ -1,0 +1,134 @@
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq, like } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
+import { auditLogs, captureRecords, captureSheetPrints, captureSheetSettings, customers, users } from "../drizzle/schema";
+import { validateIsolatedE2EDatabase } from "./e2eSafety";
+
+// LGPD da ficha em MySQL real (parecer 17/10, decisões do Lucas 16:14Z): custódia do papel, ficha de não comprador fora da
+// vista da sala (só admin/finance), exportação com CPF só com export.pii e trilha com número de linhas. Dados sintéticos.
+const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
+const runId = randomUUID().slice(0, 8);
+
+describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
+  let pool: mysql.Pool;
+  let db: ReturnType<typeof drizzle>;
+  let appRouter: typeof import("./routers")["appRouter"];
+  let userId: number;
+  let todayId: number;
+  let oldId: number;
+  let soldId: number;
+  const todayCode = `LGPD-HOJE-${runId}`, oldCode = `LGPD-ONTEM-${runId}`, soldCode = `LGPD-VENDEU-${runId}`;
+  const room = `Sala LGPD ${runId}`;
+  const previousEnv = { ...process.env };
+  const caller = (role = "admin") => appRouter.createCaller({ user: { id: userId, role, name: "Teste LGPD" } } as never);
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
+
+  beforeAll(async () => {
+    validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
+    process.env.DATABASE_URL = integrationUrl;
+    ({ appRouter } = await import("./routers"));
+    pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
+    db = drizzle({ client: pool });
+    [{ id: userId }] = await db.insert(users).values({ openId: `lgpd-${runId}`, name: "Teste LGPD", role: "admin" }).$returningId();
+    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal LGPD ${runId}`, documentNumber: `DOC-${runId}`, phone: "11988887777", city: "Natal", state: "RN", status: "active" }).$returningId();
+    // Hoje (visível), visita de 3 dias atrás sem compra (arquivada) e visita de 3 dias atrás com VENDEU (continua visível).
+    // O dia da visita é o check-in; createdAt fica no futuro próximo só para as três ficarem no topo da lista (limite de 120 linhas) num banco cheio de outras suítes.
+    const pin = (minutes: number) => new Date(Date.now() + minutes * 60_000);
+    [{ id: todayId }] = await db.insert(captureRecords).values({ customerId, salesRoom: room, coupleCode: todayCode, checkedInAt: new Date(Date.now() - 60_000), createdAt: pin(3) }).$returningId();
+    [{ id: oldId }] = await db.insert(captureRecords).values({ customerId, salesRoom: room, coupleCode: oldCode, checkedInAt: daysAgo(3), createdAt: pin(2), commercialOutcome: "caiu_em_mesa" }).$returningId();
+    [{ id: soldId }] = await db.insert(captureRecords).values({ customerId, salesRoom: room, coupleCode: soldCode, checkedInAt: daysAgo(3), createdAt: pin(1), commercialOutcome: "vendeu" }).$returningId();
+    await db.insert(captureSheetSettings).values({ key: "room_visibility_days", value: "0", provisional: true }).onDuplicateKeyUpdate({ set: { value: "0" } });
+  });
+  afterAll(async () => { process.env = previousEnv; await pool?.end(); });
+
+  it("a migration 0063 semeou as chaves novas e elas saem em settings.get", async () => {
+    const settings = await caller().captureSheet.settings.get();
+    expect(settings).toMatchObject({ roomVisibilityDays: 0, paperDestroyDeadlineDays: 0, privacy: { privacy_controller_name: "" } });
+    await expect(caller().captureSheet.settings.set({ key: "room_visibility_days", value: "9999" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await caller().captureSheet.settings.set({ key: "privacy_controller_name", value: "Operadora Sintética Ltda" });
+    expect((await caller().captureSheet.byCode({ code: todayCode })).privacyNotice).toContain("Operadora Sintética Ltda");
+    await caller().captureSheet.settings.set({ key: "privacy_controller_name", value: "" });
+  });
+
+  it("ficha de hoje: sala abre; ficha antiga sem compra: seller e service levam FORBIDDEN sem gerar trilha, admin e finance abrem", async () => {
+    expect((await caller("seller").captureSheet.byCode({ code: todayCode })).roomVisibility).toMatchObject({ visibleToRoom: true, reason: "dia_da_visita" });
+    const before = await db.select().from(auditLogs).where(and(eq(auditLogs.entityId, String(oldId)), eq(auditLogs.action, "sheet_opened")));
+    await expect(caller("seller").captureSheet.byCode({ code: oldCode })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("service").captureSheet.byCode({ code: oldCode })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("seller").captureSheet.recordPrint({ code: oldCode })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const after = await db.select().from(auditLogs).where(and(eq(auditLogs.entityId, String(oldId)), eq(auditLogs.action, "sheet_opened")));
+    expect(after.length).toBe(before.length);
+    expect((await caller("finance").captureSheet.byCode({ code: oldCode })).roomVisibility).toMatchObject({ visibleToRoom: false, reason: "arquivada" });
+    expect((await caller("admin").captureSheet.byCode({ code: oldCode })).customer.documentNumber).toBe(`DOC-${runId}`);
+    // VENDEU de 3 dias atrás continua na vista da sala.
+    expect((await caller("seller").captureSheet.byCode({ code: soldCode })).roomVisibility).toMatchObject({ visibleToRoom: true, reason: "vendeu" });
+    // Com 5 dias extras configurados, a antiga volta a aparecer para a sala.
+    await caller().captureSheet.settings.set({ key: "room_visibility_days", value: "5" });
+    expect((await caller("seller").captureSheet.byCode({ code: oldCode })).roomVisibility.visibleToRoom).toBe(true);
+    await caller().captureSheet.settings.set({ key: "room_visibility_days", value: "0" });
+  });
+
+  it("a lista de captação segue a mesma vista: seller não vê a antiga sem compra, admin vê", async () => {
+    const sellerIds = (await caller("seller").captures.list()).rows.map(row => row.capture.id);
+    expect(sellerIds).toContain(todayId);
+    expect(sellerIds).toContain(soldId);
+    expect(sellerIds).not.toContain(oldId);
+    const adminIds = (await caller("admin").captures.list()).rows.map(row => row.capture.id);
+    expect(adminIds).toEqual(expect.arrayContaining([todayId, oldId, soldId]));
+  });
+
+  it("custódia do papel: imprime, recolhe, destrói, com trilha; o painel do dia conta e o alerta de reimpressão dispara", async () => {
+    await expect(caller("service").captureSheet.paper.collect({ code: todayCode })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await caller("service").captureSheet.recordPrint({ code: todayCode });
+    let sheet = await caller().captureSheet.byCode({ code: todayCode });
+    expect(sheet.paper).toMatchObject({ status: "em_circulacao", overdue: false, reprintAlert: false });
+    expect(await caller("service").captureSheet.paper.collect({ code: todayCode })).toEqual({ collected: 1 });
+    await expect(caller("service").captureSheet.paper.collect({ code: todayCode })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    sheet = await caller().captureSheet.byCode({ code: todayCode });
+    expect(sheet.paper.status).toBe("recolhida");
+    // Reimpressão: a nova cópia entra em circulação e o alerta liga.
+    await caller("service").captureSheet.recordPrint({ code: todayCode });
+    sheet = await caller().captureSheet.byCode({ code: todayCode });
+    expect(sheet.paper).toMatchObject({ status: "em_circulacao", reprintAlert: true });
+    const panel = await caller("service").captureSheet.paper.outstanding();
+    const mine = panel.sheets.find(row => row.captureId === todayId);
+    expect(mine).toMatchObject({ coupleCode: todayCode, printCount: 2, status: "em_circulacao", reprintAlert: true });
+    expect(panel.notCollected).toBeGreaterThanOrEqual(1);
+    // Destruir sem recolher a segunda cópia: recolhimento marcado junto, todas as impressões fechadas.
+    expect(await caller("service").captureSheet.paper.destroy({ code: todayCode })).toEqual({ destroyed: 2 });
+    const prints = await db.select().from(captureSheetPrints).where(eq(captureSheetPrints.captureId, todayId));
+    expect(prints.every(row => row.destroyedAt && row.collectedAt && row.destroyedByUserId === userId)).toBe(true);
+    sheet = await caller().captureSheet.byCode({ code: todayCode });
+    expect(sheet.paper.status).toBe("destruida");
+    expect((await caller("service").captureSheet.paper.outstanding()).sheets.find(row => row.captureId === todayId)?.status).toBe("destruida");
+    const actions = (await db.select().from(auditLogs).where(eq(auditLogs.entityId, String(todayId)))).map(row => row.action);
+    expect(actions).toEqual(expect.arrayContaining(["sheet_paper_collected", "sheet_paper_destroyed"]));
+    // Papel recolhido/destruído vale mesmo na ficha fora da vista da sala (não devolve dado pessoal).
+    await caller("admin").captureSheet.recordPrint({ code: oldCode });
+    expect(await caller("service").captureSheet.paper.destroy({ code: oldCode })).toEqual({ destroyed: 1 });
+    // A ficha digital continua inteira depois de destruir o papel.
+    expect((await db.select().from(captureRecords).where(eq(captureRecords.id, todayId))).length).toBe(1);
+  });
+
+  it("exportação: CPF só com export.pii; seller não leva fichas arquivadas; trilha guarda formato, filtros e número de linhas sem dado pessoal", async () => {
+    const from = daysAgo(10).toISOString().slice(0, 10), to = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    await expect(caller("seller").captureSheet.export.rows({ from, to, salesRoom: room, withCpf: true, format: "csv" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("service").captureSheet.export.rows({ from, to, salesRoom: room, withCpf: true, format: "csv" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("admin").captureSheet.export.rows({ from: to, to: from, withCpf: false, format: "csv" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const seller = await caller("seller").captureSheet.export.rows({ from, to, salesRoom: room, withCpf: false, format: "csv" });
+    expect(seller.rows.map(row => row.captureId).sort()).toEqual([todayId, soldId].sort());
+    expect(seller.rows.every(row => row.documentNumber === null)).toBe(true);
+    const admin = await caller("admin").captureSheet.export.rows({ from, to, salesRoom: room, withCpf: false, format: "xlsx" });
+    expect(admin.rows.map(row => row.captureId).sort()).toEqual([todayId, oldId, soldId].sort());
+    expect(admin.rows.every(row => row.documentNumber === null)).toBe(true);
+    const finance = await caller("finance").captureSheet.export.rows({ from, to, salesRoom: room, withCpf: true, format: "csv" });
+    expect(finance.rows).toHaveLength(3);
+    expect(finance.rows[0]!.documentNumber).toBe(`DOC-${runId}`);
+    const trail = await db.select().from(auditLogs).where(and(eq(auditLogs.action, "sheet_exported"), like(auditLogs.summary, `%${room}%`)));
+    expect(trail.length).toBe(3);
+    expect(trail.map(row => row.summary)).toEqual(expect.arrayContaining([expect.stringContaining("CSV: 2 linha(s)"), expect.stringContaining("XLSX: 3 linha(s)"), expect.stringContaining("COM CPF")]));
+    expect(trail.every(row => !new RegExp(`DOC-${runId}|11988887777`).test(row.summary ?? ""))).toBe(true);
+  });
+});
