@@ -41,6 +41,12 @@ export const encounterTimesSchema = z.strictObject({
     const a = t[start], b = t[end];
     if (typeof a === "string" && typeof b === "string" && Date.parse(b) < Date.parse(a)) ctx.addIssue({ code: "custom", path: ["times", end], message: "O fim vem antes do início." });
   }
+  // O fim do atendimento não pode vir antes de nenhuma etapa registrada.
+  if (typeof t.endedAt === "string") {
+    const end = Date.parse(t.endedAt);
+    const stages = [t.waitStartedAt, t.waitEndedAt, t.consultantStartedAt, t.consultantEndedAt, t.closerStartedAt, t.closerEndedAt];
+    if (stages.some(value => typeof value === "string" && Date.parse(value) > end)) ctx.addIssue({ code: "custom", path: ["times", "endedAt"], message: "O fim do atendimento vem antes de uma etapa." });
+  }
   if (!Object.values(t).some(value => typeof value === "string")) ctx.addIssue({ code: "custom", path: ["times"], message: "Nenhum horário informado." });
 });
 export type EncounterTimesEvent = z.infer<typeof encounterTimesSchema>;
