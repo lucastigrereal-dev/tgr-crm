@@ -21,7 +21,7 @@ import {
   units,
 } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
-import { isDuplicateKeyError } from "./mysqlErrors";
+import { isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { materializeSalesCommandSale, type SalesCommandSale } from "./salesCommandBridge";
 
 // Integração real contra MySQL descartável. Só roda quando TGR_MYSQL_INTEGRATION_URL
@@ -104,7 +104,7 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const { resortId, project } = await seedProject("exact", 5);
     const event = saleEvent(project);
 
-    const result = await db.transaction(tx => materializeSalesCommandSale(tx, event));
+    const result = await withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, event)));
 
     expect(result.replay).toBe(false);
     expect(result.fractionIds).toHaveLength(2);
@@ -153,7 +153,7 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const { resortId, project } = await seedProject("attr", 2);
     const event = saleEvent(project);
 
-    const result = await db.transaction(tx => materializeSalesCommandSale(tx, event));
+    const result = await withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, event)));
 
     const [contract] = await db.select().from(contracts).where(eq(contracts.id, result.contractId));
     expect(contract).toMatchObject({ externalSource: "sales-command", externalSaleId: event.saleId, sellerId: null, customerId: result.customerId, proposalId: result.proposalId });
@@ -195,8 +195,8 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const { resortId, project } = await seedProject("replay", 4);
     const event = saleEvent(project);
 
-    const first = await db.transaction(tx => materializeSalesCommandSale(tx, event));
-    const second = await db.transaction(tx => materializeSalesCommandSale(tx, { ...event, eventId: `evt-${randomUUID()}` }));
+    const first = await withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, event)));
+    const second = await withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, { ...event, eventId: `evt-${randomUUID()}` })));
 
     expect(second).toMatchObject({ replay: true, contractId: first.contractId, proposalId: first.proposalId, opportunityId: first.opportunityId, customerId: first.customerId, fractionIds: first.fractionIds, installmentCount: first.installmentCount });
     expect(await db.select().from(contracts).where(eq(contracts.externalSaleId, event.saleId))).toHaveLength(1);

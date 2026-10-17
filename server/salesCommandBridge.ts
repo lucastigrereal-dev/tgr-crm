@@ -26,7 +26,7 @@ import {
   parseSaleTermsPolicy,
 } from "./saleTermsPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
-import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { logger } from "./logger";
 
 // PIL-008: recusa de DOMÍNIO (não vale a pena o Sales reenviar) vs falha de INFRAESTRUTURA (transitória, 503).
@@ -458,7 +458,8 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
 
   let result: Awaited<ReturnType<typeof materializeSalesCommandSale>>;
   try {
-    result = await db.transaction(tx => materializeSalesCommandSale(tx, event));
+    // Deadlock do InnoDB derruba a transação inteira e manda repetir; a materialização é idempotente por saleId, então repetir é seguro.
+    result = await withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, event)));
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       const raced = await findFormalization(db, event.saleId);
