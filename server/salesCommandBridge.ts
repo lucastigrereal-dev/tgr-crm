@@ -478,8 +478,9 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
     return;
   }
 
-  await syncRevenueQualityForContract({ contractId: result.contractId, actorUserId: null, trigger: "formalização Sales Command" });
-  response.status(201).json({ accepted: true, ...result, saleId: event.saleId });
+  // Depois de um deadlock repetido, a nova tentativa pode achar a venda já formalizada por uma requisição concorrente: é replay (200), não criação (201).
+  await syncRevenueQualityForContract({ contractId: result.contractId, actorUserId: null, trigger: result.replay ? "race replay Sales Command" : "formalização Sales Command" });
+  response.status(result.replay ? 200 : 201).json({ accepted: true, ...result, saleId: event.saleId });
 }
 
 export function registerSalesCommandBridge(app: Express, integrationKey: string | undefined) {
