@@ -75,6 +75,11 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     expect((await db.select().from(captureRecords).where(eq(captureRecords.id, free)))[0]).toMatchObject({ ntKind: null, noTourReason: "texto livre antigo" });
   });
 
+  it("updateStatus não cria sem-tour sem motivo da lista", async () => {
+    const captureId = await newCapture({ presentationStatus: "scheduled" });
+    await expect(caller().captures.updateStatus({ id: captureId, presentationStatus: "no_tour" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
   it("motivo de outro tipo, motivo 'outro' sem complemento e papel sem permissão são recusados", async () => {
     const captureId = await newCapture();
     const tempo = await motiveOf("nt_tempo", "sem_tempo");

@@ -285,6 +285,8 @@ export const capturesRouter = router({
   }),
 
   updateStatus: salesProcedure.input(z.object({ id: z.number().int().positive(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]), qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).optional(), qualificationReason: optionalText, noTourReason: optionalText })).mutation(async ({ ctx, input }) => {
+    // Sem-tour passa pelo motivo padronizado (captures.markNoTour ou captureSheet.recordNt); aqui ele criaria um NT sem classificação.
+    if (input.presentationStatus === "no_tour") throw new TRPCError({ code: "BAD_REQUEST", message: "Para marcar sem-tour use o botão de sem-tour da sala ou o cartão de NT da ficha, que pedem o motivo da lista." });
     const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     if (!canTransitionPresentationStatus(capture.presentationStatus, input.presentationStatus)) throw new TRPCError({ code: "BAD_REQUEST", message: `Transição inválida: ${capture.presentationStatus} → ${input.presentationStatus}.` });
     const updateResult = await db.update(captureRecords).set({ presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), noTourReason: nullIfBlank(input.noTourReason), checkedInAt: input.presentationStatus === "checked_in" ? new Date() : undefined }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
