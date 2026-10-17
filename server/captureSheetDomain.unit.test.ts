@@ -68,6 +68,9 @@ describe("casal qualificado: itens de NQ (regra provisória)", () => {
     expect(status({ vehicleKind: "carro", vehicleYear: null })).toBe("missing");
     expect(status({})).toBe("missing");
     expect(status({ vehicleKind: "moto", vehicleYear: 2027, secondVehicleKind: "carro", secondVehicleYear: 2019 })).toBe("ok");
+    // ano gravado sem o tipo (ficha antiga) pode ser um carro bom: fica faltando, mesmo com o outro veículo sendo moto
+    expect(status({ vehicleKind: "moto", vehicleYear: 2010, secondVehicleKind: null, secondVehicleYear: 2021 })).toBe("missing");
+    expect(status({ vehicleKind: null, vehicleYear: 2021 })).toBe("missing");
   });
 
   it("renda de 8 mil conta; cartão e casa própria são obrigatórios; 'da cidade' não é critério", () => {

@@ -98,10 +98,14 @@ export const captureSheetRouter = router({
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
     const [{ prints }] = await db.select({ prints: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
-    const contacts = await db.select({ kind: customerContacts.kind, label: customerContacts.label, value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customer.id), isNull(customerContacts.archivedAt), eq(customerContacts.isPreferred, false), sql`${customerContacts.kind} IN ('phone', 'whatsapp', 'email')`)).orderBy(asc(customerContacts.id)).limit(10);
+    // Todos os contatos ativos; o que já está no cadastro principal (telefone/e-mail do cliente) não repete, mas o WhatsApp preferido, que não espelha no cadastro, entra.
+    const allContacts = await db.select({ kind: customerContacts.kind, label: customerContacts.label, value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customer.id), isNull(customerContacts.archivedAt), sql`${customerContacts.kind} IN ('phone', 'whatsapp', 'email')`)).orderBy(asc(customerContacts.id)).limit(20);
+    const digits = (value?: string | null) => (value ?? "").replace(/\D/g, "");
+    const contacts = allContacts.filter(contact => (contact.kind === "email" ? contact.value.trim().toLowerCase() !== (customer.email ?? "").trim().toLowerCase() : digits(contact.value) !== digits(customer.phone))).slice(0, 10);
     const gifts = await db.select({ description: vouchers.description, status: vouchers.status }).from(vouchers).where(and(eq(vouchers.captureId, capture.id), sql`${vouchers.status} <> 'cancelled'`)).orderBy(asc(vouchers.id)).limit(20);
     const settings = await loadSettings(db);
-    const primaryAge = ageInYears(customer.birthDate, new Date());
+    // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
+    const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
     const nq = computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
     return {
       captureId: capture.id,

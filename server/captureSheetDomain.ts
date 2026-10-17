@@ -90,7 +90,9 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
   const vehicles = [{ kind: input.vehicleKind, year: input.vehicleYear }, { kind: input.secondVehicleKind, year: input.secondVehicleYear }];
   const label = `Carro de ${settings.minVehicleYear} ou mais novo`;
   if (vehicles.some(v => v.kind === "carro" && v.year != null && v.year >= settings.minVehicleYear)) add("veiculo", label, "ok", "Carro dentro do ano mínimo.");
-  else if (vehicles.every(v => v.kind == null)) add("veiculo", label, "missing", "Tipo do veículo não informado (carro ou moto).");
+  // Dado parcial (ex.: ano gravado sem o tipo, comum em ficha antiga) pode ainda ser um carro bom: fica "faltando", nunca vira NQ por palpite.
+  else if (vehicles.every(v => v.kind == null && v.year == null)) add("veiculo", label, "missing", "Tipo do veículo não informado (carro ou moto).");
+  else if (vehicles.some(v => v.kind == null && v.year != null)) add("veiculo", label, "missing", "Veículo com ano mas sem o tipo (carro ou moto).");
   else if (vehicles.some(v => v.kind === "carro" && v.year == null)) add("veiculo", label, "missing", "Ano do carro não informado.");
   else add("veiculo", label, "nq", vehicles.every(v => v.kind !== "carro") ? "Só moto (moto não vale)." : "Carro mais velho que o ano mínimo.");
 

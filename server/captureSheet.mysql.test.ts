@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customers, users } from "../drizzle/schema";
+import { auditLogs, captureRecords, captureSheetPrints, captureSheetSettings, customerContacts, captureTeamMembers, captureTeamRoles, customers, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Ficha impressa (TSE x CRM) em MySQL real: abre pelo código do casal, reimpressão auditada, equipe por papel, PEP e campos novos.
@@ -144,6 +144,14 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     expect(sheet.nq.criteria.find(c => c.key === "casa_propria")?.status).toBe("nq");
     expect(sheet.nq.criteria.find(c => c.key === "veiculo")?.status).toBe("ok");
     expect(sheet.sheetSettings.minPresentationMinutes).toBe(30);
+
+    // WhatsApp preferido não espelha no cadastro e precisa sair na ficha; o telefone/e-mail igual ao do cadastro não repete.
+    await db.insert(customerContacts).values([
+      { customerId: customerId2, kind: "whatsapp", value: "(11) 98888-7777", isPreferred: true },
+      { customerId: customerId2, kind: "phone", value: "11 97777-0000", isPreferred: true },
+    ]);
+    const withContacts = await caller("service").captureSheet.byCode({ code: nqCode });
+    expect(withContacts.contacts.map(contact => contact.value)).toEqual(["(11) 98888-7777"]);
 
     await expect(caller("seller").captureSheet.settings.set({ key: "nq_min_income", value: "5000" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller().captureSheet.settings.set({ key: "nq_min_income", value: "abc" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
