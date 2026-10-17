@@ -106,9 +106,13 @@ export const captureSheetRouter = router({
 
   /** Registra a impressão. A primeira é a original; as seguintes são reimpressões. O QR é sempre o mesmo. */
   recordPrint: receptionProcedure.input(z.object({ code: z.string().max(64) })).mutation(async ({ ctx, input }) => {
-    const { db, capture } = await captureByCode(input.code);
+    const code = normalizeCoupleCode(input.code);
+    if (!isCoupleCode(code)) throw new TRPCError({ code: "NOT_FOUND", message: "Código da ficha inválido." });
+    const db = await requireDb();
     const reprint = await db.transaction(async tx => {
-      await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.id, capture.id)).limit(1).for("update");
+      // O código é conferido com a ficha travada: se a administração trocar o código no meio, a impressão com o código velho é recusada.
+      const [capture] = await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
+      if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
       const [{ count }] = await tx.select({ count: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
       const isReprint = Number(count) > 0;
       await tx.insert(captureSheetPrints).values({ captureId: capture.id, printedByUserId: ctx.user.id, reprint: isReprint });
