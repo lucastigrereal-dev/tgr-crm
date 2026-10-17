@@ -538,7 +538,9 @@ export const captureSheetRouter = router({
       const limit = 5000;
       // Dia da visita (check-in, senão agendamento, senão criação), como na vista da sala: ficha marcada antes cai no dia em que aconteceu.
       const visitRef = sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.scheduledAt}, ${captureRecords.createdAt})`;
-      const conditions = [sql`${visitRef} >= ${start}`, sql`${visitRef} < ${end}`];
+      // Limites como texto UTC (igual a roomVisibleCondition): um Date cru seria serializado no fuso do processo.
+      const utcText = (date: Date) => date.toISOString().slice(0, 23).replace("T", " ");
+      const conditions = [sql`${visitRef} >= ${utcText(start)}`, sql`${visitRef} < ${utcText(end)}`];
       if (input.salesRoom?.trim()) conditions.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
       const liner = alias(users, "liner");
       const rows = await db.select({
