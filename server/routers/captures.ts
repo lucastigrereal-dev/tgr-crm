@@ -376,6 +376,7 @@ export const capturesRouter = router({
     reason: z.string().trim().max(5000).optional().nullable(),
     motiveId: z.number().int().positive().optional().nullable(),
   }).superRefine((value, issueContext) => {
+    if (value.outcome === "vendeu" && value.motiveId) issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["motiveId"], message: "VENDEU não tem motivo da lista." });
     if (value.outcome === "caiu_em_mesa" && (value.reason?.trim().length ?? 0) < 3 && !value.motiveId) {
       issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres) para CAIU EM MESA." });
     }

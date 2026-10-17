@@ -194,7 +194,8 @@ export const captureSheetRouter = router({
     // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
     const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
     const nq = computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
-    const ntMotiveLabel = capture.ntMotiveId ? (await db.select({ label: captureMotives.label }).from(captureMotives).where(eq(captureMotives.id, capture.ntMotiveId)).limit(1))[0]?.label ?? null : null;
+    // Rótulo do momento do registro (o snapshot em noTourReason), não o texto atual do catálogo: renomear o motivo depois não reescreve o histórico.
+    const ntMotiveLabel = capture.ntKind ? (capture.ntComplement && capture.noTourReason?.endsWith(`: ${capture.ntComplement}`) ? capture.noTourReason.slice(0, -(capture.ntComplement.length + 2)) : capture.noTourReason) ?? null : null;
     return {
       captureId: capture.id,
       coupleCode: code,

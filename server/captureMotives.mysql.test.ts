@@ -51,6 +51,12 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     expect(row).toMatchObject({ ntKind: "perfil", ntMotiveId: motive.id, ntCaptorName: `Captador ${runId}`, presentationStatus: "no_tour", noTourReason: "Renda abaixo do mínimo" });
     expect(row.presentationEndedAt).toBeInstanceOf(Date);
     await expect(caller().captureSheet.recordNt({ captureId, kind: "perfil", motiveId: motive.id })).resolves.toMatchObject({ alreadyRecorded: true });
+    // Renomear o motivo depois não muda o que a ficha mostra do NT já gravado.
+    await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_perfil", code: "renda", label: "Renda renomeada" });
+    const sheetCode = `NT-${runId}`;
+    await db.update(captureRecords).set({ coupleCode: sheetCode }).where(eq(captureRecords.id, captureId));
+    expect((await caller().captureSheet.byCode({ code: sheetCode })).nt).toMatchObject({ kind: "perfil", motive: "Renda abaixo do mínimo" });
+    await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_perfil", code: "renda", label: "Renda abaixo do mínimo" });
     const other = await motiveOf("nt_perfil", "idade");
     await expect(caller().captureSheet.recordNt({ captureId, kind: "perfil", motiveId: other.id })).rejects.toMatchObject({ code: "CONFLICT" });
   });
@@ -101,6 +107,7 @@ describe.skipIf(!integrationUrl)("motivos padronizados e não tour em MySQL real
     await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "achou caro o plano 3" })).resolves.toMatchObject({ alreadyRecorded: true });
     await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "caiu_em_mesa", motiveId: motive.id, reason: "outro complemento" })).rejects.toMatchObject({ code: "CONFLICT" });
     await caller().captureSheet.motives.upsert({ id: motive.id, kind: "nt_mesa", code: "preco", label: motive.label, active: true });
+    await expect(caller().captures.recordCommercialOutcome({ id: captureId, outcome: "vendeu", motiveId: motive.id })).rejects.toThrow();
     const wrongKind = await motiveOf("nt_perfil", "renda");
     const second = await newCapture({ presentationStatus: "presented", closerId: adminId });
     await expect(caller().captures.recordCommercialOutcome({ id: second, outcome: "caiu_em_mesa", motiveId: wrongKind.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
