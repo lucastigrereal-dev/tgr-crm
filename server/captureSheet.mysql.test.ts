@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, captureRecords, captureSheetPrints, captureTeamMembers, captureTeamRoles, customers, users } from "../drizzle/schema";
+import { auditLogs, captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customers, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Ficha impressa (TSE x CRM) em MySQL real: abre pelo código do casal, reimpressão auditada, equipe por papel, PEP e campos novos.
@@ -130,5 +130,37 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     expect(capture).toMatchObject({ secondVehicleModel: "Civic", secondVehicleYear: 2019, retiredPrimary: true, retiredPartner: false, guest1Name: "Convidada Um", guest2Name: null, pepOffered: true, pepOfferedBy: "Fechador Teste", pepResult: "declined" });
     await caller().captureSheet.updateExtras({ captureId, pepOffered: false });
     expect((await caller().captureSheet.byCode({ code })).capture).toMatchObject({ pepOffered: false, pepOfferedBy: null, pepResult: null });
+  });
+
+  it("casal qualificado: campos novos, cálculo na ficha e limites só da administração com trilha", async () => {
+    const [{ id: customerId2 }] = await db.insert(customers).values({ fullName: `Casal NQ ${runId}`, documentNumber: `NQ-${runId}`, phone: "11977770000", birthDate: new Date("1980-01-01T00:00:00Z"), status: "active" } as never).$returningId();
+    const nqCode = `NQ-${runId}`;
+    const [{ id: nqCapture }] = await db.insert(captureRecords).values({ customerId: customerId2, coupleCode: nqCode, relationshipStatus: "Casados", relationshipYears: 3, averageIncome: "9000.00", hasCreditCard: true, ownsHome: false, partnerAge: 25 }).$returningId();
+    await caller("seller").captureSheet.updateExtras({ captureId: nqCapture, maleSpouse: "titular", vehicleKind: "moto", vehicleYear: undefined, secondVehicleKind: "carro", secondVehicleYear: 2019, watchedVacationPresentation: false, captureKind: "  tour direto " });
+    const sheet = await caller("service").captureSheet.byCode({ code: nqCode });
+    expect(sheet.capture).toMatchObject({ maleSpouse: "titular", vehicleKind: "moto", secondVehicleKind: "carro", watchedVacationPresentation: false, captureKind: "tour direto" });
+    expect(sheet.customer.age).toBeGreaterThan(40);
+    expect(sheet.nq).toMatchObject({ nqItems: 1, outcome: "nq_aceito" });
+    expect(sheet.nq.criteria.find(c => c.key === "casa_propria")?.status).toBe("nq");
+    expect(sheet.nq.criteria.find(c => c.key === "veiculo")?.status).toBe("ok");
+    expect(sheet.sheetSettings.minPresentationMinutes).toBe(30);
+
+    await expect(caller("seller").captureSheet.settings.set({ key: "nq_min_income", value: "5000" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller().captureSheet.settings.set({ key: "nq_min_income", value: "abc" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const before = await caller("service").captureSheet.settings.get();
+    try {
+      await caller().captureSheet.settings.set({ key: "nq_max_items_accepted", value: "0" });
+      await caller().captureSheet.settings.set({ key: "min_presentation_minutes", value: "45" });
+      expect((await caller("service").captureSheet.byCode({ code: nqCode })).nq.outcome).toBe("nt_perfil");
+      expect((await caller("service").captureSheet.byCode({ code: nqCode })).sheetSettings.minPresentationMinutes).toBe(45);
+      const [audit] = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "capture_sheet_setting"), eq(auditLogs.entityId, "nq_max_items_accepted")));
+      expect(audit.summary).toContain('de "1" para "0"');
+    } finally {
+      await caller().captureSheet.settings.set({ key: "nq_max_items_accepted", value: String(before.nq.maxItemsAccepted) });
+      await caller().captureSheet.settings.set({ key: "min_presentation_minutes", value: String(before.minPresentationMinutes) });
+    }
+    const roles = await caller().captureSheet.roles.list();
+    expect(roles.find(role => role.code === "supervisor_vendas")).toMatchObject({ kind: "presentation" });
+    expect((await db.select().from(captureSheetSettings)).length).toBeGreaterThanOrEqual(6);
   });
 });

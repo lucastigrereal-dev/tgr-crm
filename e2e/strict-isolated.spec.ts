@@ -612,6 +612,14 @@ test.describe("homologação isolada estrita", () => {
     const prints = await queryDatabase<Array<{ reprint: number }>>("SELECT reprint FROM capture_sheet_prints WHERE captureId = ? ORDER BY id", [captureId]);
     expect(prints.map(row => Number(row.reprint))).toEqual([0, 1]);
 
+    await expect(page.getByTestId("nq-label")).toContainText("NQ: 0 itens (faltam");
+    await expect(page.locator("#ficha-print").getByText("Termo de ciência")).toBeVisible();
+    const maleSet = waitForMutation(page, "captureSheet.updateExtras");
+    await page.getByLabel("Cônjuge homem").selectOption("titular");
+    await maleSet;
+    const [maleRow] = await queryDatabase<Array<{ maleSpouse: string | null }>>("SELECT maleSpouse FROM capture_records WHERE id = ?", [captureId]);
+    expect(maleRow!.maleSpouse).toBe("titular");
+
     await page.getByRole("combobox").first().click();
     await page.getByRole("option", { name: "Recepção 1" }).click();
     await page.getByLabel("Nome da pessoa").fill("Recepção E2E");
