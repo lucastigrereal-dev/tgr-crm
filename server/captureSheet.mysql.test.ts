@@ -57,6 +57,17 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     await expect(caller("user").captureSheet.byCode({ code })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("duas ligações ao mesmo tempo na mesma ficha sem código: só uma passa", async () => {
+    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal Corrida ${runId}`, status: "active" }).$returningId();
+    const [{ id: raceId }] = await db.insert(captureRecords).values({ customerId }).$returningId();
+    const results = await Promise.allSettled([
+      caller("seller").captureSheet.setCoupleCode({ captureId: raceId, coupleCode: `RACE-A-${runId}` }),
+      caller("seller").captureSheet.setCoupleCode({ captureId: raceId, coupleCode: `RACE-B-${runId}` }),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")[0]).toMatchObject({ reason: { code: "FORBIDDEN" } });
+  });
+
   it("abrir com outra caixa devolve o código como foi gravado", async () => {
     const sheet = await caller().captureSheet.byCode({ code: code.toLowerCase() });
     expect(sheet.coupleCode).toBe(code);

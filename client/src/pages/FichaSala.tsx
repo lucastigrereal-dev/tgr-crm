@@ -96,6 +96,7 @@ function FichaImpressa({ code }: { code: string }) {
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, retiredPrimary: !capture.retiredPrimary })}>Titular aposentado: {yesNo(capture.retiredPrimary)}</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, retiredPartner: !capture.retiredPartner })}>Cônjuge aposentado: {yesNo(capture.retiredPartner)}</Button>
         <Button variant="outline" onClick={() => updateExtras.mutate({ captureId: data.captureId, pepOffered: true, pepOfferedBy: extras.pepOfferedBy })}>Registrar oferta de PEP</Button>
+        <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepOffered: false })}>Sem oferta de PEP</Button>
         <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepResult: "accepted" })}>PEP aceito</Button>
         <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepResult: "declined" })}>PEP recusado</Button>
       </div>

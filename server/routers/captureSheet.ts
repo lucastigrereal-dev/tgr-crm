@@ -39,16 +39,22 @@ export const captureSheetRouter = router({
     const code = normalizeCoupleCode(input.coupleCode);
     if (!isCoupleCode(code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Código inválido: use de 4 a 64 letras, números, - ou _ (nunca CPF ou telefone)." });
     const db = await requireDb();
-    const [capture] = await db.select({ id: captureRecords.id, coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
-    if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
-    if (capture.coupleCode === code) return { code };
-    if (capture.coupleCode && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só a administração troca o código de uma ficha que já tem código." });
-    try {
-      await db.update(captureRecords).set({ coupleCode: code }).where(eq(captureRecords.id, input.captureId));
-    } catch (error) {
-      if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Este código já está ligado a outra ficha." });
-      throw error;
-    }
+    // Ficha travada na leitura e na gravação: duas ligações ao mesmo tempo não passam as duas como "primeira ligação".
+    const previous = await db.transaction(async tx => {
+      const [capture] = await tx.select({ id: captureRecords.id, coupleCode: captureRecords.coupleCode }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
+      if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+      if (capture.coupleCode === code) return { unchanged: true as const, coupleCode: capture.coupleCode };
+      if (capture.coupleCode && ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Só a administração troca o código de uma ficha que já tem código." });
+      try {
+        await tx.update(captureRecords).set({ coupleCode: code }).where(eq(captureRecords.id, input.captureId));
+      } catch (error) {
+        if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "Este código já está ligado a outra ficha." });
+        throw error;
+      }
+      return { unchanged: false as const, coupleCode: capture.coupleCode };
+    });
+    if (previous.unchanged) return { code };
+    const capture = { coupleCode: previous.coupleCode };
     await recordAudit(ctx.user.id, "capture", input.captureId, "couple_code_set", capture.coupleCode ? `Ficha ${input.captureId}: código do casal trocado de ${capture.coupleCode} para ${code}.` : `Ficha ${input.captureId}: código do casal ${code} ligado.`);
     return { code };
   }),
