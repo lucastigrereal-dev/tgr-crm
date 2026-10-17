@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addCalendarDays, canOpenArchivedSheet, localDayStart, paperCustody, privacyNoticeText, roomVisibility } from "./captureSheetDomain";
+import { addCalendarDays, canOpenArchivedSheet, localDayStart, paperCustody, paperCustodyOfSheet, privacyNoticeText, roomVisibility } from "./captureSheetDomain";
 import { buildCaptureExportFilename, buildCaptureExportRows, csvCell, toCsv } from "../shared/captureSheetExport";
 import { localDateInTimezone } from "./saleTermsPolicy";
 
@@ -97,5 +97,17 @@ describe("exportação CSV/Excel das fichas", () => {
     expect(buildCaptureExportRows([base], { withCpf: false })[0]!.Criada_em).toContain("16/10/2026");
     expect(buildCaptureExportRows([base], { withCpf: false, timeZone: "America/Sao_Paulo" })[0]!.Criada_em).toContain("16/10/2026");
     expect(buildCaptureExportRows([base], { withCpf: false, timeZone: "Asia/Tokyo" })[0]!.Criada_em).toContain("17/10/2026");
+  });
+
+  it("custódia da ficha: cópia antiga atrasada continua atrasada mesmo com reimpressão nova no prazo", () => {
+    const old = { printedDay: "2026-10-10", collectedAt: null, destroyedAt: null, destroyDeadlineDays: 2 };
+    const fresh = { printedDay: "2026-10-17", collectedAt: null, destroyedAt: null, destroyDeadlineDays: 2 };
+    expect(paperCustodyOfSheet([fresh, old], "2026-10-17", 0)).toEqual({ status: "em_circulacao", overdue: true, deadlineDay: "2026-10-12" });
+    expect(paperCustodyOfSheet([fresh, { ...old, destroyedAt: new Date() }], "2026-10-17", 0)).toMatchObject({ overdue: false, deadlineDay: "2026-10-19" });
+    expect(paperCustodyOfSheet([{ ...fresh, collectedAt: new Date() }, { ...old, destroyedAt: new Date() }], "2026-10-17", 0).status).toBe("recolhida");
+    expect(paperCustodyOfSheet([{ ...old, destroyedAt: new Date() }], "2026-10-17", 0).status).toBe("destruida");
+    expect(paperCustodyOfSheet([], "2026-10-17", 0).status).toBe("nao_impressa");
+    // Impressão antiga sem prazo gravado usa o configurado hoje.
+    expect(paperCustodyOfSheet([{ ...old, destroyDeadlineDays: null }], "2026-10-17", 30).overdue).toBe(false);
   });
 });

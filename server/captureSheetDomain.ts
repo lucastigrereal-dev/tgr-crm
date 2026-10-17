@@ -174,6 +174,23 @@ export function paperCustody(input: { printedDay: string | null; collectedAt: Da
   return { status: input.collectedAt ? "recolhida" : "em_circulacao", overdue: input.today > deadlineDay, deadlineDay };
 }
 
+/**
+ * Custódia da ficha inteira: cada impressão tem o próprio prazo (o gravado nela, ou o configurado hoje quando antiga).
+ * Enquanto existir cópia não destruída, vale a pior: atrasada se QUALQUER cópia pendente passou do prazo, em circulação
+ * se alguma ainda não foi recolhida, e o prazo mostrado é o mais cedo entre as pendentes. Todas destruídas = destruída.
+ */
+export function paperCustodyOfSheet(prints: Array<{ printedDay: string; collectedAt: Date | null; destroyedAt: Date | null; destroyDeadlineDays: number | null }>, today: string, fallbackDeadlineDays: number): PaperCustody {
+  if (!prints.length) return { status: "nao_impressa", overdue: false, deadlineDay: null };
+  const each = prints.map(print => ({ print, custody: paperCustody({ printedDay: print.printedDay, collectedAt: print.collectedAt, destroyedAt: print.destroyedAt, today, destroyDeadlineDays: print.destroyDeadlineDays ?? fallbackDeadlineDays }) }));
+  const pending = each.filter(item => item.custody.status !== "destruida");
+  if (!pending.length) return { status: "destruida", overdue: false, deadlineDay: each.map(item => item.custody.deadlineDay!).sort().at(-1) ?? null };
+  return {
+    status: pending.some(item => item.custody.status === "em_circulacao") ? "em_circulacao" : "recolhida",
+    overdue: pending.some(item => item.custody.overdue),
+    deadlineDay: pending.map(item => item.custody.deadlineDay!).sort()[0] ?? null,
+  };
+}
+
 /** Acima deste número de impressões a ficha entra no alerta de reimpressão do painel (parecer A1.4). */
 export const REPRINT_ALERT_THRESHOLD = 2;
 

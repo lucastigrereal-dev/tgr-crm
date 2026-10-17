@@ -8,7 +8,7 @@ import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { txAudit } from "../txOutbox";
-import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustody, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
+import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustodyOfSheet, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
 import type { CaptureExportSource } from "../../shared/captureSheetExport";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
@@ -26,6 +26,7 @@ async function requireDb() {
   return db;
 }
 
+const PANEL_LIMIT = 2000;
 const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "room_visibility_days", "paper_destroy_deadline_days", "brand_name", ...PRIVACY_TEXT_KEYS] as const;
 /** Chaves de texto livre (marca e aviso de privacidade): sem validação numérica. */
 const TEXT_SETTING_KEYS: ReadonlySet<string> = new Set(["brand_name", ...PRIVACY_TEXT_KEYS]);
@@ -151,11 +152,11 @@ export const captureSheetRouter = router({
       const near = await db.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom }).from(captureRecords).where(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, from), lt(captureRecords.checkedInAt, to), sameRoom));
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
-    const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(50);
-    // printCount real: o limit(50) acima serve só para achar a última impressão e não pode travar a contagem.
+    const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(500);
+    // printCount real: o limit(500) acima serve só para a custódia e não pode travar a contagem.
     const [{ total: prints }] = await db.select({ total: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
     const lastPrint = printRows[0] ?? null;
-    const paper = paperCustody({ printedDay: lastPrint ? localDateInTimezone(lastPrint.printedAt, projectTimezone()) : null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null, today: todayLocal(), destroyDeadlineDays: lastPrint?.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays });
+    const paper = paperCustodyOfSheet(printRows.map(row => ({ printedDay: localDateInTimezone(row.printedAt, projectTimezone()), collectedAt: row.collectedAt, destroyedAt: row.destroyedAt, destroyDeadlineDays: row.destroyDeadlineDays })), todayLocal(), settings.paperDestroyDeadlineDays);
     // Todos os contatos ativos; o que já está no cadastro principal (telefone/e-mail do cliente) não repete, mas o WhatsApp preferido, que não espelha no cadastro, entra.
     const allContacts = await db.select({ kind: customerContacts.kind, label: customerContacts.label, value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customer.id), isNull(customerContacts.archivedAt), sql`${customerContacts.kind} IN ('phone', 'whatsapp', 'email')`)).orderBy(desc(customerContacts.isPreferred), asc(customerContacts.id)).limit(20);
     const digits = (value?: string | null) => (value ?? "").replace(/\D/g, "");
@@ -324,7 +325,10 @@ export const captureSheetRouter = router({
       // Papel de dias anteriores que ainda não foi destruído também entra (é o atrasado); impressões do dia consultado entram sempre.
       const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome })
         .from(captureSheetPrints).innerJoin(captureRecords, eq(captureRecords.id, captureSheetPrints.captureId)).innerJoin(customers, eq(customers.id, captureRecords.customerId))
-        .where(and(lt(captureSheetPrints.printedAt, end), or(gte(captureSheetPrints.printedAt, start), isNull(captureSheetPrints.destroyedAt)))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
+        .where(and(lt(captureSheetPrints.printedAt, end), or(gte(captureSheetPrints.printedAt, start), isNull(captureSheetPrints.destroyedAt)))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(PANEL_LIMIT + 1);
+      // Corte explícito: com mais linhas que o limite o painel avisa que a lista está incompleta em vez de apresentar totais parciais como completos.
+      const truncated = rows.length > PANEL_LIMIT;
+      if (truncated) rows.length = PANEL_LIMIT;
       const byCapture = new Map<number, typeof rows>();
       for (const row of rows) byCapture.set(row.captureId, [...(byCapture.get(row.captureId) ?? []), row]);
       // Total de impressões por ficha, sem o filtro de dia/destruição: a cópia antiga destruída em outro dia também conta.
@@ -334,13 +338,15 @@ export const captureSheetRouter = router({
       const today = todayLocal();
       const sheets = Array.from(byCapture.entries()).map(([captureId, prints]) => {
         const last = prints[0]!;
-        const custody = paperCustody({ printedDay: localDateInTimezone(last.printedAt, tz), collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: last.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays });
+        const custody = paperCustodyOfSheet(prints.map(print => ({ printedDay: localDateInTimezone(print.printedAt, tz), collectedAt: print.collectedAt, destroyedAt: print.destroyedAt, destroyDeadlineDays: print.destroyDeadlineDays })), today, settings.paperDestroyDeadlineDays);
         // Ficha fora da vista da sala: o papel continua na lista (alguém precisa destruí-lo), mas sem o nome do casal para quem não é administrativo.
         const hidden = !canOpenArchivedSheet(ctx.user.role) && !visibilityOf(last, settings).visibleToRoom;
         return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: totalByCapture.get(captureId) ?? prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: (totalByCapture.get(captureId) ?? prints.length) >= REPRINT_ALERT_THRESHOLD || prints.some(print => print.reprint) };
       });
       return {
         date: day,
+        truncated,
+        limit: PANEL_LIMIT,
         printed: sheets.length,
         notCollected: sheets.filter(sheet => sheet.status === "em_circulacao").length,
         notDestroyed: sheets.filter(sheet => sheet.status !== "destruida").length,
