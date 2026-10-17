@@ -1166,6 +1166,13 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "destroyDeadlineDays": {
+          "name": "destroyDeadlineDays",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {

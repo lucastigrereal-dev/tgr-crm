@@ -145,11 +145,11 @@ export const captureSheetRouter = router({
       const near = await db.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom }).from(captureRecords).where(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, from), lt(captureRecords.checkedInAt, to), sameRoom));
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
-    const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(50);
+    const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(50);
     // printCount real: o limit(50) acima serve só para achar a última impressão e não pode travar a contagem.
     const [{ total: prints }] = await db.select({ total: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
     const lastPrint = printRows[0] ?? null;
-    const paper = paperCustody({ printedDay: lastPrint ? localDateInTimezone(lastPrint.printedAt, projectTimezone()) : null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null, today: todayLocal(), destroyDeadlineDays: settings.paperDestroyDeadlineDays });
+    const paper = paperCustody({ printedDay: lastPrint ? localDateInTimezone(lastPrint.printedAt, projectTimezone()) : null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null, today: todayLocal(), destroyDeadlineDays: lastPrint?.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays });
     // Todos os contatos ativos; o que já está no cadastro principal (telefone/e-mail do cliente) não repete, mas o WhatsApp preferido, que não espelha no cadastro, entra.
     const allContacts = await db.select({ kind: customerContacts.kind, label: customerContacts.label, value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customer.id), isNull(customerContacts.archivedAt), sql`${customerContacts.kind} IN ('phone', 'whatsapp', 'email')`)).orderBy(desc(customerContacts.isPreferred), asc(customerContacts.id)).limit(20);
     const digits = (value?: string | null) => (value ?? "").replace(/\D/g, "");
@@ -167,7 +167,7 @@ export const captureSheetRouter = router({
       nq,
       sheetSettings: { minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName },
       // LGPD: estado do papel, vista da sala e o aviso v1 (provisório) que sai na faixa destacável.
-      paper: { ...paper, destroyDeadlineDays: settings.paperDestroyDeadlineDays, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
+      paper: { ...paper, destroyDeadlineDays: lastPrint?.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
       roomVisibility: visibility,
       privacyNotice: privacyNoticeText(settings.privacy, settings.paperDestroyDeadlineDays),
       capture: {
@@ -194,10 +194,11 @@ export const captureSheetRouter = router({
       // O código é conferido com a ficha travada: se a administração trocar o código no meio, a impressão com o código velho é recusada.
       const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
-      assertSheetVisibleTo(ctx.user.role, capture, await loadSettings(db));
+      const printSettings = await loadSettings(db);
+      assertSheetVisibleTo(ctx.user.role, capture, printSettings);
       const [{ count }] = await tx.select({ count: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
       const isReprint = Number(count) > 0;
-      await tx.insert(captureSheetPrints).values({ captureId: capture.id, printedByUserId: ctx.user.id, reprint: isReprint });
+      await tx.insert(captureSheetPrints).values({ captureId: capture.id, printedByUserId: ctx.user.id, reprint: isReprint, destroyDeadlineDays: printSettings.paperDestroyDeadlineDays });
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: isReprint ? "sheet_reprinted" : "sheet_printed", summary: isReprint ? `Ficha ${capture.id} reimpressa.` : `Ficha ${capture.id} impressa.` });
       return isReprint;
     });
@@ -315,7 +316,7 @@ export const captureSheetRouter = router({
       const day = input?.date ?? todayLocal();
       const start = localDayStart(day, tz, localDateInTimezone), end = localDayStart(addCalendarDays(day, 1), tz, localDateInTimezone);
       // Papel de dias anteriores que ainda não foi destruído também entra (é o atrasado); impressões do dia consultado entram sempre.
-      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome })
+      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, destroyDeadlineDays: captureSheetPrints.destroyDeadlineDays, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome })
         .from(captureSheetPrints).innerJoin(captureRecords, eq(captureRecords.id, captureSheetPrints.captureId)).innerJoin(customers, eq(customers.id, captureRecords.customerId))
         .where(and(lt(captureSheetPrints.printedAt, end), or(gte(captureSheetPrints.printedAt, start), isNull(captureSheetPrints.destroyedAt)))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
       const byCapture = new Map<number, typeof rows>();
@@ -327,7 +328,7 @@ export const captureSheetRouter = router({
       const today = todayLocal();
       const sheets = Array.from(byCapture.entries()).map(([captureId, prints]) => {
         const last = prints[0]!;
-        const custody = paperCustody({ printedDay: localDateInTimezone(last.printedAt, tz), collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: settings.paperDestroyDeadlineDays });
+        const custody = paperCustody({ printedDay: localDateInTimezone(last.printedAt, tz), collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: last.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays });
         // Ficha fora da vista da sala: o papel continua na lista (alguém precisa destruí-lo), mas sem o nome do casal para quem não é administrativo.
         const hidden = !canOpenArchivedSheet(ctx.user.role) && !visibilityOf(last, settings).visibleToRoom;
         return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: totalByCapture.get(captureId) ?? prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: (totalByCapture.get(captureId) ?? prints.length) >= REPRINT_ALERT_THRESHOLD || prints.some(print => print.reprint) };
@@ -379,7 +380,7 @@ export const captureSheetRouter = router({
       const page: CaptureExportSource[] = rows.slice(0, limit).map(row => ({ ...row, documentNumber: input.withCpf ? row.documentNumber : null }));
       // Trilha sem dado pessoal: filtros, formato, com/sem CPF e quantas linhas saíram (parecer M1.b).
       await recordAudit(ctx.user.id, "capture_export", `${input.from}_${input.to}`, "sheet_exported", `Fichas exportadas em ${input.format.toUpperCase()}: ${page.length} linha(s)${truncated ? " (corte em " + limit + ")" : ""}, período ${input.from} a ${input.to}${input.salesRoom?.trim() ? `, sala "${input.salesRoom.trim()}"` : ""}, ${input.withCpf ? "COM CPF" : "sem CPF"}.`);
-      return { rows: page, truncated, limit };
+      return { rows: page, truncated, limit, timeZone: tz };
     }),
   }),
 

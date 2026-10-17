@@ -8,7 +8,7 @@ ALTER TABLE `capture_sheet_prints` DROP FOREIGN KEY `capture_sheet_prints_collec
 --> statement-breakpoint
 ALTER TABLE `capture_sheet_prints` DROP FOREIGN KEY `capture_sheet_prints_destroyedByUserId_users_id_fk`;
 --> statement-breakpoint
-ALTER TABLE `capture_sheet_prints` DROP COLUMN `collectedAt`, DROP COLUMN `collectedByUserId`, DROP COLUMN `destroyedAt`, DROP COLUMN `destroyedByUserId`;
+ALTER TABLE `capture_sheet_prints` DROP COLUMN `collectedAt`, DROP COLUMN `collectedByUserId`, DROP COLUMN `destroyedAt`, DROP COLUMN `destroyedByUserId`, DROP COLUMN `destroyDeadlineDays`;
 --> statement-breakpoint
 DELETE FROM `capture_sheet_settings` WHERE `provisional` = true AND `updatedByUserId` IS NULL AND `key` IN ('room_visibility_days','paper_destroy_deadline_days','privacy_controller_name','privacy_controller_cnpj','privacy_contact_channel','privacy_full_text_url','privacy_retention_text');
 --> statement-breakpoint

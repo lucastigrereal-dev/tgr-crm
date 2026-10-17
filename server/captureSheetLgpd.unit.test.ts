@@ -91,4 +91,11 @@ describe("exportação CSV/Excel das fichas", () => {
     expect(buildCaptureExportFilename("2026-10-01", "2026-10-17", "Gerência de Sala", "csv", new Date("2026-10-17T16:30:00Z"))).toBe("fichas-2026-10-01_a_2026-10-17-gerencia-de-sala-20261017T163000.csv");
     expect(buildCaptureExportFilename("2026-10-01", "2026-10-17", "   ", "xlsx", new Date("2026-10-17T16:30:00Z"))).toMatch(/-usuario-\d{8}T\d{6}\.xlsx$/);
   });
+
+  it("a exportação formata as datas no fuso do projeto, não sempre em Recife", () => {
+    const base = { captureId: 1, coupleCode: null, createdAt: new Date("2026-10-17T02:30:00Z"), checkedInAt: null, salesRoom: null, captureLocation: null, presentationStatus: "captured", qualificationStatus: "pending", commercialOutcome: null, customerName: "Casal Sintético", documentNumber: null, city: null, state: null, partnerName: null, averageIncome: null, promoterName: null, linerName: null, closerName: null };
+    expect(buildCaptureExportRows([base], { withCpf: false })[0]!.Criada_em).toContain("16/10/2026");
+    expect(buildCaptureExportRows([base], { withCpf: false, timeZone: "America/Sao_Paulo" })[0]!.Criada_em).toContain("16/10/2026");
+    expect(buildCaptureExportRows([base], { withCpf: false, timeZone: "Asia/Tokyo" })[0]!.Criada_em).toContain("17/10/2026");
+  });
 });

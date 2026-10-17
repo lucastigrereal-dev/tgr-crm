@@ -208,4 +208,19 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     expect(trail.map(row => row.summary)).toEqual(expect.arrayContaining([expect.stringContaining("CSV: 2 linha(s)"), expect.stringContaining("XLSX: 3 linha(s)"), expect.stringContaining("COM CPF")]));
     expect(trail.every(row => !new RegExp(`DOC-${runId}|11988887777`).test(row.summary ?? ""))).toBe(true);
   });
+
+  it("o prazo prometido fica gravado na impressão: mudar a configuração depois não reescreve o papel já impresso", async () => {
+    await caller().captureSheet.settings.set({ key: "paper_destroy_deadline_days", value: "2" });
+    await caller("service").captureSheet.recordPrint({ code: soldCode });
+    await caller().captureSheet.settings.set({ key: "paper_destroy_deadline_days", value: "0" });
+    try {
+      const sheet = await caller("seller").captureSheet.byCode({ code: soldCode });
+      expect(sheet.paper.destroyDeadlineDays).toBe(2);
+      expect(sheet.paper.overdue).toBe(false);
+      const [print] = await db.select().from(captureSheetPrints).where(eq(captureSheetPrints.captureId, soldId));
+      expect(print!.destroyDeadlineDays).toBe(2);
+    } finally {
+      await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, soldId));
+    }
+  });
 });

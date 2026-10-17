@@ -417,6 +417,8 @@ export const captureSheetPrints = mysqlTable(
     collectedByUserId: int("collectedByUserId").references(() => users.id),
     destroyedAt: timestamp("destroyedAt"),
     destroyedByUserId: int("destroyedByUserId").references(() => users.id),
+    /** Prazo prometido no papel desta impressão (dias após o dia impresso). Nulo = impressão anterior à coluna: vale o prazo configurado hoje. */
+    destroyDeadlineDays: int("destroyDeadlineDays"),
   },
   table => [index("capture_sheet_prints_capture_idx").on(table.captureId, table.printedAt), index("capture_sheet_prints_printed_idx").on(table.printedAt, table.destroyedAt)],
 );

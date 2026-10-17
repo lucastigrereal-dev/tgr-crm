@@ -25,14 +25,15 @@ export type CaptureExportSource = {
   closerName: string | null;
 };
 
-const dateTime = (value: Date | string | null) => (value ? new Date(value).toLocaleString("pt-BR", { timeZone: "America/Recife" }) : "");
+const dateTime = (value: Date | string | null, timeZone: string) => (value ? new Date(value).toLocaleString("pt-BR", { timeZone }) : "");
 
-export function buildCaptureExportRows(rows: CaptureExportSource[], options: { withCpf: boolean }) {
+export function buildCaptureExportRows(rows: CaptureExportSource[], options: { withCpf: boolean; /** Fuso do projeto, o mesmo que o servidor usou para escolher o dia; sem ele vale Recife. */ timeZone?: string }) {
+  const timeZone = options.timeZone || "America/Recife";
   return rows.map(row => ({
     Ficha: row.captureId,
     Codigo_do_casal: row.coupleCode ?? "",
-    Criada_em: dateTime(row.createdAt),
-    Check_in: dateTime(row.checkedInAt),
+    Criada_em: dateTime(row.createdAt, timeZone),
+    Check_in: dateTime(row.checkedInAt, timeZone),
     Sala: row.salesRoom ?? "",
     Local_de_captacao: row.captureLocation ?? "",
     Status: row.presentationStatus,

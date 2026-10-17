@@ -288,7 +288,7 @@ function ExportarFichas() {
   const run = trpc.captureSheet.export.rows.useMutation({ onError: error => toast.error(error.message) });
   const exportAs = async (format: "csv" | "xlsx") => {
     const result = await run.mutateAsync({ from: form.from, to: form.to, salesRoom: form.salesRoom || undefined, withCpf: canPii && form.withCpf, format });
-    const rows = buildCaptureExportRows(result.rows, { withCpf: canPii && form.withCpf });
+    const rows = buildCaptureExportRows(result.rows, { withCpf: canPii && form.withCpf, timeZone: result.timeZone });
     const filename = buildCaptureExportFilename(form.from, form.to, user?.name ?? "usuario", format);
     if (format === "csv") downloadBlob(toCsv(rows), filename, "text/csv;charset=utf-8");
     else downloadBlob(await writeCaptureExportXlsx(rows, await import("exceljs")), filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
