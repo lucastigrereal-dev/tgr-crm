@@ -483,12 +483,14 @@ export const captureSheetRouter = router({
     const db = await requireDb();
     const complement = input.complement?.trim() || null;
     return db.transaction(async tx => {
+      // As leituras seguintes usam a mesma conexão da transação (sem pedir outra ao pool).
+      const txDb = tx as unknown as SheetDb;
       const [capture] = await tx.select({
         id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome,
         presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom,
       }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
-      await assertCaptureInRoomView(db, ctx.user.role, capture);
+      await assertCaptureInRoomView(txDb, ctx.user.role, capture);
       if (capture.ntKind) {
         if (capture.ntKind === input.kind && capture.ntMotiveId === input.motiveId && (capture.ntComplement ?? null) === complement) return { ok: true as const, alreadyRecorded: true as const };
         throw new TRPCError({ code: "CONFLICT", message: "NT_IMMUTABLE: o não tour desta ficha já foi registrado e não pode ser alterado." });
@@ -496,9 +498,9 @@ export const captureSheetRouter = router({
       if (capture.commercialOutcome) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já tem resultado comercial; não dá para marcar não tour." });
       if (capture.presentationStatus === "no_tour") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já está como não tour; o motivo gravado antes não é reescrito." });
       if (capture.presentationStatus === "presented" || capture.presentationStatus === "closed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O casal já entrou na apresentação; o caminho é o CAIU EM MESA." });
-      const { motive, reason } = await resolveNtMotive(db, input.kind, input.motiveId, complement);
+      const { motive, reason } = await resolveNtMotive(txDb, input.kind, input.motiveId, complement);
       const now = new Date();
-      const captorName = await captorNameOf(db, capture.id, capture.promoterId);
+      const captorName = await captorNameOf(txDb, capture.id, capture.promoterId);
       await tx.update(captureRecords).set({
         ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: captorName, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id, presentationEndedAt: now,
         presentationStatus: "no_tour", noTourReason: reason,
