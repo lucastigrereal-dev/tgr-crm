@@ -141,7 +141,8 @@ export const captureSheetRouter = router({
       order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
     const printRows = await db.select({ printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id)).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(50);
-    const prints = printRows.length;
+    // printCount real: o limit(50) acima serve só para achar a última impressão e não pode travar a contagem.
+    const [{ total: prints }] = await db.select({ total: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
     const lastPrint = printRows[0] ?? null;
     const paper = paperCustody({ printedDay: lastPrint ? localDateInTimezone(lastPrint.printedAt, projectTimezone()) : null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null, today: todayLocal(), destroyDeadlineDays: settings.paperDestroyDeadlineDays });
     // Todos os contatos ativos; o que já está no cadastro principal (telefone/e-mail do cliente) não repete, mas o WhatsApp preferido, que não espelha no cadastro, entra.
