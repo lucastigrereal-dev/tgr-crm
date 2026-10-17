@@ -3,6 +3,8 @@
  * O servidor decide o que sai (CPF só com `export.pii`) e grava a trilha com filtros e número de linhas;
  * aqui só mora a montagem do arquivo, para o teste cobrir sem navegador nem banco.
  */
+import { presentationMinutes } from "./captureSheetReports";
+
 export type CaptureExportSource = {
   captureId: number;
   coupleCode: string | null;
@@ -23,6 +25,10 @@ export type CaptureExportSource = {
   promoterName: string | null;
   linerName: string | null;
   closerName: string | null;
+  ntKind?: string | null;
+  noTourReason?: string | null;
+  presentationStartedAt?: Date | string | null;
+  presentationEndedAt?: Date | string | null;
 };
 
 const dateTime = (value: Date | string | null, timeZone: string) => (value ? new Date(value).toLocaleString("pt-BR", { timeZone }) : "");
@@ -48,6 +54,11 @@ export function buildCaptureExportRows(rows: CaptureExportSource[], options: { w
     Promotor: row.promoterName ?? "",
     Consultor: row.linerName ?? "",
     Fechador: row.closerName ?? "",
+    Tipo_NT: row.ntKind ?? "",
+    Motivo_sem_tour: row.noTourReason ?? "",
+    Inicio_apresentacao: dateTime(row.presentationStartedAt ?? null, timeZone),
+    Fim_apresentacao: dateTime(row.presentationEndedAt ?? null, timeZone),
+    Minutos_apresentacao: presentationMinutes(row.presentationStartedAt ?? null, row.presentationEndedAt ?? null) ?? "",
   }));
 }
 
@@ -62,10 +73,10 @@ export function csvCell(value: string | number | null | undefined) {
 }
 
 /** CSV com ponto e vírgula e BOM: abre certo no Excel em português sem assistente de importação. */
-export function toCsv(rows: CaptureExportRow[]) {
+export function toCsv(rows: Array<Record<string, string | number>>) {
   if (!rows.length) return "﻿";
   const headers = Object.keys(rows[0]!);
-  const lines = [headers.join(";"), ...rows.map(row => headers.map(header => csvCell((row as Record<string, string | number>)[header])).join(";"))];
+  const lines = [headers.join(";"), ...rows.map(row => headers.map(header => csvCell(row[header])).join(";"))];
   return `﻿${lines.join("\r\n")}\r\n`;
 }
 
