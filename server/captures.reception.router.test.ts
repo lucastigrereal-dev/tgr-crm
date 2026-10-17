@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./db", () => ({ getDb: vi.fn(), recordAudit: vi.fn(), recordDomainEvent: vi.fn() }));
 import { getDb, recordAudit, recordDomainEvent } from "./db";
@@ -25,6 +25,7 @@ function capture(overrides: Record<string, unknown> = {}) {
     presentationStatus: "scheduled",
     presentationStartedAt: null,
     presentationEndedAt: null,
+    createdAt: new Date(),
     ...overrides,
   };
 }
@@ -36,6 +37,7 @@ function updateRecorder(affectedRows = 1) {
 
 describe("captures reception router", () => {
   beforeEach(() => vi.resetAllMocks());
+  afterEach(() => vi.useRealTimers());
 
   it("restringe ações de sala a recepção, comercial e administração", async () => {
     await expect(caller("finance").captures.checkIn({ id: 91 })).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -85,6 +87,7 @@ describe("captures reception router", () => {
     const recorder = updateRecorder();
     const select = vi.fn()
       .mockReturnValueOnce(chain([capture({ presentationStatus: "checked_in" })]))
+      .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([{ id: 31 }, { id: 32 }]));
     mockedDb.mockResolvedValue({ select, ...recorder } as never);
 
@@ -98,6 +101,7 @@ describe("captures reception router", () => {
     const recorder = updateRecorder();
     const select = vi.fn()
       .mockReturnValueOnce(chain([capture({ presentationStatus: "checked_in" })]))
+      .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]));
     mockedDb.mockResolvedValue({ select, ...recorder } as never);
 
@@ -157,18 +161,17 @@ describe("captures reception router", () => {
     const tour = capture({ id: 201, scheduledAt: new Date("2026-08-21T10:00:00-03:00") }) as Record<string, unknown>;
     const noTour = capture({ id: 202, scheduledAt: new Date("2026-08-21T11:00:00-03:00") }) as Record<string, unknown>;
     let selected: Record<string, unknown> | null = null;
+    const settings = () => []; // configurações da ficha (vista da sala, LGPD)
+    const queue = () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }];
     const responses = [
-      () => [tour],
-      () => [tour],
-      () => [{ id: 31 }, { id: 32 }],
-      () => [tour],
-      () => [], // configurações da ficha (corte de visibilidade LGPD)
-      () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
-      () => [tour],
-      () => [noTour],
-      () => [noTour],
-      () => [], // configurações da ficha (corte de visibilidade LGPD)
-      () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
+      () => [tour], settings,
+      () => [tour], settings, () => [{ id: 31 }, { id: 32 }],
+      () => [tour], settings,
+      settings, queue,
+      () => [tour], settings,
+      () => [noTour], settings,
+      () => [noTour], settings,
+      settings, queue,
     ];
     const set = vi.fn((patch: Record<string, unknown>) => {
       Object.assign(selected!, patch);
@@ -183,6 +186,8 @@ describe("captures reception router", () => {
       update: vi.fn(() => ({ set })),
     } as never);
 
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-21T14:00:00-03:00"));
     const room = caller("service").captures;
     await room.checkIn({ id: 201, receptionNotes: "Chegou para o tour" });
     await room.assignRoom({ id: 201, salesTable: "M-03", linerId: 31, closerId: 32 });

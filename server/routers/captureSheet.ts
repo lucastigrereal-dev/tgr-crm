@@ -59,6 +59,12 @@ function assertSheetVisibleTo(role: string, capture: { checkedInAt: Date | null;
   return visibility;
 }
 
+/** Mutações da sala (check-in, mesa, apresentação, resultado) por id: quem não é administrativo não age sobre ficha que saiu da vista da sala. */
+export async function assertCaptureInRoomView(db: Awaited<ReturnType<typeof requireDb>>, role: string, capture: { checkedInAt: Date | null; scheduledAt?: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }) {
+  if (canOpenArchivedSheet(role)) return;
+  assertSheetVisibleTo(role, capture, await loadSettings(db));
+}
+
 /**
  * Corte da vista da sala para consultas em lote (lista e exportação): fichas visitadas antes deste instante só aparecem
  * para a sala se tiveram VENDEU. Mesma regra de `roomVisibility`, em SQL.

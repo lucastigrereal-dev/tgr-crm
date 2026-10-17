@@ -223,4 +223,15 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
       await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, soldId));
     }
   });
+
+  it("mutações da sala por id recusam ficha arquivada para seller e service; admin segue", async () => {
+    const [before] = await db.select({ checkedInAt: captureRecords.checkedInAt, presentationStatus: captureRecords.presentationStatus }).from(captureRecords).where(eq(captureRecords.id, oldId));
+    await expect(caller("service").captures.checkIn({ id: oldId })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("seller").captures.updateStatus({ id: oldId, presentationStatus: "checked_in" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("seller").captures.assignRoom({ id: oldId, salesTable: "M-01" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(caller("service").captures.markNoTour({ id: oldId, reason: "Teste sintético" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const [after] = await db.select({ checkedInAt: captureRecords.checkedInAt, presentationStatus: captureRecords.presentationStatus }).from(captureRecords).where(eq(captureRecords.id, oldId));
+    expect(after).toEqual(before);
+    expect((await caller("seller").captureSheet.byCode({ code: oldCode }).catch(error => error)).code).toBe("FORBIDDEN");
+  });
 });

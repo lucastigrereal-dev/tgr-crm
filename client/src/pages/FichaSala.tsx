@@ -46,7 +46,7 @@ function FichaImpressa({ code }: { code: string }) {
   useEffect(() => { if (saved) setExtras({ secondVehicleModel: saved.secondVehicleModel ?? "", secondVehicleYear: saved.secondVehicleYear ? String(saved.secondVehicleYear) : "", guest1Name: saved.guest1Name ?? "", guest2Name: saved.guest2Name ?? "", pepOfferedBy: saved.pepOfferedBy ?? "", captureKind: saved.captureKind ?? "" }); }, [savedKey]);
   const refresh = () => utils.captureSheet.byCode.invalidate({ code });
   const fail = (error: { message: string }) => toast.error(error.message);
-  const recordPrint = trpc.captureSheet.recordPrint.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
+  const recordPrint = trpc.captureSheet.recordPrint.useMutation({ onError: fail });
   const setMember = trpc.captureSheet.team.set.useMutation({ onSuccess: () => { setPerson(""); toast.success("Equipe atualizada."); void refresh(); }, onError: fail });
   const clearMember = trpc.captureSheet.team.clear.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
   const updateExtras = trpc.captureSheet.updateExtras.useMutation({ onSuccess: () => { toast.success("Ficha atualizada."); void refresh(); }, onError: fail });
@@ -54,7 +54,8 @@ function FichaImpressa({ code }: { code: string }) {
   if (!sheet.data) return <EmptyState title="Ficha não encontrada" body={sheet.error?.message ?? "Nenhuma ficha com este código."} />;
   const data = sheet.data;
   const { capture, customer, team, derived } = data;
-  const print = async () => { await recordPrint.mutateAsync({ code }); window.print(); };
+  // A folha impressa promete o prazo gravado nesta impressão: recarrega a ficha (e o aviso) e deixa a tela refletir antes de abrir a impressão.
+  const print = async () => { await recordPrint.mutateAsync({ code }); await refresh(); await new Promise(resolve => requestAnimationFrame(() => resolve(null))); window.print(); };
   return <div className="space-y-6">
     <style>{printCss}</style>
     <div className="flex flex-wrap items-center justify-between gap-3">
