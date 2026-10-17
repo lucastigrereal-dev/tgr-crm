@@ -147,11 +147,12 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
 
     // WhatsApp preferido não espelha no cadastro e precisa sair na ficha; o telefone/e-mail igual ao do cadastro não repete.
     await db.insert(customerContacts).values([
+      { customerId: customerId2, kind: "whatsapp", value: "(11) 90000-0000", isPreferred: false },
       { customerId: customerId2, kind: "whatsapp", value: "(11) 98888-7777", isPreferred: true },
       { customerId: customerId2, kind: "phone", value: "11 97777-0000", isPreferred: true },
     ]);
     const withContacts = await caller("service").captureSheet.byCode({ code: nqCode });
-    expect(withContacts.contacts.map(contact => contact.value)).toEqual(["(11) 98888-7777"]);
+    expect(withContacts.contacts.map(contact => contact.value)).toEqual(["(11) 98888-7777", "(11) 90000-0000"]);
 
     await expect(caller("seller").captureSheet.settings.set({ key: "nq_min_income", value: "5000" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(caller().captureSheet.settings.set({ key: "nq_min_income", value: "abc" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
