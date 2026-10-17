@@ -145,8 +145,31 @@ function FichaImpressa({ code }: { code: string }) {
         <Button variant="outline" disabled={!capture.pepOffered} onClick={() => updateExtras.mutate({ captureId: data.captureId, pepResult: "declined" })}>PEP recusado</Button>
       </div>
     </CardContent></Card> : null}
-    {isAdmin ? <><TrocarCodigo captureId={data.captureId} onDone={newCode => { window.location.href = `/ficha?codigo=${encodeURIComponent(newCode)}`; }} /><PapeisAdmin /><LimitesAdmin /></> : null}
+    {canEdit && data.ntOpen || data.nt ? <NaoTourCard captureId={data.captureId} code={code} nt={data.nt} /> : null}
+    {isAdmin ? <><TrocarCodigo captureId={data.captureId} onDone={newCode => { window.location.href = `/ficha?codigo=${encodeURIComponent(newCode)}`; }} /><PapeisAdmin /><MotivosAdmin /><LimitesAdmin /></> : null}
   </div>;
+}
+
+const NT_KINDS = [{ value: "perfil", label: "Perfil" }, { value: "tempo", label: "Tempo" }, { value: "consultor", label: "Consultor" }] as const;
+
+/** Não tour de perfil, tempo ou consultor com motivo da lista; o de mesa é o CAIU EM MESA do closer. Depois de gravado não muda. */
+function NaoTourCard({ captureId, code, nt }: { captureId: number; code: string; nt: { kind: string; motive: string | null; complement: string | null; captorName: string | null } | null }) {
+  const utils = trpc.useUtils();
+  const [kind, setKind] = useState<"perfil" | "tempo" | "consultor">("perfil");
+  const [motiveId, setMotiveId] = useState("");
+  const [complement, setComplement] = useState("");
+  const motives = trpc.captureSheet.motives.list.useQuery({ kind: `nt_${kind}` }, { enabled: !nt });
+  const chosen = motives.data?.find(motive => String(motive.id) === motiveId);
+  const record = trpc.captureSheet.recordNt.useMutation({ onSuccess: () => { toast.success("Não tour registrado."); void utils.captureSheet.byCode.invalidate({ code }); }, onError: error => toast.error(error.message) });
+  return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5" data-testid="nt-card">
+    <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Não tour (NT)</p>
+    {nt ? <p className="text-sm" data-testid="nt-recorded"><b>NT de {nt.kind}</b>: {nt.motive ?? "motivo removido"}{nt.complement ? ` · ${nt.complement}` : ""}{nt.captorName ? ` · captador ${nt.captorName}` : ""}. Já registrado, não muda.</p> : <div className="flex flex-wrap items-end gap-3">
+      <div className="grid gap-1"><Label>Tipo</Label><Select value={kind} onValueChange={value => { setKind(value as typeof kind); setMotiveId(""); }}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent>{NT_KINDS.map(item => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></div>
+      <div className="grid gap-1"><Label>Motivo</Label><Select value={motiveId || undefined} onValueChange={setMotiveId}><SelectTrigger className="w-72"><SelectValue placeholder="Escolha o motivo" /></SelectTrigger><SelectContent>{(motives.data ?? []).map(motive => <SelectItem key={motive.id} value={String(motive.id)}>{motive.label}</SelectItem>)}</SelectContent></Select></div>
+      <div className="grid gap-1"><Label htmlFor="nt-complement">Complemento{chosen?.requiresComplement ? " (obrigatório)" : ""}</Label><Input id="nt-complement" className="w-64" value={complement} onChange={event => setComplement(event.target.value)} /></div>
+      <Button disabled={record.isPending || !chosen || (chosen.requiresComplement && complement.trim().length < 3)} onClick={() => { if (window.confirm("Registrar o não tour? Depois de gravado, o motivo não muda.")) record.mutate({ captureId, kind, motiveId: Number(motiveId), complement: complement.trim() || undefined }); }}>Registrar NT</Button>
+    </div>}
+  </CardContent></Card>;
 }
 
 function TrocarCodigo({ captureId, onDone }: { captureId: number; onDone: (code: string) => void }) {
@@ -172,6 +195,26 @@ function PapeisAdmin() {
       <div className="grid gap-1"><Label htmlFor="role-code">Código (a-z, 0-9, _)</Label><Input id="role-code" className="w-44" value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} /></div>
       <div className="grid gap-1"><Label htmlFor="role-label">Nome do papel</Label><Input id="role-label" className="w-56" value={form.label} onChange={event => setForm({ ...form, label: event.target.value })} /></div>
       <Button disabled={upsert.isPending || form.code.trim().length < 2 || form.label.trim().length < 2} onClick={() => upsert.mutate({ code: form.code, label: form.label, kind: form.kind, sortOrder: 500, active: true })}>Criar papel</Button>
+    </div>
+  </CardContent></Card>;
+}
+
+const MOTIVE_KIND_LABELS = { nt_perfil: "NT perfil", nt_tempo: "NT tempo", nt_consultor: "NT consultor", nt_mesa: "Caiu em mesa", qualificacao: "Qualificação" } as const;
+
+function MotivosAdmin() {
+  const utils = trpc.useUtils();
+  const motives = trpc.captureSheet.motives.list.useQuery({ includeInactive: true });
+  const [form, setForm] = useState({ kind: "nt_perfil" as keyof typeof MOTIVE_KIND_LABELS, code: "", label: "", requiresComplement: false });
+  const upsert = trpc.captureSheet.motives.upsert.useMutation({ onSuccess: () => { toast.success("Motivos atualizados."); setForm({ ...form, code: "", label: "" }); void utils.captureSheet.motives.list.invalidate(); }, onError: error => toast.error(error.message) });
+  return <Card className="border-[#e8e1d4]"><CardContent className="space-y-3 p-5">
+    <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Motivos padronizados (administração, lista provisória)</p>
+    <ul className="space-y-1 text-sm">{(motives.data ?? []).map(motive => <li key={motive.id} className="flex items-center justify-between gap-3"><span className={motive.active ? "" : "text-muted-foreground line-through"}>{MOTIVE_KIND_LABELS[motive.kind]} · {motive.label}{motive.requiresComplement ? " (pede complemento)" : ""}</span><Button size="sm" variant="outline" onClick={() => upsert.mutate({ id: motive.id, kind: motive.kind, code: motive.code, label: motive.label, requiresComplement: motive.requiresComplement, sortOrder: motive.sortOrder, active: !motive.active })}>{motive.active ? "Desativar" : "Reativar"}</Button></li>)}</ul>
+    <div className="flex flex-wrap items-end gap-3 border-t border-[#ece6da] pt-3">
+      <div className="grid gap-1"><Label>Tipo</Label><Select value={form.kind} onValueChange={value => setForm({ ...form, kind: value as typeof form.kind })}><SelectTrigger className="w-44"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(MOTIVE_KIND_LABELS).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></div>
+      <div className="grid gap-1"><Label htmlFor="motive-code">Código (a-z, 0-9, _)</Label><Input id="motive-code" className="w-40" value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} /></div>
+      <div className="grid gap-1"><Label htmlFor="motive-label">Texto do motivo</Label><Input id="motive-label" className="w-64" value={form.label} onChange={event => setForm({ ...form, label: event.target.value })} /></div>
+      <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={form.requiresComplement} onChange={event => setForm({ ...form, requiresComplement: event.target.checked })} />Pede complemento</label>
+      <Button disabled={upsert.isPending || form.code.trim().length < 2 || form.label.trim().length < 3} onClick={() => upsert.mutate({ kind: form.kind, code: form.code, label: form.label, requiresComplement: form.requiresComplement, sortOrder: 500, active: true })}>Criar motivo</Button>
     </div>
   </CardContent></Card>;
 }

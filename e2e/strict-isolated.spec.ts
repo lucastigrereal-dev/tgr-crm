@@ -142,8 +142,10 @@ test.describe("homologação isolada estrita", () => {
       .getByTestId("room-card")
       .filter({ hasText: fx.roomNoTourCustomerName });
     await noTourCard.getByRole("button", { name: "Registrar sem-tour" }).click();
+    await noTourCard.getByRole("combobox").nth(1).click();
+    await page.getByRole("option", { name: "Idade fora do perfil" }).click();
     await noTourCard
-      .getByLabel("Motivo do sem-tour *")
+      .getByLabel("Complemento")
       .fill("Casal desistiu da apresentação no teste isolado.");
     await noTourCard.getByRole("button", { name: "Confirmar sem-tour" }).click();
     await expect(noTourCard).toHaveCount(0);
@@ -158,9 +160,10 @@ test.describe("homologação isolada estrita", () => {
         presentationStartedAt: Date | null;
         presentationEndedAt: Date | null;
         noTourReason: string | null;
+        ntKind: string | null;
       }>
     >(
-      "SELECT c.fullName, cr.presentationStatus, cr.salesTable, cr.linerId, cr.closerId, cr.presentationStartedAt, cr.presentationEndedAt, cr.noTourReason FROM capture_records cr JOIN customers c ON c.id = cr.customerId WHERE c.documentNumber IN (?, ?) ORDER BY c.documentNumber",
+      "SELECT c.fullName, cr.presentationStatus, cr.salesTable, cr.linerId, cr.closerId, cr.presentationStartedAt, cr.presentationEndedAt, cr.noTourReason, cr.ntKind FROM capture_records cr JOIN customers c ON c.id = cr.customerId WHERE c.documentNumber IN (?, ?) ORDER BY c.documentNumber",
       [fx.documents.roomTour, fx.documents.roomNoTour],
     );
     const tour = records.find(record => record.fullName === fx.roomTourCustomerName);
@@ -177,7 +180,8 @@ test.describe("homologação isolada estrita", () => {
     expect(tour?.presentationEndedAt).toBeTruthy();
     expect(noTour).toMatchObject({
       presentationStatus: "no_tour",
-      noTourReason: "Casal desistiu da apresentação no teste isolado.",
+      noTourReason: "Idade fora do perfil: Casal desistiu da apresentação no teste isolado.",
+      ntKind: "perfil",
     });
   });
 

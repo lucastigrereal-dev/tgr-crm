@@ -2,12 +2,13 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
 import { z } from "zod";
-import { captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
+import { captureMotives, captureRecords, captureSheetPrints, captureSheetSettings, captureTeamMembers, captureTeamRoles, customerContacts, customers, users, vouchers } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
 import { getDb, recordAudit } from "../db";
+import { publishSalesRoomEvent } from "../realtime";
 import { router } from "../_core/trpc";
 import { adminProcedure, assertCapability, internalProcedure, receptionProcedure, salesProcedure } from "./access";
-import { txAudit } from "../txOutbox";
+import { txAudit, txEvent } from "../txOutbox";
 import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustodyOfSheet, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
 import type { CaptureExportSource } from "../../shared/captureSheetExport";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
@@ -26,7 +27,30 @@ async function requireDb() {
   return db;
 }
 
+type SheetDb = Awaited<ReturnType<typeof requireDb>>;
+
+/** Motivo de NT conferido: ativo, do tipo certo e com complemento quando o motivo pede. */
+export async function resolveNtMotive(db: SheetDb, kind: "perfil" | "tempo" | "consultor", motiveId: number, complement: string | null) {
+  const [motive] = await db.select().from(captureMotives).where(eq(captureMotives.id, motiveId)).limit(1);
+  if (!motive || !motive.active || motive.kind !== `nt_${kind}`) throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para este tipo de não tour." });
+  if (motive.requiresComplement && (complement?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
+  return { motive, reason: complement ? `${motive.label}: ${complement}` : motive.label };
+}
+
+/** Nome do captador no momento do NT: o promotor da ficha ou, sem ele, o promotor de marketing da equipe por papel (a mesma regra da ficha impressa). */
+export async function captorNameOf(db: SheetDb, captureId: number, promoterId: number | null) {
+  if (promoterId) {
+    const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, promoterId)).limit(1);
+    if (user?.name) return user.name;
+  }
+  const [member] = await db.select({ personName: captureTeamMembers.personName, userName: users.name }).from(captureTeamMembers)
+    .innerJoin(captureTeamRoles, eq(captureTeamRoles.id, captureTeamMembers.roleId)).leftJoin(users, eq(users.id, captureTeamMembers.userId))
+    .where(and(eq(captureTeamMembers.captureId, captureId), eq(captureTeamRoles.code, "promotor_marketing"))).limit(1);
+  return member?.personName ?? member?.userName ?? null;
+}
+
 const PANEL_LIMIT = 2000;
+const MOTIVE_KINDS = ["nt_perfil", "nt_tempo", "nt_consultor", "nt_mesa", "qualificacao"] as const;
 const SETTING_KEYS = ["nq_min_man_age", "nq_min_relationship_months", "nq_min_vehicle_year", "nq_min_income", "nq_max_items_accepted", "min_presentation_minutes", "room_visibility_days", "paper_destroy_deadline_days", "brand_name", ...PRIVACY_TEXT_KEYS] as const;
 /** Chaves de texto livre (marca e aviso de privacidade): sem validação numérica. */
 const TEXT_SETTING_KEYS: ReadonlySet<string> = new Set(["brand_name", ...PRIVACY_TEXT_KEYS]);
@@ -170,6 +194,8 @@ export const captureSheetRouter = router({
     // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
     const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
     const nq = computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
+    // Rótulo do momento do registro (o snapshot em noTourReason), não o texto atual do catálogo: renomear o motivo depois não reescreve o histórico.
+    const ntMotiveLabel = capture.ntKind ? (capture.ntComplement && capture.noTourReason?.endsWith(`: ${capture.ntComplement}`) ? capture.noTourReason.slice(0, -(capture.ntComplement.length + 2)) : capture.noTourReason) ?? null : null;
     return {
       captureId: capture.id,
       coupleCode: code,
@@ -177,6 +203,8 @@ export const captureSheetRouter = router({
       contacts,
       gifts: gifts.map(gift => gift.description),
       nq,
+      ntOpen: !capture.ntKind && !capture.commercialOutcome && !(["no_tour", "presented", "closed"] as string[]).includes(capture.presentationStatus),
+      nt: capture.ntKind ? { kind: capture.ntKind, motive: ntMotiveLabel, complement: capture.ntComplement, captorName: capture.ntCaptorName, recordedAt: capture.ntRecordedAt } : null,
       sheetSettings: { minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName },
       // LGPD: estado do papel, vista da sala e o aviso v1 (provisório) que sai na faixa destacável.
       paper: { ...paper, destroyDeadlineDays: lastPrint?.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
@@ -399,6 +427,94 @@ export const captureSheetRouter = router({
       await recordAudit(ctx.user.id, "capture_export", `${input.from}_${input.to}`, "sheet_exported", `Fichas exportadas em ${input.format.toUpperCase()}: ${page.length} linha(s)${truncated ? " (corte em " + limit + ")" : ""}, período ${input.from} a ${input.to}${input.salesRoom?.trim() ? `, sala "${input.salesRoom.trim()}"` : ""}, ${input.withCpf ? "COM CPF" : "sem CPF"}.`);
       return { rows: page, truncated, limit, timeZone: tz };
     }),
+  }),
+
+  /**
+   * Motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). A lista é provisória e a administração
+   * ajusta; um motivo usado nunca é apagado, só desativado, para o histórico continuar legível.
+   */
+  motives: router({
+    list: receptionProcedure.input(z.object({ kind: z.enum(MOTIVE_KINDS).optional(), includeInactive: z.boolean().default(false) }).optional()).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const rows = await db.select().from(captureMotives).where(input?.kind ? eq(captureMotives.kind, input.kind) : undefined).orderBy(asc(captureMotives.kind), asc(captureMotives.sortOrder), asc(captureMotives.id)).limit(500);
+      return input?.includeInactive && ctx.user.role === "admin" ? rows : rows.filter(row => row.active);
+    }),
+    upsert: adminProcedure.input(z.object({
+      id: z.number().int().positive().optional(),
+      kind: z.enum(MOTIVE_KINDS),
+      code: z.string().trim().toLowerCase().regex(/^[a-z0-9_]{2,60}$/, "Use só letras minúsculas, números e _."),
+      label: z.string().trim().min(3).max(160),
+      // Na edição o que não vier fica como está; só a criação usa os padrões.
+      requiresComplement: z.boolean().optional(),
+      sortOrder: z.number().int().min(0).max(9999).optional(),
+      active: z.boolean().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      try {
+        await db.transaction(async tx => {
+          if (input.id) {
+            const [current] = await tx.select({ kind: captureMotives.kind, code: captureMotives.code }).from(captureMotives).where(eq(captureMotives.id, input.id)).limit(1).for("update");
+            if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Motivo não encontrado." });
+            // Tipo e código são a identidade do motivo no histórico: não mudam depois de criado.
+            if (current.kind !== input.kind || current.code !== input.code) throw new TRPCError({ code: "BAD_REQUEST", message: "Tipo e código do motivo não mudam; crie outro motivo e desative este." });
+            await tx.update(captureMotives).set({ label: input.label, ...(input.requiresComplement !== undefined ? { requiresComplement: input.requiresComplement } : {}), ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}), ...(input.active !== undefined ? { active: input.active } : {}), provisional: false }).where(eq(captureMotives.id, input.id));
+          } else {
+            await tx.insert(captureMotives).values({ kind: input.kind, code: input.code, label: input.label, requiresComplement: input.requiresComplement ?? false, sortOrder: input.sortOrder ?? 0, active: input.active ?? true, provisional: false });
+          }
+          await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture_motive", entityId: input.id ?? `${input.kind}:${input.code}`, action: input.id ? "updated" : "created", summary: `Motivo "${input.label}" (${input.kind}) ${input.id ? "atualizado" : "criado"}.` });
+        });
+      } catch (error) {
+        if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: `Já existe o código "${input.code}" neste tipo.` });
+        throw error;
+      }
+      return { ok: true };
+    }),
+  }),
+
+  /**
+   * Não tour (NT) de perfil, tempo ou consultor, com motivo da lista e o nome do captador gravado na hora.
+   * Imutável depois de gravado (repetir o mesmo é idempotente); o NT de mesa é o CAIU EM MESA (captures.recordCommercialOutcome).
+   */
+  recordNt: salesProcedure.input(z.object({
+    captureId: z.number().int().positive(),
+    kind: z.enum(["perfil", "tempo", "consultor"]),
+    motiveId: z.number().int().positive(),
+    complement: z.string().trim().max(1000).optional().nullable(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await requireDb();
+    const complement = input.complement?.trim() || null;
+    return db.transaction(async tx => {
+      // As leituras seguintes usam a mesma conexão da transação (sem pedir outra ao pool).
+      const txDb = tx as unknown as SheetDb;
+      const [capture] = await tx.select({
+        id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome,
+        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom,
+      }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
+      if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
+      await assertCaptureInRoomView(txDb, ctx.user.role, capture);
+      if (capture.ntKind) {
+        if (capture.ntKind === input.kind && capture.ntMotiveId === input.motiveId && (capture.ntComplement ?? null) === complement) return { ok: true as const, alreadyRecorded: true as const };
+        throw new TRPCError({ code: "CONFLICT", message: "NT_IMMUTABLE: o não tour desta ficha já foi registrado e não pode ser alterado." });
+      }
+      if (capture.commercialOutcome) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já tem resultado comercial; não dá para marcar não tour." });
+      if (capture.presentationStatus === "no_tour") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Esta ficha já está como não tour; o motivo gravado antes não é reescrito." });
+      if (capture.presentationStatus === "presented" || capture.presentationStatus === "closed") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O casal já entrou na apresentação; o caminho é o CAIU EM MESA." });
+      const { motive, reason } = await resolveNtMotive(txDb, input.kind, input.motiveId, complement);
+      const now = new Date();
+      const captorName = await captorNameOf(txDb, capture.id, capture.promoterId);
+      await tx.update(captureRecords).set({
+        ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: captorName, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id, presentationEndedAt: now,
+        presentationStatus: "no_tour", noTourReason: reason,
+      }).where(eq(captureRecords.id, capture.id));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
+      // O evento entra na mesma transação do status: o fato e a saída para quem escuta capture.no_tour saem juntos.
+      await txEvent(tx, { eventName: "capture.no_tour", aggregateType: "capture", aggregateId: capture.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason, ntKind: input.kind } });
+      return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom };
+    }).then(result => {
+      // O painel da sala atualiza em tempo real (mesmo caminho do markNoTour).
+      if (!result.alreadyRecorded) publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.captureId, salesRoom: result.salesRoom });
+      return { ok: true as const, alreadyRecorded: result.alreadyRecorded };
+    });
   }),
 
   roles: router({

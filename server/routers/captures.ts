@@ -1,11 +1,11 @@
 import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
+import { captureMotives, captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
-import { assertCaptureInRoomView, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
+import { assertCaptureInRoomView, captorNameOf, resolveNtMotive, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
 import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
 import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfile } from "../captureSegmentation";
@@ -285,6 +285,8 @@ export const capturesRouter = router({
   }),
 
   updateStatus: salesProcedure.input(z.object({ id: z.number().int().positive(), presentationStatus: z.enum(["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]), qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).optional(), qualificationReason: optionalText, noTourReason: optionalText })).mutation(async ({ ctx, input }) => {
+    // Sem-tour passa pelo motivo padronizado (captures.markNoTour ou captureSheet.recordNt); aqui ele criaria um NT sem classificação.
+    if (input.presentationStatus === "no_tour") throw new TRPCError({ code: "BAD_REQUEST", message: "Para marcar sem-tour use o botão de sem-tour da sala ou o cartão de NT da ficha, que pedem o motivo da lista." });
     const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     if (!canTransitionPresentationStatus(capture.presentationStatus, input.presentationStatus)) throw new TRPCError({ code: "BAD_REQUEST", message: `Transição inválida: ${capture.presentationStatus} → ${input.presentationStatus}.` });
     const updateResult = await db.update(captureRecords).set({ presentationStatus: input.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), noTourReason: nullIfBlank(input.noTourReason), checkedInAt: input.presentationStatus === "checked_in" ? new Date() : undefined }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
@@ -374,16 +376,34 @@ export const capturesRouter = router({
     id: z.number().int().positive(),
     outcome: z.enum(["vendeu", "caiu_em_mesa"]),
     reason: z.string().trim().max(5000).optional().nullable(),
+    motiveId: z.number().int().positive().optional().nullable(),
   }).superRefine((value, issueContext) => {
-    if (value.outcome === "caiu_em_mesa" && (value.reason?.trim().length ?? 0) < 3) {
+    if (value.outcome === "vendeu" && value.motiveId) issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["motiveId"], message: "VENDEU não tem motivo da lista." });
+    if (value.outcome === "caiu_em_mesa" && (value.reason?.trim().length ?? 0) < 3 && !value.motiveId) {
       issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres) para CAIU EM MESA." });
     }
   })).mutation(async ({ ctx, input }) => {
     const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     // O closer designado grava o próprio resultado; admin (gerente) pode registrar por qualquer ficha.
     if (ctx.user.role !== "admin" && capture.closerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o closer designado da ficha (ou a administração) registra o resultado comercial." });
-    const reason = nullIfBlank(input.reason);
-    const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || (existing.commercialOutcomeReason ?? null) === reason);
+    let reason = nullIfBlank(input.reason);
+    let motiveId: number | null = null;
+    let complement: string | null = null;
+    // Já gravado com este motivo: repetir é idempotente mesmo que o motivo tenha sido desativado ou renomeado depois.
+    if (capture.commercialOutcome && input.motiveId) {
+      const sameComplement = (capture.commercialOutcomeComplement ?? null) === reason;
+      if (capture.commercialOutcome === input.outcome && capture.commercialOutcomeMotiveId === input.motiveId && sameComplement) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
+      throw new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
+    }
+    if (input.outcome === "caiu_em_mesa" && input.motiveId) {
+      const [motive] = await db.select().from(captureMotives).where(eq(captureMotives.id, input.motiveId)).limit(1);
+      if (!motive || !motive.active || motive.kind !== "nt_mesa") throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para CAIU EM MESA." });
+      if (motive.requiresComplement && (reason?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
+      motiveId = motive.id;
+      complement = reason;
+      reason = reason ? `${motive.label}: ${reason}` : motive.label;
+    }
+    const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null; commercialOutcomeMotiveId: number | null; commercialOutcomeComplement: string | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || (motiveId !== null ? (existing.commercialOutcomeMotiveId ?? null) === motiveId && (existing.commercialOutcomeComplement ?? null) === complement : (existing.commercialOutcomeReason ?? null) === reason && (existing.commercialOutcomeMotiveId ?? null) === null));
     const rejectChange = () => new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
     if (capture.commercialOutcome) {
       if (sameAs(capture)) return { success: true as const, alreadyRecorded: true as const, outcome: capture.commercialOutcome };
@@ -393,7 +413,7 @@ export const capturesRouter = router({
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `COMMERCIAL_OUTCOME_REQUIRES_PRESENTATION: o resultado comercial só pode ser registrado depois que a apresentação começou (atual: ${capture.presentationStatus}).` });
     }
     const recordedAt = new Date();
-    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id })
+    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id, commercialOutcomeMotiveId: motiveId, commercialOutcomeComplement: complement })
       .where(and(eq(captureRecords.id, input.id), isNull(captureRecords.commercialOutcome)));
     if (affectedRows(updateResult) === 0) {
       const current = (await db.select().from(captureRecords).where(eq(captureRecords.id, input.id)).limit(1))[0];
@@ -406,14 +426,22 @@ export const capturesRouter = router({
     return { success: true as const, alreadyRecorded: false as const, outcome: input.outcome, recordedAt };
   }),
 
-  markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().min(3).max(5000), receptionNotes: optionalText })).mutation(async ({ ctx, input }) => {
+  // Com `ntKind` + `motiveId` o sem-tour usa o motivo padronizado da lista (captador gravado); sem eles segue o texto livre de antes.
+  markNoTour: receptionProcedure.input(z.object({ id: z.number().int().positive(), reason: z.string().trim().max(5000).optional(), ntKind: z.enum(["perfil", "tempo", "consultor"]).optional(), motiveId: z.number().int().positive().optional(), receptionNotes: optionalText }).superRefine((value, issueContext) => {
+    if (!value.motiveId !== !value.ntKind) issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["motiveId"], message: "Tipo e motivo do não tour vêm juntos." });
+    if (!value.motiveId && (value.reason?.length ?? 0) < 3) issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres)." });
+  })).mutation(async ({ ctx, input }) => {
     const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     assertAction(capture, "mark_no_tour");
+    const complement = nullIfBlank(input.reason);
+    const nt = input.motiveId && input.ntKind ? await resolveNtMotive(db, input.ntKind, input.motiveId, complement) : null;
+    const finalReason = nt?.reason ?? input.reason!;
+    const ntColumns = nt && input.ntKind ? { ntKind: input.ntKind, ntMotiveId: nt.motive.id, ntComplement: complement, ntCaptorName: await captorNameOf(db, capture.id, capture.promoterId), ntRecordedAt: new Date(), ntRecordedByUserId: ctx.user.id } : {};
     const endedAt = new Date();
-    const updateResult = await db.update(captureRecords).set({ presentationStatus: "no_tour", noTourReason: input.reason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
+    const updateResult = await db.update(captureRecords).set({ ...ntColumns, presentationStatus: "no_tour", noTourReason: finalReason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), eq(captureRecords.presentationStatus, capture.presentationStatus)));
     assertCaptureUpdateSucceeded(updateResult);
     await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
-    await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: input.reason } });
+    await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: finalReason } });
     publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.id, salesRoom: capture.salesRoom });
     return { success: true, endedAt };
   }),
