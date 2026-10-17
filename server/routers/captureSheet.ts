@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, captureSheetPrints, captureTeamMembers, captureTeamRoles, customers, users } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
@@ -81,8 +81,10 @@ export const captureSheetRouter = router({
       const tz = projectTimezone();
       const day = localDateInTimezone(capture.checkedInAt, tz);
       const from = new Date(capture.checkedInAt.getTime() - 36 * 3600_000), to = new Date(capture.checkedInAt.getTime() + 36 * 3600_000);
-      const near = await db.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom }).from(captureRecords).where(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, from), lt(captureRecords.checkedInAt, to))).limit(5000);
-      order = arrivalOrder(capture, near.filter(row => row.checkedInAt && (row.salesRoom ?? null) === (capture.salesRoom ?? null) && localDateInTimezone(row.checkedInAt, tz) === day));
+      // Mesma sala filtrada no SQL e sem corte de linhas: a janela de 72 h de uma sala cabe folgada, e a ordem nunca sai truncada.
+      const sameRoom = capture.salesRoom == null ? isNull(captureRecords.salesRoom) : eq(captureRecords.salesRoom, capture.salesRoom);
+      const near = await db.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, salesRoom: captureRecords.salesRoom }).from(captureRecords).where(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, from), lt(captureRecords.checkedInAt, to), sameRoom));
+      order = arrivalOrder(capture, near.filter(row => row.checkedInAt && localDateInTimezone(row.checkedInAt, tz) === day));
     }
     const [{ prints }] = await db.select({ prints: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
     return {
