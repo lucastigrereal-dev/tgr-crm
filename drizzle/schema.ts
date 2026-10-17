@@ -293,6 +293,14 @@ export const captureRecords = mysqlTable(
     commercialOutcomeReason: text("commercialOutcomeReason"),
     commercialOutcomeAt: timestamp("commercialOutcomeAt"),
     commercialOutcomeByUserId: int("commercialOutcomeByUserId").references(() => users.id),
+    commercialOutcomeMotiveId: int("commercialOutcomeMotiveId"),
+    // Não tour (NT) de perfil, tempo ou consultor, com motivo padronizado; o de mesa é o CAIU EM MESA acima. Imutável depois de gravado.
+    ntKind: mysqlEnum("ntKind", ["perfil", "tempo", "consultor"]),
+    ntMotiveId: int("ntMotiveId"),
+    ntComplement: text("ntComplement"),
+    ntCaptorName: varchar("ntCaptorName", { length: 180 }),
+    ntRecordedAt: timestamp("ntRecordedAt"),
+    ntRecordedByUserId: int("ntRecordedByUserId"),
     partnerName: varchar("partnerName", { length: 255 }),
     partnerAge: int("partnerAge"),
     partnerProfession: varchar("partnerProfession", { length: 120 }),
@@ -392,6 +400,19 @@ export const captureTeamMembers = mysqlTable(
 );
 
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
+/** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
+export const captureMotives = mysqlTable("capture_motives", {
+  id: int("id").autoincrement().primaryKey(),
+  kind: mysqlEnum("kind", ["nt_perfil", "nt_tempo", "nt_consultor", "nt_mesa", "qualificacao"]).notNull(),
+  code: varchar("code", { length: 60 }).notNull(),
+  label: varchar("label", { length: 160 }).notNull(),
+  requiresComplement: boolean("requiresComplement").default(false).notNull(),
+  sortOrder: int("sortOrder").default(0).notNull(),
+  active: boolean("active").default(true).notNull(),
+  provisional: boolean("provisional").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("capture_motives_kind_code_unique").on(table.kind, table.code)]);
+
 export const captureSheetSettings = mysqlTable("capture_sheet_settings", {
   key: varchar("key", { length: 60 }).primaryKey(),
   value: varchar("value", { length: 255 }).notNull(),

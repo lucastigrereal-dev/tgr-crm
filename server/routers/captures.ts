@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
+import { captureMotives, captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
@@ -374,15 +374,24 @@ export const capturesRouter = router({
     id: z.number().int().positive(),
     outcome: z.enum(["vendeu", "caiu_em_mesa"]),
     reason: z.string().trim().max(5000).optional().nullable(),
+    motiveId: z.number().int().positive().optional().nullable(),
   }).superRefine((value, issueContext) => {
-    if (value.outcome === "caiu_em_mesa" && (value.reason?.trim().length ?? 0) < 3) {
+    if (value.outcome === "caiu_em_mesa" && (value.reason?.trim().length ?? 0) < 3 && !value.motiveId) {
       issueContext.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "Informe o motivo (mínimo 3 caracteres) para CAIU EM MESA." });
     }
   })).mutation(async ({ ctx, input }) => {
     const { db, capture } = await findCaptureOrThrow(input.id, ctx.user.role);
     // O closer designado grava o próprio resultado; admin (gerente) pode registrar por qualquer ficha.
     if (ctx.user.role !== "admin" && capture.closerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o closer designado da ficha (ou a administração) registra o resultado comercial." });
-    const reason = nullIfBlank(input.reason);
+    let reason = nullIfBlank(input.reason);
+    let motiveId: number | null = null;
+    if (input.outcome === "caiu_em_mesa" && input.motiveId) {
+      const [motive] = await db.select().from(captureMotives).where(eq(captureMotives.id, input.motiveId)).limit(1);
+      if (!motive || !motive.active || motive.kind !== "nt_mesa") throw new TRPCError({ code: "BAD_REQUEST", message: "Motivo inválido para CAIU EM MESA." });
+      if (motive.requiresComplement && (reason?.length ?? 0) < 3) throw new TRPCError({ code: "BAD_REQUEST", message: "Este motivo pede um complemento (mínimo 3 caracteres)." });
+      motiveId = motive.id;
+      reason = reason ? `${motive.label}: ${reason}` : motive.label;
+    }
     const sameAs = (existing: { commercialOutcome: string | null; commercialOutcomeReason: string | null }) => existing.commercialOutcome === input.outcome && (input.outcome === "vendeu" || (existing.commercialOutcomeReason ?? null) === reason);
     const rejectChange = () => new TRPCError({ code: "CONFLICT", message: "COMMERCIAL_OUTCOME_IMMUTABLE: o resultado comercial desta ficha já foi registrado e não pode ser alterado." });
     if (capture.commercialOutcome) {
@@ -393,7 +402,7 @@ export const capturesRouter = router({
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `COMMERCIAL_OUTCOME_REQUIRES_PRESENTATION: o resultado comercial só pode ser registrado depois que a apresentação começou (atual: ${capture.presentationStatus}).` });
     }
     const recordedAt = new Date();
-    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id })
+    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id, commercialOutcomeMotiveId: motiveId })
       .where(and(eq(captureRecords.id, input.id), isNull(captureRecords.commercialOutcome)));
     if (affectedRows(updateResult) === 0) {
       const current = (await db.select().from(captureRecords).where(eq(captureRecords.id, input.id)).limit(1))[0];
