@@ -28,18 +28,19 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
     [{ id: userId }] = await db.insert(users).values({ openId: `sheet-${runId}`, name: "Recepção ficha", role: "admin" }).$returningId();
-    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal Ficha ${runId}`, phone: "11999990000", status: "active" }).$returningId();
+    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal Ficha ${runId}`, documentNumber: `CPF-${runId}`, phone: "11999990000", status: "active" }).$returningId();
     const now = new Date();
-    [{ id: captureId }] = await db.insert(captureRecords).values({ customerId, salesRoom: `Sala ${runId}`, checkedInAt: new Date(now.getTime() - 60_000), relationshipYears: 3, relationshipMonths: 2 }).$returningId();
+    [{ id: captureId }] = await db.insert(captureRecords).values({ customerId, salesRoom: `Sala ${runId}`, checkedInAt: new Date(now.getTime() - 60_000), relationshipYears: 3, relationshipMonths: 2, averageIncome: "12345.67" }).$returningId();
     [{ id: otherCaptureId }] = await db.insert(captureRecords).values({ customerId, salesRoom: `Sala ${runId}`, checkedInAt: new Date(now.getTime() - 120_000) }).$returningId();
   });
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
-  it("os papéis de equipe da migração já existem, com motorista e recepção como apoio", async () => {
+  it("os papéis de equipe da migração já existem, com recepção como apoio", async () => {
     const roles = await caller().captureSheet.roles.list();
     const byCode = new Map(roles.map(role => [role.code, role]));
     expect(byCode.get("promotor_telemarketing")).toMatchObject({ kind: "presentation" });
-    expect(byCode.get("motorista")).toMatchObject({ kind: "support" });
+    expect(byCode.get("recepcao_1")).toMatchObject({ kind: "support" });
+    expect(byCode.has("motorista")).toBe(false);
     expect(byCode.get("recepcao_2")).toMatchObject({ kind: "support" });
   });
 
@@ -51,7 +52,7 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     await expect(caller("seller").captureSheet.setCoupleCode({ captureId, coupleCode: `${code}-X` })).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await caller().captureSheet.codeOf({ captureId })).toEqual({ coupleCode: code });
     const sheet = await caller().captureSheet.byCode({ code });
-    expect(sheet).toMatchObject({ captureId, coupleCode: code, customer: { fullName: `Casal Ficha ${runId}` }, derived: { relationshipDays: 3 * 365 + 60 } });
+    expect(sheet).toMatchObject({ captureId, coupleCode: code, customer: { fullName: `Casal Ficha ${runId}`, documentNumber: `CPF-${runId}` }, capture: { averageIncome: "12345.67" }, derived: { relationshipDays: 3 * 365 + 60 } });
     await expect(caller().captureSheet.byCode({ code: "NAO-EXISTE-1" })).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(caller("user").captureSheet.byCode({ code })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -68,22 +69,26 @@ describe.skipIf(!integrationUrl)("ficha impressa e equipe por papel em MySQL rea
     expect(prints.map(row => row.reprint).sort()).toEqual([false, true]);
     expect((await caller().captureSheet.byCode({ code })).printCount).toBe(2);
     const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "capture"), eq(auditLogs.entityId, String(captureId))));
-    expect(audits.map(row => row.action)).toEqual(expect.arrayContaining(["sheet_printed", "sheet_reprinted", "couple_code_set"]));
+    await caller().captureSheet.recordOpen({ code });
+    const audits2 = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "capture"), eq(auditLogs.entityId, String(captureId))));
+    expect(audits2.map(row => row.action)).toEqual(expect.arrayContaining(["sheet_printed", "sheet_reprinted", "couple_code_set", "sheet_opened"]));
+    // CPF e telefone nunca entram no texto da trilha
+    expect(audits2.every(row => !/CPF-|11999990000/.test(row.summary ?? ""))).toBe(true);
   });
 
   it("monta a equipe por papel, com login ou só o nome, e troca sem duplicar", async () => {
     const roles = await caller().captureSheet.roles.list();
-    const driver = roles.find(role => role.code === "motorista")!;
+    const driver = roles.find(role => role.code === "recepcao_1")!;
     const tele = roles.find(role => role.code === "promotor_telemarketing")!;
     await expect(caller().captureSheet.team.set({ captureId, roleId: driver.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    await caller().captureSheet.team.set({ captureId, roleId: driver.id, personName: "Zé Motorista" });
-    await caller().captureSheet.team.set({ captureId, roleId: driver.id, personName: "João Motorista" });
+    await caller().captureSheet.team.set({ captureId, roleId: driver.id, personName: "Zé Recepção" });
+    await caller().captureSheet.team.set({ captureId, roleId: driver.id, personName: "João Recepção" });
     await caller().captureSheet.team.set({ captureId, roleId: tele.id, userId });
     const rows = await db.select().from(captureTeamMembers).where(eq(captureTeamMembers.captureId, captureId));
     expect(rows).toHaveLength(2);
     const members = (await caller().captureSheet.byCode({ code })).team.members;
     expect(members).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: "motorista", name: "João Motorista", kind: "support" }),
+      expect.objectContaining({ code: "recepcao_1", name: "João Recepção", kind: "support" }),
       expect.objectContaining({ code: "promotor_telemarketing", name: "Recepção ficha" }),
     ]));
     await caller().captureSheet.team.clear({ captureId, roleId: driver.id });

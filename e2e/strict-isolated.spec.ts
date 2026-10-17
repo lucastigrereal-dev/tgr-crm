@@ -613,14 +613,14 @@ test.describe("homologação isolada estrita", () => {
     expect(prints.map(row => Number(row.reprint))).toEqual([0, 1]);
 
     await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "Motorista" }).click();
-    await page.getByLabel("Nome da pessoa").fill("Motorista E2E");
+    await page.getByRole("option", { name: "Recepção 1" }).click();
+    await page.getByLabel("Nome da pessoa").fill("Recepção E2E");
     const assigned = waitForMutation(page, "captureSheet.team.set");
     await page.getByRole("button", { name: "Atribuir" }).click();
     await assigned;
-    await expect(page.locator("#ficha-print").getByText("Motorista E2E")).toBeVisible();
+    await expect(page.locator("#ficha-print").getByText("Recepção E2E")).toBeVisible();
     const members = await queryDatabase<Array<{ personName: string }>>("SELECT personName FROM capture_team_members WHERE captureId = ?", [captureId]);
-    expect(members.map(row => row.personName)).toEqual(["Motorista E2E"]);
+    expect(members.map(row => row.personName)).toEqual(["Recepção E2E"]);
 
     // código inexistente não abre ficha nenhuma
     await page.goto("/ficha?codigo=NAO-EXISTE-1");

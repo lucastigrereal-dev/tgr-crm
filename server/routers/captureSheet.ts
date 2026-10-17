@@ -80,9 +80,9 @@ export const captureSheetRouter = router({
     return {
       captureId: capture.id,
       coupleCode: code,
-      customer: { fullName: customer.fullName, phone: customer.phone, city: customer.city, state: customer.state },
+      customer: { fullName: customer.fullName, documentNumber: customer.documentNumber, phone: customer.phone, city: customer.city, state: customer.state },
       capture: {
-        salesRoom: capture.salesRoom, captureLocation: capture.captureLocation, lodgingLocation: capture.lodgingLocation, transportation: capture.transportation, scheduledAt: capture.scheduledAt, checkedInAt: capture.checkedInAt, presentationStatus: capture.presentationStatus, qualificationStatus: capture.qualificationStatus,
+        salesRoom: capture.salesRoom, captureLocation: capture.captureLocation, lodgingLocation: capture.lodgingLocation, transportation: capture.transportation, averageIncome: capture.averageIncome, createdAt: capture.createdAt, checkedInAt: capture.checkedInAt, presentationStatus: capture.presentationStatus, qualificationStatus: capture.qualificationStatus,
         partnerName: capture.partnerName, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, childrenCount: capture.childrenCount,
         vehicleBrand: capture.vehicleBrand, vehicleModel: capture.vehicleModel, vehicleYear: capture.vehicleYear, secondVehicleModel: capture.secondVehicleModel, secondVehicleYear: capture.secondVehicleYear,
         retiredPrimary: capture.retiredPrimary, retiredPartner: capture.retiredPartner, guest1Name: capture.guest1Name, guest2Name: capture.guest2Name,
@@ -92,6 +92,13 @@ export const captureSheetRouter = router({
       derived: { relationshipDays: relationshipDays(capture.relationshipYears, capture.relationshipMonths), arrivalOrder: order },
       printCount: Number(prints),
     };
+  }),
+
+  /** Trilha de abertura: quem abriu a ficha e quando (decisão do Lucas: CPF e renda completos, com trilha). Sem CPF nem telefone no texto. */
+  recordOpen: receptionProcedure.input(z.object({ code: z.string().max(64) })).mutation(async ({ ctx, input }) => {
+    const { capture } = await captureByCode(input.code);
+    await recordAudit(ctx.user.id, "capture", capture.id, "sheet_opened", `Ficha ${capture.id} aberta.`);
+    return { ok: true };
   }),
 
   /** Registra a impressão. A primeira é a original; as seguintes são reimpressões. O QR é sempre o mesmo. */

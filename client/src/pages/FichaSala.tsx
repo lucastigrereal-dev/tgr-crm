@@ -30,9 +30,11 @@ function FichaImpressa({ code }: { code: string }) {
   const saved = sheet.data?.capture;
   const savedKey = saved ? `${sheet.data?.captureId}|${saved.secondVehicleModel}|${saved.secondVehicleYear}|${saved.guest1Name}|${saved.guest2Name}|${saved.pepOfferedBy}` : "";
   // Mostra o que já está gravado nos campos da sala; recarrega quando a ficha muda no servidor.
+  useEffect(() => { void recordOpen.mutateAsync({ code }).catch(() => undefined); }, [code]);
   useEffect(() => { if (saved) setExtras({ secondVehicleModel: saved.secondVehicleModel ?? "", secondVehicleYear: saved.secondVehicleYear ? String(saved.secondVehicleYear) : "", guest1Name: saved.guest1Name ?? "", guest2Name: saved.guest2Name ?? "", pepOfferedBy: saved.pepOfferedBy ?? "" }); }, [savedKey]);
   const refresh = () => utils.captureSheet.byCode.invalidate({ code });
   const fail = (error: { message: string }) => toast.error(error.message);
+  const recordOpen = trpc.captureSheet.recordOpen.useMutation();
   const recordPrint = trpc.captureSheet.recordPrint.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
   const setMember = trpc.captureSheet.team.set.useMutation({ onSuccess: () => { setPerson(""); toast.success("Equipe atualizada."); void refresh(); }, onError: fail });
   const clearMember = trpc.captureSheet.team.clear.useMutation({ onSuccess: () => { void refresh(); }, onError: fail });
@@ -52,10 +54,10 @@ function FichaImpressa({ code }: { code: string }) {
       <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">Ficha de atendimento</p><h2 className="font-serif text-2xl">{customer.fullName}</h2><p className="text-sm">{text(customer.phone)} · {text(customer.city)}{customer.state ? `/${customer.state}` : ""}</p></div>
         <div className="text-center"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#6b756f]">Código do casal</p><p aria-label={`Código do casal ${code}`} className="font-mono text-3xl font-bold tracking-wider">{code}</p><div className="mt-2 flex h-28 w-28 items-center justify-center rounded border border-dashed border-[#c9c2b2] p-1 text-[10px] text-[#6b756f] ml-auto">Cole aqui o QR da recepção</div></div></div>
       <div className="mt-4 grid grid-cols-2 gap-x-6 sm:grid-cols-3">
-        <Field label="Sala" value={text(capture.salesRoom)} /><Field label="Agendada" value={when(capture.scheduledAt)} /><Field label="Check-in" value={when(capture.checkedInAt)} />
+        <Field label="Sala" value={text(capture.salesRoom)} /><Field label="Ficha criada em" value={when(capture.createdAt)} /><Field label="CPF" value={text(customer.documentNumber)} /><Field label="Check-in" value={when(capture.checkedInAt)} />
         <Field label="Ordem de chegada" value={text(derived.arrivalOrder)} /><Field label="Local de captação" value={text(capture.captureLocation)} /><Field label="Locomoção" value={text(capture.transportation)} />
         <Field label="Cônjuge" value={text(capture.partnerName)} /><Field label="Idade do cônjuge" value={text(capture.partnerAge)} /><Field label="Relacionamento" value={`${text(capture.relationshipStatus)}${derived.relationshipDays != null ? ` · ${derived.relationshipDays} dias` : ""}`} />
-        <Field label="Filhos" value={text(capture.childrenCount)} /><Field label="Aposentado (titular)" value={yesNo(capture.retiredPrimary)} /><Field label="Aposentado (cônjuge)" value={yesNo(capture.retiredPartner)} />
+        <Field label="Renda média mensal" value={capture.averageIncome ? Number(capture.averageIncome).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"} /><Field label="Filhos" value={text(capture.childrenCount)} /><Field label="Aposentado (titular)" value={yesNo(capture.retiredPrimary)} /><Field label="Aposentado (cônjuge)" value={yesNo(capture.retiredPartner)} />
         <Field label="Veículo" value={[capture.vehicleBrand, capture.vehicleModel, capture.vehicleYear].filter(Boolean).join(" ") || "—"} /><Field label="2º veículo" value={[capture.secondVehicleModel, capture.secondVehicleYear].filter(Boolean).join(" ") || "—"} /><Field label="Hospedagem" value={text(capture.lodgingLocation)} />
         <Field label="Convidado 1" value={text(capture.guest1Name)} /><Field label="Convidado 2" value={text(capture.guest2Name)} /><Field label="Oferta de PEP" value={capture.pepOffered == null ? "—" : capture.pepOffered ? `Sim · ${text(capture.pepOfferedBy)} · ${capture.pepResult === "accepted" ? "aceitou" : capture.pepResult === "declined" ? "recusou" : "sem resultado"}` : "Não"} />
       </div>
@@ -67,7 +69,9 @@ function FichaImpressa({ code }: { code: string }) {
       </div>
       <p className="mt-4 text-[10px] font-bold uppercase tracking-[.1em] text-[#6b756f]">Observações</p>
       <p className="whitespace-pre-wrap text-sm">{text(capture.notes)}</p>
-      <div className="mt-3 h-32 rounded border border-dashed border-[#c9c2b2]" aria-label="Espaço para anotação à mão" />
+      <div className="mt-3 h-24 rounded border border-dashed border-[#c9c2b2]" aria-label="Espaço para anotação à mão" />
+      <p className="mt-3 text-[10px] leading-snug text-[#6b756f]">Aviso de privacidade (texto provisório, a aprovar): seus dados, incluindo CPF e renda, são usados para o atendimento e a proposta comercial desta visita e ficam guardados com segurança. Esta ficha em papel deve ser devolvida à gerência no fim do dia. Pedidos sobre seus dados: fale com a recepção.</p>
+      <div className="mt-6 grid grid-cols-2 gap-8 text-xs"><div className="border-t border-[#1d2b2a] pt-1">Ciente do casal (assinatura)</div><div className="border-t border-[#1d2b2a] pt-1">Gerente de sala</div></div>
     </div>
     <Card className="border-[#e8e1d4]"><CardContent className="space-y-4 p-5">
       <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Equipe por papel</p>

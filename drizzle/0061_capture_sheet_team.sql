@@ -57,5 +57,4 @@ INSERT IGNORE INTO `capture_team_roles` (`code`, `label`, `kind`, `sortOrder`) V
 	('gerencia_operacional', 'Gerência operacional', 'support', 110),
 	('administrativo', 'Administrativo', 'support', 120),
 	('recepcao_1', 'Recepção 1', 'support', 130),
-	('recepcao_2', 'Recepção 2', 'support', 140),
-	('motorista', 'Motorista', 'support', 150);
+	('recepcao_2', 'Recepção 2', 'support', 140);

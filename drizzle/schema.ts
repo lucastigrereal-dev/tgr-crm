@@ -329,7 +329,7 @@ export const captureRecords = mysqlTable(
     retiredPartner: boolean("retiredPartner"),
     guest1Name: varchar("guest1Name", { length: 180 }),
     guest2Name: varchar("guest2Name", { length: 180 }),
-    /** PEP é produto de saída: a ficha só guarda a oferta e o resultado, sem tempo próprio (provisório). */
+    /** PEP: a ficha guarda a oferta e o resultado. O tempo do PEP (decisão do Lucas, 17/10) chega pelo evento de tempos do Sales Command. */
     pepOffered: boolean("pepOffered"),
     pepOfferedBy: varchar("pepOfferedBy", { length: 180 }),
     pepResult: mysqlEnum("pepResult", ["accepted", "declined"]),
@@ -352,7 +352,7 @@ export const captureRecords = mysqlTable(
   ],
 );
 
-/** Papéis da equipe da ficha (promotor de telemarketing, líder de marketing, recepção, motorista...). Lista editável: papel novo não exige migration. */
+/** Papéis da equipe da ficha (promotor de telemarketing, líder de marketing, recepção...). Lista editável: papel novo não exige migration. */
 export const captureTeamRoles = mysqlTable(
   "capture_team_roles",
   {
