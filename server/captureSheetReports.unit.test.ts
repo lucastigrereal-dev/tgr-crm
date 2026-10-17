@@ -8,6 +8,7 @@ const row = (extra: Partial<ReportSource> = {}): ReportSource => ({ captureLocat
 describe("relatórios da sala: funções puras", () => {
   it("minutos da apresentação: nulo sem início/fim ou com fim antes do início", () => {
     expect(presentationMinutes(at("12:00"), at("12:45"))).toBe(45);
+    expect(presentationMinutes(new Date("2026-10-17T12:00:00Z"), new Date("2026-10-17T12:30:40Z"))).toBe(30);
     expect(presentationMinutes(null, at("12:45"))).toBeNull();
     expect(presentationMinutes(at("13:00"), at("12:00"))).toBeNull();
   });

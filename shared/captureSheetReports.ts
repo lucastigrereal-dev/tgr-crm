@@ -22,11 +22,11 @@ function isRealTour(row: ReportSource) {
 export const NO_ORIGIN_LABEL = "(sem origem)";
 export const NO_CONSULTANT_LABEL = "(sem consultor)";
 
-/** Minutos inteiros da apresentação; sem início/fim, ou fim antes do início, não entra na média. */
+/** Minutos inteiros (piso, igual a tourDurationMinutes) da apresentação; sem início/fim, ou fim antes do início, não entra na média. */
 export function presentationMinutes(start: Date | string | null, end: Date | string | null) {
   if (!start || !end) return null;
   const ms = new Date(end).getTime() - new Date(start).getTime();
-  return Number.isFinite(ms) && ms >= 0 ? Math.round(ms / 60_000) : null;
+  return Number.isFinite(ms) && ms >= 0 ? Math.floor(ms / 60_000) : null;
 }
 
 export type OriginRow = { origin: string; fichas: number; tours: number; vendeu: number; caiuEmMesa: number; naoTour: number; conversaoPct: number | null };
