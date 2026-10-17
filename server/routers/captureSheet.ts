@@ -319,7 +319,7 @@ export const captureSheetRouter = router({
         const custody = paperCustody({ printedDay: localDateInTimezone(last.printedAt, tz), collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: settings.paperDestroyDeadlineDays });
         // Ficha fora da vista da sala: o papel continua na lista (alguém precisa destruí-lo), mas sem o nome do casal para quem não é administrativo.
         const hidden = !canOpenArchivedSheet(ctx.user.role) && !visibilityOf(last, settings).visibleToRoom;
-        return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: prints.length >= REPRINT_ALERT_THRESHOLD };
+        return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: prints.length >= REPRINT_ALERT_THRESHOLD || prints.some(print => print.reprint) };
       });
       return {
         date: day,

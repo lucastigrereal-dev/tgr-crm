@@ -129,6 +129,14 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     expect(listIds).not.toContain(missedId);
   });
 
+  it("reimpressão em outro dia mantém o alerta no painel mesmo com a cópia antiga já destruída", async () => {
+    await db.insert(captureSheetPrints).values({ captureId: todayId, printedByUserId: userId, printedAt: daysAgo(3), destroyedAt: daysAgo(3), destroyedByUserId: userId, reprint: false });
+    await db.insert(captureSheetPrints).values({ captureId: todayId, printedByUserId: userId, reprint: true });
+    const panel = (await caller("service").captureSheet.paper.outstanding()) as { sheets: Array<{ coupleCode: string | null; reprintAlert: boolean }> };
+    expect(panel.sheets.find(sheet => sheet.coupleCode === todayCode)?.reprintAlert).toBe(true);
+    await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, todayId));
+  });
+
   it("custódia do papel: imprime, recolhe, destrói, com trilha; o painel do dia conta e o alerta de reimpressão dispara", async () => {
     await expect(caller("service").captureSheet.paper.collect({ code: todayCode })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await caller("service").captureSheet.recordPrint({ code: todayCode });
