@@ -113,6 +113,22 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, oldId));
   });
 
+  it("agendada para hoje e sem check-in continua na vista da sala; agendada para 3 dias atrás e faltou fica arquivada", async () => {
+    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal Agenda ${runId}`, documentNumber: `AG-${runId}`, phone: "11977776666", city: "Natal", state: "RN", status: "active" }).$returningId();
+    const pin = (minutes: number) => new Date(Date.now() + minutes * 60_000);
+    const codeToday = `LGPD-AGENDA-HOJE-${runId}`, codeMissed = `LGPD-AGENDA-FALTOU-${runId}`;
+    // Ficha criada há 3 dias (createdAt antigo), agendada para hoje, sem check-in: a recepção precisa achar o casal.
+    const [{ id: scheduledTodayId }] = await db.insert(captureRecords).values({ customerId, salesRoom: `Agenda ${runId}`, coupleCode: codeToday, scheduledAt: new Date(Date.now() + 30 * 60_000), createdAt: pin(4) }).$returningId();
+    await db.update(captureRecords).set({ createdAt: daysAgo(3) }).where(eq(captureRecords.id, scheduledTodayId));
+    await db.update(captureRecords).set({ createdAt: pin(4) }).where(eq(captureRecords.id, scheduledTodayId));
+    const [{ id: missedId }] = await db.insert(captureRecords).values({ customerId, salesRoom: `Agenda ${runId}`, coupleCode: codeMissed, scheduledAt: daysAgo(3), createdAt: pin(5) }).$returningId();
+    expect((await caller("seller").captureSheet.byCode({ code: codeToday })).roomVisibility).toMatchObject({ visibleToRoom: true });
+    await expect(caller("seller").captureSheet.byCode({ code: codeMissed })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const listIds = (await caller("seller").captures.list()).rows.map(row => row.capture.id);
+    expect(listIds).toContain(scheduledTodayId);
+    expect(listIds).not.toContain(missedId);
+  });
+
   it("custódia do papel: imprime, recolhe, destrói, com trilha; o painel do dia conta e o alerta de reimpressão dispara", async () => {
     await expect(caller("service").captureSheet.paper.collect({ code: todayCode })).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await caller("service").captureSheet.recordPrint({ code: todayCode });

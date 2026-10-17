@@ -45,15 +45,15 @@ async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
 type SheetSettings = Awaited<ReturnType<typeof loadSettings>>;
 
 const todayLocal = () => localDateInTimezone(new Date(), projectTimezone());
-/** Dia da visita no calendário do projeto: check-in; sem check-in, criação da ficha. */
-const visitDayOf = (capture: { checkedInAt: Date | null; createdAt: Date }) => localDateInTimezone(capture.checkedInAt ?? capture.createdAt, projectTimezone());
+/** Dia da visita no calendário do projeto: check-in; sem check-in, o agendamento; sem agendamento, a criação da ficha. */
+const visitDayOf = (capture: { checkedInAt: Date | null; scheduledAt?: Date | null; createdAt: Date }) => localDateInTimezone(capture.checkedInAt ?? capture.scheduledAt ?? capture.createdAt, projectTimezone());
 
-function visibilityOf(capture: { checkedInAt: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }, settings: SheetSettings) {
+function visibilityOf(capture: { checkedInAt: Date | null; scheduledAt?: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }, settings: SheetSettings) {
   return roomVisibility({ visitDay: visitDayOf(capture), today: todayLocal(), roomVisibilityDays: settings.roomVisibilityDays, commercialOutcome: capture.commercialOutcome });
 }
 
 /** Ficha fora da vista da sala só abre (e só imprime) para o administrativo. A ficha digital não é apagada: só muda quem a vê. */
-function assertSheetVisibleTo(role: string, capture: { checkedInAt: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }, settings: SheetSettings) {
+function assertSheetVisibleTo(role: string, capture: { checkedInAt: Date | null; scheduledAt?: Date | null; createdAt: Date; commercialOutcome: "vendeu" | "caiu_em_mesa" | null }, settings: SheetSettings) {
   const visibility = visibilityOf(capture, settings);
   if (!visibility.visibleToRoom && !canOpenArchivedSheet(role)) throw new TRPCError({ code: "FORBIDDEN", message: "Esta ficha saiu da vista da sala (o casal não comprou). Só a administração e o financeiro abrem." });
   return visibility;
@@ -72,7 +72,7 @@ export async function roomVisibilityCutoff() {
 export function roomVisibleCondition(cutoff: Date) {
   // O corte vai como texto UTC: as colunas timestamp do drizzle guardam e leem em UTC, e um Date cru seria serializado no fuso do processo.
   const utc = cutoff.toISOString().slice(0, 23).replace("T", " ");
-  return or(eq(captureRecords.commercialOutcome, "vendeu"), sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.createdAt}) >= ${utc}`);
+  return or(eq(captureRecords.commercialOutcome, "vendeu"), sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.scheduledAt}, ${captureRecords.createdAt}) >= ${utc}`);
 }
 
 async function captureByCode(rawCode: string) {
@@ -187,7 +187,7 @@ export const captureSheetRouter = router({
     const db = await requireDb();
     const reprint = await db.transaction(async tx => {
       // O código é conferido com a ficha travada: se a administração trocar o código no meio, a impressão com o código velho é recusada.
-      const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
+      const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
       assertSheetVisibleTo(ctx.user.role, capture, await loadSettings(db));
       const [{ count }] = await tx.select({ count: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
@@ -308,7 +308,7 @@ export const captureSheetRouter = router({
       const day = input?.date ?? todayLocal();
       const start = localDayStart(day, tz, localDateInTimezone), end = localDayStart(addCalendarDays(day, 1), tz, localDateInTimezone);
       // Papel de dias anteriores que ainda não foi destruído também entra (é o atrasado); impressões do dia consultado entram sempre.
-      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName, checkedInAt: captureRecords.checkedInAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome })
+      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome })
         .from(captureSheetPrints).innerJoin(captureRecords, eq(captureRecords.id, captureSheetPrints.captureId)).innerJoin(customers, eq(customers.id, captureRecords.customerId))
         .where(and(lt(captureSheetPrints.printedAt, end), or(gte(captureSheetPrints.printedAt, start), isNull(captureSheetPrints.destroyedAt)))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
       const byCapture = new Map<number, typeof rows>();
