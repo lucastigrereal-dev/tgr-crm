@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, captureRecords, captureSheetPrints, captureSheetSettings, customers, users } from "../drizzle/schema";
@@ -44,6 +44,11 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
   it("a migration 0063 semeou as chaves novas e elas saem em settings.get", async () => {
+    // As 7 linhas existem de verdade (o fallback do código devolveria o mesmo valor sem a migration) e nascem provisórias.
+    const keys = ["paper_destroy_deadline_days", "privacy_controller_name", "privacy_controller_cnpj", "privacy_contact_channel", "privacy_full_text_url", "privacy_retention_text", "room_visibility_days"];
+    const seeded = await db.select().from(captureSheetSettings).where(inArray(captureSheetSettings.key, keys));
+    expect(seeded.map(row => row.key).sort()).toEqual([...keys].sort());
+    expect(seeded.every(row => row.provisional)).toBe(true);
     const settings = await caller().captureSheet.settings.get();
     expect(settings).toMatchObject({ roomVisibilityDays: 0, paperDestroyDeadlineDays: 0, privacy: { privacy_controller_name: "" } });
     await expect(caller().captureSheet.settings.set({ key: "room_visibility_days", value: "9999" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -77,6 +82,35 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     expect(sellerIds).not.toContain(oldId);
     const adminIds = (await caller("admin").captures.list()).rows.map(row => row.capture.id);
     expect(adminIds).toEqual(expect.arrayContaining([todayId, oldId, soldId]));
+  });
+
+  it("a ficha arquivada não vaza por outros caminhos: análise de perfil, fila da recepção, detalhe do cliente e painel do papel", async () => {
+    const mentions = (value: unknown, code: string) => JSON.stringify(value).includes(code);
+    const customerId = (await db.select({ id: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, oldId)))[0].id;
+    const profileIds = async (role: string) => ((await caller(role).captures.profileAnalysis({ salesRoom: room } as never)).rows as Array<{ id: number }>).map(row => row.id);
+    for (const role of ["seller", "service"]) {
+      const ids = await profileIds(role);
+      expect(ids).not.toContain(oldId);
+      expect(ids).toContain(todayId);
+    }
+    expect(await profileIds("admin")).toContain(oldId);
+    expect(await profileIds("finance")).toContain(oldId);
+    for (const role of ["seller", "service"] as const) {
+      const queue = await caller(role).captures.receptionQueue({ includeCompleted: true } as never);
+      expect(mentions(queue, oldCode)).toBe(false);
+    }
+    const sellerDetail = await caller("seller").customers.detail({ id: customerId });
+    expect(mentions(sellerDetail?.captures ?? sellerDetail, oldCode)).toBe(false);
+    expect(mentions(sellerDetail?.captures ?? sellerDetail, soldCode)).toBe(true);
+    expect(mentions((await caller("admin").customers.detail({ id: customerId }))?.captures, oldCode)).toBe(true);
+    // Papel da ficha arquivada continua na lista de pendências, mas o nome do casal não aparece para a sala.
+    await caller("admin").captureSheet.recordPrint({ code: oldCode });
+    const room_ = (await caller("service").captureSheet.paper.outstanding()) as { sheets: Array<{ coupleCode: string | null; customerName: string | null }> };
+    const line = room_.sheets.find(sheet => sheet.coupleCode === oldCode);
+    expect(line?.customerName ?? null).toBeNull();
+    const adminLine = ((await caller("admin").captureSheet.paper.outstanding()) as typeof room_).sheets.find(sheet => sheet.coupleCode === oldCode);
+    expect(adminLine?.customerName).toContain("Casal LGPD");
+    await db.delete(captureSheetPrints).where(eq(captureSheetPrints.captureId, oldId));
   });
 
   it("custódia do papel: imprime, recolhe, destrói, com trilha; o painel do dia conta e o alerta de reimpressão dispara", async () => {

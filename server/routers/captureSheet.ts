@@ -70,7 +70,9 @@ export async function roomVisibilityCutoff() {
   return localDayStart(firstRoomDay, projectTimezone(), localDateInTimezone);
 }
 export function roomVisibleCondition(cutoff: Date) {
-  return or(eq(captureRecords.commercialOutcome, "vendeu"), gte(sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.createdAt})`, cutoff));
+  // O corte vai como texto UTC: as colunas timestamp do drizzle guardam e leem em UTC, e um Date cru seria serializado no fuso do processo.
+  const utc = cutoff.toISOString().slice(0, 23).replace("T", " ");
+  return or(eq(captureRecords.commercialOutcome, "vendeu"), sql`COALESCE(${captureRecords.checkedInAt}, ${captureRecords.createdAt}) >= ${utc}`);
 }
 
 async function captureByCode(rawCode: string) {
@@ -298,22 +300,25 @@ export const captureSheetRouter = router({
       return { destroyed: updated };
     }),
     /** Painel do gerente: fichas impressas no dia e ainda não recolhidas ou não destruídas, mais o alerta de reimpressão. Sem CPF nem renda. */
-    outstanding: receptionProcedure.input(z.object({ date: z.string().date().optional() }).optional()).query(async ({ input }) => {
+    outstanding: receptionProcedure.input(z.object({ date: z.string().date().optional() }).optional()).query(async ({ ctx, input }) => {
       const db = await requireDb();
       const settings = await loadSettings(db);
       const tz = projectTimezone();
       const day = input?.date ?? todayLocal();
       const start = localDayStart(day, tz, localDateInTimezone), end = localDayStart(addCalendarDays(day, 1), tz, localDateInTimezone);
-      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName })
+      // Papel de dias anteriores que ainda não foi destruído também entra (é o atrasado); impressões do dia consultado entram sempre.
+      const rows = await db.select({ id: captureSheetPrints.id, captureId: captureSheetPrints.captureId, printedAt: captureSheetPrints.printedAt, collectedAt: captureSheetPrints.collectedAt, destroyedAt: captureSheetPrints.destroyedAt, reprint: captureSheetPrints.reprint, coupleCode: captureRecords.coupleCode, salesRoom: captureRecords.salesRoom, customerName: customers.fullName, checkedInAt: captureRecords.checkedInAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome })
         .from(captureSheetPrints).innerJoin(captureRecords, eq(captureRecords.id, captureSheetPrints.captureId)).innerJoin(customers, eq(customers.id, captureRecords.customerId))
-        .where(and(gte(captureSheetPrints.printedAt, start), lt(captureSheetPrints.printedAt, end))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
+        .where(and(lt(captureSheetPrints.printedAt, end), or(gte(captureSheetPrints.printedAt, start), isNull(captureSheetPrints.destroyedAt)))).orderBy(desc(captureSheetPrints.printedAt), desc(captureSheetPrints.id)).limit(2000);
       const byCapture = new Map<number, typeof rows>();
       for (const row of rows) byCapture.set(row.captureId, [...(byCapture.get(row.captureId) ?? []), row]);
       const today = todayLocal();
       const sheets = Array.from(byCapture.entries()).map(([captureId, prints]) => {
         const last = prints[0]!;
-        const custody = paperCustody({ printedDay: day, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: settings.paperDestroyDeadlineDays });
-        return { captureId, coupleCode: last.coupleCode, customerName: last.customerName, salesRoom: last.salesRoom, printCount: prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: prints.length >= REPRINT_ALERT_THRESHOLD };
+        const custody = paperCustody({ printedDay: localDateInTimezone(last.printedAt, tz), collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, today, destroyDeadlineDays: settings.paperDestroyDeadlineDays });
+        // Ficha fora da vista da sala: o papel continua na lista (alguém precisa destruí-lo), mas sem o nome do casal para quem não é administrativo.
+        const hidden = !canOpenArchivedSheet(ctx.user.role) && !visibilityOf(last, settings).visibleToRoom;
+        return { captureId, coupleCode: last.coupleCode, customerName: hidden ? null : last.customerName, salesRoom: hidden ? null : last.salesRoom, printCount: prints.length, lastPrintedAt: last.printedAt, collectedAt: last.collectedAt, destroyedAt: last.destroyedAt, ...custody, reprintAlert: prints.length >= REPRINT_ALERT_THRESHOLD };
       });
       return {
         date: day,

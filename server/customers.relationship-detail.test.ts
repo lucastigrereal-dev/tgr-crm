@@ -18,6 +18,7 @@ describe("contrato da central de relacionamento", () => {
     vi.setSystemTime(new Date("2026-08-20T12:00:00Z"));
     const results = [
       [{ id: 9, fullName: "Ana", email: "ana@exemplo.com", phone: "11999999999", status: "active" }],
+      [], // configurações da ficha (corte de visibilidade LGPD)
       [{ id: 1, occurredAt: new Date("2026-08-16T12:00:00Z") }],
       [{ id: 2 }],
       [{ id: 3, status: "active" }],

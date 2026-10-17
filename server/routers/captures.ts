@@ -145,10 +145,12 @@ export const capturesRouter = router({
     return { rows, truncated, truncatedSources: truncated ? ["fichas de captação"] : [] };
   }),
 
-  profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ input }) => {
+  profileAnalysis: internalProcedure.input(profileAnalysisInput).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { summary: buildCaptureProfileAnalytics([]), rows: [], totalMatches: 0, truncated: false, filters: { cities: [], states: [], salesRooms: [], vehicleBrands: [], vehicleModels: [], travelSeasons: [], relationshipStatuses: [] } };
     const conditions = [];
+    // LGPD: a análise de perfil traz CPF, renda e notas; para a sala, só fichas dentro da vista (mesma regra da lista).
+    if (!canOpenArchivedSheet(ctx.user.role)) conditions.push(roomVisibleCondition(await roomVisibilityCutoff())!);
     if (input.startDate) conditions.push(gte(captureRecords.createdAt, new Date(`${input.startDate}T00:00:00Z`)));
     if (input.endDate) conditions.push(lt(captureRecords.createdAt, new Date(new Date(`${input.endDate}T00:00:00Z`).getTime() + 86_400_000)));
     if (input.campaignId) conditions.push(eq(captureRecords.campaignId, input.campaignId));
@@ -292,7 +294,7 @@ export const capturesRouter = router({
     return { success: true };
   }),
 
-  receptionQueue: receptionProcedure.input(z.object({ date: z.string().date().optional(), salesRoom: optionalShort, includeCompleted: z.boolean().default(false) }).optional()).query(async ({ input }) => {
+  receptionQueue: receptionProcedure.input(z.object({ date: z.string().date().optional(), salesRoom: optionalShort, includeCompleted: z.boolean().default(false) }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
     const date = input?.date ?? new Date().toISOString().slice(0, 10);
@@ -300,6 +302,8 @@ export const capturesRouter = router({
     const end = new Date(`${date}T23:59:59.999-03:00`);
     const filters = [gte(captureRecords.scheduledAt, start), lt(captureRecords.scheduledAt, end)];
     if (input?.salesRoom?.trim()) filters.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
+    // LGPD: data passada não abre a ficha de quem não comprou para a sala; admin e finance seguem vendo.
+    if (!canOpenArchivedSheet(ctx.user.role)) filters.push(roomVisibleCondition(await roomVisibilityCutoff())!);
     if (!input?.includeCompleted) filters.push(inArray(captureRecords.presentationStatus, activeRoomStatuses));
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))

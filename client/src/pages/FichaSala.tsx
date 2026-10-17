@@ -14,6 +14,8 @@ import { toast } from "sonner";
 
 const when = (value?: string | Date | null) => (value ? new Date(value).toLocaleString("pt-BR") : "—");
 const yesNo = (value?: boolean | null) => (value == null ? "—" : value ? "Sim" : "Não");
+// "Hoje" no calendário do projeto (Recife), igual ao padrão do servidor: em UTC, depois das 21h o painel e a exportação cairiam no dia seguinte.
+const projectToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Recife" });
 const text = (value?: string | number | null) => (value == null || value === "" ? "—" : String(value));
 
 // A faixa do ciente (rodapé) imprime na mesma folha e se destaca pela linha pontilhada: a operação destrói a parte de cima e guarda só a faixa.
@@ -29,6 +31,8 @@ function FichaImpressa({ code }: { code: string }) {
   const { user } = useAuth();
   const canEdit = user?.role === "admin" || user?.role === "seller";
   const isAdmin = user?.role === "admin";
+  // O financeiro abre a ficha (administrativo), mas imprimir e mexer no papel é da recepção/sala: sem botões que o servidor recusaria.
+  const canHandlePaper = user?.role !== "finance";
   const sheet = trpc.captureSheet.byCode.useQuery({ code });
   const roles = trpc.captureSheet.roles.list.useQuery();
   const [roleId, setRoleId] = useState("");
@@ -54,11 +58,11 @@ function FichaImpressa({ code }: { code: string }) {
     <style>{printCss}</style>
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-sm text-muted-foreground">{data.printCount ? `Impressa ${data.printCount}x. Uma nova impressão fica registrada como reimpressão.` : "Ainda não impressa."}</p>
-      <Button onClick={print} disabled={recordPrint.isPending}><Printer className="mr-2 h-4 w-4" />{data.printCount ? "Reimprimir ficha" : "Imprimir ficha"}</Button>
+      {canHandlePaper ? <Button onClick={print} disabled={recordPrint.isPending}><Printer className="mr-2 h-4 w-4" />{data.printCount ? "Reimprimir ficha" : "Imprimir ficha"}</Button> : null}
     </div>
     {!data.roomVisibility.visibleToRoom ? <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" data-testid="ficha-arquivada">Ficha fora da vista da sala: o casal não comprou e o dia da visita passou. Só a administração e o financeiro abrem. Nada foi apagado.</p> : null}
     {data.paper.reprintAlert ? <p className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900" data-testid="ficha-reimpressao">Alerta: esta ficha já foi impressa {data.printCount}x. Confira onde estão as cópias em papel antes de imprimir de novo.</p> : null}
-    <PapelCustodia code={code} paper={data.paper} />
+    <PapelCustodia code={code} paper={data.paper} canAct={canHandlePaper} />
     <div id="ficha-print" className="rounded-xl border border-[#e8e1d4] bg-white p-6 text-[#1d2b2a]">
       <div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#b18f4b]">{data.sheetSettings.brandName ? `${data.sheetSettings.brandName} · ` : ""}Ficha de atendimento</p><p className="text-xs">Promotor: {text(team.promoter ?? team.members.find(member => member.code === "promotor_marketing")?.name)}</p><h2 className="font-serif text-2xl">{customer.fullName}</h2><p className="text-sm">{text(customer.phone)} · {text(customer.city)}{customer.state ? `/${customer.state}` : ""}</p></div>
         <div className="text-center"><p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#6b756f]">Código do casal</p><p aria-label={`Código do casal ${code}`} className="font-mono text-3xl font-bold tracking-wider">{code}</p><div className="mt-2 flex h-28 w-28 items-center justify-center rounded border border-dashed border-[#c9c2b2] p-1 text-[10px] text-[#6b756f] ml-auto">Cole aqui o QR da recepção</div></div></div>
@@ -230,7 +234,7 @@ function LimitesAdmin() {
   </CardContent></Card>;
 }
 
-function PapelCustodia({ code, paper }: { code: string; paper: { status: "nao_impressa" | "em_circulacao" | "recolhida" | "destruida"; overdue: boolean; deadlineDay: string | null; lastPrintedAt: string | Date | null; collectedAt: string | Date | null; destroyedAt: string | Date | null } }) {
+function PapelCustodia({ code, paper, canAct }: { code: string; canAct: boolean; paper: { status: "nao_impressa" | "em_circulacao" | "recolhida" | "destruida"; overdue: boolean; deadlineDay: string | null; lastPrintedAt: string | Date | null; collectedAt: string | Date | null; destroyedAt: string | Date | null } }) {
   const utils = trpc.useUtils();
   const refresh = () => { void utils.captureSheet.byCode.invalidate({ code }); void utils.captureSheet.paper.outstanding.invalidate(); };
   const fail = (error: { message: string }) => toast.error(error.message);
@@ -241,8 +245,8 @@ function PapelCustodia({ code, paper }: { code: string; paper: { status: "nao_im
   return <div className={`flex flex-wrap items-center justify-between gap-3 rounded border px-3 py-2 text-xs ${paper.overdue ? "border-red-300 bg-red-50 text-red-900" : "border-[#e8e1d4] bg-[#faf8f3]"}`} data-testid="ficha-papel">
     <span>{label}{paper.overdue ? ` · atrasado (prazo ${paper.deadlineDay})` : paper.deadlineDay && paper.status !== "destruida" ? ` · destruir até ${paper.deadlineDay}` : ""}</span>
     <span className="flex gap-2">
-      {paper.status === "em_circulacao" ? <Button size="sm" variant="outline" disabled={collect.isPending} onClick={() => collect.mutate({ code })}>Papel recolhido</Button> : null}
-      {paper.status !== "destruida" ? <Button size="sm" variant="outline" disabled={destroy.isPending} onClick={() => destroy.mutate({ code })}>Papel destruído</Button> : null}
+      {!canAct ? null : <>{paper.status === "em_circulacao" ? <Button size="sm" variant="outline" disabled={collect.isPending} onClick={() => collect.mutate({ code })}>Papel recolhido</Button> : null}
+      {paper.status !== "destruida" ? <Button size="sm" variant="outline" disabled={destroy.isPending} onClick={() => destroy.mutate({ code })}>Papel destruído</Button> : null}</>}
     </span>
   </div>;
 }
@@ -250,7 +254,7 @@ function PapelCustodia({ code, paper }: { code: string; paper: { status: "nao_im
 /** Sem ficha na URL: painel do papel do dia (impressas e não recolhidas, atrasadas, reimpressões) e exportação das fichas. */
 function PainelPapel() {
   const { user } = useAuth();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = projectToday();
   const [date, setDate] = useState(today);
   const outstanding = trpc.captureSheet.paper.outstanding.useQuery({ date }, { enabled: user?.role !== "finance" });
   const data = outstanding.data;
@@ -259,7 +263,7 @@ function PainelPapel() {
       <div className="flex flex-wrap items-end justify-between gap-3"><p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Papel do dia: impressas e não recolhidas</p><div className="grid gap-1"><Label htmlFor="papel-dia">Dia</Label><Input id="papel-dia" type="date" className="w-44" value={date} onChange={event => setDate(event.target.value || today)} /></div></div>
       {data ? <>
         <p className="text-sm" data-testid="papel-resumo">Impressas: <b>{data.printed}</b> · em circulação: <b>{data.notCollected}</b> · não destruídas: <b>{data.notDestroyed}</b> · atrasadas: <b className={data.overdue ? "text-red-700" : ""}>{data.overdue}</b> · com reimpressão: <b>{data.reprintAlerts}</b></p>
-        {data.sheets.length ? <ul className="divide-y divide-[#ece6da] text-sm">{data.sheets.map(sheet => <li key={sheet.captureId} className="flex flex-wrap items-center justify-between gap-2 py-1.5"><span><a className="font-mono underline" href={`/ficha?codigo=${encodeURIComponent(sheet.coupleCode ?? "")}`}>{sheet.coupleCode ?? `#${sheet.captureId}`}</a> · {sheet.customerName}{sheet.salesRoom ? ` · ${sheet.salesRoom}` : ""}</span><span className={`text-xs ${sheet.overdue ? "text-red-700" : "text-muted-foreground"}`}>{sheet.status === "em_circulacao" ? "em circulação" : sheet.status === "recolhida" ? "recolhida" : "destruída"}{sheet.overdue ? " · atrasada" : ""}{sheet.reprintAlert ? ` · impressa ${sheet.printCount}x` : ""}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">Nenhuma ficha impressa neste dia.</p>}
+        {data.sheets.length ? <ul className="divide-y divide-[#ece6da] text-sm">{data.sheets.map(sheet => <li key={sheet.captureId} className="flex flex-wrap items-center justify-between gap-2 py-1.5"><span><a className="font-mono underline" href={`/ficha?codigo=${encodeURIComponent(sheet.coupleCode ?? "")}`}>{sheet.coupleCode ?? `#${sheet.captureId}`}</a> · {sheet.customerName ?? "(ficha fora da vista da sala)"}{sheet.salesRoom ? ` · ${sheet.salesRoom}` : ""}</span><span className={`text-xs ${sheet.overdue ? "text-red-700" : "text-muted-foreground"}`}>{sheet.status === "em_circulacao" ? "em circulação" : sheet.status === "recolhida" ? "recolhida" : "destruída"}{sheet.overdue ? " · atrasada" : ""}{sheet.reprintAlert ? ` · impressa ${sheet.printCount}x` : ""}</span></li>)}</ul> : <p className="text-sm text-muted-foreground">Nenhuma ficha impressa neste dia.</p>}
       </> : <p className="text-sm text-muted-foreground">Carregando...</p>}
     </CardContent></Card> : null}
     <ExportarFichas />
@@ -270,7 +274,7 @@ function PainelPapel() {
 function ExportarFichas() {
   const { user } = useAuth();
   const canPii = user?.role === "admin" || user?.role === "finance";
-  const today = new Date().toISOString().slice(0, 10);
+  const today = projectToday();
   const [form, setForm] = useState({ from: today, to: today, salesRoom: "", withCpf: false });
   const run = trpc.captureSheet.export.rows.useMutation({ onError: error => toast.error(error.message) });
   const exportAs = async (format: "csv" | "xlsx") => {

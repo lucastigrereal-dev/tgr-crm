@@ -162,10 +162,12 @@ describe("captures reception router", () => {
       () => [tour],
       () => [{ id: 31 }, { id: 32 }],
       () => [tour],
+      () => [], // configurações da ficha (corte de visibilidade LGPD)
       () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
       () => [tour],
       () => [noTour],
       () => [noTour],
+      () => [], // configurações da ficha (corte de visibilidade LGPD)
       () => [{ capture: tour, customer: { name: "Ana" }, campaign: null }, { capture: noTour, customer: { name: "Bia" }, campaign: null }],
     ];
     const set = vi.fn((patch: Record<string, unknown>) => {
