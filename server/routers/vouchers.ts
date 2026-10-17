@@ -135,12 +135,6 @@ export const vouchersRouter = router({
     const db = await requireDb();
     const [customer] = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1);
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
-    if (input.captureId) {
-      const [capture] = await db.select({ customerId: captureRecords.customerId, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
-      if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
-      // Ficha que saiu da vista da sala (casal não comprou) não pode ser escolhida por quem não é do administrativo.
-      await assertCaptureInRoomView(db, ctx.user.role, capture);
-    }
     const auditIssued = (actorUserId: number | null, id: number, code: string, customerId: number, description: string) =>
       recordAudit(actorUserId, "voucher", id, "issued", `Voucher ${code} emitido para o associado ${customerId}: ${description}.`, { idempotencyKey: `voucher_issued:${id}` });
     // Reenvio da mesma emissão (resposta perdida, auditoria que falhou): devolve o voucher já gravado, sem novo código.
@@ -157,6 +151,13 @@ export const vouchersRouter = router({
     };
     const replay = await previous();
     if (replay) return replay;
+    // Só emissão nova confere a ficha e a vista da sala: o reenvio de uma emissão já gravada devolve o voucher mesmo que a ficha tenha saído da vista depois.
+    if (input.captureId) {
+      const [capture] = await db.select({ customerId: captureRecords.customerId, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1);
+      if (!capture || capture.customerId !== input.customerId) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada para este associado." });
+      // Ficha que saiu da vista da sala (casal não comprou) não pode ser escolhida por quem não é do administrativo.
+      await assertCaptureInRoomView(db, ctx.user.role, capture);
+    }
     // A validade no passado só barra emissão nova: o reenvio de uma emissão feita no último dia, depois da meia-noite, devolve o voucher.
     if (input.expiresAt && input.expiresAt < projectToday()) throw new TRPCError({ code: "BAD_REQUEST", message: "A validade não pode ser no passado." });
     for (let attempt = 0; attempt < 5; attempt += 1) {

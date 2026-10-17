@@ -242,5 +242,9 @@ describe.skipIf(!integrationUrl)("LGPD da ficha em MySQL real", () => {
     expect(sellerIds).not.toContain(oldId);
     expect((await caller("admin").vouchers.captureOptions({ customerId })).captures.map(row => row.id)).toContain(oldId);
     await expect(caller("service").vouchers.issue({ customerId, captureId: oldId, description: "Brinde sintético", costAmount: 0, requestId: randomUUID() })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Reenvio de emissão já gravada devolve o voucher mesmo com a ficha fora da vista (idempotência).
+    const requestId = randomUUID();
+    const first = await caller("admin").vouchers.issue({ customerId, captureId: oldId, description: "Brinde sintético", costAmount: 0, requestId });
+    expect(await caller("service").vouchers.issue({ customerId, captureId: oldId, description: "Brinde sintético", costAmount: 0, requestId })).toEqual(first);
   });
 });
