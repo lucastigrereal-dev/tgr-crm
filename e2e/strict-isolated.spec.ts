@@ -436,4 +436,134 @@ test.describe("homologação isolada estrita", () => {
     );
     expect(fractionRows).toEqual([{ status: "available", currentContractId: null }]);
   });
+  test("documentos: confirma a assinatura do documento do contrato pela tela, com auditoria e evento", async ({ page }) => {
+    const fx = fixture!;
+    const saleId = `E2E-SALE-${fx.normalizedRunId}`;
+    const [contract] = await queryDatabase<Array<{ id: number }>>(
+      "SELECT id FROM contracts WHERE externalSource = 'sales-command' AND externalSaleId = ?", [saleId],
+    );
+    expect(contract).toBeDefined();
+    const filename = `${fx.prefix}contrato-assinatura.pdf`;
+    await queryDatabase(
+      "INSERT INTO contract_documents (contractId, category, filename, storageKey, signed, signedArtifact) VALUES (?, 'contrato', ?, ?, 0, 0)",
+      [contract!.id, filename, `e2e/${fx.normalizedRunId}/contrato-assinatura.pdf`],
+    );
+
+    await page.goto(`/contratos/${contract!.id}`);
+    await expect(page.getByText(filename)).toBeVisible();
+    await expect(page.getByText(/aguardando assinatura/)).toBeVisible();
+    await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
+
+    const signed = waitForMutation(page, "contracts.markDocumentSigned");
+    await page.getByRole("button", { name: "Confirmar manualmente" }).click();
+    await signed;
+    await expect(page.getByText(/assinatura confirmada \(falta enviar o arquivo assinado\)/)).toBeVisible();
+    // ADR-007: confirmação manual é só exibição; sem o arquivo assinado real, o portão da assinatura não abre e a venda não valida
+    await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Validar venda" })).toBeDisabled();
+
+    const [doc] = await queryDatabase<Array<{ id: number; signed: number; signedArtifact: number }>>(
+      "SELECT id, signed, signedArtifact FROM contract_documents WHERE contractId = ? AND filename = ?", [contract!.id, filename],
+    );
+    expect(doc).toMatchObject({ signed: 1, signedArtifact: 0 });
+    const audit = await queryDatabase<Array<{ action: string }>>(
+      "SELECT action FROM audit_logs WHERE entityType = 'contract_document' AND entityId = ? AND action = 'signed'", [String(doc!.id)],
+    );
+    expect(audit).toHaveLength(1);
+    const events = await queryDatabase<Array<{ eventName: string }>>(
+      "SELECT eventName FROM domain_events WHERE aggregateType = 'contract_document' AND aggregateId = ? AND eventName = 'contract.document.signed'", [String(doc!.id)],
+    );
+    expect(events).toHaveLength(1);
+    const [contractRow] = await queryDatabase<Array<{ status: string }>>("SELECT status FROM contracts WHERE id = ?", [contract!.id]);
+    expect(contractRow!.status).toBe("pending_signature");
+  });
+
+  test("pontos: credita o ano, lança uso e confere o saldo no extrato", async ({ page }) => {
+    const fx = fixture!;
+    const saleId = `E2E-SALE-${fx.normalizedRunId}`;
+    const [contract] = await queryDatabase<Array<{ id: number }>>(
+      "SELECT id FROM contracts WHERE externalSource = 'sales-command' AND externalSaleId = ?", [saleId],
+    );
+    expect(contract).toBeDefined();
+    await queryDatabase(
+      "INSERT INTO ownership_entitlements (contractId, entitlementType, annualPoints, status) VALUES (?, 'points', 1000, 'active')",
+      [contract!.id],
+    );
+    const [entitlement] = await queryDatabase<Array<{ id: number }>>(
+      "SELECT id FROM ownership_entitlements WHERE contractId = ? AND entitlementType = 'points'", [contract!.id],
+    );
+
+    await page.goto(`/contratos/${contract!.id}`);
+    await expect(page.getByText("Direitos de uso")).toBeVisible();
+    await page.getByRole("button", { name: "Extrato de pontos" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText("Nenhum lançamento ainda.")).toBeVisible();
+
+    const credited = waitForMutation(page, "pointsLedger.creditAnnual");
+    await dialog.getByRole("button", { name: /Creditar/ }).click();
+    await credited;
+    await expect(dialog.getByText("+1000")).toBeVisible();
+    await expect(dialog.getByText(/Disponível:/)).toContainText("1000");
+
+    await dialog.getByLabel("Pontos").fill("250");
+    await dialog.getByPlaceholder("Observação ou motivo").fill("Uso de laboratório E2E");
+    const used = waitForMutation(page, "pointsLedger.recordUsage");
+    await dialog.getByRole("button", { name: "Lançar uso" }).click();
+    await used;
+    await expect(dialog.getByText("-250")).toBeVisible();
+    await expect(dialog.getByText(/Disponível:/)).toContainText("750");
+
+    const ledger = await queryDatabase<Array<{ entryType: string; points: number }>>(
+      "SELECT entryType, points FROM points_ledger WHERE entitlementId = ? ORDER BY id", [entitlement!.id],
+    );
+    expect(ledger).toEqual([{ entryType: "annual_credit", points: 1000 }, { entryType: "usage", points: -250 }]);
+  });
+
+  test("portal do proprietário: admin gera o link, o associado vê contrato e parcelas, e o link revogado para de abrir", async ({ page }) => {
+    const fx = fixture!;
+    const saleId = `E2E-SALE-${fx.normalizedRunId}`;
+    const [contract] = await queryDatabase<Array<{ id: number; number: string; customerId: number }>>(
+      "SELECT id, number, customerId FROM contracts WHERE externalSource = 'sales-command' AND externalSaleId = ?", [saleId],
+    );
+    expect(contract).toBeDefined();
+
+    await page.goto(`/clientes/${contract!.customerId}`);
+    await expect(page.getByText("Portal do associado")).toBeVisible();
+    const created = waitForMutation(page, "ownerPortal.createLink");
+    await page.getByRole("button", { name: "Gerar link" }).click();
+    await created;
+    await expect(page.getByText("Copie agora: este link não aparece de novo.")).toBeVisible();
+    const url = await page.locator('input[readonly]').first().inputValue();
+    expect(url).toMatch(/\/portal\/[A-Za-z0-9_-]{43}$/);
+
+    // o associado abre o link sem sessão: contexto novo, sem cookie do admin
+    const guest = await page.context().browser()!.newContext();
+    const guestPage = await guest.newPage();
+    await guestPage.goto(url);
+    await expect(guestPage.getByRole("heading", { name: /^Olá,/ })).toBeVisible();
+    await expect(guestPage.getByText(`Contrato ${contract!.number}`)).toBeVisible();
+    await expect(guestPage.getByText(/Parcela 1 ·/).first()).toBeVisible();
+    // só tem o hash no banco, nunca o token
+    const token = url.split("/portal/")[1]!;
+    const links = await queryDatabase<Array<{ tokenHash: string; revokedAt: Date | null }>>(
+      "SELECT tokenHash, revokedAt FROM owner_portal_links WHERE customerId = ?", [contract!.customerId],
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0]!.tokenHash).toBe(createHash("sha256").update(token, "utf8").digest("hex"));
+    expect(links[0]!.tokenHash).not.toContain(token);
+
+    const revoked = waitForMutation(page, "ownerPortal.revokeLink");
+    await page.getByRole("button", { name: "Revogar" }).click();
+    await revoked;
+    await guestPage.reload();
+    await expect(guestPage.getByRole("heading", { name: "Link indisponível" })).toBeVisible();
+    await guest.close();
+
+    // link inventado também não abre
+    const fake = await page.context().browser()!.newContext();
+    const fakePage = await fake.newPage();
+    await fakePage.goto(new URL("/portal/" + "A".repeat(43), url).toString());
+    await expect(fakePage.getByRole("heading", { name: "Link indisponível" })).toBeVisible();
+    await fake.close();
+  });
 });
