@@ -639,3 +639,109 @@ test.describe("homologação isolada estrita", () => {
     await expect(page.getByText("Ficha não encontrada")).toBeVisible();
   });
 });
+
+// CRM-A03: tela de estoque comercial (/estoque-comercial) de ponta a ponta no navegador, contra o backend real e o MySQL descartável do run.
+// Cria o próprio empreendimento e as UHs (prefixo E2E-TGR-<run>), materializa as cotas pela tela, segura, bloqueia e desbloqueia, e confere o banco.
+test.describe("estoque comercial no navegador", () => {
+  test("materializa cotas, é idempotente, segura, bloqueia e desbloqueia pela tela, sem overflow no celular", async ({ page }) => {
+    const fx = fixture!;
+    const resortName = `${fx.prefix}Estoque A03`;
+    await queryDatabase("INSERT INTO resorts (name, city, state, status) VALUES (?, 'Natal', 'RN', 'active')", [resortName]);
+    const [resort] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM resorts WHERE name = ? LIMIT 1", [resortName]);
+    for (const code of [`${fx.normalizedRunId.toUpperCase()}-A03-1`, `${fx.normalizedRunId.toUpperCase()}-A03-2`]) {
+      await queryDatabase("INSERT INTO units (resortId, code, status) VALUES (?, ?, 'active')", [resort!.id, code]);
+    }
+    const countByStatus = async (status: string) => Number((await queryDatabase<Array<{ n: number }>>("SELECT COUNT(*) AS n FROM commercial_fractions WHERE resortId = ? AND status = ?", [resort!.id, status]))[0]!.n);
+    const tile = (label: string) => page.locator("div.rounded-2xl").filter({ has: page.locator("p", { hasText: new RegExp(`^${label}$`) }) }).locator("p.font-serif");
+
+    await page.goto("/estoque-comercial");
+    await expect(page.getByRole("heading", { name: "Estoque comercial de cotas" })).toBeVisible();
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: resortName }).click();
+    await expect(page.getByText("2 UHs carregadas × 52")).toBeVisible();
+    await page.getByPlaceholder("Cotas/UH").fill("3");
+    await expect(page.getByText("2 UHs carregadas × 3 = 6 cotas esperadas")).toBeVisible();
+
+    const bootstrap = waitForMutation(page, "inventory.bootstrap");
+    await page.getByRole("button", { name: "Materializar estoque" }).click();
+    await bootstrap;
+    await expect(tile("Total")).toHaveText("6");
+    await expect(tile("Disponível")).toHaveText("6");
+    expect(await countByStatus("available")).toBe(6);
+
+    // repetir não duplica
+    const again = waitForMutation(page, "inventory.bootstrap");
+    await page.getByRole("button", { name: "Materializar estoque" }).click();
+    await again;
+    await expect(tile("Total")).toHaveText("6");
+    expect((await queryDatabase<Array<{ n: number }>>("SELECT COUNT(*) AS n FROM commercial_fractions WHERE resortId = ?", [resort!.id]))[0]!.n).toBe(6);
+
+    // hold
+    const held = waitForMutation(page, "inventory.createHold");
+    await page.getByRole("button", { name: "Hold", exact: true }).first().click();
+    await held;
+    await expect(tile("Em hold")).toHaveText("1");
+    await expect(tile("Disponível")).toHaveText("5");
+    expect(await countByStatus("held")).toBe(1);
+
+    // bloquear (a tela pede o motivo num prompt) e desbloquear
+    page.once("dialog", dialog => void dialog.accept("Manutenção E2E A03"));
+    const blocked = waitForMutation(page, "inventory.block");
+    await page.getByRole("button", { name: "Bloquear" }).first().click();
+    await blocked;
+    await expect(tile("Bloqueada")).toHaveText("1");
+    expect(await countByStatus("blocked")).toBe(1);
+    await expect(page.getByText("Manutenção E2E A03")).toBeVisible();
+    const unblocked = waitForMutation(page, "inventory.unblock");
+    await page.getByRole("button", { name: "Desbloquear" }).first().click();
+    await unblocked;
+    await expect(tile("Bloqueada")).toHaveText("0");
+    expect(await countByStatus("blocked")).toBe(0);
+    expect(await countByStatus("held")).toBe(1);
+
+    // busca filtra a tabela
+    const [first] = await queryDatabase<Array<{ code: string }>>("SELECT code FROM commercial_fractions WHERE resortId = ? ORDER BY code LIMIT 1", [resort!.id]);
+    await page.getByPlaceholder("Buscar cota ou UH").fill(first!.code);
+    await expect(page.locator("tbody tr")).toHaveCount(1);
+
+    // celular: a página não ganha rolagem horizontal (a tabela rola dentro do próprio contêiner)
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/estoque-comercial");
+    await expect(page.getByRole("heading", { name: "Estoque comercial de cotas" })).toBeVisible();
+    const geometry = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  });
+});
+
+// CRM-A11: renegociação na tela Financeiro (aprovar e aplicar pelo navegador). A proposta nasce de OUTRO usuário: quem propõe não aprova.
+test.describe("renegociação no navegador", () => {
+  test("aprova e aplica um acordo pela tela Financeiro, e o banco reflete a parcela nova", async ({ page }) => {
+    const fx = fixture!;
+    await queryDatabase("INSERT INTO users (openId, name, email, loginMethod, role) VALUES (?, 'Proponente A11', ?, 'e2e', 'finance')", [`${fx.prefix}PROP-A11`, `${fx.normalizedRunId}.prop-a11@e2e.invalid`]);
+    const [proposer] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM users WHERE openId = ?", [`${fx.prefix}PROP-A11`]);
+    await queryDatabase("INSERT INTO customers (fullName, documentNumber, status) VALUES (?, ?, 'active')", [`${fx.prefix}Cliente A11`, `98${fx.documents.imported.slice(2)}`.slice(0, 11)]);
+    const [customer] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM customers WHERE fullName = ?", [`${fx.prefix}Cliente A11`]);
+    const number = `${fx.prefix}A11-001`;
+    await queryDatabase("INSERT INTO contracts (number, customerId, status, totalAmount) VALUES (?, ?, 'active', 3000.00)", [number, customer!.id]);
+    const [contract] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM contracts WHERE number = ?", [number]);
+    await queryDatabase("INSERT INTO installments (contractId, sequence, dueDate, amount, paidAmount, status) VALUES (?, 1, '2026-10-10', 1000.00, 0.00, 'overdue')", [contract!.id]);
+    const [installment] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM installments WHERE contractId = ?", [contract!.id]);
+    await queryDatabase("INSERT INTO installment_renegotiations (contractId, originalInstallmentId, originalAmount, proposedAmount, proposedDueDate, discountAmount, status, createdByUserId) VALUES (?, ?, 1000.00, 900.00, '2026-12-15', 100.00, 'draft', ?)", [contract!.id, installment!.id, proposer!.id]);
+    const [reneg] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM installment_renegotiations WHERE contractId = ?", [contract!.id]);
+
+    await page.goto("/financeiro");
+    const row = page.getByTestId(`renegotiation-${reneg!.id}`);
+    await expect(row).toBeVisible();
+    await expect(row.getByText("Rascunho")).toBeVisible();
+    const approved = waitForMutation(page, "finance.approveRenegotiation");
+    await row.getByRole("button", { name: "Aprovar" }).click();
+    await approved;
+    await expect(row.getByText("Aprovado")).toBeVisible();
+    const applied = waitForMutation(page, "finance.applyRenegotiation");
+    await row.getByRole("button", { name: "Aplicar" }).click();
+    await applied;
+    await expect(row.getByText("Aplicado")).toBeVisible();
+    const installments = await queryDatabase<Array<{ sequence: number; status: string; amount: string }>>("SELECT sequence, status, amount FROM installments WHERE contractId = ? ORDER BY sequence", [contract!.id]);
+    expect(installments.map(item => [item.sequence, item.status, Number(item.amount)])).toEqual([[1, "renegotiated", 1000], [2, "open", 900]]);
+  });
+});

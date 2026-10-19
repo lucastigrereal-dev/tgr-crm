@@ -24,6 +24,9 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
+import { getDb } from "../db";
+import { getAsaasConfig } from "../paymentGateway";
 import { startOrphanBlobSweepJob, type OrphanBlobSweepJob } from "../orphanBlobSweep";
 
 const SALES_ROOM_STREAM_ROLES = new Set(["admin", "seller", "service"]);
@@ -55,6 +58,7 @@ async function startServer() {
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
+  let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
@@ -159,6 +163,7 @@ async function startServer() {
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
     orphanBlobSweepJob?.stop();
+    gatewayRecoveryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
     server.close(error => {
       if (error) {
@@ -195,6 +200,14 @@ async function startServer() {
       onError: error => logger.error("Hold expiry job failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       onRun: result => { if (result.holds > 0) logger.info("Hold expiry job released", { holds: result.holds, fractions: result.fractions.length }); },
     });
+    // CRM-A10: só lê o Asaas e reconcilia intenções de emissão pendentes; sem Asaas configurado não faz nada.
+    if (ENV.gatewayRecoveryEnabled) {
+      gatewayRecoveryJob = startGatewayRecoveryJob({
+        getDb, getConfig: () => getAsaasConfig(), intervalMs: ENV.gatewayRecoveryIntervalMinutes * 60_000, minAgeMs: ENV.gatewayRecoveryMinAgeMinutes * 60_000,
+        onError: error => logger.error("Gateway recovery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+        onRun: result => { if (result.scanned > 0) logger.warn("Gateway orphan billing recovery", { ...result }); },
+      });
+    }
     // CRM-A07: desligada por padrão. Ligada sem ORPHAN_BLOB_SWEEP_DELETE só relata os arquivos órfãos (ensaio).
     if (ENV.orphanBlobSweepEnabled) {
       orphanBlobSweepJob = startOrphanBlobSweepJob({

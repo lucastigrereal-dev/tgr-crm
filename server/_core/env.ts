@@ -12,6 +12,9 @@ export const ENV = {
   nqReadEndpointEnabled: process.env.NQ_READ_ENDPOINT_ENABLED === "true",
   encounterTimesReceiverEnabled: process.env.ENCOUNTER_TIMES_RECEIVER_ENABLED === "true",
   // CRM-A07: varredura de blob órfão no armazenamento local. DESLIGADA por padrão; ligada sem DELETE só relata (ensaio).
+  gatewayRecoveryEnabled: process.env.GATEWAY_RECOVERY_ENABLED !== "false",
+  gatewayRecoveryIntervalMinutes: Math.max(1, Math.min(24 * 60, Math.trunc(Number(process.env.GATEWAY_RECOVERY_INTERVAL_MINUTES ?? 5)) || 5)),
+  gatewayRecoveryMinAgeMinutes: Math.max(1, Math.min(24 * 60, Math.trunc(Number(process.env.GATEWAY_RECOVERY_MIN_AGE_MINUTES ?? 10)) || 10)),
   orphanBlobSweepEnabled: process.env.ORPHAN_BLOB_SWEEP_ENABLED === "true",
   orphanBlobSweepDelete: process.env.ORPHAN_BLOB_SWEEP_DELETE === "true",
   orphanBlobMinAgeHours: Math.max(1, Math.min(24 * 90, Math.trunc(Number(process.env.ORPHAN_BLOB_MIN_AGE_HOURS ?? 24)) || 24)),

@@ -7,6 +7,7 @@ import {
 } from "./commissionLifecycle";
 
 export type CommissionRates = Partial<Record<"liner" | "closer" | "ftb", number>>;
+export type CommissionRoleV2Mapped = "promoter" | "liner" | "closer";
 
 // ADR-010: papel sem taxa (ou 0%) vale 0 e não gera lançamento.
 export const commissionRoleRate = (rates: CommissionRates | undefined, role: "liner" | "closer" | "ftb") => {
@@ -25,7 +26,7 @@ export function buildInstallmentCommissions(input: {
   closerId: number | null;
   rates?: CommissionRates;
   /** Issue #38 (1): acumulado já lançado (não cancelado) por papel neste contrato; limita o liberado ao total devido. */
-  alreadyReleased?: Partial<Record<"liner" | "closer" | "ftb", number>>;
+  alreadyReleased?: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>>;
   calendar?: {
     cancellationDeadlineDay?: number;
     expectedPaymentDay?: number;
@@ -86,4 +87,39 @@ export function buildInstallmentCommissions(input: {
 // comissão ficaria liberada por engano. Sem qualquer um, fica bloqueada (auditado como commission_blocked).
 export function canCommissionBecomeDue(contractStatus: string | null | undefined, completePolicy: unknown, saleValidated: boolean): boolean {
   return Boolean(completePolicy) && contractStatus === "active" && saleValidated === true;
+}
+
+/**
+ * CRM-A13: comissão por parcela pelas regras V2. O TOTAL de cada papel vem do motor puro (centavos -> reais) e a parcela libera a fração
+ * dele na mesma proporção da entrada recebida (mesma `releasedCommission` do V1: nunca passa do total devido). Só é chamada com a política
+ * V2 LIBERADA; travada, ninguém chama. Valor fixo por cota pode superar a entrada, então a taxa gravada (coluna decimal(5,2)) é limitada.
+ */
+export function buildInstallmentCommissionsV2(input: {
+  installmentId: number;
+  installmentAmount: number;
+  entryTotal: number;
+  paymentMethod: PaymentMethod;
+  compensatedAt: Date;
+  lines: Array<{ role: CommissionRoleV2Mapped; userId: number; totalReais: number }>;
+  alreadyReleased?: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>>;
+  calendar?: { cancellationDeadlineDay?: number; expectedPaymentDay?: number };
+}) {
+  const dates = commissionDates(input.paymentMethod, input.compensatedAt, input.calendar);
+  const rows = input.lines.filter(line => line.totalReais > 0).map(line => {
+    const total = Math.round(line.totalReais * 100) / 100;
+    const amount = releasedCommission(input.installmentAmount, input.entryTotal, total, input.alreadyReleased?.[line.role] ?? 0);
+    return {
+      sellerId: line.userId,
+      commissionRole: line.role,
+      sourceInstallmentId: input.installmentId,
+      baseAmount: input.entryTotal,
+      rate: input.entryTotal > 0 ? Math.min(999.99, Math.round((total / input.entryTotal) * 10_000) / 100) : 0,
+      amount,
+      paymentMethod: input.paymentMethod,
+      compensatedAt: input.compensatedAt,
+      ...dates,
+      lifecycleStatus: commissionStatus({ compensatedAt: input.compensatedAt, receivedAt: null, cancelledAt: null, ...dates, now: input.compensatedAt }),
+    };
+  });
+  return rows.filter(row => !(row.amount <= 0 && (input.alreadyReleased?.[row.commissionRole] ?? 0) > 0));
 }

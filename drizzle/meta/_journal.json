@@ -470,6 +470,27 @@
       "when": 1792438583970,
       "tag": "0066_capture_erasure_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "5",
+      "when": 1792449836993,
+      "tag": "0067_commission_role_promoter",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "5",
+      "when": 1792450159127,
+      "tag": "0068_payment_gateway_issue_intents",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "5",
+      "when": 1792451460597,
+      "tag": "0069_commission_rule_version",
+      "breakpoints": true
     }
   ]
 }

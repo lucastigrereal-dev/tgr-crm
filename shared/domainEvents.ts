@@ -34,6 +34,8 @@ export const domainEventCatalog = {
   "proposal.discount.decided": { aggregateType: "proposal_discount", description: "Pedido de desconto comercial decidido." },
   "sales.playbook.created": { aggregateType: "sales_playbook", description: "Playbook comercial publicado." },
   "installment.renegotiation.proposed": { aggregateType: "installment_renegotiation", description: "Renegociação proposta." },
+  "installment.renegotiation.approved": { aggregateType: "installment_renegotiation", description: "Renegociação aprovada (CRM-A11)." },
+  "installment.renegotiation.applied": { aggregateType: "installment_renegotiation", description: "Renegociação aplicada: parcela original encerrada como renegociada e nova parcela criada (CRM-A11)." },
   "installment.paid": { aggregateType: "installment", description: "Parcela baixada." },
   "installment.scheduled": { aggregateType: "installment", description: "Parcela a receber agendada ou reagendada (PKG-FIN-03)." },
   "commission.created": { aggregateType: "sales_commission", description: "Comissão financeira criada." },

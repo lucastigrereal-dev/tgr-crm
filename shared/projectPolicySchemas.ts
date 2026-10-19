@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { commissionRulesV2Schema } from "./commissionRulesV2";
 
 export const commissionPaymentMethodSchema = z.enum([
   "pix",
@@ -23,6 +24,8 @@ export const commissionPolicySchema = z
     expectedPaymentDay: z.number().int().min(1).max(28),
     eligiblePaymentMethods: z.array(commissionPaymentMethodSchema).min(1),
     basis: z.literal("eligible_receipt"),
+    /** Regras V2 (CRM-A13): dado configurável; só valem quando a política V2 for LIBERADA (COMMISSION_V2_RELEASED). Travado por padrão. */
+    rulesV2: commissionRulesV2Schema.optional(),
   })
   .strict();
 

@@ -1,0 +1,1 @@
+ALTER TABLE `sales_commissions` MODIFY COLUMN `commissionRole` enum('liner','closer','ftb','promoter') NOT NULL DEFAULT 'ftb';

@@ -16,6 +16,8 @@ import { buildRevenueQualityLedger, summarizeRevenueQualityLedger } from "../rev
 import { syncRevenueQualityForContract } from "../revenueQualitySync";
 import { asaasBillingType, billingExternalReference, createAsaasCustomer, createAsaasPayment, findAsaasPaymentsByReference, getAsaasConfig, getAsaasIdentificationField, getAsaasPixQrCode } from "../paymentGateway";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
+import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
+import { markIssueIntentRecorded, registerIssueIntent } from "../gatewayIssueRecovery";
 
 const dateValue = (value: string) => new Date(`${value}T12:00:00Z`);
 const ASAAS_GATEWAY_ERROR = "O gateway de cobrança não respondeu corretamente. Tente novamente.";
@@ -245,6 +247,77 @@ export const financeRouter = router({
     return { id: renegotiation.id };
   }),
 
+  // CRM-A11: quem dispara a renegociação. Antes só existia a proposta (draft); nada aprovava nem aplicava. Fluxo: draft -> approved -> applied.
+  // Regra da empresa vira configuração com padrão: quem propõe não aprova (RENEGOTIATION_SELF_APPROVAL=true libera, p.ex. operação de uma pessoa só).
+  // CRM-A11: lista de acordos para a tela (sem ID opaco). `canApprove` já vem resolvido: quem propôs não aprova, salvo RENEGOTIATION_SELF_APPROVAL=true.
+  listRenegotiations: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional(), status: z.enum(["draft", "approved", "applied", "rejected", "cancelled"]).optional(), limit: z.number().int().min(1).max(200).default(100) }).optional()).query(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const filters = [input?.contractId ? eq(installmentRenegotiations.contractId, input.contractId) : undefined, input?.status ? eq(installmentRenegotiations.status, input.status) : undefined].filter((item): item is NonNullable<typeof item> => Boolean(item));
+    const rows = await db.select({ renegotiation: installmentRenegotiations, sequence: installments.sequence, contractNumber: contracts.number, customerName: customers.fullName })
+      .from(installmentRenegotiations).innerJoin(installments, eq(installmentRenegotiations.originalInstallmentId, installments.id)).innerJoin(contracts, eq(installmentRenegotiations.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
+      .where(filters.length ? and(...filters) : undefined).orderBy(desc(installmentRenegotiations.createdAt), desc(installmentRenegotiations.id)).limit(input?.limit ?? 100);
+    const selfApproval = process.env.RENEGOTIATION_SELF_APPROVAL === "true";
+    return { rows: rows.map(row => ({ ...row.renegotiation, installmentSequence: row.sequence, contractNumber: row.contractNumber, customerName: row.customerName, canApprove: row.renegotiation.status === "draft" && (selfApproval || row.renegotiation.createdByUserId !== ctx.user.id) })) };
+  }),
+
+  approveRenegotiation: financeProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    await db.transaction(async tx => {
+      const row = (await tx.select().from(installmentRenegotiations).where(eq(installmentRenegotiations.id, input.id)).limit(1).for("update"))[0];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Acordo não encontrado." });
+      if (row.status !== "draft") throw new TRPCError({ code: "CONFLICT", message: "Só um acordo em rascunho pode ser aprovado." });
+      if (row.createdByUserId === ctx.user.id && process.env.RENEGOTIATION_SELF_APPROVAL !== "true") throw new TRPCError({ code: "FORBIDDEN", message: "Quem propôs o acordo não pode aprová-lo." });
+      await tx.update(installmentRenegotiations).set({ status: "approved", approvedByUserId: ctx.user.id }).where(eq(installmentRenegotiations.id, row.id));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "installment_renegotiation", entityId: row.id, action: "approved", summary: `Acordo da parcela ${row.originalInstallmentId} aprovado.` });
+      await txEvent(tx, { eventName: "installment.renegotiation.approved", aggregateType: "installment_renegotiation", aggregateId: row.id, actorUserId: ctx.user.id, payload: { installmentId: row.originalInstallmentId, proposalAmount: Number(row.proposedAmount) } });
+    });
+    return { id: input.id, status: "approved" as const };
+  }),
+
+  cancelRenegotiation: financeProcedure.input(z.object({ id: z.number().int().positive(), reject: z.boolean().default(false) })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const status = input.reject ? "rejected" as const : "cancelled" as const;
+    await db.transaction(async tx => {
+      const row = (await tx.select().from(installmentRenegotiations).where(eq(installmentRenegotiations.id, input.id)).limit(1).for("update"))[0];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Acordo não encontrado." });
+      if (!["draft", "approved"].includes(row.status)) throw new TRPCError({ code: "CONFLICT", message: "Só um acordo em rascunho ou aprovado pode ser encerrado." });
+      await tx.update(installmentRenegotiations).set({ status }).where(eq(installmentRenegotiations.id, row.id));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "installment_renegotiation", entityId: row.id, action: status, summary: `Acordo da parcela ${row.originalInstallmentId} ${input.reject ? "rejeitado" : "cancelado"}.` });
+    });
+    return { id: input.id, status };
+  }),
+
+  applyRenegotiation: financeProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    return db.transaction(async tx => {
+      const row = (await tx.select().from(installmentRenegotiations).where(eq(installmentRenegotiations.id, input.id)).limit(1).for("update"))[0];
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Acordo não encontrado." });
+      if (row.status !== "approved") throw new TRPCError({ code: "CONFLICT", message: "Só um acordo aprovado pode ser aplicado." });
+      const original = (await tx.select().from(installments).where(eq(installments.id, row.originalInstallmentId)).limit(1).for("update"))[0];
+      if (!original) throw new TRPCError({ code: "NOT_FOUND", message: "Parcela original não encontrada." });
+      if (!["open", "overdue"].includes(original.status)) throw new TRPCError({ code: "CONFLICT", message: "A parcela original não está mais em aberto; o acordo não pode ser aplicado." });
+      const outstanding = Number((Number(original.amount) - Number(original.paidAmount ?? 0)).toFixed(2));
+      if (outstanding.toFixed(2) !== Number(row.originalAmount).toFixed(2)) throw new TRPCError({ code: "CONFLICT", message: "O saldo da parcela mudou depois da proposta; crie um novo acordo." });
+      const contract = (await tx.select({ id: contracts.id, status: contracts.status }).from(contracts).where(eq(contracts.id, row.contractId)).limit(1).for("update"))[0];
+      if (!contract || ["cancelled", "closed"].includes(contract.status)) throw new TRPCError({ code: "CONFLICT", message: "O contrato não aceita renegociação." });
+      const last = (await tx.select({ sequence: sql<number>`MAX(${installments.sequence})` }).from(installments).where(eq(installments.contractId, row.contractId)))[0];
+      const sequence = Number(last?.sequence ?? 0) + 1;
+      await tx.update(installments).set({ status: "renegotiated" }).where(eq(installments.id, original.id));
+      const created = await tx.insert(installments).values({ contractId: row.contractId, sequence, dueDate: row.proposedDueDate, amount: Number(row.proposedAmount).toFixed(2), paidAmount: "0.00", status: "open" }).$returningId();
+      const newInstallmentId = created[0]?.id;
+      if (!newInstallmentId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a nova parcela do acordo." });
+      // Cobranças ainda em aberto da parcela original deixam de valer. A cobrança remota do Asaas NÃO é cancelada aqui (o CRM não é dono dela):
+      // os ids vão no evento para quem opera o gateway cancelar.
+      const openBillings = await tx.select({ id: billingRecords.id, gatewayPaymentId: billingRecords.gatewayPaymentId }).from(billingRecords).where(and(eq(billingRecords.installmentId, original.id), inArray(billingRecords.status, ["pending", "generated"]))).for("update");
+      if (openBillings.length) await tx.update(billingRecords).set({ status: "cancelled" }).where(inArray(billingRecords.id, openBillings.map(item => item.id)));
+      await tx.update(installmentRenegotiations).set({ status: "applied", appliedAt: new Date() }).where(eq(installmentRenegotiations.id, row.id));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "installment_renegotiation", entityId: row.id, action: "applied", summary: `Acordo aplicado: parcela ${original.sequence} renegociada na parcela ${sequence}.` });
+      await txEvent(tx, { eventName: "installment.renegotiation.applied", aggregateType: "installment_renegotiation", aggregateId: row.id, actorUserId: ctx.user.id, payload: { installmentId: original.id, newInstallmentId, contractId: row.contractId, proposalAmount: Number(row.proposedAmount), cancelledBillingIds: openBillings.map(item => item.id), gatewayPaymentIds: openBillings.map(item => item.gatewayPaymentId).filter((id): id is string => Boolean(id)) } });
+      await recordInstallmentsScheduled(tx, { contractId: row.contractId, actorUserId: ctx.user.id, onlyIds: [newInstallmentId], transition: `reneg-${row.id}` });
+      return { id: row.id, status: "applied" as const, originalInstallmentId: original.id, newInstallmentId, cancelledBillingIds: openBillings.map(item => item.id) };
+    });
+  }),
+
   issueGatewayBilling: financeProcedure.input(z.object({ installmentId: z.number().int().positive(), type: z.enum(["boleto", "pix"]) }))
     .mutation(async ({ ctx, input }) => {
       const config = getAsaasConfig();
@@ -280,12 +353,15 @@ export const financeRouter = router({
         const externalReference = billingExternalReference(input.installmentId);
         const expectedBillingType = asaasBillingType(input.type);
         const existingRemote = (await runAsaas(() => findAsaasPaymentsByReference(config, externalReference))).data?.find(item => item.externalReference === externalReference && item.billingType === expectedBillingType);
+        // CRM-A10: a intenção é gravada (fora desta transação) antes da chamada remota que cria a cobrança.
+        if (!existingRemote) await runAsaas(() => registerIssueIntent(db, { installmentId: input.installmentId, type: input.type, externalReference, actorUserId: ctx.user.id }));
         const payment = existingRemote || await runAsaas(() => createAsaasPayment(config, { customer: gatewayCustomerId, billingType: expectedBillingType, value: outstandingAmount, dueDate: new Date(row.installment.dueDate).toISOString().slice(0, 10), description: `TGR-CRM · ${row.contract.number} · parcela ${row.installment.sequence}`, externalReference }));
         const identification = input.type === "boleto" ? await runAsaas(() => getAsaasIdentificationField(config, payment.id)) : null;
         const pix = input.type === "pix" ? await runAsaas(() => getAsaasPixQrCode(config, payment.id)) : null;
         const created = await tx.insert(billingRecords).values({ installmentId: input.installmentId, type: input.type, status: "generated", gatewayProvider: "asaas", gatewayPaymentId: payment.id, gatewayStatus: payment.status || "PENDING", amount: outstandingAmount.toFixed(2), dueDate: row.installment.dueDate, externalReference, digitableLine: identification?.identificationField || null, pixCopyPaste: pix?.payload || null, pixQrCodeBase64: pix?.encodedImage || null, invoiceUrl: payment.invoiceUrl || null, bankSlipUrl: payment.bankSlipUrl || null, generatedAt: new Date() }).$returningId();
         const id = created[0]?.id;
         if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Cobrança criada no gateway, mas não foi persistida no CRM." });
+        await markIssueIntentRecorded(tx, { installmentId: input.installmentId, type: input.type, gatewayPaymentId: payment.id });
           await txAudit(tx, { actorUserId: ctx.user.id, entityType: "billing_record", entityId: id, action: "gateway_issued", summary: `Cobrança ${input.type.toUpperCase()} emitida pelo Asaas para parcela ${input.installmentId}.` });
           await txEvent(tx, { eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: id, actorUserId: ctx.user.id, payload: { installmentId: input.installmentId, gatewayProvider: "asaas", gatewayPaymentId: payment.id, type: input.type } });
           return { id, gatewayPaymentId: payment.id, reused: false };

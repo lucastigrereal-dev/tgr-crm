@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, domainEvents } from "../drizzle/schema";
+import { auditLogs, domainEvents, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // RED TEAM P2 em MySQL real: eventos antigos presos em 503 (sem code) não escondem o evento novo, mesmo com mais presos
@@ -299,9 +299,11 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       expect(hits.get(oldEvent.id)).toBeUndefined(); // tem recibo de recusa: a ponte não o tenta
 
       const appDb = await getDb();
-      const result = await resendRejectedReceipt(appDb!, { receiptId: receipt.id, actorUserId: 1 });
+      // usuário próprio: o id 1 só existe se outro arquivo de teste já tiver rodado (FK de audit_logs), o que depende da ordem entre processos
+      const [{ id: actorUserId }] = await db.insert(users).values({ openId: `resend-actor-${runId}`, name: "Operador reenvio", role: "admin" }).$returningId();
+      const result = await resendRejectedReceipt(appDb!, { receiptId: receipt.id, actorUserId });
       expect(result).toEqual({ bridge: "financial", rewindTo: oldEvent.id });
-      await expect(resendRejectedReceipt(appDb!, { receiptId: receipt.id, actorUserId: 1 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" }); // duplo clique
+      await expect(resendRejectedReceipt(appDb!, { receiptId: receipt.id, actorUserId })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" }); // duplo clique
       const [kept] = await db.select().from(auditLogs).where(eq(auditLogs.id, receipt.id));
       expect(kept).toMatchObject({ action: "financial_rejected", summary: "recusa sintética", idempotencyKey: `resent:${receipt.id}:financial-event:${oldEvent.id}` });
       expect((await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `resend-request:${receipt.id}`))).length).toBe(1);
