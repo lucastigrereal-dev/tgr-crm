@@ -58,6 +58,10 @@ Não coberto pela revisão manual: varredura de dependências, teste de intrusã
 - Receptor `encounter.times_recorded.v1`: a revisão achou que ele NÃO tinha flag própria (ligava com a chave da ponte Sales, que já existe). Agora `ENCOUNTER_TIMES_RECEIVER_ENABLED=false` por padrão: 404 mesmo com a chave certa (teste MySQL). Sem PII: só `coupleCode`, instantes e um booleano; o log tem só `eventId` e código da recusa; o corpo nunca é registrado. Não prova a segurança do emissor do Sales (não existe).
 - Provas: `captureErasure.mysql` 11 testes; com as guardas neutralizadas os testes de guarda falham.
 
+### CI vermelho em f8ca897: corrida de vendas do Sales Command
+
+Causa raiz: `salesCommandBridge.mysql` "duas vendas concorrentes nunca vendem a mesma fração" chamava `materializeSalesCommandSale` direto, sem o `withDeadlockRetry` que a ponte de produção usa. Quando o MySQL escolheu a perdedora como vítima de deadlock (`ER_LOCK_DEADLOCK` no insert de `installments`), a mensagem da perdedora era o deadlock, não "estoque insuficiente". Não tem relação com os guards novos: `salesCommandBridge.ts` e o inventário não foram tocados neste ramo, e o run anterior (bf57638) passou com o mesmo teste. Correção: o teste roda as duas vendas sob `withDeadlockRetry`, como em produção; na repetição a perdedora vê a fração vendida e recusa por estoque. A invariante (nunca vender a mesma fração) e as asserções seguem as mesmas; nada foi desligado. Não consegui reproduzir o deadlock localmente (6 execuções limpas), então a prova é o CI.
+
 ## CRM-A07 e CRM-A25
 
 - Varredura de órfãos: lista o diretório do storage local e apaga o que nenhuma linha de documento referencia, com idade mínima. `ORPHAN_BLOB_SWEEP_ENABLED=false` e `ORPHAN_BLOB_SWEEP_DELETE=false` por padrão (ligar a varredura sem a exclusão só relata). Forge/S3 não é varrido: sem listagem segura aqui, fica manual.
