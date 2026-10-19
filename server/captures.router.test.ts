@@ -7,7 +7,7 @@ import { getDb, recordAudit, recordDomainEvent } from "./db";
 import { appRouter } from "./routers";
 
 const mockedDb = vi.mocked(getDb);
-function chain<T>(value: T) { const promise = Promise.resolve(value) as Promise<T> & Record<string, unknown>; for (const method of ["from", "where", "orderBy", "limit", "innerJoin", "leftJoin"]) promise[method] = () => promise; return promise; }
+function chain<T>(value: T) { const promise = Promise.resolve(value) as Promise<T> & Record<string, unknown>; for (const method of ["from", "where", "orderBy", "limit", "innerJoin", "leftJoin", "for"]) promise[method] = () => promise; return promise; }
 function caller(role: string) { return appRouter.createCaller({ user: { id: 7, role } } as never); }
 function returningId(rows: { id: number }[]) { return { values: vi.fn(() => ({ $returningId: vi.fn().mockResolvedValue(rows) })) }; }
 const baseInput = { customer: { fullName: "Rafael da Captação", phone: "11999999999", city: "Americana", state: "SP" }, campaignId: 12, captureLocation: "Estacionamento", salesRoom: "Thermas São Pedro", qualificationStatus: "qualified" as const, travelWeeksPerYear: 2, averageIncome: 15000, createOpportunity: true };

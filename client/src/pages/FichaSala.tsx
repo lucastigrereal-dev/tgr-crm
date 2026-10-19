@@ -97,7 +97,7 @@ function FichaImpressa({ code }: { code: string }) {
         <p className="text-[9px] uppercase tracking-[.14em] text-[#6b756f]">✂ destacar aqui · faixa do ciente (sem CPF e sem renda)</p>
         <div className="mt-1 flex items-baseline justify-between gap-4"><p className="text-sm font-semibold">{customer.fullName}{capture.partnerName ? ` e ${capture.partnerName}` : ""}</p><p className="font-mono text-sm">{code}</p></div>
         <p className="mt-2 text-[10px] leading-snug text-[#1d2b2a]"><b>Termo de ciência (texto provisório, a aprovar):</b> declaro estar ciente de que a apresentação tem duração mínima de {data.sheetSettings.minPresentationMinutes} minutos, contados da chegada do consultor, e de que a liberação da cortesia está vinculada a esse tempo.</p>
-        <p className="mt-2 text-[9px] leading-snug text-[#1d2b2a]"><b>Aviso de privacidade (resumo; texto provisório, a aprovar):</b> {data.privacyNotice}</p>
+        <p className="mt-2 text-[9px] leading-snug text-[#1d2b2a]"><b>Aviso de privacidade {data.privacyNoticeStatus.version} (resumo; texto provisório, a aprovar):</b> {data.privacyNotice}</p>
         <p className="mt-2 text-[10px]">Declaro que fui informado(a) deste aviso.</p>
         <div className="mt-5 grid grid-cols-3 gap-6 text-[10px]"><div className="border-t border-[#1d2b2a] pt-1">Ciente (titular)</div><div className="border-t border-[#1d2b2a] pt-1">Ciente (cônjuge)</div><div className="border-t border-[#1d2b2a] pt-1">Data ___/___/______</div></div>
       </div>
@@ -146,6 +146,7 @@ function FichaImpressa({ code }: { code: string }) {
       </div>
     </CardContent></Card> : null}
     {canEdit && data.ntOpen || data.nt ? <NaoTourCard captureId={data.captureId} code={code} nt={data.nt} /> : null}
+    {user?.role === "admin" || user?.role === "finance" ? <PedidoExclusao code={code} isAdmin={isAdmin} anonymized={Boolean(data.anonymizedAt)} /> : null}
     {isAdmin ? <><TrocarCodigo captureId={data.captureId} onDone={newCode => { window.location.href = `/ficha?codigo=${encodeURIComponent(newCode)}`; }} /><PapeisAdmin /><MotivosAdmin /><LimitesAdmin /></> : null}
   </div>;
 }
@@ -255,9 +256,10 @@ const settingLabels: Array<{ key: "nq_min_man_age" | "nq_min_relationship_months
   { key: "room_visibility_days", label: "Dias extras na vista da sala (não comprou; 0 = só no dia)", pick: s => s.roomVisibilityDays },
   { key: "paper_destroy_deadline_days", label: "Prazo para destruir o papel (dias após imprimir; 0 = no dia)", pick: s => s.paperDestroyDeadlineDays },
 ];
-const privacyLabels: Array<{ key: "privacy_controller_name" | "privacy_controller_cnpj" | "privacy_contact_channel" | "privacy_full_text_url" | "privacy_retention_text"; label: string }> = [
+const privacyLabels: Array<{ key: "privacy_controller_name" | "privacy_controller_cnpj" | "privacy_dpo_name" | "privacy_contact_channel" | "privacy_full_text_url" | "privacy_retention_text"; label: string }> = [
   { key: "privacy_controller_name", label: "Controladora (razão social)" },
   { key: "privacy_controller_cnpj", label: "CNPJ da controladora" },
+  { key: "privacy_dpo_name", label: "Encarregado (nome)" },
   { key: "privacy_contact_channel", label: "Canal do encarregado (e-mail ou telefone)" },
   { key: "privacy_full_text_url", label: "Endereço do texto completo" },
   { key: "privacy_retention_text", label: "Prazo de guarda (texto)" },
@@ -273,7 +275,8 @@ function LimitesAdmin() {
     <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Limites provisórios do casal qualificado e do termo (administração)</p>
     <div className="grid gap-3 sm:grid-cols-3">{settingLabels.map(item => <div key={item.key} className="grid gap-1"><Label htmlFor={`limit-${item.key}`}>{item.label}</Label><div className="flex gap-2"><Input id={`limit-${item.key}`} type="number" value={draft[item.key] ?? String(item.pick(settings.data))} onChange={event => setDraft({ ...draft, [item.key]: event.target.value })} /><Button size="sm" variant="outline" disabled={save.isPending || draft[item.key] == null} onClick={() => save.mutate({ key: item.key, value: draft[item.key] })}>Salvar</Button></div></div>)}</div>
     <div className="flex flex-wrap items-end gap-2 border-t border-[#ece6da] pt-3"><div className="grid gap-1"><Label htmlFor="limit-brand">Marca no cabeçalho da ficha</Label><Input id="limit-brand" className="w-64" value={draft.brand_name ?? settings.data.brandName} onChange={event => setDraft({ ...draft, brand_name: event.target.value })} /></div><Button size="sm" variant="outline" disabled={save.isPending || draft.brand_name == null} onClick={() => save.mutate({ key: "brand_name", value: draft.brand_name })}>Salvar marca</Button></div>
-    <p className="border-t border-[#ece6da] pt-3 text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Aviso de privacidade da faixa do ciente (texto v1, a aprovar pelo advogado)</p>
+    <p className="border-t border-[#ece6da] pt-3 text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Aviso de privacidade da faixa do ciente (texto {settings.data.privacyNoticeStatus.version}, a aprovar pelo advogado)</p>
+    {settings.data.privacyNoticeStatus.complete ? null : <p role="alert" className="text-xs font-semibold text-red-700" data-testid="aviso-incompleto">PREENCHER ANTES DE CASAL REAL: falta {settings.data.privacyNoticeStatus.missing.join(", ")}.</p>}
     <div className="grid gap-3 sm:grid-cols-2">{privacyLabels.map(item => <div key={item.key} className="grid gap-1"><Label htmlFor={`privacy-${item.key}`}>{item.label}</Label><div className="flex gap-2"><Input id={`privacy-${item.key}`} value={draft[item.key] ?? settings.data!.privacy[item.key]} onChange={event => setDraft({ ...draft, [item.key]: event.target.value })} /><Button size="sm" variant="outline" disabled={save.isPending || draft[item.key] == null} onClick={() => save.mutate({ key: item.key, value: draft[item.key] })}>Salvar</Button></div></div>)}</div>
     <p className="text-xs text-muted-foreground">Campo vazio sai como [●] na ficha. Tudo provisório até o Lucas homologar. Cada troca fica na trilha com o valor antigo e o novo.</p>
   </CardContent></Card>;
@@ -383,5 +386,30 @@ function ExportarFichas() {
       <Button variant="outline" disabled={run.isPending || !form.from || !form.to} onClick={() => void exportAs("xlsx")}>Baixar Excel</Button>
     </div>
     <p className="text-xs text-muted-foreground">{canPii ? "CPF só sai marcando a opção; cada exportação fica na trilha com período, sala, formato e número de linhas." : "Sem CPF (só administração e financeiro exportam com CPF). Fichas fora da vista da sala não entram. Cada exportação fica na trilha."} Não mande o arquivo por WhatsApp ou e-mail pessoal.</p>
+  </CardContent></Card>;
+}
+
+/** LGPD (CRM-A18): pedido de exclusão do titular. O administrativo registra; só a administração cumpre digitando o código da ficha. Sobra nome, CPF e a data do brinde. */
+function PedidoExclusao({ code, isAdmin, anonymized }: { code: string; isAdmin: boolean; anonymized: boolean }) {
+  const utils = trpc.useUtils();
+  const list = trpc.captureSheet.erasure.forCode.useQuery({ code });
+  const [reason, setReason] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [note, setNote] = useState("");
+  const refresh = () => { void utils.captureSheet.erasure.forCode.invalidate({ code }); void utils.captureSheet.byCode.invalidate({ code }); };
+  const fail = (error: { message: string }) => toast.error(error.message);
+  const request = trpc.captureSheet.erasure.request.useMutation({ onSuccess: () => { toast.success("Pedido de exclusão registrado."); setReason(""); refresh(); }, onError: fail });
+  const complete = trpc.captureSheet.erasure.complete.useMutation({ onSuccess: () => { toast.success("Ficha anonimizada. Ficaram só nome, CPF e a data do brinde."); setConfirm(""); refresh(); }, onError: fail });
+  const reject = trpc.captureSheet.erasure.reject.useMutation({ onSuccess: () => { toast.success("Pedido recusado."); setNote(""); refresh(); }, onError: fail });
+  const open = list.data?.requests.find(item => item.status === "requested");
+  return <Card className="border-[#e8e1d4]" data-testid="ficha-exclusao"><CardContent className="space-y-3 p-5">
+    <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Pedido de exclusão do titular (LGPD)</p>
+    {anonymized ? <p className="text-sm">Esta ficha já foi anonimizada: ficaram só o nome, o CPF e a data do brinde.</p> : null}
+    {!anonymized && !open ? <div className="flex flex-wrap items-end gap-2"><div className="grid gap-1"><Label htmlFor="exclusao-motivo">Motivo (como o titular pediu)</Label><Input id="exclusao-motivo" className="w-80" value={reason} onChange={event => setReason(event.target.value)} /></div><Button variant="outline" disabled={request.isPending || reason.trim().length < 5} onClick={() => request.mutate({ code, reason })}>Registrar pedido</Button></div> : null}
+    {open ? <div className="space-y-2 text-sm"><p>Pedido {open.id} aberto: {open.reason}</p>
+      {isAdmin ? <div className="flex flex-wrap items-end gap-2"><div className="grid gap-1"><Label htmlFor="exclusao-confirma">Digite o código {code} para confirmar</Label><Input id="exclusao-confirma" className="w-56" value={confirm} onChange={event => setConfirm(event.target.value)} /></div><Button variant="destructive" disabled={complete.isPending || confirm.trim() !== code} onClick={() => complete.mutate({ requestId: open.id, confirmCode: confirm })}>Anonimizar agora</Button>
+        <div className="grid gap-1"><Label htmlFor="exclusao-recusa">Ou recusar, com justificativa</Label><Input id="exclusao-recusa" className="w-64" value={note} onChange={event => setNote(event.target.value)} /></div><Button variant="outline" disabled={reject.isPending || note.trim().length < 5} onClick={() => reject.mutate({ requestId: open.id, note })}>Recusar pedido</Button></div> : <p className="text-xs text-muted-foreground">Só a administração cumpre ou recusa.</p>}
+    </div> : null}
+    {list.data?.requests.length ? <ul className="text-xs text-muted-foreground">{list.data.requests.map(item => <li key={item.id}>Pedido {item.id}: {item.status === "requested" ? "aberto" : item.status === "completed" ? "cumprido" : "recusado"}</li>)}</ul> : null}
   </CardContent></Card>;
 }

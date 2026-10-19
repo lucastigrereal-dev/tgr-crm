@@ -4,6 +4,7 @@ import { z } from "zod";
 import { customerContacts, customers } from "../../drizzle/schema";
 import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
+import { anonymizedCustomerError } from "../customerAnonymization";
 import { internalProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
 
@@ -83,8 +84,9 @@ export const customerContactsRouter = router({
   add: internalProcedure.input(z.object({ customerId: z.number().int().positive(), label: z.string().trim().max(60).optional(), preferred: z.boolean().default(false) }).and(contactInput)).mutation(async ({ ctx, input }) => {
     const db = await requireDb();
     const id = await db.transaction(async tx => {
-      const [customer] = await tx.select({ id: customers.id, phone: customers.phone, email: customers.email }).from(customers).where(eq(customers.id, input.customerId)).limit(1).for("update");
+      const [customer] = await tx.select({ id: customers.id, phone: customers.phone, email: customers.email, anonymizedAt: customers.anonymizedAt }).from(customers).where(eq(customers.id, input.customerId)).limit(1).for("update");
       if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado não encontrado." });
+      if (customer.anonymizedAt) throw anonymizedCustomerError();
       const activeOf = () => tx.select({ id: customerContacts.id, value: customerContacts.value, isPreferred: customerContacts.isPreferred }).from(customerContacts)
         .where(and(eq(customerContacts.customerId, customer.id), eq(customerContacts.kind, input.kind), isNull(customerContacts.archivedAt)));
       let active = await activeOf();

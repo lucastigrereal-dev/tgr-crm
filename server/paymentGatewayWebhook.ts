@@ -6,7 +6,7 @@ import { isSaleValidated, recordZeroRateSkip } from "./saleValidationService";
 import { commissionApplies, commissionBlockReason, insertInstallmentCommissions, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
-import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
+import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { recordInstallmentSettlementFacts } from "./installmentSettlementFacts";
 import { txAudit } from "./txOutbox";
 
@@ -34,13 +34,13 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   if (!config) return { status: 503, message: "Gateway Asaas não configurado." };
   if (!isAsaasWebhookTokenValid(config, token)) return { status: 401, message: "Token de webhook inválido." };
 
-  const event = typeof payload.event === "string" ? payload.event.trim() : "";
-  const paymentId = typeof payload.payment?.id === "string" ? payload.payment.id.trim() : "";
+  const event = typeof payload?.event === "string" ? payload.event.trim() : "";
+  const paymentId = typeof payload?.payment?.id === "string" ? payload.payment.id.trim() : "";
   if (!event || !paymentId) return { status: 202, ignored: true, message: "Evento sem pagamento ignorado." };
 
   const db = await getDb();
   if (!db) return { status: 503, message: "Banco indisponível." };
-  const eventId = typeof payload.id === "string" && payload.id.trim() ? payload.id.trim() : `${event}:${paymentId}`;
+  const eventId = typeof payload?.id === "string" && payload.id!.trim() ? payload.id!.trim() : `${event}:${paymentId}`;
   const existingEvent = (await db.select({ id: paymentGatewayWebhookEvents.id }).from(paymentGatewayWebhookEvents).where(and(eq(paymentGatewayWebhookEvents.gatewayProvider, "asaas"), eq(paymentGatewayWebhookEvents.gatewayEventId, eventId))).limit(1))[0];
   if (existingEvent) return { status: 200, duplicate: true, message: "Evento já processado." };
 
@@ -48,7 +48,9 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
   let installmentPaid = false;
 
   try {
-    await db.transaction(async tx => {
+    // CRM-A27: o MySQL pode derrubar a transação por deadlock (visto no CI da main em 7110fb9, insert em sales_commissions); repete do zero, como a ponte do Sales.
+    await withDeadlockRetry(() => db.transaction(async tx => {
+      installmentPaid = false; // cada tentativa recomeça sem estado da anterior
       await tx.insert(paymentGatewayWebhookEvents).values({ gatewayProvider: "asaas", gatewayEventId: eventId, eventType: event, billingRecordId: billing?.billing.id ?? null });
       await txAudit(tx, { actorUserId: null, entityType: "billing_record", entityId: billing?.billing.id ?? paymentId, action: `gateway_${event.toLowerCase()}`, summary: `Webhook Asaas recebido para pagamento ${paymentId}.` });
       if (!billing) return;
@@ -105,7 +107,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       } else {
         await tx.update(billingRecords).set({ gatewayStatus: payload.payment?.status || event }).where(eq(billingRecords.id, billing.billing.id));
       }
-    });
+    }));
   } catch (error) {
     if (isDuplicateKeyError(error)) return { status: 200, duplicate: true, message: "Evento já processado." };
     throw error;

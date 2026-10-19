@@ -227,9 +227,12 @@ describe.skipIf(!integrationUrl)("Sales Command → CRM em MySQL real: fração 
     const left = saleEvent(project);
     const right = saleEvent(project);
 
+    // Como na ponte de produção (salesCommandBridge.ts): a transação roda sob withDeadlockRetry. Um deadlock do MySQL entre as duas vendas
+    // (a vítima cai no insert de parcelas) é repetido, e na repetição a perdedora enxerga a fração já vendida e recusa por estoque. Sem o
+    // retry o motivo da perdedora seria ER_LOCK_DEADLOCK, que não é o que este teste mede (a invariante é "nunca vendem a mesma fração").
     const outcomes = await Promise.allSettled([
-      db.transaction(tx => materializeSalesCommandSale(tx, left)),
-      db.transaction(tx => materializeSalesCommandSale(tx, right)),
+      withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, left))),
+      withDeadlockRetry(() => db.transaction(tx => materializeSalesCommandSale(tx, right))),
     ]);
 
     const fulfilled = outcomes.filter(item => item.status === "fulfilled");

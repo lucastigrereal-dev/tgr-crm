@@ -7,6 +7,7 @@ import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
 import { txEvent } from "../txOutbox";
 import { buildInstallmentSchedule } from "../domain";
 import { getDb, recordAudit } from "../db";
+import { assertCustomerNotAnonymized, ANONYMIZED_CUSTOMER_MESSAGE } from "../customerAnonymization";
 import { applyCsvMapping, buildImportErrorReport, parseContractsCsv, parseCustomersCsv, parseUnitsCsv, suggestCsvMapping, type CsvColumnMapping, type ImportIssue, type ImportKind } from "../csvImport";
 import { assertCsvImportRowBudget, duplicateValueIndexes } from "../csvImportGuard";
 import { router } from "../_core/trpc";
@@ -63,12 +64,13 @@ export const importsRouter = router({
     if (input.kind === "customers") {
       const rows = parseCustomersCsv(csv).records; const documents = rows.map(row => row.documentNumber).filter(Boolean); const existing = documents.length ? await db.select().from(customers).where(inArray(customers.documentNumber, documents)) : []; const existingByDocument = new Map(existing.map(item => [item.documentNumber, item])); const duplicateCustomerRows = new Set(duplicateValueIndexes(rows.map(row => row.documentNumber)));
       rows.forEach((row, index) => { if (duplicateCustomerRows.has(index)) issues.push({ line: index + 2, field: "documentNumber", message: "Documento repetido dentro do próprio arquivo." }); });
+      rows.forEach((row, index) => { if (row.documentNumber && existingByDocument.get(row.documentNumber)?.anonymizedAt) issues.push({ line: index + 2, field: "documentNumber", message: ANONYMIZED_CUSTOMER_MESSAGE }); });
       if (issues.length) return { valid: false, committed: false, totalRows: rows.length, created: 0, updated: 0, issues, sample: [], summary: importSummary(rows.length, 0, 0, issues) };
       let created = 0; let updated = 0; let batchId = 0;
       await checkDuplicate();
       await db.transaction(async tx => {
         const createdBatch = await tx.insert(csvImportBatches).values({ kind: "customers", actorUserId: ctx.user.id, totalRows: rows.length, ...origin }).$returningId(); batchId = createdBatch[0]?.id ?? 0; if (!batchId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível abrir o lote de importação." });
-        for (let index = 0; index < rows.length; index += 1) { const row = rows[index]!; const values = customerValues(row); const before = existingByDocument.get(row.documentNumber); const source = provenance(index, row.documentNumber, row); if (before) { await tx.update(customers).set(values).where(eq(customers.id, before.id)); await syncPrimaryContacts(tx, before.id, values, ctx.user.id); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before), ...source }); updated += 1; } else { const inserted = await tx.insert(customers).values(values).$returningId(); const entityId = inserted[0]?.id; if (!entityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o associado importado." }); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId, action: "created", ...source }); created += 1; } }
+        for (let index = 0; index < rows.length; index += 1) { const row = rows[index]!; const values = customerValues(row); const before = existingByDocument.get(row.documentNumber); const source = provenance(index, row.documentNumber, row); if (before) { await assertCustomerNotAnonymized(tx, before.id, { lock: true }); await tx.update(customers).set(values).where(eq(customers.id, before.id)); await syncPrimaryContacts(tx, before.id, values, ctx.user.id); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId: before.id, action: "updated", beforeSnapshot: JSON.stringify(before), ...source }); updated += 1; } else { const inserted = await tx.insert(customers).values(values).$returningId(); const entityId = inserted[0]?.id; if (!entityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o associado importado." }); await tx.insert(csvImportItems).values({ batchId, entityType: "customer", entityId, action: "created", ...source }); created += 1; } }
         await tx.update(csvImportBatches).set({ createdCount: created, updatedCount: updated, rejectedCount: 0 }).where(eq(csvImportBatches.id, batchId));
       });
       await recordAudit(ctx.user.id, "csv_import", batchId, "completed", `Lote ${batchId}: associados — ${created} criados e ${updated} atualizados.${originNote()}`);
@@ -199,6 +201,9 @@ export const importsRouter = router({
           }
         }
         for (const item of items.filter(item => item.entityType === "customer" && item.action === "updated" && item.beforeSnapshot)) {
+          // Cliente anonimizado depois da importação nunca volta ao estado de antes (o snapshot com dado pessoal foi limpo na anonimização).
+          const [current] = await tx.select({ anonymizedAt: customers.anonymizedAt }).from(customers).where(eq(customers.id, item.entityId)).limit(1).for("update");
+          if (current?.anonymizedAt) continue;
           const restored = restoreCustomerValues(JSON.parse(item.beforeSnapshot!) as Record<string, unknown>);
           await tx.update(customers).set(restored).where(eq(customers.id, item.entityId));
           await syncPrimaryContacts(tx, item.entityId, restored, ctx.user.id);

@@ -163,6 +163,29 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
     expect(await snapshot(contractId, installmentId)).toEqual(after);
   });
 
+  it("CRM-A27: deadlock do MySQL no meio do webhook Asaas é repetido do zero e o pagamento entra uma vez só (determinístico, sem depender de corrida)", async () => {
+    const { contractId, installmentId } = await seedSale("webhook-deadlock", { validated: true });
+    const paymentId = `pay-i43d-${runId}`;
+    await db.insert(billingRecords).values({ installmentId, type: "pix", status: "generated", gatewayProvider: "asaas", gatewayPaymentId: paymentId, amount: "1000.00", dueDate: new Date("2026-10-10T12:00:00Z") });
+    // Tabela MEMORY não é transacional: o marcador sobrevive ao rollback da 1ª tentativa, então só a 1ª tentativa leva o erro 1213 (o mesmo que o InnoDB devolve num deadlock real).
+    const marker = `i43_deadlock_marker_${runId}`;
+    await pool.query(`CREATE TABLE \`${marker}\` (id INT PRIMARY KEY) ENGINE=MEMORY`);
+    const name = `i43_deadlock_${runId}`;
+    await runTriggerDdl(pool, `CREATE TRIGGER \`${name}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF NEW.idempotencyKey = 'installment-paid:${installmentId}' AND (SELECT COUNT(*) FROM \`${marker}\`) = 0 THEN INSERT INTO \`${marker}\` VALUES (1); SIGNAL SQLSTATE '40001' SET MYSQL_ERRNO = 1213, MESSAGE_TEXT = 'Deadlock found when trying to get lock; try restarting transaction'; END IF; END`);
+    triggers.push(name);
+    try {
+      const payload = { id: `evt-i43d-${runId}`, event: "PAYMENT_CONFIRMED", payment: { id: paymentId, status: "CONFIRMED", billingType: "PIX" } };
+      await expect(processAsaasWebhook("token-sintetico-43", payload)).resolves.toMatchObject({ status: 200, installmentPaid: true });
+      const [{ n }] = (await pool.query(`SELECT COUNT(*) AS n FROM \`${marker}\``))[0] as unknown as [{ n: number }];
+      expect(Number(n)).toBe(1); // o deadlock foi injetado de fato, uma vez
+      expect(await snapshot(contractId, installmentId)).toMatchObject({ status: "paid", transactions: 1, paidEvents: 1, paidAudits: 0 });
+      await expect(processAsaasWebhook("token-sintetico-43", payload)).resolves.toMatchObject({ status: 200, duplicate: true });
+    } finally {
+      await dropTrigger(name);
+      await pool.query(`DROP TABLE IF EXISTS \`${marker}\``);
+    }
+  });
+
   it("webhook Asaas com venda não validada: falha ao gravar commission.automatic.blocked desfaz tudo; depois o bloqueio e o pagamento nascem juntos", async () => {
     const { contractId, installmentId } = await seedSale("webhook-blocked", { validated: false });
     const paymentId = `pay-i43b-${runId}`;

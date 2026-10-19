@@ -28,7 +28,11 @@ function makeDb(selectRows: unknown[][], affectedRows?: number) {
     })),
   }));
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => affectedRows === undefined ? undefined : { affectedRows }) })) }));
-  return { select, update };
+  // Guarda da anonimização: a transação lê o cliente (não anonimizado) sem consumir a sequência de leituras acima.
+  const guardSelect = () => ({ from: () => ({ where: () => ({ limit: () => Object.assign(Promise.resolve([{ anonymizedAt: null }]), { for: async () => [{ anonymizedAt: null }] }) }) }) });
+  const tx = { select: vi.fn(guardSelect), update };
+  const transaction = vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx));
+  return { select, update, transaction };
 }
 
 function caller() {

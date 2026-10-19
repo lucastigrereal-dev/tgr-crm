@@ -7,9 +7,10 @@ import { ENV } from "../_core/env";
 import { getDb, recordAudit } from "../db";
 import { publishSalesRoomEvent } from "../realtime";
 import { router } from "../_core/trpc";
-import { adminProcedure, assertCapability, internalProcedure, receptionProcedure, salesProcedure } from "./access";
+import { adminProcedure, assertCapability, financeProcedure, internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { txAudit, txEvent } from "../txOutbox";
-import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, PRIVACY_TEXT_KEYS, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustodyOfSheet, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
+import { completeErasure, listErasureRequests, rejectErasure, requestErasure } from "../captureErasure";
+import { DEFAULT_MIN_PRESENTATION_MINUTES, DEFAULT_NQ_SETTINGS, LGPD_DEFAULTS, PRIVACY_TEXT_KEYS, privacyNoticeStatus, REPRINT_ALERT_THRESHOLD, addCalendarDays, ageInYears, arrivalOrder, canOpenArchivedSheet, computeNq, isCoupleCode, localDayStart, normalizeCoupleCode, paperCustodyOfSheet, privacyNoticeText, relationshipDays, roomVisibility, type NqSettings, type PrivacySettings } from "../captureSheetDomain";
 import type { CaptureExportSource } from "../../shared/captureSheetExport";
 import { buildAverageTimeByConsultant, buildSalesByOrigin } from "../../shared/captureSheetReports";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
@@ -66,7 +67,7 @@ async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
   const nq: NqSettings = { minManAge: num("nq_min_man_age", DEFAULT_NQ_SETTINGS.minManAge), minRelationshipMonths: num("nq_min_relationship_months", DEFAULT_NQ_SETTINGS.minRelationshipMonths), minVehicleYear: num("nq_min_vehicle_year", DEFAULT_NQ_SETTINGS.minVehicleYear), minIncome: num("nq_min_income", DEFAULT_NQ_SETTINGS.minIncome), maxItemsAccepted: num("nq_max_items_accepted", DEFAULT_NQ_SETTINGS.maxItemsAccepted) };
   const privacy = Object.fromEntries(PRIVACY_TEXT_KEYS.map(key => [key, map.get(key)?.value ?? ""])) as PrivacySettings;
   // LGPD (decisão do Lucas 17/10): 0 dias = ficha de quem não comprou sai da vista da sala depois do dia da visita; papel destruído no mesmo dia.
-  return { nq, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", roomVisibilityDays: num("room_visibility_days", 0), paperDestroyDeadlineDays: num("paper_destroy_deadline_days", 0), privacy, rows };
+  return { nq, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", roomVisibilityDays: num("room_visibility_days", LGPD_DEFAULTS.roomVisibilityDays), paperDestroyDeadlineDays: num("paper_destroy_deadline_days", LGPD_DEFAULTS.paperDestroyDeadlineDays), privacy, rows };
 }
 type SheetSettings = Awaited<ReturnType<typeof loadSettings>>;
 
@@ -227,6 +228,8 @@ export const captureSheetRouter = router({
       paper: { ...paper, destroyDeadlineDays: lastPrint?.destroyDeadlineDays ?? settings.paperDestroyDeadlineDays, reprintAlert: prints >= REPRINT_ALERT_THRESHOLD, lastPrintedAt: lastPrint?.printedAt ?? null, collectedAt: lastPrint?.collectedAt ?? null, destroyedAt: lastPrint?.destroyedAt ?? null },
       roomVisibility: visibility,
       privacyNotice: privacyNoticeText(settings.privacy, settings.paperDestroyDeadlineDays),
+      privacyNoticeStatus: privacyNoticeStatus(settings.privacy),
+      anonymizedAt: capture.anonymizedAt,
       capture: {
         salesRoom: capture.salesRoom, captureLocation: capture.captureLocation, lodgingLocation: capture.lodgingLocation, transportation: capture.transportation, averageIncome: capture.averageIncome, createdAt: capture.createdAt, checkedInAt: capture.checkedInAt, presentationStatus: capture.presentationStatus, qualificationStatus: capture.qualificationStatus,
         partnerName: capture.partnerName, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, childrenCount: capture.childrenCount,
@@ -249,8 +252,9 @@ export const captureSheetRouter = router({
     const db = await requireDb();
     const reprint = await db.transaction(async tx => {
       // O código é conferido com a ficha travada: se a administração trocar o código no meio, a impressão com o código velho é recusada.
-      const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
+      const [capture] = await tx.select({ id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome, anonymizedAt: captureRecords.anonymizedAt }).from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
+      if (capture.anonymizedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ficha anonimizada a pedido do titular: não imprime mais." });
       const printSettings = await loadSettings(db);
       assertSheetVisibleTo(ctx.user.role, capture, printSettings);
       const [{ count }] = await tx.select({ count: sql<number>`COUNT(*)` }).from(captureSheetPrints).where(eq(captureSheetPrints.captureId, capture.id));
@@ -298,8 +302,9 @@ export const captureSheetRouter = router({
     const sheetSettings = await loadSettings(db);
     await db.transaction(async tx => {
       // Leitura e gravação juntas, com a ficha travada: duas abas não furam a regra "resultado só com oferta".
-      const [existing] = await tx.select({ id: captureRecords.id, customerId: captureRecords.customerId, pepOffered: captureRecords.pepOffered, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
+      const [existing] = await tx.select({ id: captureRecords.id, customerId: captureRecords.customerId, anonymizedAt: captureRecords.anonymizedAt, pepOffered: captureRecords.pepOffered, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1).for("update");
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha de captação não encontrada." });
+      if (existing.anonymizedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ficha anonimizada a pedido do titular: não aceita novos dados pessoais." });
       assertSheetVisibleTo(ctx.user.role, existing, sheetSettings);
       if (patch.pepResult && patch.pepOffered === undefined && !existing.pepOffered) throw new TRPCError({ code: "BAD_REQUEST", message: "Registre a oferta de PEP antes do resultado." });
       if (patch.pepOffered === false) { patch.pepResult = null; patch.pepOfferedBy = null; }
@@ -318,7 +323,7 @@ export const captureSheetRouter = router({
     get: receptionProcedure.query(async () => {
       const db = await requireDb();
       const settings = await loadSettings(db);
-      return { nq: settings.nq, minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName, roomVisibilityDays: settings.roomVisibilityDays, paperDestroyDeadlineDays: settings.paperDestroyDeadlineDays, privacy: settings.privacy, provisional: true };
+      return { nq: settings.nq, minPresentationMinutes: settings.minPresentationMinutes, brandName: settings.brandName, roomVisibilityDays: settings.roomVisibilityDays, paperDestroyDeadlineDays: settings.paperDestroyDeadlineDays, privacy: settings.privacy, privacyNoticeStatus: privacyNoticeStatus(settings.privacy), provisional: true };
     }),
     set: adminProcedure.input(z.object({ key: z.enum(SETTING_KEYS), value: z.string().trim().max(255) })).mutation(async ({ ctx, input }) => {
       if (!TEXT_SETTING_KEYS.has(input.key)) {
@@ -448,6 +453,26 @@ export const captureSheetRouter = router({
   }),
 
   /**
+   * Pedido de exclusão/anonimização do titular (LGPD art. 18, CRM-A18). O administrativo registra; só a administração cumpre
+   * (digitando o código do casal) ou recusa. Sobra o registro mínimo: nome, CPF e a data do brinde. Ver server/captureErasure.ts.
+   */
+  erasure: router({
+    forCode: financeProcedure.input(z.object({ code: z.string().max(64) })).query(async ({ input }) => {
+      const db = await requireDb();
+      const code = normalizeCoupleCode(input.code);
+      if (!isCoupleCode(code)) throw new TRPCError({ code: "NOT_FOUND", message: "Código da ficha inválido." });
+      return { requests: await listErasureRequests(db, code) };
+    }),
+    request: financeProcedure.input(z.object({ code: z.string().max(64), reason: z.string().trim().min(5).max(500) })).mutation(async ({ ctx, input }) => {
+      const code = normalizeCoupleCode(input.code);
+      if (!isCoupleCode(code)) throw new TRPCError({ code: "NOT_FOUND", message: "Código da ficha inválido." });
+      return requestErasure(await requireDb(), { code, reason: input.reason, actorUserId: ctx.user.id });
+    }),
+    complete: adminProcedure.input(z.object({ requestId: z.number().int().positive(), confirmCode: z.string().trim().max(64) })).mutation(async ({ ctx, input }) => completeErasure(await requireDb(), { requestId: input.requestId, confirmCode: input.confirmCode, actorUserId: ctx.user.id })),
+    reject: adminProcedure.input(z.object({ requestId: z.number().int().positive(), note: z.string().trim().min(5).max(500) })).mutation(async ({ ctx, input }) => rejectErasure(await requireDb(), { requestId: input.requestId, note: input.note, actorUserId: ctx.user.id })),
+  }),
+
+  /**
    * Motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). A lista é provisória e a administração
    * ajusta; um motivo usado nunca é apagado, só desativado, para o histórico continuar legível.
    */
@@ -506,9 +531,10 @@ export const captureSheetRouter = router({
       const txDb = tx as unknown as SheetDb;
       const [capture] = await tx.select({
         id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome,
-        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom,
+        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom, anonymizedAt: captureRecords.anonymizedAt,
       }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
+      if (capture.anonymizedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ficha anonimizada a pedido do titular: não aceita novas alterações." });
       await assertCaptureInRoomView(txDb, ctx.user.role, capture);
       if (capture.ntKind) {
         if (capture.ntKind === input.kind && capture.ntMotiveId === input.motiveId && (capture.ntComplement ?? null) === complement) return { ok: true as const, alreadyRecorded: true as const };
@@ -523,7 +549,7 @@ export const captureSheetRouter = router({
       await tx.update(captureRecords).set({
         ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: captorName, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id, presentationEndedAt: now,
         presentationStatus: "no_tour", noTourReason: reason,
-      }).where(eq(captureRecords.id, capture.id));
+      }).where(and(eq(captureRecords.id, capture.id), isNull(captureRecords.anonymizedAt)));
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
       // O evento entra na mesma transação do status: o fato e a saída para quem escuta capture.no_tour saem juntos.
       await txEvent(tx, { eventName: "capture.no_tour", aggregateType: "capture", aggregateId: capture.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason, ntKind: input.kind } });

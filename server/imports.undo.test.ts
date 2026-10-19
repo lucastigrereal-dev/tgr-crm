@@ -22,6 +22,8 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
         return {
         where: () => {
           if (table === csvImportItems) return items;
+          // Guarda da anonimização na reversão: lê o cliente (não anonimizado) com limit(1).for("update").
+          if (table === customers) return Object.assign([] as unknown[], { limit: () => Object.assign(Promise.resolve([{ anonymizedAt: null }]), { for: async () => [{ anonymizedAt: null }] }) });
           if (table === contracts) return contractDependencies;
           if (table === installments) return options.installments ?? [];
           if (table === contractDocuments) return options.documents ?? [];

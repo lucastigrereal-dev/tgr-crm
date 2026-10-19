@@ -39,7 +39,7 @@ describe.skipIf(!integrationUrl)("receptor de tempos de sala em MySQL real", () 
     [{ id: captureId }] = await db.insert(captureRecords).values({ customerId, promoterId: userId, salesRoom: `Sala ET ${runId}`, coupleCode } as never).$returningId();
     const app = express();
     app.use(express.json());
-    registerEncounterTimesReceiver(app, KEY);
+    registerEncounterTimesReceiver(app, KEY, true);
     server = createServer(app);
     await new Promise<void>(resolve => server.listen(0, resolve));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}${ENCOUNTER_TIMES_PATH}`;

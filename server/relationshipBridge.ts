@@ -1,3 +1,4 @@
+import { takeBridgeRewind } from "./bridgeRewind";
 import { and, asc, eq, gt, inArray, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { auditLogs, contracts, customers, domainEvents, proposals } from "../drizzle/schema";
 import { getDb, recordAudit } from "./db";
@@ -536,6 +537,9 @@ function startContractStatePump(
     try {
       const db = await getDb();
       if (!db) return 0;
+      // CRM-A25: "reenviar" no painel recua o cursor até o evento (só os sem recibo voltam a ser lidos).
+      const rewind = takeBridgeRewind(target.receiptPrefix);
+      if (rewind !== null) cursor = Math.min(cursor, rewind - 1);
       const queriedCursor = cursor;
       const range = cursorRange(cursor, CONTRACT_STATE_EVENT_NAMES, contractStateUnhandled(target), { inRetry: retry.items().map(event => event.id), after: pager.after(), cap: options.retryExclusionCap });
       const events = await db.select().from(domainEvents)

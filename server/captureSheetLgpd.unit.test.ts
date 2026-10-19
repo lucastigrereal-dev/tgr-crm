@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addCalendarDays, canOpenArchivedSheet, localDayStart, paperCustody, paperCustodyOfSheet, privacyNoticeText, roomVisibility } from "./captureSheetDomain";
+import { LGPD_DEFAULTS, PRIVACY_NOTICE_VERSION, PRIVACY_REAL_COUPLE_MARK, addCalendarDays, canOpenArchivedSheet, localDayStart, paperCustody, paperCustodyOfSheet, privacyNoticeStatus, privacyNoticeText, roomVisibility } from "./captureSheetDomain";
 import { buildCaptureExportFilename, buildCaptureExportRows, csvCell, toCsv } from "../shared/captureSheetExport";
 import { localDateInTimezone } from "./saleTermsPolicy";
 
@@ -51,21 +51,39 @@ describe("custódia do papel", () => {
   });
 });
 
-describe("aviso de privacidade v1 (provisório)", () => {
-  it("campo vazio sai como marcador, nunca inventado; preenchido entra no texto; a palavra consentimento não aparece", () => {
+describe("aviso de privacidade v4 (provisório, tudo configuração)", () => {
+  const full = { privacy_controller_name: " Operadora Exemplo Ltda ", privacy_controller_cnpj: "00.000.000/0001-00", privacy_dpo_name: "Encarregada Exemplo", privacy_contact_channel: "privacidade@exemplo.test", privacy_retention_text: "5 anos", privacy_full_text_url: "exemplo.test/privacidade" };
+  it("campo vazio sai como marcador, nunca inventado; a palavra consentimento não aparece; abre com a marcação de preencher antes de casal real", () => {
+    expect(PRIVACY_NOTICE_VERSION).toBe("v4");
     const empty = privacyNoticeText({});
+    expect(empty.startsWith(PRIVACY_REAL_COUPLE_MARK)).toBe(true);
     expect(empty).toContain("[RAZÃO SOCIAL DA OPERADORA]");
     expect(empty).toContain("CNPJ [●]");
+    expect(empty).toContain("[nome do encarregado]");
     expect(empty).toContain("[canal do encarregado]");
     expect(empty.toLowerCase()).not.toContain("consent");
     expect(empty).toContain("no fim do dia em que é impressa");
     expect(privacyNoticeText({}, 3)).toContain("em até 3 dias depois do dia em que é impressa");
     expect(privacyNoticeText({}, 3)).not.toContain("no fim do dia em que é impressa");
     expect(privacyNoticeText({}, 1)).toContain("em até 1 dia depois do dia em que é impressa");
-    const filled = privacyNoticeText({ privacy_controller_name: " Operadora Exemplo Ltda ", privacy_controller_cnpj: "00.000.000/0001-00", privacy_contact_channel: "privacidade@exemplo.test", privacy_retention_text: "5 anos", privacy_full_text_url: "exemplo.test/privacidade" });
+  });
+  it("preenchido entra no texto, a marcação some e o caminho do pedido de exclusão está escrito", () => {
+    const filled = privacyNoticeText(full);
     expect(filled).toContain("tratados por Operadora Exemplo Ltda, CNPJ 00.000.000/0001-00");
     expect(filled).toContain("pelo prazo de 5 anos");
+    expect(filled).toContain("Encarregado pelo tratamento de dados: Encarregada Exemplo");
+    expect(filled).toContain("a exclusão dos seus dados");
+    expect(filled).toContain("apenas seu nome, seu CPF e a data do brinde");
     expect(filled).not.toContain("[●]");
+    expect(filled).not.toContain(PRIVACY_REAL_COUPLE_MARK);
+  });
+  it("status lista o que falta (razão social, CNPJ, encarregado, canal, prazo); o endereço do texto completo não bloqueia", () => {
+    expect(privacyNoticeStatus({})).toMatchObject({ version: "v4", complete: false, missing: ["razão social da controladora", "CNPJ", "nome do encarregado", "canal do encarregado", "prazo de guarda"] });
+    expect(privacyNoticeStatus({ ...full, privacy_dpo_name: "  " })).toMatchObject({ complete: false, missing: ["nome do encarregado"] });
+    expect(privacyNoticeStatus({ ...full, privacy_full_text_url: "" })).toMatchObject({ complete: true, missing: [] });
+  });
+  it("prazos da ficha e do papel são configuração com padrão 0 (só no dia)", () => {
+    expect(LGPD_DEFAULTS).toEqual({ roomVisibilityDays: 0, paperDestroyDeadlineDays: 0 });
   });
 });
 

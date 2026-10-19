@@ -22,13 +22,19 @@ const FIXED_DETAIL: Record<string, { ok: string; nq: string; missing: string; fi
   relacionamento: { ok: "Casado ou união estável.", nq: "Fora de casado ou união estável.", missing: "Relacionamento a confirmar pelo gerente.", fixedMissing: ["Relacionamento não informado."] },
   tempo_relacionamento: { ok: "Tempo de relacionamento acima do mínimo.", nq: "Tempo de relacionamento abaixo do mínimo.", missing: "Tempo de relacionamento a confirmar.", fixedMissing: ["Tempo de relacionamento não informado."] },
   renda: { ok: "Renda dentro do mínimo.", nq: "Renda abaixo do mínimo.", missing: "Renda a confirmar.", fixedMissing: ["Renda não informada."] },
+  // Os três abaixo já têm frases fixas no cálculo; entram na lista para que NENHUM critério saia por repasse do texto original.
+  veiculo: { ok: "Carro dentro do ano mínimo.", nq: "Veículo fora do critério.", missing: "Veículo a confirmar.", fixedMissing: [] },
+  cartao: { ok: "Trabalha com cartão de crédito.", nq: "Não trabalha com cartão de crédito.", missing: "Cartão de crédito a confirmar.", fixedMissing: [] },
+  casa_propria: { ok: "Tem casa própria.", nq: "Não tem casa própria.", missing: "Casa própria a confirmar.", fixedMissing: [] },
 };
+/** Critério desconhecido (um futuro critério da ficha): frase genérica por status, nunca o texto do cálculo (CRM-A22: lista de permissão, não de bloqueio). */
+const GENERIC_DETAIL = { ok: "Critério atendido.", nq: "Critério não atendido.", missing: "Critério a confirmar." } as const;
 
 export function toIntegrationNq(nq: NqResult) {
   return {
     criteria: nq.criteria.map(criterion => {
       const fixed = FIXED_DETAIL[criterion.key];
-      const detail = !fixed ? criterion.detail : criterion.status === "missing" ? (fixed.fixedMissing.includes(criterion.detail) ? criterion.detail : fixed.missing) : fixed[criterion.status];
+      const detail = !fixed ? GENERIC_DETAIL[criterion.status] ?? GENERIC_DETAIL.missing : criterion.status === "missing" ? (fixed.fixedMissing.includes(criterion.detail) ? criterion.detail : fixed.missing) : fixed[criterion.status];
       return { key: criterion.key, status: criterion.status, detail };
     }),
     nqItems: nq.nqItems,

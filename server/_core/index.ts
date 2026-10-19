@@ -24,6 +24,7 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startOrphanBlobSweepJob, type OrphanBlobSweepJob } from "../orphanBlobSweep";
 
 const SALES_ROOM_STREAM_ROLES = new Set(["admin", "seller", "service"]);
 
@@ -53,6 +54,7 @@ async function startServer() {
   let financialPump: FinancialBridgePump | undefined;
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
+  let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");
@@ -70,7 +72,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
-  registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey);
+  registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey, ENV.encounterTimesReceiverEnabled);
   registerNqReadEndpoint(app, ENV.salesCommandIntegrationKey, ENV.nqReadEndpointEnabled);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
@@ -156,6 +158,7 @@ async function startServer() {
     financialPump?.stop();
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
+    orphanBlobSweepJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
     server.close(error => {
       if (error) {
@@ -192,6 +195,14 @@ async function startServer() {
       onError: error => logger.error("Hold expiry job failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       onRun: result => { if (result.holds > 0) logger.info("Hold expiry job released", { holds: result.holds, fractions: result.fractions.length }); },
     });
+    // CRM-A07: desligada por padrão. Ligada sem ORPHAN_BLOB_SWEEP_DELETE só relata os arquivos órfãos (ensaio).
+    if (ENV.orphanBlobSweepEnabled) {
+      orphanBlobSweepJob = startOrphanBlobSweepJob({
+        minAgeHours: ENV.orphanBlobMinAgeHours, deleteOrphans: ENV.orphanBlobSweepDelete, intervalMs: ENV.orphanBlobSweepIntervalHours * 3_600_000,
+        onError: error => logger.error("Orphan blob sweep failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+        onRun: result => { if (!result.supported) logger.warn("Orphan blob sweep not supported", { reason: result.reason }); else if (result.orphans.length) logger.warn("Orphan blobs found", { count: result.orphans.length, bytes: result.orphanBytes, deleted: result.deleted, failed: result.failed, dryRun: result.dryRun }); },
+      });
+    }
     logger.info("Server running", { port });
   });
 }

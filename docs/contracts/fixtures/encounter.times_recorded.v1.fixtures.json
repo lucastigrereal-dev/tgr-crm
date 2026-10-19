@@ -1,0 +1,377 @@
+{
+  "contract": "encounter.times_recorded.v1",
+  "version": 1,
+  "fixtureRevision": 1,
+  "description": "Fixture compartilhada do contrato encounter.times_recorded.v1 (Sales Command emite, CRM recebe). Só dado sintético. O emissor do Sales deve gerar eventos que passem em todos os casos de `valid` (mesma forma) e que NUNCA caiam em `invalid`; o CRM prova o receptor contra este arquivo (server/encounterTimesContract.test.ts e .mysql.test.ts). Mudar o contrato = nova versão (v2) e novo arquivo, nunca editar o v1 de forma incompatível.",
+  "path": "/api/integrations/sales-command/encounter-times",
+  "method": "POST",
+  "auth": "Authorization: Bearer <SALES_COMMAND_INTEGRATION_KEY> (a mesma chave da ponte Sales -> CRM)",
+  "coupleCodeSeed": {
+    "valid": "FIXT-CASAL-0001",
+    "unknown": "FIXT-NAO-EXISTE-9999",
+    "note": "O teste do CRM cria a ficha FIXT-CASAL-0001; no ambiente real o código é o publicCode do casal no Sales Command."
+  },
+  "valid": [
+    {
+      "name": "atendimento completo (espera, consultor, fechador e fim)",
+      "expect": {
+        "firstDelivery": 201,
+        "replay": 200
+      },
+      "event": {
+        "eventId": "fixt-evt-0001",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-evt-0001",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "waitStartedAt": "2026-10-17T14:00:00Z",
+          "waitEndedAt": "2026-10-17T14:10:00Z",
+          "consultantStartedAt": "2026-10-17T14:10:00Z",
+          "consultantEndedAt": "2026-10-17T14:50:00Z",
+          "closerStartedAt": "2026-10-17T14:50:00Z",
+          "closerEndedAt": "2026-10-17T15:20:00Z",
+          "endedAt": "2026-10-17T15:20:00Z"
+        }
+      }
+    },
+    {
+      "name": "consultor dispensado: só espera e fechador",
+      "expect": {
+        "firstDelivery": 201,
+        "replay": 200
+      },
+      "event": {
+        "eventId": "fixt-evt-0002",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-evt-0002",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "waitStartedAt": "2026-10-17T14:00:00Z",
+          "waitEndedAt": "2026-10-17T14:05:00Z",
+          "consultantDispensed": true,
+          "closerStartedAt": "2026-10-17T14:05:00Z",
+          "closerEndedAt": "2026-10-17T14:40:00Z"
+        }
+      }
+    },
+    {
+      "name": "mínimo: só o fim do atendimento",
+      "expect": {
+        "firstDelivery": 201,
+        "replay": 200
+      },
+      "event": {
+        "eventId": "fixt-evt-0003",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-evt-0003",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "instante UTC com fração de segundo",
+      "expect": {
+        "firstDelivery": 201,
+        "replay": 200
+      },
+      "event": {
+        "eventId": "fixt-evt-0004",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-evt-0004",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "waitStartedAt": "2026-10-17T14:00:00.250Z",
+          "waitEndedAt": "2026-10-17T14:12:30.500Z"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "campo a mais na raiz (envelope estrito)",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0001",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0001",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        },
+        "extra": 1
+      }
+    },
+    {
+      "name": "campo a mais em times",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0002",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0002",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z",
+          "note": "x"
+        }
+      }
+    },
+    {
+      "name": "nome do evento de outra versão",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0003",
+        "eventName": "encounter.times_recorded.v2",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0003",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "origem diferente de sales-command",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0004",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "outro",
+        "correlationId": "corr-fixt-bad-0004",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "times vazio",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0005",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0005",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {}
+      }
+    },
+    {
+      "name": "só consultantDispensed, sem nenhum horário",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0006",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0006",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "consultantDispensed": true
+        }
+      }
+    },
+    {
+      "name": "fim da espera antes do início",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0007",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0007",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "waitStartedAt": "2026-10-17T14:10:00Z",
+          "waitEndedAt": "2026-10-17T14:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "fim do atendimento antes de uma etapa",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0008",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0008",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "closerStartedAt": "2026-10-17T15:00:00Z",
+          "endedAt": "2026-10-17T14:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "instante sem fuso (data e hora ingênuas)",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0009",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0009",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00"
+        }
+      }
+    },
+    {
+      "name": "instante com deslocamento de fuso em vez de Z (o contrato é sempre UTC com Z)",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0014",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0014",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "waitStartedAt": "2026-10-17T11:00:00-03:00",
+          "waitEndedAt": "2026-10-17T11:10:00-03:00"
+        }
+      }
+    },
+    {
+      "name": "instante fora da faixa do MySQL (2038 em diante)",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0010",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0010",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2040-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "eventId vazio",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-x",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "sem correlationId",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0012",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-CASAL-0001",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "coupleCode com mais de 64 caracteres",
+      "expect": {
+        "status": 400
+      },
+      "event": {
+        "eventId": "fixt-bad-0013",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-bad-0013",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    }
+  ],
+  "domainRefusals": [
+    {
+      "name": "código do casal que o CRM não conhece",
+      "expect": {
+        "status": 422,
+        "code": "UNKNOWN_COUPLE_CODE",
+        "emitterAction": "parar de reenviar e revisar o código do casal (não é erro de rede)"
+      },
+      "event": {
+        "eventId": "fixt-ref-0001",
+        "eventName": "encounter.times_recorded.v1",
+        "source": "sales-command",
+        "correlationId": "corr-fixt-ref-0001",
+        "occurredAt": "2026-10-17T15:00:00Z",
+        "coupleCode": "FIXT-NAO-EXISTE-9999",
+        "times": {
+          "endedAt": "2026-10-17T15:00:00Z"
+        }
+      }
+    }
+  ],
+  "conflict": {
+    "name": "mesmo eventId do valid[0] com conteúdo diferente",
+    "expect": {
+      "status": 409,
+      "code": "EVENT_ID_CONFLICT",
+      "emitterAction": "nunca reutilizar eventId com outro conteúdo; gerar eventId novo"
+    },
+    "basedOnValid": 0,
+    "changes": {
+      "times": {
+        "waitStartedAt": "2026-10-17T14:00:00Z",
+        "waitEndedAt": "2026-10-17T14:11:00Z"
+      }
+    }
+  }
+}

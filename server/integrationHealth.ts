@@ -25,6 +25,9 @@ const BRIDGES: BridgeDef[] = [
   { key: "salesCancellation", label: "TGR Sales Command", receiptPrefix: CONTRACT_STATE_TARGETS.salesCancellation.receiptPrefix, eventNames: CONTRACT_STATE_EVENT_NAMES, unhandled: () => contractStateUnhandled(CONTRACT_STATE_TARGETS.salesCancellation), configured: () => Boolean(ENV.salesCommandEndpoint.trim() && ENV.salesCommandCancellationKey.trim()) },
 ];
 
+/** Prefixos dos recibos de cada ponte e os eventos que ela lê: o "reenviar" do painel se apoia neles. */
+export const BRIDGE_RECEIPTS = BRIDGES.map(bridge => ({ key: bridge.key, label: bridge.label, receiptPrefix: bridge.receiptPrefix, eventNames: bridge.eventNames }));
+
 const resultOf = (action: string) => action.endsWith("_rejected") ? "rejected" : action.endsWith("_not_applicable") ? "notApplicable" : action.endsWith("_delivered") ? "delivered" : null;
 
 export async function integrationHealth() {

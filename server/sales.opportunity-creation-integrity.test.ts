@@ -10,6 +10,8 @@ function chain(rows: unknown[]) {
   return { from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(() => result) })) })) };
 }
 
+const guard = () => ({ from: () => ({ where: () => ({ limit: () => Object.assign(Promise.resolve([{ anonymizedAt: null }]), { for: async () => [{ anonymizedAt: null }] }) }) }) });
+
 describe("atomicidade da criação de oportunidade", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -19,7 +21,7 @@ describe("atomicidade da criação de oportunidade", () => {
       .mockImplementationOnce(() => chain([{ id: 55 }]));
     const taskInsert = vi.fn(() => ({ values: vi.fn().mockRejectedValue(new Error("falha no follow-up")) }));
     const opportunityInsert = vi.fn(() => ({ values: vi.fn(() => ({ $returningId: async () => [{ id: 700 }] })) }));
-    const tx = { insert: vi.fn()
+    const tx = { select: vi.fn(guard), insert: vi.fn()
       .mockImplementationOnce(() => opportunityInsert())
       .mockImplementationOnce(() => taskInsert()) };
     const db = { select, transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)) };

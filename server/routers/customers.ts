@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, like, ne, or } from "drizzle-orm";
 import { z } from "zod";
+import { assertCustomerNotAnonymized } from "../customerAnonymization";
 import {
   contracts,
   customerDocuments,
@@ -116,6 +117,7 @@ export const customersRouter = router({
       if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe outro cliente com este documento." });
     }
     await db.transaction(async tx => {
+      await assertCustomerNotAnonymized(tx, input.id, { lock: true });
       await tx.update(customers).set({
         ...input.data,
         documentNumber,
@@ -185,7 +187,10 @@ export const customersRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
-    const result = await db.insert(customerInteractions).values({ ...input, subject: nullableText(input.subject), createdByUserId: ctx.user.id }).$returningId();
+    const result = await db.transaction(async tx => {
+      await assertCustomerNotAnonymized(tx, input.customerId, { lock: true });
+      return tx.insert(customerInteractions).values({ ...input, subject: nullableText(input.subject), createdByUserId: ctx.user.id }).$returningId();
+    });
     const id = result[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível salvar a interação." });
     await recordAudit(ctx.user.id, "customer_interaction", id, "created", `Interação ${input.type} registrada.`);
@@ -204,6 +209,7 @@ export const customersRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.customerId)).limit(1))[0];
     if (!customer) throw new TRPCError({ code: "NOT_FOUND", message: "Cliente não encontrado." });
+    await assertCustomerNotAnonymized(db, input.customerId);
     const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     let upload: { key: string; url: string };
@@ -212,13 +218,17 @@ export const customersRouter = router({
     } catch {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível armazenar o documento do cliente." });
     }
-    const result = await db.insert(customerDocuments).values({
-      customerId: input.customerId,
-      type: input.category,
-      filename: input.filename,
-      storageKey: upload.key,
-      uploadedByUserId: ctx.user.id,
-    }).$returningId();
+    const result = await db.transaction(async tx => {
+      // Corrida com o pedido de exclusão: a guarda trava o cliente; o blob já gravado sobra para a varredura de órfãos.
+      await assertCustomerNotAnonymized(tx, input.customerId, { lock: true });
+      return tx.insert(customerDocuments).values({
+        customerId: input.customerId,
+        type: input.category,
+        filename: input.filename,
+        storageKey: upload.key,
+        uploadedByUserId: ctx.user.id,
+      }).$returningId();
+    });
     const id = result[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar o documento do cliente." });
     await recordAudit(ctx.user.id, "customer_document", id, "uploaded", `Anexo ${input.filename} incluído.`);

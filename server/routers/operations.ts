@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { assertCustomerNotAnonymized } from "../customerAnonymization";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, or, sql, SQL } from "drizzle-orm";
 import { z } from "zod";
 import { contracts, customers, installments, ownershipEntitlements, pointsLedger, reservationGuests, reservationWaitlist, reservations, resorts, tasks, unitMaintenanceBlocks, units, users } from "../../drizzle/schema";
@@ -413,7 +414,10 @@ export const operationsRouter = router({
     const dueAt = dateTimeValue(input.dueAt);
     const reminderAt = dateTimeValue(input.reminderAt);
     if (dueAt && reminderAt && reminderAt > dueAt) throw new TRPCError({ code: "BAD_REQUEST", message: "O lembrete da tarefa não pode ocorrer depois do vencimento." });
-    const created = await db.insert(tasks).values({ ...input, description: input.description || null, customerId, contractId, assignedToUserId, dueAt, reminderAt, createdByUserId: ctx.user.id }).$returningId();
+    const created = await db.transaction(async tx => {
+      if (customerId) await assertCustomerNotAnonymized(tx, customerId, { lock: true });
+      return tx.insert(tasks).values({ ...input, description: input.description || null, customerId, contractId, assignedToUserId, dueAt, reminderAt, createdByUserId: ctx.user.id }).$returningId();
+    });
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a tarefa." });
     await recordAudit(ctx.user.id, "task", id, "created", `Tarefa ${input.title} criada.`);
