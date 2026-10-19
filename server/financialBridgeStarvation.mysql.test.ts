@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { domainEvents } from "../drizzle/schema";
+import { auditLogs, domainEvents } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // RED TEAM P2 em MySQL real: eventos antigos presos em 503 (sem code) não escondem o evento novo, mesmo com mais presos
@@ -276,5 +277,40 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
       await conn.rollback().catch(() => undefined);
       conn.release();
     }
+  });
+
+  // CRM-A25: "reenviar" um recusado ANTIGO (fora da janela de releitura, abaixo do cursor) faz a ponte relê-lo sem reiniciar, e a recusa fica na trilha.
+  it("reenviar recusado antigo: a chave do recibo é trocada (recusa fica na trilha), a ponte recua o cursor e entrega uma vez", async () => {
+    const { startFinancialBridgePump, FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
+    const { resendRejectedReceipt } = await import("./integrationResend");
+    const { getDb } = await import("./db");
+    const old = new Date(Date.now() - 3 * 3_600_000);
+    const [oldEvent] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(970_000_000 + Math.floor(Math.random() * 1_000_000)), actorUserId: null, payload: JSON.stringify({ status: "active" }), occurredAt: old }).$returningId();
+    const [receipt] = await db.insert(auditLogs).values({ actorUserId: null, entityType: "integration_event", entityId: String(oldEvent.id), action: "financial_rejected", summary: "recusa sintética", idempotencyKey: `financial-event:${oldEvent.id}` }).$returningId();
+    const [marker] = await db.insert(domainEvents).values({ eventName: "contract.status.updated", aggregateType: "contract", aggregateId: String(960_000_000 + Math.floor(Math.random() * 1_000_000)), actorUserId: null, payload: JSON.stringify({ status: "active" }) }).$returningId();
+    const placeholders = FINANCIAL_EVENT_NAMES.map(() => "?").join(",");
+    const [backlogRows] = await pool.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) AS pending FROM domain_events d LEFT JOIN audit_logs a ON a.idempotencyKey = CONCAT('financial-event:', d.id) WHERE a.id IS NULL AND d.eventName IN (${placeholders})`, [...FINANCIAL_EVENT_NAMES]);
+    const maxTicks = Math.ceil((Number(backlogRows[0]?.pending ?? 0) + 2000) / 500) + 20;
+    const pump = startFinancialBridgePump(baseUrl, "syn-fin-key", { externalKey: randomUUID(), name: `SYN resend ${runId}`, timezone: "America/Recife" }, { autoStart: false, onError: () => undefined });
+    try {
+      for (let i = 0; i < maxTicks && !hits.get(marker.id); i += 1) await pump.tick();
+      expect(hits.get(marker.id)).toBe(1); // cursor já passou do evento antigo
+      for (let i = 0; i < 3; i += 1) await pump.tick();
+      expect(hits.get(oldEvent.id)).toBeUndefined(); // tem recibo de recusa: a ponte não o tenta
+
+      const appDb = await getDb();
+      const result = await resendRejectedReceipt(appDb!, { receiptId: receipt.id, actorUserId: 1 });
+      expect(result).toEqual({ bridge: "financial", rewindTo: oldEvent.id });
+      await expect(resendRejectedReceipt(appDb!, { receiptId: receipt.id, actorUserId: 1 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" }); // duplo clique
+      const [kept] = await db.select().from(auditLogs).where(eq(auditLogs.id, receipt.id));
+      expect(kept).toMatchObject({ action: "financial_rejected", summary: "recusa sintética", idempotencyKey: `resent:${receipt.id}:financial-event:${oldEvent.id}` });
+      expect((await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `resend-request:${receipt.id}`))).length).toBe(1);
+
+      for (let i = 0; i < maxTicks && !hits.get(oldEvent.id); i += 1) await pump.tick();
+      expect(hits.get(oldEvent.id)).toBe(1);
+      for (let i = 0; i < 3; i += 1) await pump.tick();
+      expect(hits.get(oldEvent.id)).toBe(1); // entregue: ganhou recibo novo, não volta
+      expect(hits.get(marker.id)).toBe(1);
+    } finally { pump.stop(); }
   });
 });

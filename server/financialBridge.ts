@@ -1,3 +1,4 @@
+import { takeBridgeRewind } from "./bridgeRewind";
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { auditLogs, contracts, domainEvents } from "../drizzle/schema";
 import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents";
@@ -171,6 +172,9 @@ export function startFinancialBridgePump(
     try {
       const db = await getDb();
       if (!db) return 0;
+      // CRM-A25: "reenviar" no painel recua o cursor até o evento (só os sem recibo voltam a ser lidos).
+      const rewind = takeBridgeRewind("financial-event:");
+      if (rewind !== null) cursor = Math.min(cursor, rewind - 1);
       // Commit tardio (outbox na transação): relê também os recentes sem recibo abaixo do cursor (ver `cursorRange`).
       const queriedCursor = cursor;
       const range = cursorRange(cursor, FINANCIAL_EVENT_NAMES, isNull(auditLogs.id), { inRetry: retry.items().map(event => event.id), after: pager.after(), cap: options.retryExclusionCap });

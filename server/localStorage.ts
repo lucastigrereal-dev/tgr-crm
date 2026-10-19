@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export function getLocalStorageRoot(): string | null {
@@ -36,4 +36,31 @@ export async function putLocalStorageFile(
 
 export async function readLocalStorageFile(key: string): Promise<Buffer> {
   return readFile(resolveLocalStoragePath(key));
+}
+
+export type LocalStorageEntry = { key: string; sizeBytes: number; modifiedAt: Date };
+
+/** Lista os arquivos comuns (sem seguir link simbólico) abaixo de um prefixo da raiz, com a chave relativa em barras "/". Prefixo inexistente dá lista vazia. */
+export async function listLocalStorageFiles(prefix: string): Promise<LocalStorageEntry[]> {
+  const root = getLocalStorageRoot();
+  if (!root) throw new Error("Local storage não configurado.");
+  const base = resolveLocalStoragePath(prefix);
+  const found: LocalStorageEntry[] = [];
+  const walk = async (directory: string) => {
+    let names: string[];
+    try { names = await readdir(directory); } catch (error) { if ((error as { code?: string }).code === "ENOENT") return; throw error; }
+    for (const name of names) {
+      const full = path.join(directory, name);
+      const info = await lstat(full);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) await walk(full);
+      else if (info.isFile()) found.push({ key: path.relative(root, full).split(path.sep).join("/"), sizeBytes: info.size, modifiedAt: info.mtime });
+    }
+  };
+  await walk(base);
+  return found;
+}
+
+export async function deleteLocalStorageFile(key: string): Promise<void> {
+  await unlink(resolveLocalStoragePath(key));
 }
