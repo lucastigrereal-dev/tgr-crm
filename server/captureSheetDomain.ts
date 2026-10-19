@@ -194,18 +194,42 @@ export function paperCustodyOfSheet(prints: Array<{ printedDay: string; collecte
 /** Acima deste número de impressões a ficha entra no alerta de reimpressão do painel (parecer A1.4). */
 export const REPRINT_ALERT_THRESHOLD = 2;
 
+/**
+ * Padrões LGPD da sala (regra da empresa = configuração com padrão, decisão do Lucas 17/10): 0 dias extras na vista da sala para
+ * quem não comprou (a ficha de não comprador fica só com admin e finance depois do dia da visita) e papel destruído no mesmo dia.
+ * Quem muda é a administração, em `capture_sheet_settings` (`room_visibility_days`, `paper_destroy_deadline_days`), com trilha.
+ */
+export const LGPD_DEFAULTS = { roomVisibilityDays: 0, paperDestroyDeadlineDays: 0 } as const;
+
+/** Versão do texto do aviso de privacidade impresso na faixa do ciente. Muda quando o texto muda; o conteúdo variável é configuração. */
+export const PRIVACY_NOTICE_VERSION = "v4";
 /** Configurações de texto do aviso de privacidade: vazias até o Lucas/advogado mandarem; a ficha imprime o marcador entre colchetes. */
-export const PRIVACY_TEXT_KEYS = ["privacy_controller_name", "privacy_controller_cnpj", "privacy_contact_channel", "privacy_full_text_url", "privacy_retention_text"] as const;
+export const PRIVACY_TEXT_KEYS = ["privacy_controller_name", "privacy_controller_cnpj", "privacy_dpo_name", "privacy_contact_channel", "privacy_full_text_url", "privacy_retention_text"] as const;
 export type PrivacyTextKey = (typeof PRIVACY_TEXT_KEYS)[number];
 export type PrivacySettings = Record<PrivacyTextKey, string>;
+/** Sem estes cinco o aviso não vale para casal real (o endereço do texto completo é desejável, não bloqueia). */
+export const PRIVACY_REQUIRED_KEYS: readonly PrivacyTextKey[] = ["privacy_controller_name", "privacy_controller_cnpj", "privacy_dpo_name", "privacy_contact_channel", "privacy_retention_text"];
+export const PRIVACY_KEY_LABELS: Record<PrivacyTextKey, string> = {
+  privacy_controller_name: "razão social da controladora", privacy_controller_cnpj: "CNPJ", privacy_dpo_name: "nome do encarregado", privacy_contact_channel: "canal do encarregado", privacy_full_text_url: "endereço do texto completo", privacy_retention_text: "prazo de guarda",
+};
+export const PRIVACY_REAL_COUPLE_MARK = "[PREENCHER ANTES DE CASAL REAL]";
+
+/** O aviso está completo (pode ir a casal real) ou falta preencher? Lista o que falta, em português. */
+export function privacyNoticeStatus(settings: Partial<PrivacySettings>) {
+  const missing = PRIVACY_REQUIRED_KEYS.filter(key => !settings[key]?.trim());
+  return { version: PRIVACY_NOTICE_VERSION, complete: missing.length === 0, missing: missing.map(key => PRIVACY_KEY_LABELS[key]), missingKeys: [...missing] };
+}
 
 /**
- * Texto v1 do aviso de privacidade (parecer, seção 4): provisório, não aprovado por advogado. Campos vazios saem como
- * [●] para ninguém assinar um aviso com dado inventado. Não usa a palavra "consentimento": em sala de vendas o campo é "ciente".
+ * Texto v4 do aviso de privacidade (parecer, seção 4, mais o caminho do pedido de exclusão): provisório, não aprovado por advogado.
+ * Campos vazios saem entre colchetes para ninguém assinar um aviso com dado inventado, e enquanto faltar razão social, CNPJ, encarregado,
+ * canal ou prazo o texto abre com a marcação "PREENCHER ANTES DE CASAL REAL". Não usa a palavra "consentimento": em sala de vendas o campo é "ciente".
  */
 export function privacyNoticeText(settings: Partial<PrivacySettings>, destroyDeadlineDays = 0) {
   const pick = (key: PrivacyTextKey, placeholder: string) => (settings[key]?.trim() ? settings[key]!.trim() : placeholder);
-  return `Os dados desta ficha (identificação, contato, CPF, renda, veículo, família e preferências de viagem) são tratados por ${pick("privacy_controller_name", "[RAZÃO SOCIAL DA OPERADORA]")}, CNPJ ${pick("privacy_controller_cnpj", "[●]")}, para realizar esta visita, avaliar a proposta comercial e, se houver interesse, dar seguimento ao contato. Base legal: procedimentos preliminares de contrato e legítimo interesse. Os dados podem ser compartilhados com os sistemas da operação (cadastro de visita, sala de vendas, CRM) e, em caso de contratação, com parceiros de pagamento e assinatura eletrônica. Guardamos os dados pelo prazo de ${pick("privacy_retention_text", "[●]")}; esta folha em papel é recolhida e destruída ${paperDestroyPromise(destroyDeadlineDays)}. Você pode pedir acesso, correção, informação sobre compartilhamento ou oposição ao tratamento pelo canal ${pick("privacy_contact_channel", "[canal do encarregado]")}. Texto completo em ${pick("privacy_full_text_url", "[endereço]")}.`;
+  const status = privacyNoticeStatus(settings);
+  const mark = status.complete ? "" : `${PRIVACY_REAL_COUPLE_MARK} Falta: ${status.missing.join(", ")}. `;
+  return `${mark}Os dados desta ficha (identificação, contato, CPF, renda, veículo, família e preferências de viagem) são tratados por ${pick("privacy_controller_name", "[RAZÃO SOCIAL DA OPERADORA]")}, CNPJ ${pick("privacy_controller_cnpj", "[●]")}, para realizar esta visita, avaliar a proposta comercial e, se houver interesse, dar seguimento ao contato. Base legal: procedimentos preliminares de contrato e legítimo interesse. Os dados podem ser compartilhados com os sistemas da operação (cadastro de visita, sala de vendas, CRM) e, em caso de contratação, com parceiros de pagamento e assinatura eletrônica. Guardamos os dados pelo prazo de ${pick("privacy_retention_text", "[●]")}; esta folha em papel é recolhida e destruída ${paperDestroyPromise(destroyDeadlineDays)}. Encarregado pelo tratamento de dados: ${pick("privacy_dpo_name", "[nome do encarregado]")}. Você pode pedir acesso, correção, informação sobre compartilhamento, oposição ao tratamento ou a exclusão dos seus dados pelo canal ${pick("privacy_contact_channel", "[canal do encarregado]")}; se pedir a exclusão, apagamos a ficha e guardamos apenas seu nome, seu CPF e a data do brinde, para não entregar o brinde em duplicidade e para nossa defesa em eventual disputa. Texto completo em ${pick("privacy_full_text_url", "[endereço]")}.`;
 }
 
 /** Primeiro instante (UTC) do dia local AAAA-MM-DD no fuso dado; fusos com passo de 15 min cobertos. */

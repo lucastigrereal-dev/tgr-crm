@@ -75,6 +75,8 @@ export const customers = mysqlTable(
     acquisitionSource: varchar("acquisitionSource", { length: 120 }),
     status: mysqlEnum("status", ["active", "inactive", "prospect"]).default("prospect").notNull(),
     notes: text("notes"),
+    /** LGPD (CRM-A18): quando o pedido de exclusão foi cumprido. Sobra só o registro mínimo (nome e CPF); o resto do cadastro foi limpo. */
+    anonymizedAt: timestamp("anonymizedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -351,6 +353,8 @@ export const captureRecords = mysqlTable(
     watchedVacationPresentation: boolean("watchedVacationPresentation"),
     /** Tipo de captação (ex.: tour direto). Texto livre curto; lista fechada só se o Lucas mandar. */
     captureKind: varchar("captureKind", { length: 60 }),
+    /** LGPD (CRM-A18): ficha anonimizada a pedido do titular; os campos pessoais foram limpos e a ficha não imprime mais. */
+    anonymizedAt: timestamp("anonymizedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -466,6 +470,33 @@ export const captureSheetPrints = mysqlTable(
     destroyDeadlineDays: int("destroyDeadlineDays"),
   },
   table => [index("capture_sheet_prints_capture_idx").on(table.captureId, table.printedAt), index("capture_sheet_prints_printed_idx").on(table.printedAt, table.destroyedAt)],
+);
+
+/**
+ * Pedido de exclusão/anonimização do titular (LGPD art. 18, CRM-A18). Dois passos com trilha: o administrativo registra o pedido
+ * e só a administração confirma digitando o código do casal. Cumprido, o cadastro e as fichas do cliente ficam só com o registro
+ * mínimo (nome e CPF) e `giftDate` guarda a data do brinde (antiduplicidade e defesa em disputa). Nada aqui guarda dado pessoal além do motivo digitado.
+ */
+export const captureErasureRequests = mysqlTable(
+  "capture_erasure_requests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    captureId: int("captureId").notNull().references(() => captureRecords.id),
+    customerId: int("customerId").notNull().references(() => customers.id),
+    coupleCode: varchar("coupleCode", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["requested", "completed", "rejected"]).default("requested").notNull(),
+    reason: varchar("reason", { length: 500 }).notNull(),
+    requestedByUserId: int("requestedByUserId").references(() => users.id),
+    requestedAt: timestamp("requestedAt").defaultNow().notNull(),
+    decidedByUserId: int("decidedByUserId").references(() => users.id),
+    decidedAt: timestamp("decidedAt"),
+    decisionNote: varchar("decisionNote", { length: 500 }),
+    /** Data do brinde preservada no registro mínimo (primeiro voucher não cancelado do cliente; sem voucher, a criação da ficha). */
+    giftDate: timestamp("giftDate"),
+    /** Quantas fichas do cliente foram anonimizadas no cumprimento. */
+    sheetsAnonymized: int("sheetsAnonymized"),
+  },
+  table => [index("capture_erasure_requests_capture_idx").on(table.captureId, table.status), index("capture_erasure_requests_customer_idx").on(table.customerId)],
 );
 
 /**
