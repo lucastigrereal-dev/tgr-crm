@@ -639,3 +639,76 @@ test.describe("homologação isolada estrita", () => {
     await expect(page.getByText("Ficha não encontrada")).toBeVisible();
   });
 });
+
+// CRM-A03: tela de estoque comercial (/estoque-comercial) de ponta a ponta no navegador, contra o backend real e o MySQL descartável do run.
+// Cria o próprio empreendimento e as UHs (prefixo E2E-TGR-<run>), materializa as cotas pela tela, segura, bloqueia e desbloqueia, e confere o banco.
+test.describe("estoque comercial no navegador", () => {
+  test("materializa cotas, é idempotente, segura, bloqueia e desbloqueia pela tela, sem overflow no celular", async ({ page }) => {
+    const fx = fixture!;
+    const resortName = `${fx.prefix}Estoque A03`;
+    await queryDatabase("INSERT INTO resorts (name, city, state, status) VALUES (?, 'Natal', 'RN', 'active')", [resortName]);
+    const [resort] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM resorts WHERE name = ? LIMIT 1", [resortName]);
+    for (const code of [`${fx.normalizedRunId.toUpperCase()}-A03-1`, `${fx.normalizedRunId.toUpperCase()}-A03-2`]) {
+      await queryDatabase("INSERT INTO units (resortId, code, status) VALUES (?, ?, 'active')", [resort!.id, code]);
+    }
+    const countByStatus = async (status: string) => Number((await queryDatabase<Array<{ n: number }>>("SELECT COUNT(*) AS n FROM commercial_fractions WHERE resortId = ? AND status = ?", [resort!.id, status]))[0]!.n);
+    const tile = (label: string) => page.locator("div.rounded-2xl").filter({ has: page.locator("p", { hasText: new RegExp(`^${label}$`) }) }).locator("p.font-serif");
+
+    await page.goto("/estoque-comercial");
+    await expect(page.getByRole("heading", { name: "Estoque comercial de cotas" })).toBeVisible();
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: resortName }).click();
+    await expect(page.getByText("2 UHs carregadas × 52")).toBeVisible();
+    await page.getByPlaceholder("Cotas/UH").fill("3");
+    await expect(page.getByText("2 UHs carregadas × 3 = 6 cotas esperadas")).toBeVisible();
+
+    const bootstrap = waitForMutation(page, "inventory.bootstrap");
+    await page.getByRole("button", { name: "Materializar estoque" }).click();
+    await bootstrap;
+    await expect(tile("Total")).toHaveText("6");
+    await expect(tile("Disponível")).toHaveText("6");
+    expect(await countByStatus("available")).toBe(6);
+
+    // repetir não duplica
+    const again = waitForMutation(page, "inventory.bootstrap");
+    await page.getByRole("button", { name: "Materializar estoque" }).click();
+    await again;
+    await expect(tile("Total")).toHaveText("6");
+    expect((await queryDatabase<Array<{ n: number }>>("SELECT COUNT(*) AS n FROM commercial_fractions WHERE resortId = ?", [resort!.id]))[0]!.n).toBe(6);
+
+    // hold
+    const held = waitForMutation(page, "inventory.createHold");
+    await page.getByRole("button", { name: "Hold", exact: true }).first().click();
+    await held;
+    await expect(tile("Em hold")).toHaveText("1");
+    await expect(tile("Disponível")).toHaveText("5");
+    expect(await countByStatus("held")).toBe(1);
+
+    // bloquear (a tela pede o motivo num prompt) e desbloquear
+    page.once("dialog", dialog => void dialog.accept("Manutenção E2E A03"));
+    const blocked = waitForMutation(page, "inventory.block");
+    await page.getByRole("button", { name: "Bloquear" }).first().click();
+    await blocked;
+    await expect(tile("Bloqueada")).toHaveText("1");
+    expect(await countByStatus("blocked")).toBe(1);
+    await expect(page.getByText("Manutenção E2E A03")).toBeVisible();
+    const unblocked = waitForMutation(page, "inventory.unblock");
+    await page.getByRole("button", { name: "Desbloquear" }).first().click();
+    await unblocked;
+    await expect(tile("Bloqueada")).toHaveText("0");
+    expect(await countByStatus("blocked")).toBe(0);
+    expect(await countByStatus("held")).toBe(1);
+
+    // busca filtra a tabela
+    const [first] = await queryDatabase<Array<{ code: string }>>("SELECT code FROM commercial_fractions WHERE resortId = ? ORDER BY code LIMIT 1", [resort!.id]);
+    await page.getByPlaceholder("Buscar cota ou UH").fill(first!.code);
+    await expect(page.locator("tbody tr")).toHaveCount(1);
+
+    // celular: a página não ganha rolagem horizontal (a tabela rola dentro do próprio contêiner)
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/estoque-comercial");
+    await expect(page.getByRole("heading", { name: "Estoque comercial de cotas" })).toBeVisible();
+    const geometry = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  });
+});
