@@ -115,4 +115,14 @@ describe.skipIf(!integrationUrl)("CRM-A11: renegociação de parcela, aprovar e 
     await expect(as(approver).cancelRenegotiation({ id: cancelled.renegotiationId, reject: true })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(await state(cancelled)).toMatchObject({ original: "overdue", installments: 1, billing: "generated" });
   });
+  it("listRenegotiations: lista por contrato e estado, com canApprove resolvido por usuário", async () => {
+    const s = await seed("lista");
+    const mine = await as(proposer).listRenegotiations({ contractId: s.contractId });
+    expect(mine.rows).toHaveLength(1);
+    expect(mine.rows[0]).toMatchObject({ id: s.renegotiationId, status: "draft", installmentSequence: 1, canApprove: false });
+    expect((await as(approver).listRenegotiations({ contractId: s.contractId })).rows[0]).toMatchObject({ canApprove: true });
+    await as(approver).approveRenegotiation({ id: s.renegotiationId });
+    expect((await as(approver).listRenegotiations({ contractId: s.contractId, status: "draft" })).rows).toHaveLength(0);
+    expect((await as(approver).listRenegotiations({ contractId: s.contractId, status: "approved" })).rows[0]).toMatchObject({ id: s.renegotiationId, canApprove: false });
+  });
 });

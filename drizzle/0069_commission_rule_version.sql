@@ -1,0 +1,1 @@
+ALTER TABLE `sales_commissions` ADD `ruleVersion` varchar(8) DEFAULT 'v1' NOT NULL;

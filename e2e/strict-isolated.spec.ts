@@ -712,3 +712,36 @@ test.describe("estoque comercial no navegador", () => {
     expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   });
 });
+
+// CRM-A11: renegociação na tela Financeiro (aprovar e aplicar pelo navegador). A proposta nasce de OUTRO usuário: quem propõe não aprova.
+test.describe("renegociação no navegador", () => {
+  test("aprova e aplica um acordo pela tela Financeiro, e o banco reflete a parcela nova", async ({ page }) => {
+    const fx = fixture!;
+    await queryDatabase("INSERT INTO users (openId, name, email, loginMethod, role) VALUES (?, 'Proponente A11', ?, 'e2e', 'finance')", [`${fx.prefix}PROP-A11`, `${fx.normalizedRunId}.prop-a11@e2e.invalid`]);
+    const [proposer] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM users WHERE openId = ?", [`${fx.prefix}PROP-A11`]);
+    await queryDatabase("INSERT INTO customers (fullName, documentNumber, status) VALUES (?, ?, 'active')", [`${fx.prefix}Cliente A11`, `98${fx.documents.imported.slice(2)}`.slice(0, 11)]);
+    const [customer] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM customers WHERE fullName = ?", [`${fx.prefix}Cliente A11`]);
+    const number = `${fx.prefix}A11-001`;
+    await queryDatabase("INSERT INTO contracts (number, customerId, status, totalAmount) VALUES (?, ?, 'active', 3000.00)", [number, customer!.id]);
+    const [contract] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM contracts WHERE number = ?", [number]);
+    await queryDatabase("INSERT INTO installments (contractId, sequence, dueDate, amount, paidAmount, status) VALUES (?, 1, '2026-10-10', 1000.00, 0.00, 'overdue')", [contract!.id]);
+    const [installment] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM installments WHERE contractId = ?", [contract!.id]);
+    await queryDatabase("INSERT INTO installment_renegotiations (contractId, originalInstallmentId, originalAmount, proposedAmount, proposedDueDate, discountAmount, status, createdByUserId) VALUES (?, ?, 1000.00, 900.00, '2026-12-15', 100.00, 'draft', ?)", [contract!.id, installment!.id, proposer!.id]);
+    const [reneg] = await queryDatabase<Array<{ id: number }>>("SELECT id FROM installment_renegotiations WHERE contractId = ?", [contract!.id]);
+
+    await page.goto("/financeiro");
+    const row = page.getByTestId(`renegotiation-${reneg!.id}`);
+    await expect(row).toBeVisible();
+    await expect(row.getByText("Rascunho")).toBeVisible();
+    const approved = waitForMutation(page, "finance.approveRenegotiation");
+    await row.getByRole("button", { name: "Aprovar" }).click();
+    await approved;
+    await expect(row.getByText("Aprovado")).toBeVisible();
+    const applied = waitForMutation(page, "finance.applyRenegotiation");
+    await row.getByRole("button", { name: "Aplicar" }).click();
+    await applied;
+    await expect(row.getByText("Aplicado")).toBeVisible();
+    const installments = await queryDatabase<Array<{ sequence: number; status: string; amount: string }>>("SELECT sequence, status, amount FROM installments WHERE contractId = ? ORDER BY sequence", [contract!.id]);
+    expect(installments.map(item => [item.sequence, item.status, Number(item.amount)])).toEqual([[1, "renegotiated", 1000], [2, "open", 900]]);
+  });
+});

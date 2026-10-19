@@ -41,13 +41,15 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
 
   const v2Policy = JSON.stringify({ linerRate: 0, closerRate: 0, ftbRate: 0, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt", rulesV2: FIVE_COMMISSION_DRAFT_V2 });
 
+  const v1AndV2Policy = JSON.stringify({ linerRate: 0.1, closerRate: 0.1, ftbRate: 0, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt", rulesV2: FIVE_COMMISSION_DRAFT_V2 });
+
   /** Venda validada e ativa: entrada de R$ 1.000 dividida em parcelas, 2 frações vendidas (2 cotas), captador, consultor (liner) e fechador (closer) distintos. */
-  async function seedSale(label: string, installmentAmounts = ["1000.00"]) {
+  async function seedSale(label: string, installmentAmounts = ["1000.00"], policyJson = v2Policy) {
     const [promoter] = await db.insert(users).values({ openId: `v2-promoter-${label}-${runId}`, name: "Captador", role: "seller" }).$returningId();
     const [liner] = await db.insert(users).values({ openId: `v2-liner-${label}-${runId}`, name: "Consultor", role: "seller" }).$returningId();
     const [closer] = await db.insert(users).values({ openId: `v2-closer-${label}-${runId}`, name: "Fechador", role: "seller" }).$returningId();
     const [resort] = await db.insert(resorts).values({ name: `Resort V2 ${label} ${runId}` } as never).$returningId();
-    await db.insert(commercialProjectSettings).values({ resortId: resort.id, commissionPolicy: v2Policy });
+    await db.insert(commercialProjectSettings).values({ resortId: resort.id, commissionPolicy: policyJson });
     const [customer] = await db.insert(customers).values({ fullName: `Cliente V2 ${label} ${runId}`, status: "active" }).$returningId();
     const [opportunity] = await db.insert(opportunities).values({ customerId: customer.id, title: `Opp ${label}`, sellerId: closer.id } as never).$returningId();
     const [proposal] = await db.insert(proposals).values({ opportunityId: opportunity.id, reference: `P-V2-${label}-${runId}`, productDescription: "Semana fixa", totalAmount: "10000.00", downPaymentAmount: "1000.00", installmentCount: 3 }).$returningId();
@@ -163,5 +165,30 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     expect(all).toHaveLength(6);
     const total = (role: string) => all.filter(row => row.commissionRole === role).reduce((sum, row) => sum + Number(row.amount), 0);
     expect([total("promoter"), total("liner"), total("closer")]).toEqual([800, 100, 100]);
+  });
+  it("VERSÃO FIXADA POR CONTRATO: V1 já gerou a 1ª parcela; liberar o V2 no meio NÃO troca de regra nas parcelas seguintes", async () => {
+    const { contractId, installmentIds } = await seedSale("travessia", ["500.00", "500.00"], v1AndV2Policy);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" }); // V2 travado: V1 (10% sobre o saldo do contrato, pro-rata da entrada)
+    const first = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+    expect(first.map(row => [row.commissionRole, row.amount, row.ruleVersion]).sort()).toEqual([["closer", "450.00", "v1"], ["liner", "450.00", "v1"]]);
+    process.env.COMMISSION_V2_RELEASED = "true"; // liberado no meio do contrato
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    const all = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+    expect(all.every(row => row.ruleVersion === "v1")).toBe(true);
+    expect(all.some(row => row.commissionRole === "promoter")).toBe(false);
+    const total = (role: string) => all.filter(row => row.commissionRole === role).reduce((sum, row) => sum + Number(row.amount), 0);
+    expect([total("liner"), total("closer")]).toEqual([900, 900]); // fecha exatamente na política V1, sem subtrair V1 de V2
+  });
+
+  it("V2 fixado e travado de novo: o travamento vence e nenhuma parcela nova gera comissão", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("retrava", ["500.00", "500.00"]);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" });
+    expect((await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).every(row => row.ruleVersion === "v2")).toBe(true);
+    delete process.env.COMMISSION_V2_RELEASED;
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
   });
 });

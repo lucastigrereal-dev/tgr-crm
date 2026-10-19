@@ -249,6 +249,17 @@ export const financeRouter = router({
 
   // CRM-A11: quem dispara a renegociação. Antes só existia a proposta (draft); nada aprovava nem aplicava. Fluxo: draft -> approved -> applied.
   // Regra da empresa vira configuração com padrão: quem propõe não aprova (RENEGOTIATION_SELF_APPROVAL=true libera, p.ex. operação de uma pessoa só).
+  // CRM-A11: lista de acordos para a tela (sem ID opaco). `canApprove` já vem resolvido: quem propôs não aprova, salvo RENEGOTIATION_SELF_APPROVAL=true.
+  listRenegotiations: financeProcedure.input(z.object({ contractId: z.number().int().positive().optional(), status: z.enum(["draft", "approved", "applied", "rejected", "cancelled"]).optional(), limit: z.number().int().min(1).max(200).default(100) }).optional()).query(async ({ ctx, input }) => {
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    const filters = [input?.contractId ? eq(installmentRenegotiations.contractId, input.contractId) : undefined, input?.status ? eq(installmentRenegotiations.status, input.status) : undefined].filter((item): item is NonNullable<typeof item> => Boolean(item));
+    const rows = await db.select({ renegotiation: installmentRenegotiations, sequence: installments.sequence, contractNumber: contracts.number, customerName: customers.fullName })
+      .from(installmentRenegotiations).innerJoin(installments, eq(installmentRenegotiations.originalInstallmentId, installments.id)).innerJoin(contracts, eq(installmentRenegotiations.contractId, contracts.id)).innerJoin(customers, eq(contracts.customerId, customers.id))
+      .where(filters.length ? and(...filters) : undefined).orderBy(desc(installmentRenegotiations.createdAt), desc(installmentRenegotiations.id)).limit(input?.limit ?? 100);
+    const selfApproval = process.env.RENEGOTIATION_SELF_APPROVAL === "true";
+    return { rows: rows.map(row => ({ ...row.renegotiation, installmentSequence: row.sequence, contractNumber: row.contractNumber, customerName: row.customerName, canApprove: row.renegotiation.status === "draft" && (selfApproval || row.renegotiation.createdByUserId !== ctx.user.id) })) };
+  }),
+
   approveRenegotiation: financeProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     await db.transaction(async tx => {

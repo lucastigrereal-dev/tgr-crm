@@ -484,6 +484,13 @@
       "when": 1792450159127,
       "tag": "0068_payment_gateway_issue_intents",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "5",
+      "when": 1792451460597,
+      "tag": "0069_commission_rule_version",
+      "breakpoints": true
     }
   ]
 }

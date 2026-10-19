@@ -2,6 +2,10 @@ import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import { billingRecords, installments, paymentGatewayIssueIntents } from "../drizzle/schema";
 import { asaasBillingType, findAsaasPaymentsByReference, getAsaasIdentificationField, getAsaasPixQrCode, type AsaasConfig, type GatewayBillingType } from "./paymentGateway";
 import { txAudit, txEvent } from "./txOutbox";
+import { processAsaasWebhook } from "./paymentGatewayWebhook";
+
+/** Estados do Asaas que significam dinheiro recebido: a recuperação deve liquidar, não só recriar a cobrança como "gerada". */
+const REMOTE_PAID = ["CONFIRMED", "RECEIVED", "RECEIVED_IN_CASH"];
 
 /**
  * CRM-A10: recuperação durável de cobrança Asaas órfã.
@@ -47,6 +51,7 @@ export async function recoverOrphanGatewayBillings(db: Db, config: AsaasConfig, 
         continue;
       }
       // Detalhes de boleto/PIX são lidos fora da transação (chamadas remotas somente leitura).
+      const remotePaid = REMOTE_PAID.includes(String(remote.status ?? "").toUpperCase());
       const identification = intent.type === "boleto" ? await getAsaasIdentificationField(config, remote.id) : null;
       const pix = intent.type === "pix" ? await getAsaasPixQrCode(config, remote.id) : null;
       const outcome = await db.transaction(async tx => {
@@ -54,7 +59,11 @@ export async function recoverOrphanGatewayBillings(db: Db, config: AsaasConfig, 
         const fresh = (await tx.select({ status: paymentGatewayIssueIntents.status }).from(paymentGatewayIssueIntents).where(eq(paymentGatewayIssueIntents.id, intent.id)).limit(1).for("update"))[0];
         if (!fresh || fresh.status !== "pending") return "skipped" as const;
         const local = (await tx.select({ id: billingRecords.id }).from(billingRecords).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, remote.id))).orderBy(desc(billingRecords.createdAt)).limit(1))[0];
-        if (local) { await markIssueIntentRecorded(tx, { installmentId: intent.installmentId, type: intent.type, gatewayPaymentId: remote.id }); return "recorded" as const; }
+        if (local) {
+          if (remotePaid) return "settle_existing" as const;
+          await markIssueIntentRecorded(tx, { installmentId: intent.installmentId, type: intent.type, gatewayPaymentId: remote.id });
+          return "recorded" as const;
+        }
         if (!installment || CLOSED_INSTALLMENT.includes(installment.status)) {
           // A cobrança remota existe, mas a parcela não aceita mais cobrança: decisão humana (cancelar no gateway).
           await tx.update(paymentGatewayIssueIntents).set({ status: "manual_review", gatewayPaymentId: remote.id, lastError: "parcela_encerrada" }).where(eq(paymentGatewayIssueIntents.id, intent.id));
@@ -67,12 +76,22 @@ export async function recoverOrphanGatewayBillings(db: Db, config: AsaasConfig, 
         if (!id) throw new Error("billing_insert_failed");
         await txAudit(tx, { actorUserId: intent.actorUserId, entityType: "billing_record", entityId: id, action: "gateway_recovered", summary: `Cobrança ${intent.type.toUpperCase()} órfã do Asaas recuperada para a parcela ${intent.installmentId}.` });
         await txEvent(tx, { eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: id, actorUserId: intent.actorUserId, payload: { installmentId: intent.installmentId, gatewayProvider: "asaas", gatewayPaymentId: remote.id, type: intent.type, recovered: true }, idempotencyKey: `billing-recovered:${remote.id}` });
+        // Cobrança já paga no gateway: a intenção só fecha depois da liquidação (abaixo), para um novo ciclo repetir se ela falhar.
+        if (remotePaid) return "created_paid" as const;
         await markIssueIntentRecorded(tx, { installmentId: intent.installmentId, type: intent.type, gatewayPaymentId: remote.id, status: "recovered" });
         return "recovered" as const;
       });
-      if (outcome === "recovered") result.recovered += 1;
-      else if (outcome === "recorded") result.recorded += 1;
-      else if (outcome === "manual_review") result.manualReview += 1;
+      let finalOutcome: typeof outcome | "recovered" | "recorded" = outcome;
+      if (outcome === "settle_existing" || outcome === "created_paid") {
+        // Mesmo caminho do webhook (baixa, recebimento, comissão e fatos do Financial na mesma transação), idempotente por evento sintético.
+        const settled = await processAsaasWebhook(config.webhookToken, { id: `recovery:${remote.id}`, event: remote.status === "CONFIRMED" ? "PAYMENT_CONFIRMED" : "PAYMENT_RECEIVED", payment: { id: remote.id, status: remote.status } });
+        if (settled.status !== 200) throw new Error(`settle_failed_${settled.status}`);
+        finalOutcome = outcome === "created_paid" ? "recovered" : "recorded";
+        await markIssueIntentRecorded(db, { installmentId: intent.installmentId, type: intent.type, gatewayPaymentId: remote.id, status: finalOutcome });
+      }
+      if (finalOutcome === "recovered") result.recovered += 1;
+      else if (finalOutcome === "recorded") result.recorded += 1;
+      else if (finalOutcome === "manual_review") result.manualReview += 1;
     } catch (error) {
       result.failed += 1;
       const attempts = intent.attempts + 1;

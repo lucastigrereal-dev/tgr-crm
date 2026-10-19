@@ -95,7 +95,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   const existingRoles = new Set(existing.map(row => row.role));
   // Issue #38 (1): acumulado automático (de parcela, não cancelado; lançamentos manuais ficam de fora) por papel no contrato, para limitar a proração ao total devido.
   const alreadyReleased: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>> = {};
-  const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId)));
+  const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount, ruleVersion: salesCommissions.ruleVersion }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId)));
   previous.forEach(row => { alreadyReleased[row.role] = Math.round(((alreadyReleased[row.role] ?? 0) + Number(row.amount)) * 100) / 100; });
   const calendar = { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay };
   const entryTotal = Number(context.proposal.downPaymentAmount);
@@ -111,14 +111,19 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
     });
     return buildInstallmentCommissionsV2({ installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal, paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt, lines, alreadyReleased, calendar });
   };
-  const rows = (commissionV2Active(policy) ? await v2Rows() : buildInstallmentCommissions({
+  // Versão fixada por contrato: a do primeiro lançamento automático ainda vigente. Liberar o V2 depois que o V1 já gerou comissão NÃO troca de regra no meio
+  // do contrato (os totais não bateriam com nenhuma política). V2 fixado com o V2 travado de novo não gera nada: o travamento vence.
+  const pinned = previous[0]?.ruleVersion as "v1" | "v2" | undefined;
+  const useV2 = pinned ? pinned === "v2" : commissionV2Active(policy);
+  if (useV2 && !commissionV2Active(policy)) return [];
+  const rows = (useV2 ? await v2Rows() : buildInstallmentCommissions({
     installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal,
     contractTotal: Number(context.contract.totalAmount), paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt,
     linerId: context.capture.linerId, closerId: context.capture.closerId,
     rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, alreadyReleased, calendar,
   })).filter(row => !existingRoles.has(row.commissionRole));
   if (!rows.length) return [];
-  const values = rows.map(row => ({ ...row, contractId: installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
+  const values = rows.map(row => ({ ...row, ruleVersion: useV2 ? "v2" : "v1", contractId: installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
   const inserted = await tx.insert(salesCommissions).values(values).$returningId();
   const facts: CreatedCommissionFact[] = [];
   inserted.forEach((row, index) => { const value = values[index]; if (value && row?.id) facts.push({ id: row.id, sellerId: value.sellerId, campaignId: value.campaignId, opportunityId: value.opportunityId, contractId: value.contractId, sourceInstallmentId: value.sourceInstallmentId, commissionRole: value.commissionRole, amount: Number(value.amount), rate: Number(value.rate) });  });

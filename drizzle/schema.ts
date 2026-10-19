@@ -592,6 +592,8 @@ export const salesCommissions = mysqlTable(
     contractId: int("contractId").references(() => contracts.id),
     sourceInstallmentId: int("sourceInstallmentId").references(() => installments.id),
     commissionRole: mysqlEnum("commissionRole", ["liner", "closer", "ftb", "promoter"]).default("ftb").notNull(),
+    // Versão da regra que calculou a comissão automática; o contrato fica na versão do 1º lançamento (liberar o V2 no meio não mistura políticas).
+    ruleVersion: varchar("ruleVersion", { length: 8 }).default("v1").notNull(),
     baseAmount: decimal("baseAmount", { precision: 14, scale: 2 }).notNull(),
     rate: decimal("rate", { precision: 5, scale: 2 }).notNull(),
     amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),

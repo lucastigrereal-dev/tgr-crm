@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, billingRecords, contracts, customers, domainEvents, installments, paymentGatewayIssueIntents, users } from "../drizzle/schema";
+import { auditLogs, billingRecords, contracts, customers, domainEvents, financialTransactions, installments, paymentGatewayIssueIntents, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { runTriggerDdl } from "./mysqlTestDdl";
 
@@ -149,5 +149,42 @@ describe.skipIf(!integrationUrl)("CRM-A10: cobrança Asaas órfã é recuperada 
     expect(await localBillings(installmentId)).toHaveLength(0);
     const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "installment"), eq(auditLogs.entityId, String(installmentId)), eq(auditLogs.action, "gateway_orphan_needs_review")));
     expect(audits).toHaveLength(1);
+  });
+  it("ÓRFÃ JÁ PAGA: a recuperação liquida pelo caminho do webhook (parcela paga, recebimento, evento), atômica e idempotente", async () => {
+    const installmentId = await seedInstallment("paga");
+    const billingTrigger = await failBillingEvent(installmentId);
+    await expect(caller().issueGatewayBilling({ installmentId, type: "pix" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    const orphan = remote.payments.find(payment => payment.externalReference === `TGR-CRM-INSTALLMENT-${installmentId}`)!;
+    orphan.status = "RECEIVED"; // o cliente pagou; o webhook chegou antes de existir cobrança local e foi descartado
+    await dropTrigger(billingTrigger);
+
+    // a liquidação falha (evento installment.paid recusado pelo banco): nada da baixa persiste e a intenção continua pendente
+    const paidName = `a10_fail_paid_${runId}_${installmentId}`;
+    await runTriggerDdl(pool, `CREATE TRIGGER \`${paidName}\` BEFORE INSERT ON domain_events FOR EACH ROW BEGIN IF NEW.eventName = 'installment.paid' AND NEW.aggregateId = '${installmentId}' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'falha injetada: installment.paid'; END IF; END`);
+    triggers.push(paidName);
+    await recover(db as never, config, { minAgeMs: 0, limit: 500 });
+    const afterFailure = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!;
+    expect(afterFailure.status).not.toBe("paid");
+    expect((await intentOf(installmentId))?.status).toBe("pending");
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, afterFailure.contractId))).toHaveLength(0);
+    await dropTrigger(paidName);
+
+    await recover(db as never, config, { minAgeMs: 0, limit: 500 });
+    const paid = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!;
+    expect(paid).toMatchObject({ status: "paid", paidAmount: "1500.00" });
+    const rows = await localBillings(installmentId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "paid", gatewayPaymentId: orphan.id });
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, paid.contractId))).toHaveLength(1);
+    const paidEvents = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "installment.paid" as never), eq(domainEvents.aggregateId, String(installmentId))));
+    expect(paidEvents).toHaveLength(1);
+    expect((await intentOf(installmentId))?.status).toBe("recorded"); // a cobrança local já existia desde o 1º ciclo; o 2º só liquidou
+
+    // repetir não baixa de novo; um webhook real tardio também não
+    await recover(db as never, config, { minAgeMs: 0, limit: 500 });
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    await processAsaasWebhook(config.webhookToken, { id: "evt-tardio", event: "PAYMENT_RECEIVED", payment: { id: orphan.id, status: "RECEIVED" } });
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, paid.contractId))).toHaveLength(1);
+    expect(await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "installment.paid" as never), eq(domainEvents.aggregateId, String(installmentId))))).toHaveLength(1);
   });
 });
