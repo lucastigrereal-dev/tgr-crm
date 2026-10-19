@@ -39,4 +39,28 @@ describe("NQ para o Sales: o que sai", () => {
     expect(out.criteria.find(c => c.key === "idade_homem")).toEqual({ key: "idade_homem", status: "ok", detail: "Idade do homem acima do mínimo." });
     expect(out.criteria.find(c => c.key === "relacionamento")).toEqual({ key: "relacionamento", status: "ok", detail: "Casado ou união estável." });
   });
+
+  it("CRM-A22: todo detalhe que sai pertence a uma lista fixa (lista de permissão), em todas as combinações", () => {
+    const allowed = new Set<string>();
+    const ages = [null, 25, 31, 47], statuses = [null, "Casado", "Namorando", "Separado", "Maria Souza"], years = [null, 0, 1, 5], months = [null, 0, 4, 30];
+    const kinds = [null, "carro", "moto", "nenhum"] as const, vyears = [null, 2010, 2020], incomes = [null, 100, 99999], flags = [null, true, false];
+    for (const maleSpouse of [null, "titular", "conjuge"] as const) for (const primaryAge of ages) for (const relationshipStatus of statuses) for (const relationshipYears of years) for (const relationshipMonths of months) for (const vehicleKind of kinds) for (const vehicleYear of vyears) for (const averageIncome of incomes) for (const hasCreditCard of flags) {
+      const out = toIntegrationNq(computeNq({ maleSpouse, primaryAge, partnerAge: primaryAge, relationshipStatus, relationshipYears, relationshipMonths, vehicleKind, vehicleYear, secondVehicleKind: vehicleKind, secondVehicleYear: vehicleYear, averageIncome, hasCreditCard, ownsHome: hasCreditCard }));
+      for (const c of out.criteria) allowed.add(`${c.key}|${c.status}|${c.detail}`);
+    }
+    // Poucas frases por critério e status; nada com dígito (idade, anos, meses, renda) nem com o texto livre.
+    for (const entry of allowed) {
+      expect(entry).not.toMatch(/\d/);
+      expect(entry).not.toMatch(/Maria|Souza|Namorando|Separado/);
+    }
+    expect(allowed.size).toBeLessThan(40);
+  });
+
+  it("critério desconhecido sai com frase genérica, nunca com o texto do cálculo", () => {
+    const nq = computeNq(input);
+    const leaky = { ...nq, criteria: [...nq.criteria, { key: "futuro" as never, label: "x", status: "ok" as const, detail: "CPF 123.456.789-09 de Maria" }] };
+    const out = toIntegrationNq(leaky);
+    expect(JSON.stringify(out)).not.toMatch(/123\.456|Maria/);
+    expect(out.criteria.at(-1)).toEqual({ key: "futuro", status: "ok", detail: "Critério atendido." });
+  });
 });
