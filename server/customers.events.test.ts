@@ -15,11 +15,15 @@ function makeDb(options: { existingId?: number | null; duplicateDocumentId?: num
       from: (table: unknown) => {
         if (table === customerContacts) return { where: async () => [] };
         if (table !== customers) throw new Error("Tabela não prevista neste teste");
-        return { where: () => ({ limit: async () => {
-          if (options.existingId === null) return [];
-          if (options.duplicateDocumentId && customerSelectCall++ > 0) return [{ id: options.duplicateDocumentId }];
-          customerSelectCall += 1;
-          return [{ id: options.existingId ?? 121 }];
+        // limit() devolve uma promessa que também aceita .for("update") (guarda da anonimização lê o cliente com trava).
+        return { where: () => ({ limit: () => {
+          const rows = (async () => {
+            if (options.existingId === null) return [];
+            if (options.duplicateDocumentId && customerSelectCall++ > 0) return [{ id: options.duplicateDocumentId }];
+            customerSelectCall += 1;
+            return [{ id: options.existingId ?? 121 }];
+          })();
+          return Object.assign(rows, { for: () => rows });
         } }) };
       },
     })),

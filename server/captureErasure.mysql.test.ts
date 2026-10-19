@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, captureErasureRequests, captureRecords, contracts, customerContacts, customerInteractions, customers, opportunities, users, vouchers } from "../drizzle/schema";
+import { auditLogs, captureErasureRequests, captureRecords, contracts, csvImportItems, customerContacts, customerInteractions, customers, domainEvents, opportunities, users, vouchers } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { runTriggerDdl } from "./mysqlTestDdl";
 
@@ -34,9 +34,9 @@ describe.skipIf(!integrationUrl)("pedido de exclusão/anonimização da ficha em
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
   /** Cliente sintético com tudo preenchido, uma ou mais fichas (códigos), contatos, interação, oportunidade e um voucher. */
-  async function seed(label: string, sheets = 1) {
+  async function seed(label: string, sheets = 1, document?: string) {
     const [{ id: customerId }] = await db.insert(customers).values({
-      fullName: `Casal Sintético ${label} ${runId}`, documentNumber: `ERA${label}${runId}`.slice(0, 32), email: `${label}@exemplo.test`, phone: "11911112222", birthDate: new Date("1980-05-05T12:00:00Z"),
+      fullName: `Casal Sintético ${label} ${runId}`, documentNumber: document ?? `ERA${label}${runId}`.slice(0, 32), email: `${label}@exemplo.test`, phone: "11911112222", birthDate: new Date("1980-05-05T12:00:00Z"),
       maritalStatus: "Casado", occupation: "Engenheiro", zipCode: "01001000", address: "Rua Sintética", addressNumber: "10", complement: "ap 2", neighborhood: "Centro", city: "Natal", state: "RN", acquisitionSource: "Praia", status: "active", notes: "cliente pediu contato à noite",
     }).$returningId();
     await db.insert(customerContacts).values([{ customerId, kind: "phone", value: "11933334444" }, { customerId, kind: "email", value: `${label}-2@exemplo.test` }]);
@@ -154,6 +154,73 @@ describe.skipIf(!integrationUrl)("pedido de exclusão/anonimização da ficha em
     await runTriggerDdl(pool, `DROP TRIGGER IF EXISTS \`${name}\``);
     triggers.splice(0);
     await expect(as("admin").captureSheet.erasure.complete({ requestId, confirmCode: codes[0] })).resolves.toMatchObject({ sheetsAnonymized: 1 });
+  });
+
+  it("cópias secundárias: snapshot de importação CSV, payload de eventos e motivo de voucher na trilha são higienizados na mesma transação (P1)", async () => {
+    const digits = `9${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(0, 20);
+    const { customerId, captureIds, codes } = await seed("copias", 1, digits);
+    const [voucher] = await db.select().from(vouchers).where(eq(vouchers.customerId, customerId));
+    // Importação que ATUALIZA o cliente existente grava a linha inteira antiga em beforeSnapshot.
+    const csv = `nome_completo,documento,email,telefone\nCasal Sintético copias ${runId},${digits},novo-${runId}@exemplo.test,11955556666\n`;
+    const committed = await as("admin").imports.commit({ kind: "customers", csv });
+    expect(committed).toMatchObject({ committed: true, updated: 1 });
+    const [item] = await db.select().from(csvImportItems).where(and(eq(csvImportItems.entityType, "customer"), eq(csvImportItems.entityId, customerId)));
+    expect(item!.beforeSnapshot).toContain("exemplo.test");
+    await db.insert(domainEvents).values([
+      { eventName: "customer.updated", aggregateType: "customer", aggregateId: String(customerId), payload: JSON.stringify({ status: "active", city: "Natal", state: "RN" }) },
+      { eventName: "capture.no_tour", aggregateType: "capture", aggregateId: String(captureIds[0]), payload: JSON.stringify({ salesRoom: "Sala", reason: "esposa doente" }) },
+    ]);
+    await db.insert(auditLogs).values({ entityType: "voucher", entityId: String(voucher!.id), action: "cancelled", summary: `Voucher ${voucher!.code} cancelado: viagem do marido.` });
+
+    const { requestId } = await as("finance").captureSheet.erasure.request({ code: codes[0], reason: "titular pediu pelo canal" });
+    await as("admin").captureSheet.erasure.complete({ requestId, confirmCode: codes[0] });
+
+    expect((await db.select().from(csvImportItems).where(eq(csvImportItems.id, item!.id)))[0]!.beforeSnapshot).toBeNull();
+    const events = await db.select().from(domainEvents).where(and(eq(domainEvents.aggregateType, "customer"), eq(domainEvents.aggregateId, String(customerId))));
+    expect(events.map(event => event.payload).join("")).not.toMatch(/Natal|RN|city/);
+    expect(events.find(event => event.eventName === "customer.updated")!.payload).toBe(JSON.stringify({ status: "active" }));
+    const captureEvents = await db.select().from(domainEvents).where(and(eq(domainEvents.aggregateType, "capture"), eq(domainEvents.aggregateId, String(captureIds[0]))));
+    expect(captureEvents.map(event => event.payload).join("")).not.toContain("esposa doente");
+    const [voucherAudit] = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "voucher"), eq(auditLogs.entityId, String(voucher!.id))));
+    expect(voucherAudit!.summary).toBe(`Voucher ${voucher!.code} cancelado.`);
+  });
+
+  it("guarda central: depois de anonimizado, cadastro, contatos, interação, documento, captação e importação CSV NÃO desfazem a anonimização (P1)", async () => {
+    const digits = `8${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(0, 20);
+    const { customerId, codes } = await seed("guarda", 1, digits);
+    const { requestId } = await as("finance").captureSheet.erasure.request({ code: codes[0], reason: "titular pediu pelo canal" });
+    await as("admin").captureSheet.erasure.complete({ requestId, confirmCode: codes[0] });
+    const refused = { code: "PRECONDITION_FAILED" };
+
+    await expect(as("admin").customers.update({ id: customerId, data: { fullName: `Casal Sintético guarda ${runId}`, documentNumber: digits, email: "volta@exemplo.test", phone: "11900000000", status: "active" } as never })).rejects.toMatchObject(refused);
+    await expect(as("admin").customerContacts.add({ customerId, kind: "phone", value: "11977778888" } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").customers.addInteraction({ customerId, type: "note", content: "nova anotação com dado" })).rejects.toMatchObject(refused);
+    await expect(as("admin").customers.uploadDocument({ customerId, category: "RG", filename: "rg.pdf", contentType: "application/pdf", base64: Buffer.from("%PDF-1.4 sintetico sintetico").toString("base64") })).rejects.toMatchObject(refused);
+    await expect(as("admin").captures.create({ customerId, salesRoom: `Sala ${runId}` } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").captures.create({ customer: { fullName: "Qualquer Nome", documentNumber: digits } } as never)).rejects.toMatchObject(refused);
+
+    // CSV que casa o CPF retido é recusado na validação, sem tocar o cadastro.
+    const csv = `nome_completo,documento,email,telefone\nCasal Sintético guarda ${runId},${digits},volta-${runId}@exemplo.test,11911119999\n`;
+    const result = await as("admin").imports.commit({ kind: "customers", csv });
+    expect(result).toMatchObject({ valid: false, committed: false });
+    expect(result.issues[0]).toMatchObject({ field: "documentNumber" });
+
+    const [customer] = await db.select().from(customers).where(eq(customers.id, customerId));
+    expect(customer).toMatchObject({ email: null, phone: null, birthDate: null, city: null, status: "inactive" });
+    expect(customer!.anonymizedAt).not.toBeNull();
+    expect(await db.select().from(customerContacts).where(eq(customerContacts.customerId, customerId))).toHaveLength(0);
+    expect((await db.select().from(customerInteractions).where(eq(customerInteractions.customerId, customerId)))[0]!.content).toBe("[removido a pedido do titular]");
+  });
+
+  it("um pedido aberto por CLIENTE: ficha irmã do mesmo cliente não abre segundo pedido, nem em paralelo (P2)", async () => {
+    const { codes } = await seed("irma", 2);
+    const results = await Promise.allSettled([
+      as("finance").captureSheet.erasure.request({ code: codes[0], reason: "titular pediu pelo canal" }),
+      as("finance").captureSheet.erasure.request({ code: codes[1], reason: "titular pediu pelo canal" }),
+    ]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")[0]).toMatchObject({ reason: { code: "PRECONDITION_FAILED" } });
+    await expect(as("finance").captureSheet.erasure.request({ code: codes[1], reason: "titular pediu de novo" })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 
   it("a migration 0066 semeou a chave do encarregado e o aviso v4 mostra a marcação enquanto faltar dado", async () => {

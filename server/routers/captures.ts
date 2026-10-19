@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureMotives, captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { anonymizedCustomerError } from "../customerAnonymization";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { assertCaptureInRoomView, captorNameOf, resolveNtMotive, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
@@ -238,8 +239,9 @@ export const capturesRouter = router({
       let customerId = input.customerId;
       let customerName = "Associado";
       if (customerId) {
-        const existingCustomer = (await tx.select({ id: customers.id, fullName: customers.fullName }).from(customers).where(eq(customers.id, customerId)).limit(1))[0];
+        const existingCustomer = (await tx.select({ id: customers.id, fullName: customers.fullName, anonymizedAt: customers.anonymizedAt }).from(customers).where(eq(customers.id, customerId)).limit(1).for("update"))[0];
         if (!existingCustomer) throw new TRPCError({ code: "NOT_FOUND", message: "Associado da captação não encontrado." });
+        if (existingCustomer.anonymizedAt) throw anonymizedCustomerError();
         customerName = existingCustomer.fullName;
       }
       if (!customerId && input.customer) {
@@ -247,7 +249,8 @@ export const capturesRouter = router({
         if (nullIfBlank(input.customer.documentNumber)) matches.push(eq(customers.documentNumber, nullIfBlank(input.customer.documentNumber)!));
         if (nullIfBlank(input.customer.email)) matches.push(eq(customers.email, nullIfBlank(input.customer.email)!));
         if (nullIfBlank(input.customer.phone)) matches.push(eq(customers.phone, nullIfBlank(input.customer.phone)!));
-        const existing = matches.length ? (await tx.select().from(customers).where(or(...matches)).limit(1))[0] : undefined;
+        const existing = matches.length ? (await tx.select().from(customers).where(or(...matches)).limit(1).for("update"))[0] : undefined;
+        if (existing?.anonymizedAt) throw anonymizedCustomerError();
         if (existing) { customerId = existing.id; customerName = existing.fullName; }
         else {
           const insertedCustomer = await tx.insert(customers).values({ fullName: input.customer.fullName, documentNumber: nullIfBlank(input.customer.documentNumber), email: nullIfBlank(input.customer.email), phone: nullIfBlank(input.customer.phone), birthDate: input.customer.birthDate ? new Date(`${input.customer.birthDate}T12:00:00Z`) : null, occupation: nullIfBlank(input.customer.occupation), city: nullIfBlank(input.customer.city), state: nullIfBlank(input.customer.state), acquisitionSource: "captação", status: "prospect" }).$returningId();

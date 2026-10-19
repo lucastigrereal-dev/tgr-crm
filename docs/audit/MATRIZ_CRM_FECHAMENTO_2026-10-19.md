@@ -43,6 +43,13 @@ Não coberto pela revisão manual: varredura de dependências, teste de intrusã
 - Prazos como configuração com padrão: arquivamento da ficha de não comprador e guarda do papel; `room_visibility_days=0` permanece.
 - Exclusão: registro do pedido, confirmação digitando o código do casal, recusa com justificativa. Cumprida, ficam nome, CPF, código e datas da ficha e a data do brinde gravada no pedido; o resto das fichas do cliente e do cadastro é limpo. Cliente com contrato, reserva, documento anexado, lista de espera ou ficha VENDEU é recusado (guarda legal pede decisão humana). Cópias no Sales Command, Relationship e Financial NÃO são tocadas e nenhum evento é emitido: a trilha do pedido é a prova para quem for replicar.
 
+### Achados automáticos do PR #78 (corrigidos no commit seguinte)
+
+- P1 cópias secundárias: a exclusão agora higieniza, na mesma transação, o `beforeSnapshot` de importação CSV (linha inteira do cliente), o payload de eventos de domínio do cliente e das fichas (cidade, UF, origem, motivo) e o motivo de cancelamento de voucher na trilha. Auditoria e `domain_events` já entregues a outros sistemas não são recolhidos (o CRM não é dono dessas cópias).
+- P1 guarda central: `server/customerAnonymization.ts` (`assertCustomerNotAnonymized`, com trava da linha) é aplicada em `customers.update`, `customers.addInteraction`, `customers.uploadDocument`, `customerContacts.add`, `captures.create` (cliente por id ou casado por CPF/e-mail/telefone) e na importação CSV (linha que casa o CPF retido é recusada; o desfazer da importação nunca restaura cliente anonimizado). Não coberto por teste: o `undoLast` da importação (usa o último lote global, inseguro de exercitar em banco compartilhado).
+- P2 um pedido aberto por cliente: o registro trava a linha do cliente e checa pedido aberto por `customerId`; sem índice único parcial (o MySQL não tem; a trava de linha serializa).
+- Prova: `captureErasure.mysql` passou de 6 para 9 testes; com a guarda e a higienização neutralizadas, os 2 testes novos falham.
+
 ## CRM-A07 e CRM-A25
 
 - Varredura de órfãos: lista o diretório do storage local e apaga o que nenhuma linha de documento referencia, com idade mínima. `ORPHAN_BLOB_SWEEP_ENABLED=false` e `ORPHAN_BLOB_SWEEP_DELETE=false` por padrão (ligar a varredura sem a exclusão só relata). Forge/S3 não é varrido: sem listagem segura aqui, fica manual.
@@ -51,7 +58,7 @@ Não coberto pela revisão manual: varredura de dependências, teste de intrusã
 ## Suíte local (MySQL 8.0.46 descartável, banco novo com `drizzle-kit migrate` 0001 a 0066)
 
 - `pnpm check` (tsc): sem erros.
-- `pnpm test`: 180 arquivos passaram, 41 pulados (os `.mysql.test.ts` sem URL); 914 testes passaram, 222 pulados.
-- `.mysql.test.ts` (`--pool=forks`, como no CI): 41 arquivos, 222 testes, todos passaram.
+- `pnpm test`: 180 arquivos passaram, 41 pulados (os `.mysql.test.ts` sem URL); 914 testes passaram, 225 pulados.
+- `.mysql.test.ts` (`--pool=forks`, como no CI): 41 arquivos, 225 testes, todos passaram (após a correção dos achados do #78).
 - `pnpm build` e orçamento de bundle: app 151,3 KB (limite 450), Excel 264,4 (300), PDF 123,4 (150).
 - NOT_RUN localmente: E2E de navegador (Playwright). `nqReadEndpoint.mysql` usa CPF fixo e falha em segunda execução num banco reaproveitado; no CI o banco é novo por execução (não alterei esse teste).

@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { captureErasureRequests, captureRecords, contracts, customerContacts, customerDocuments, customerInteractions, customers, opportunities, reservations, tasks, vouchers, reservationWaitlist } from "../drizzle/schema";
+import { auditLogs, captureErasureRequests, captureRecords, contracts, csvImportItems, customerContacts, customerDocuments, customerInteractions, customers, domainEvents, opportunities, reservations, tasks, vouchers, reservationWaitlist } from "../drizzle/schema";
 import type { getDb } from "./db";
 import { txAudit } from "./txOutbox";
 
@@ -57,6 +57,36 @@ export async function erasureBlockers(executor: Db | Tx, customerId: number, cap
   return blockers;
 }
 
+/** Chaves de payload de evento que carregam dado pessoal ou texto livre do titular. */
+const EVENT_PII_KEYS = ["city", "state", "acquisitionSource", "reason", "notes", "complement"];
+
+/**
+ * Cópias secundárias persistidas do dado pessoal, limpas na mesma transação: snapshot de importação CSV (linha inteira do cliente),
+ * payload de eventos de domínio do cliente e das fichas (cidade, UF, origem, motivo) e o motivo de cancelamento de voucher na trilha.
+ * Ficam a trilha em si (quem, quando, o quê) e o nome/CPF mínimo. Eventos já entregues a outros sistemas não são recolhidos aqui.
+ */
+export async function scrubSecondaryCopies(tx: Tx, customerId: number, captureIds: number[]) {
+  await tx.update(csvImportItems).set({ beforeSnapshot: null }).where(and(eq(csvImportItems.entityType, "customer"), eq(csvImportItems.entityId, customerId)));
+  const scopes: Array<[string, string[]]> = [["customer", [String(customerId)]], ["capture", captureIds.map(String)]];
+  for (const [aggregateType, ids] of scopes) {
+    if (!ids.length) continue;
+    const events = await tx.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents).where(and(eq(domainEvents.aggregateType, aggregateType), inArray(domainEvents.aggregateId, ids)));
+    for (const event of events) {
+      if (!event.payload) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(event.payload); } catch { continue; }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const record = parsed as Record<string, unknown>;
+      const hit = EVENT_PII_KEYS.filter(key => key in record);
+      if (!hit.length) continue;
+      for (const key of hit) delete record[key];
+      await tx.update(domainEvents).set({ payload: JSON.stringify(record) }).where(eq(domainEvents.id, event.id));
+    }
+  }
+  const voucherRows = await tx.select({ id: vouchers.id, code: vouchers.code }).from(vouchers).where(eq(vouchers.customerId, customerId));
+  for (const voucher of voucherRows) await tx.update(auditLogs).set({ summary: `Voucher ${voucher.code} cancelado.` }).where(and(eq(auditLogs.entityType, "voucher"), eq(auditLogs.entityId, String(voucher.id)), eq(auditLogs.action, "cancelled")));
+}
+
 async function lockedCaptureByCode(tx: Tx, code: string) {
   const [capture] = await tx.select().from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
   if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
@@ -68,8 +98,11 @@ export async function requestErasure(db: Db, input: { code: string; reason: stri
   return db.transaction(async tx => {
     const capture = await lockedCaptureByCode(tx, input.code);
     if (capture.anonymizedAt) throw refuse("Esta ficha já foi anonimizada.");
-    const [open] = await tx.select({ id: captureErasureRequests.id }).from(captureErasureRequests).where(and(eq(captureErasureRequests.captureId, capture.id), eq(captureErasureRequests.status, "requested"))).limit(1);
-    if (open) throw refuse(`Já existe o pedido ${open.id} aberto para esta ficha.`);
+    // Um pedido aberto por CLIENTE (não por ficha): o cliente com várias fichas irmãs é anonimizado de uma vez. A trava da linha do cliente
+    // serializa dois pedidos concorrentes para fichas irmãs (mesma ordem de trava do cumprimento: ficha, depois cliente).
+    await tx.select({ id: customers.id }).from(customers).where(eq(customers.id, capture.customerId)).limit(1).for("update");
+    const [open] = await tx.select({ id: captureErasureRequests.id }).from(captureErasureRequests).where(and(eq(captureErasureRequests.customerId, capture.customerId), eq(captureErasureRequests.status, "requested"))).limit(1);
+    if (open) throw refuse(`Já existe o pedido ${open.id} aberto para este cliente.`);
     const siblings = await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.customerId, capture.customerId));
     const blockers = await erasureBlockers(tx, capture.customerId, siblings.map(row => row.id));
     if (blockers.length) throw refuse(`Não dá para anonimizar por aqui: o cliente ${blockers.join(", ")}. A guarda legal do contrato pede decisão da administração e do jurídico.`);
@@ -105,6 +138,7 @@ export async function completeErasure(db: Db, input: { requestId: number; confir
     await tx.update(opportunities).set({ title: "Oportunidade anonimizada", lossReason: null }).where(eq(opportunities.customerId, customer.id));
     await tx.update(tasks).set({ description: null }).where(eq(tasks.customerId, customer.id));
     await tx.update(vouchers).set({ redeemNote: null, cancelReason: null }).where(eq(vouchers.customerId, customer.id));
+    await scrubSecondaryCopies(tx, customer.id, sheets.map(row => row.id));
     await tx.update(captureErasureRequests).set({ status: "completed", decidedByUserId: input.actorUserId, decidedAt: now, giftDate, sheetsAnonymized: sheets.length }).where(eq(captureErasureRequests.id, request.id));
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "capture", entityId: capture.id, action: "erasure_completed", summary: `Ficha ${capture.id}: pedido ${request.id} cumprido. ${sheets.length} ficha(s) do cliente ${customer.id} anonimizada(s); ficam só nome, CPF e a data do brinde.` });
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "customer", entityId: customer.id, action: "anonymized", summary: `Cliente ${customer.id} anonimizado a pedido do titular (pedido ${request.id}).` });
