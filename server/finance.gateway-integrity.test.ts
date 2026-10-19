@@ -52,6 +52,7 @@ function makeDb(existingBillingType?: "pix" | "boleto", failBillingPersist = fal
       if (table === customers) return query([{ id: 7 }]);
       return query([]);
     } })),
+    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
     insert: vi.fn(() => ({ values: vi.fn((value: unknown) => {
       inserted.push(value);
       return {
@@ -60,8 +61,9 @@ function makeDb(existingBillingType?: "pix" | "boleto", failBillingPersist = fal
       };
     }) })),
   };
-  const db = { transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)) };
-  return { db, inserted };
+  const intentInserts: unknown[] = [];
+  const db = { insert: vi.fn(() => ({ values: vi.fn((value: unknown) => { intentInserts.push(value); return { onDuplicateKeyUpdate: vi.fn(async () => undefined) }; }) })), transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)) };
+  return { db, inserted, intentInserts };
 }
 
 describe("idempotência de emissão Asaas", () => {
@@ -77,6 +79,8 @@ describe("idempotência de emissão Asaas", () => {
 
     expect(gatewayMocks.createAsaasCustomer).toHaveBeenCalledTimes(1);
     expect(gatewayMocks.createAsaasPayment).toHaveBeenCalledTimes(1);
+    // CRM-A10: a intenção durável é gravada uma vez, fora da transação, antes da chamada remota que cria a cobrança.
+    expect(fixture.intentInserts).toEqual([expect.objectContaining({ installmentId: 91, type: "pix", externalReference: "TGR-CRM-INSTALLMENT-91", status: "pending" })]);
     expect(fixture.inserted.filter(value => typeof value === "object" && value !== null && "gatewayPaymentId" in value)).toHaveLength(1);
     expect(dbMocks.recordAudit).toHaveBeenCalledTimes(1);
     expect(dbMocks.recordDomainEvent).toHaveBeenCalledWith(expect.objectContaining({ eventName: "financial.billing.created", aggregateType: "billing_record", aggregateId: 901 }));
