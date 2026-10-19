@@ -1,6 +1,7 @@
 // Comissão automática de parcela paga: UM só construtor/portão para baixa manual, webhook do gateway e validação final da
 // venda (ADR-007). Parcela paga ANTES da validação fica bloqueada; ao validar, as parcelas já pagas são reavaliadas aqui.
-import { and, eq, ne, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, ne, isNotNull, sql } from "drizzle-orm";
+import { txAudit, txEvent } from "./txOutbox";
 import { commercialFractions, salesCommissions } from "../drizzle/schema";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
 import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, type CommissionRoleV2Mapped } from "./commissionAutomation";
@@ -31,6 +32,7 @@ export const COMMISSION_BLOCKED_MESSAGE: Record<CommissionBlockReason, string> =
 
 /** Motivo do `commission.automatic.skipped`: o portão passou mas nenhum papel da parcela tem percentual > 0 (janela de 0%). */
 export const COMMISSION_SKIPPED_REASON = "zero_rate" as const;
+export const COMMISSION_V2_LOCKED_REASON = "v2_locked" as const;
 export const COMMISSION_SKIPPED_MESSAGE = "Comissão automática não lançada: nenhum papel da venda tem percentual maior que 0% na política do empreendimento (0% = sem lançamento).";
 
 /**
@@ -71,7 +73,7 @@ export type InstallmentCommissionContext = {
   contract: { id: number; status: string; totalAmount: string | number };
   proposal: { downPaymentAmount: string | number } | null;
   opportunity: { id: number } | null;
-  capture: { campaignId: number | null; linerId: number | null; closerId: number | null; promoterId?: number | null } | null;
+  capture: { resortId?: number | null; campaignId: number | null; linerId: number | null; closerId: number | null; promoterId?: number | null } | null;
 };
 
 /** Só há comissão automática quando existem proposta + captação e entrada > 0 (regra de sempre). */
@@ -95,7 +97,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   const existingRoles = new Set(existing.map(row => row.role));
   // Issue #38 (1): acumulado automático (de parcela, não cancelado; lançamentos manuais ficam de fora) por papel no contrato, para limitar a proração ao total devido.
   const alreadyReleased: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>> = {};
-  const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount, ruleVersion: salesCommissions.ruleVersion }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId)));
+  const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount, ruleVersion: salesCommissions.ruleVersion }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId))).orderBy(asc(salesCommissions.id));
   previous.forEach(row => { alreadyReleased[row.role] = Math.round(((alreadyReleased[row.role] ?? 0) + Number(row.amount)) * 100) / 100; });
   const calendar = { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay };
   const entryTotal = Number(context.proposal.downPaymentAmount);
@@ -115,7 +117,11 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   // do contrato (os totais não bateriam com nenhuma política). V2 fixado com o V2 travado de novo não gera nada: o travamento vence.
   const pinned = previous[0]?.ruleVersion as "v1" | "v2" | undefined;
   const useV2 = pinned ? pinned === "v2" : commissionV2Active(policy);
-  if (useV2 && !commissionV2Active(policy)) return [];
+  if (useV2 && !commissionV2Active(policy)) {
+    // Sem rastro a parcela paga ficava sem comissão e ninguém sabia reprocessar: registra skip auditável (mesmo evento do 0%), idempotente por parcela.
+    await recordCommissionV2LockedSkip(tx, { installmentId: installment.id, contractId: installment.contractId, resortId: context.capture.resortId ?? null });
+    return [];
+  }
   const rows = (useV2 ? await v2Rows() : buildInstallmentCommissions({
     installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal,
     contractTotal: Number(context.contract.totalAmount), paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt,
@@ -128,4 +134,11 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   const facts: CreatedCommissionFact[] = [];
   inserted.forEach((row, index) => { const value = values[index]; if (value && row?.id) facts.push({ id: row.id, sellerId: value.sellerId, campaignId: value.campaignId, opportunityId: value.opportunityId, contractId: value.contractId, sourceInstallmentId: value.sourceInstallmentId, commissionRole: value.commissionRole, amount: Number(value.amount), rate: Number(value.rate) });  });
   return facts;
+}
+
+/** Contrato já fixado no V2 e o V2 voltou a ficar travado: a parcela paga fica sem comissão, mas rastreável para `reprocessSkippedCommissions` quando liberar. */
+async function recordCommissionV2LockedSkip(tx: CommissionWriter, input: { installmentId: number; contractId: number; resortId: number | null }) {
+  const key = `commission-skipped:${input.installmentId}:${COMMISSION_V2_LOCKED_REASON}`;
+  await txAudit(tx as never, { actorUserId: null, entityType: "installment", entityId: input.installmentId, action: "commission_skipped", summary: "Comissão automática não lançada: o contrato usa a regra V2 e o V2 está travado (COMMISSION_V2_RELEASED).", idempotencyKey: key });
+  await txEvent(tx as never, { eventName: "commission.automatic.skipped", aggregateType: "installment", aggregateId: input.installmentId, actorUserId: null, payload: { contractId: input.contractId, installmentId: input.installmentId, resortId: input.resortId, reason: COMMISSION_V2_LOCKED_REASON, roles: [], source: "v2_locked" }, idempotencyKey: key });
 }
