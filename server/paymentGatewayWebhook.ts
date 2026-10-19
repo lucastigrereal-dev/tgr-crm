@@ -71,8 +71,16 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       billing = lockedBilling;
 
       if (isAsaasPaymentConfirmed(event)) {
-        if (billing.billing.status === "paid") return; // reentrega do mesmo pagamento: nada a fazer
-        const reviewReason = ["cancelled", "expired"].includes(billing.billing.status) ? `billing_${billing.billing.status}` : ["cancelled", "renegotiated"].includes(billing.installment.status) ? `installment_${billing.installment.status}` : null;
+        // Cobrança "paid": evento NOVO (eventId diferente) não é reentrega, a deduplicação por eventId já cuida das reais. Se o próprio gateway já
+        // liquidou esta cobrança (há evento confirmado/recebido anterior para ela), o Asaas só está contando o mesmo pagamento de novo (CONFIRMED e depois RECEIVED).
+        // Se NÃO há, a cobrança foi marcada paga por baixa manual da parcela: o cliente pagou de novo no gateway, pagamento em duplicidade.
+        let manualPaidDuplicate = false;
+        if (billing.billing.status === "paid") {
+          const settledByGateway = (await tx.select({ id: paymentGatewayWebhookEvents.id }).from(paymentGatewayWebhookEvents).where(and(eq(paymentGatewayWebhookEvents.gatewayProvider, "asaas"), eq(paymentGatewayWebhookEvents.billingRecordId, billing.billing.id), ne(paymentGatewayWebhookEvents.gatewayEventId, eventId), inArray(paymentGatewayWebhookEvents.eventType, ["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"]))).limit(1))[0];
+          if (settledByGateway) return;
+          manualPaidDuplicate = true;
+        }
+        const reviewReason = manualPaidDuplicate ? "billing_paid_manually" : ["cancelled", "expired"].includes(billing.billing.status) ? `billing_${billing.billing.status}` : ["cancelled", "renegotiated"].includes(billing.installment.status) ? `installment_${billing.installment.status}` : null;
         if (reviewReason) {
           // Antes isto retornava mudo: o dinheiro entrava no Asaas sem baixa e sem rastro. Agora fica auditado e a intenção vai para revisão manual.
           needsReview = true;

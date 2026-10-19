@@ -245,4 +245,33 @@ describe.skipIf(!integrationUrl)("CRM-A10: cobrança Asaas órfã é recuperada 
     expect((await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!.status).toBe("open");
     expect(await reviewAudits(orphan.id)).toHaveLength(1);
   });
+  it("BAIXA MANUAL e depois pagamento no Asaas (evento NOVO): é duplicidade, não reentrega: auditoria + revisão manual; reentrega do mesmo evento segue duplicate", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("mman", "generated", "open");
+    await caller().markInstallmentPaid({ id: installmentId, paymentMethod: "pix" });
+    expect((await db.select().from(billingRecords).where(eq(billingRecords.installmentId, installmentId)))[0]!.status).toBe("paid"); // marcada paga pela baixa manual
+    const contractId = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!.contractId;
+    const receipts = (await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, contractId))).length;
+    const payload = { id: `evt-novo-${paymentId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } };
+    await expect(processAsaasWebhook(config.webhookToken, payload)).resolves.toMatchObject({ status: 200, needsReview: true, installmentPaid: false });
+    expect((await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, contractId))).length).toBe(receipts); // sem segunda receita
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+    expect(await intentOf(installmentId)).toMatchObject({ status: "manual_review", lastError: "billing_paid_manually" });
+    await expect(processAsaasWebhook(config.webhookToken, payload)).resolves.toMatchObject({ status: 200, duplicate: true });
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+  });
+
+  it("PAGAMENTO NORMAL sem baixa manual: CONFIRMED baixa; o RECEIVED seguinte do mesmo pagamento segue silencioso (sem revisão)", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("mnorm", "generated", "open");
+    await expect(processAsaasWebhook(config.webhookToken, { id: `evt-c-${paymentId}`, event: "PAYMENT_CONFIRMED", payment: { id: paymentId, status: "CONFIRMED" } })).resolves.toMatchObject({ status: 200, installmentPaid: true });
+    const second = await processAsaasWebhook(config.webhookToken, { id: `evt-r-${paymentId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } });
+    expect(second).toMatchObject({ status: 200 });
+    expect(second.needsReview).toBeUndefined();
+    expect(await reviewAudits(paymentId)).toHaveLength(0);
+    const inst = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!;
+    expect(inst.status).toBe("paid");
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, inst.contractId))).toHaveLength(1);
+    expect((await intentOf(installmentId))?.status).toBe("recorded");
+  });
 });
