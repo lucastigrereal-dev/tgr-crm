@@ -1,8 +1,9 @@
 // Comissão automática de parcela paga: UM só construtor/portão para baixa manual, webhook do gateway e validação final da
 // venda (ADR-007). Parcela paga ANTES da validação fica bloqueada; ao validar, as parcelas já pagas são reavaliadas aqui.
-import { and, eq, ne, isNotNull } from "drizzle-orm";
-import { salesCommissions } from "../drizzle/schema";
-import { buildInstallmentCommissions, canCommissionBecomeDue, commissionRoleRate } from "./commissionAutomation";
+import { and, eq, ne, isNotNull, sql } from "drizzle-orm";
+import { commercialFractions, salesCommissions } from "../drizzle/schema";
+import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
+import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, type CommissionRoleV2Mapped } from "./commissionAutomation";
 import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
 import type { getDb } from "./db";
 import type { parseCompleteCommissionPolicy } from "./projectPolicy";
@@ -36,8 +37,22 @@ export const COMMISSION_SKIPPED_MESSAGE = "Comissão automática não lançada: 
  * ADR-010: papéis atribuídos à venda quando NENHUM deles tem taxa > 0 (a parcela paga fica sem comissão e precisa ficar
  * rastreável para reprocesso após ajuste das taxas). `null` quando algum papel é pagável ou não há papel atribuído.
  */
-export function zeroRateSkippedRoles(capture: { linerId: number | null; closerId: number | null } | null | undefined, policy: Pick<CompleteCommissionPolicy, "linerRate" | "closerRate" | "ftbRate">): string[] | null {
+/**
+ * CRM-A13: a política V2 só vale LIBERADA (COMMISSION_V2_RELEASED=true) e com `rulesV2` na política do empreendimento. Travada (padrão), isto é
+ * sempre falso e a geração por parcela segue exatamente o V1 (ADR-010: 0% = nenhum lançamento). Liberar é decisão do Lucas.
+ */
+/** Lido a cada chamada (não no carregamento do módulo): liberar ou travar não exige reinício do código nem import novo. */
+export const isCommissionV2Released = () => process.env.COMMISSION_V2_RELEASED === "true";
+export const commissionV2Active = (policy: { rulesV2?: CommissionRulesV2 } | null | undefined): policy is { rulesV2: CommissionRulesV2 } => isCommissionV2Released() && Boolean(policy?.rulesV2);
+
+/** Papéis V2 -> papéis gravados (padrão da política: captador=promoter, consultor=liner, fechador=closer) e de quem vem o pagamento na ficha. */
+export const COMMISSION_V2_ROLE_MAP = { captador: "promoter", consultor: "liner", fechador: "closer" } as const satisfies Record<string, CommissionRoleV2Mapped>;
+const V2_PAYEE: Record<CommissionRoleV2Mapped, "promoterId" | "linerId" | "closerId"> = { promoter: "promoterId", liner: "linerId", closer: "closerId" };
+
+export function zeroRateSkippedRoles(capture: { linerId: number | null; closerId: number | null } | null | undefined, policy: Pick<CompleteCommissionPolicy, "linerRate" | "closerRate" | "ftbRate"> & { rulesV2?: CommissionRulesV2 }): string[] | null {
   if (!capture) return null;
+  // V2 liberada: o motor V2 decide o valor por parcela (pode resultar 0 sem rastro de "skip"; o V1 não vale aqui).
+  if (commissionV2Active(policy)) return null;
   const assignments = commissionAssignments({ linerId: capture.linerId, closerId: capture.closerId });
   if (!assignments.length) return null;
   const rates = { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate };
@@ -56,7 +71,7 @@ export type InstallmentCommissionContext = {
   contract: { id: number; status: string; totalAmount: string | number };
   proposal: { downPaymentAmount: string | number } | null;
   opportunity: { id: number } | null;
-  capture: { campaignId: number | null; linerId: number | null; closerId: number | null } | null;
+  capture: { campaignId: number | null; linerId: number | null; closerId: number | null; promoterId?: number | null } | null;
 };
 
 /** Só há comissão automática quando existem proposta + captação e entrada > 0 (regra de sempre). */
@@ -79,16 +94,29 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   const existing = await tx.select({ id: salesCommissions.id, role: salesCommissions.commissionRole }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installment.id));
   const existingRoles = new Set(existing.map(row => row.role));
   // Issue #38 (1): acumulado automático (de parcela, não cancelado; lançamentos manuais ficam de fora) por papel no contrato, para limitar a proração ao total devido.
-  const alreadyReleased: Partial<Record<"liner" | "closer" | "ftb", number>> = {};
+  const alreadyReleased: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>> = {};
   const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId)));
   previous.forEach(row => { alreadyReleased[row.role] = Math.round(((alreadyReleased[row.role] ?? 0) + Number(row.amount)) * 100) / 100; });
-  const rows = buildInstallmentCommissions({
-    installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal: Number(context.proposal.downPaymentAmount),
+  const calendar = { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay };
+  const entryTotal = Number(context.proposal.downPaymentAmount);
+  const v2Rows = async () => {
+    // Cotas da venda = frações vendidas ao contrato (mínimo 1: contrato sem fração ligada, ex. importado por CSV, conta uma cota).
+    const [quotaRow] = await tx.select({ n: sql<number>`COUNT(*)` }).from(commercialFractions).where(eq(commercialFractions.currentContractId, installment.contractId));
+    const result = computeCommissionV2(policy.rulesV2, { quotas: Math.max(1, Number(quotaRow?.n ?? 0)), entryCents: Math.round(entryTotal * 100), saleTotalCents: Math.round(Number(context.contract.totalAmount) * 100) });
+    const capture = context.capture!;
+    const lines = result.lines.flatMap(line => {
+      const role = COMMISSION_V2_ROLE_MAP[line.role];
+      const userId = capture[V2_PAYEE[role]];
+      return userId ? [{ role, userId, totalReais: line.amountCents / 100 }] : [];
+    });
+    return buildInstallmentCommissionsV2({ installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal, paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt, lines, alreadyReleased, calendar });
+  };
+  const rows = (commissionV2Active(policy) ? await v2Rows() : buildInstallmentCommissions({
+    installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal,
     contractTotal: Number(context.contract.totalAmount), paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt,
     linerId: context.capture.linerId, closerId: context.capture.closerId,
-    rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, alreadyReleased,
-    calendar: { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay },
-  }).filter(row => !existingRoles.has(row.commissionRole));
+    rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, alreadyReleased, calendar,
+  })).filter(row => !existingRoles.has(row.commissionRole));
   if (!rows.length) return [];
   const values = rows.map(row => ({ ...row, contractId: installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
   const inserted = await tx.insert(salesCommissions).values(values).$returningId();

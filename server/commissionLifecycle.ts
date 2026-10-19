@@ -1,4 +1,4 @@
-export type CommissionRole = "liner" | "closer" | "ftb";
+export type CommissionRole = "liner" | "closer" | "ftb" | "promoter";
 export type CommissionStatus = "expected" | "awaiting_customer_payment" | "closing" | "cancellation_window" | "payable" | "paid" | "cancelled" | "overdue";
 export type PaymentMethod = "pix" | "debit" | "credit" | "boleto" | "cash" | "cheque" | "other";
 

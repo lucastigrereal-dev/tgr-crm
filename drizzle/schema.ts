@@ -591,7 +591,7 @@ export const salesCommissions = mysqlTable(
     opportunityId: int("opportunityId").references(() => opportunities.id),
     contractId: int("contractId").references(() => contracts.id),
     sourceInstallmentId: int("sourceInstallmentId").references(() => installments.id),
-    commissionRole: mysqlEnum("commissionRole", ["liner", "closer", "ftb"]).default("ftb").notNull(),
+    commissionRole: mysqlEnum("commissionRole", ["liner", "closer", "ftb", "promoter"]).default("ftb").notNull(),
     baseAmount: decimal("baseAmount", { precision: 14, scale: 2 }).notNull(),
     rate: decimal("rate", { precision: 5, scale: 2 }).notNull(),
     amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),
@@ -994,6 +994,27 @@ export const paymentGatewayWebhookEvents = mysqlTable("payment_gateway_webhook_e
   uniqueIndex("payment_gateway_webhook_unique").on(table.gatewayProvider, table.gatewayEventId),
   index("payment_gateway_webhook_billing_idx").on(table.billingRecordId, table.createdAt),
   foreignKey({ name: "pg_webhook_billing_fk", columns: [table.billingRecordId], foreignColumns: [billingRecords.id] }),
+]);
+
+// CRM-A10: intenção durável de emissão no gateway. Gravada ANTES da chamada remota (fora da
+// transação de emissão) para que uma cobrança criada no Asaas e não persistida localmente
+// possa ser recuperada. Sem FK de propósito: a gravação ocorre enquanto a parcela está travada.
+export const paymentGatewayIssueIntents = mysqlTable("payment_gateway_issue_intents", {
+  id: int("id").autoincrement().primaryKey(),
+  gatewayProvider: mysqlEnum("gatewayProvider", ["asaas"]).notNull(),
+  installmentId: int("installmentId").notNull(),
+  type: mysqlEnum("type", ["boleto", "pix"]).notNull(),
+  externalReference: varchar("externalReference", { length: 255 }).notNull(),
+  status: mysqlEnum("status", ["pending", "recorded", "recovered", "abandoned", "manual_review"]).default("pending").notNull(),
+  gatewayPaymentId: varchar("gatewayPaymentId", { length: 128 }),
+  attempts: int("attempts").default(0).notNull(),
+  lastError: varchar("lastError", { length: 255 }),
+  actorUserId: int("actorUserId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("pg_issue_intent_unique").on(table.gatewayProvider, table.installmentId, table.type),
+  index("pg_issue_intent_status_idx").on(table.status, table.updatedAt),
 ]);
 
 export const installmentRenegotiations = mysqlTable("installment_renegotiations", {
