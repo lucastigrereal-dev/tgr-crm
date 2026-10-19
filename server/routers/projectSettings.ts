@@ -24,13 +24,16 @@ function normalizeJsonText(value: string | null | undefined) {
 const SETTING_FIELDS = ["cancellationPolicy", "requiredCaptureFields", "requiredContractDocuments", "commercialRoles", "commissionPolicy"] as const;
 const AUDIT_ENTITY = "commercial_project_settings";
 
+const clip = (value: string | null) => (value !== null && value.length > 2_000 ? `${value.slice(0, 2_000)}… (cortado)` : value);
+
 /** Histórico por campo (de/para). Vai no texto da auditoria como JSON; leitura tolera linhas antigas, que só têm a frase genérica. */
 export function describeSettingsChange(before: Record<string, string | null> | undefined, after: Record<string, string | null>, note?: string) {
   const changes: Record<string, { from: string | null; to: string | null }> = {};
   for (const field of SETTING_FIELDS) {
     const from = before?.[field] ?? null;
     const to = after[field] ?? null;
-    if (from !== to) changes[field] = { from, to };
+    // O texto da auditoria é TEXT (64KB): cada de/para vai cortado em 2k para uma regra gigante nunca derrubar o registro.
+    if (from !== to) changes[field] = { from: clip(from), to: clip(to) };
   }
   return { changes, ...(note ? { note } : {}) };
 }
