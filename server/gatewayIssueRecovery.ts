@@ -31,6 +31,13 @@ export async function markIssueIntentRecorded(tx: Pick<Db, "update">, input: { i
     .where(and(eq(paymentGatewayIssueIntents.gatewayProvider, "asaas"), eq(paymentGatewayIssueIntents.installmentId, input.installmentId), eq(paymentGatewayIssueIntents.type, input.type)));
 }
 
+/** Pagamento recebido no gateway que o CRM não pôde baixar: a intenção de emissão (se houver) vai para revisão manual, durável e consultável. */
+export async function markIssueIntentNeedsReview(tx: Pick<Db, "update">, input: { installmentId: number; billingType: string; paymentId: string; reason: string }) {
+  if (input.billingType !== "pix" && input.billingType !== "boleto") return;
+  await tx.update(paymentGatewayIssueIntents).set({ status: "manual_review", gatewayPaymentId: input.paymentId, lastError: input.reason.slice(0, 250) })
+    .where(and(eq(paymentGatewayIssueIntents.gatewayProvider, "asaas"), eq(paymentGatewayIssueIntents.installmentId, input.installmentId), eq(paymentGatewayIssueIntents.type, input.billingType)));
+}
+
 export type OrphanRecoveryResult = { scanned: number; recovered: number; recorded: number; abandoned: number; manualReview: number; failed: number };
 
 export async function recoverOrphanGatewayBillings(db: Db, config: AsaasConfig, options: { minAgeMs?: number; limit?: number; now?: Date } = {}): Promise<OrphanRecoveryResult> {
@@ -86,8 +93,13 @@ export async function recoverOrphanGatewayBillings(db: Db, config: AsaasConfig, 
         // Mesmo caminho do webhook (baixa, recebimento, comissão e fatos do Financial na mesma transação), idempotente por evento sintético.
         const settled = await processAsaasWebhook(config.webhookToken, { id: `recovery:${remote.id}`, event: remote.status === "CONFIRMED" ? "PAYMENT_CONFIRMED" : "PAYMENT_RECEIVED", payment: { id: remote.id, status: remote.status } });
         if (settled.status !== 200) throw new Error(`settle_failed_${settled.status}`);
-        finalOutcome = outcome === "created_paid" ? "recovered" : "recorded";
-        await markIssueIntentRecorded(db, { installmentId: intent.installmentId, type: intent.type, gatewayPaymentId: remote.id, status: finalOutcome });
+        if (settled.needsReview) {
+          // O webhook recusou a baixa (cobrança cancelada, parcela encerrada ou já paga) e já deixou auditoria + intenção em revisão: não marcar como registrada.
+          finalOutcome = "manual_review";
+        } else {
+          finalOutcome = outcome === "created_paid" ? "recovered" : "recorded";
+          await markIssueIntentRecorded(db, { installmentId: intent.installmentId, type: intent.type, gatewayPaymentId: remote.id, status: finalOutcome });
+        }
       }
       if (finalOutcome === "recovered") result.recovered += 1;
       else if (finalOutcome === "recorded") result.recorded += 1;

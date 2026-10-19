@@ -191,4 +191,48 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
   });
+  it("V2 fixado e re-travado deixa skip AUDITÁVEL (idempotente) e o reprocesso gera a comissão quando liberar", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("skiplock", ["500.00", "500.00"]);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" });
+    delete process.env.COMMISSION_V2_RELEASED;
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
+    const skips = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.automatic.skipped" as never), eq(domainEvents.aggregateId, String(installmentIds[1]!))));
+    // (a política de teste também tem taxas V1 em 0%, então o registro de 0% pode coexistir; o que importa é o skip v2_locked, único)
+    const locked = skips.filter(event => JSON.parse(String(event.payload)).reason === "v2_locked");
+    expect(locked).toHaveLength(1);
+    expect(JSON.parse(String(locked[0]!.payload))).toMatchObject({ contractId, installmentId: installmentIds[1] });
+    expect(await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "installment"), eq(auditLogs.entityId, String(installmentIds[1]!)), eq(auditLogs.idempotencyKey, `commission-skipped:${installmentIds[1]}:v2_locked`)))).toHaveLength(1);
+
+    // ainda travado: reprocessar não cria nada
+    const { reprocessSkippedCommissions } = await import("./saleValidationService");
+    const stillLocked = await reprocessSkippedCommissions(db as never, { contractId, actorUserId: adminId });
+    expect(stillLocked.created).toBe(0);
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
+
+    // liberado: o reprocesso lança a parcela que ficou para trás, fechando em 800/100/100
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const released = await reprocessSkippedCommissions(db as never, { contractId, actorUserId: adminId });
+    expect(released.created).toBe(3);
+    const all = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+    const total = (role: string) => all.filter(row => row.commissionRole === role).reduce((sum, row) => sum + Number(row.amount), 0);
+    expect([total("promoter"), total("liner"), total("closer")]).toEqual([800, 100, 100]);
+  });
+
+  it("a versão fixada vem do PRIMEIRO lançamento por id (ordem determinística), não de um qualquer", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("ordem", ["500.00", "500.00"], v1AndV2Policy);
+    const [other] = await db.select().from(installments).where(eq(installments.id, installmentIds[0]!));
+    // dois lançamentos automáticos antigos: o de MENOR id é v1, o de maior id é v2 (inserido por último)
+    const base = { sellerId: adminId, contractId, baseAmount: "9000.00", rate: "10.00", amount: "450.00", commissionRole: "liner" as const, sourceInstallmentId: other!.id };
+    await db.insert(salesCommissions).values({ ...base, ruleVersion: "v1", idempotencyKey: `ord-a-${runId}` });
+    await db.insert(salesCommissions).values({ ...base, commissionRole: "closer", ruleVersion: "v2", idempotencyKey: `ord-b-${runId}` });
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    const rows = (await db.select().from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installmentIds[1]!)));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every(row => row.ruleVersion === "v1")).toBe(true);
+  });
 });

@@ -187,4 +187,91 @@ describe.skipIf(!integrationUrl)("CRM-A10: cobrança Asaas órfã é recuperada 
     expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, paid.contractId))).toHaveLength(1);
     expect(await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "installment.paid" as never), eq(domainEvents.aggregateId, String(installmentId))))).toHaveLength(1);
   });
+  // Follow-up do PR 79: o webhook deixou de retornar mudo quando não pode baixar. Dinheiro entrou no Asaas sem baixa => auditoria + revisão manual.
+  async function seedBillingWithIntent(label: string, billingStatus: "generated" | "cancelled", installmentStatus: "open" | "renegotiated" | "paid") {
+    const installmentId = await seedInstallment(label);
+    const paymentId = `pay_fu_${label}_${runId}`;
+    await db.update(installments).set({ status: installmentStatus }).where(eq(installments.id, installmentId));
+    await db.insert(billingRecords).values({ installmentId, type: "pix", status: billingStatus, gatewayProvider: "asaas", gatewayPaymentId: paymentId, amount: "1500.00", dueDate: new Date("2026-12-10T12:00:00Z") });
+    await db.insert(paymentGatewayIssueIntents).values({ gatewayProvider: "asaas", installmentId, type: "pix", externalReference: `TGR-CRM-INSTALLMENT-${installmentId}`, status: "recorded", gatewayPaymentId: paymentId, actorUserId: adminId });
+    return { installmentId, paymentId };
+  }
+  const reviewAudits = async (paymentId: string) => (await db.select().from(auditLogs).where(and(eq(auditLogs.action, "gateway_payment_needs_review"), eq(auditLogs.idempotencyKey, `gateway-review:${paymentId}`))));
+
+  it("WEBHOOK com cobrança cancelada: não baixa, audita e manda a intenção para revisão manual; reentrega não duplica", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("wcanc", "cancelled", "open");
+    const payload = { id: `evt-${paymentId}`, event: "PAYMENT_CONFIRMED", payment: { id: paymentId, status: "CONFIRMED" } };
+    await expect(processAsaasWebhook(config.webhookToken, payload)).resolves.toMatchObject({ status: 200, needsReview: true, installmentPaid: false });
+    const inst = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!;
+    expect(inst.status).toBe("open");
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, inst.contractId))).toHaveLength(0);
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+    expect(await intentOf(installmentId)).toMatchObject({ status: "manual_review", lastError: "billing_cancelled", gatewayPaymentId: paymentId });
+    await expect(processAsaasWebhook(config.webhookToken, payload)).resolves.toMatchObject({ status: 200, duplicate: true });
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+  });
+
+  it("WEBHOOK com parcela renegociada: mesma revisão manual, sem baixa", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("wreneg", "generated", "renegotiated");
+    await expect(processAsaasWebhook(config.webhookToken, { id: `evt-${paymentId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } })).resolves.toMatchObject({ status: 200, needsReview: true });
+    expect((await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!.status).toBe("renegotiated");
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+    expect(await intentOf(installmentId)).toMatchObject({ status: "manual_review", lastError: "installment_renegotiated" });
+  });
+
+  it("WEBHOOK com parcela já paga à mão: pagamento em duplicidade vai para revisão, sem segunda baixa", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("wdup", "generated", "paid");
+    const before = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!;
+    await expect(processAsaasWebhook(config.webhookToken, { id: `evt-${paymentId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } })).resolves.toMatchObject({ status: 200, needsReview: true });
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, before.contractId))).toHaveLength(0);
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+    expect(await intentOf(installmentId)).toMatchObject({ status: "manual_review", lastError: "installment_not_open" });
+  });
+
+  it("RECUPERAÇÃO settle_existing sobre cobrança local cancelada: não marca 'recorded' sobre 200 mudo; fica em revisão manual", async () => {
+    const installmentId = await seedInstallment("rsettle");
+    const trigger = await failBillingEvent(installmentId);
+    await expect(caller().issueGatewayBilling({ installmentId, type: "pix" })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    await dropTrigger(trigger);
+    const orphan = remote.payments.find(payment => payment.externalReference === `TGR-CRM-INSTALLMENT-${installmentId}`)!;
+    orphan.status = "RECEIVED";
+    // cobrança local já existe, mas foi cancelada
+    await db.insert(billingRecords).values({ installmentId, type: "pix", status: "cancelled", gatewayProvider: "asaas", gatewayPaymentId: orphan.id, amount: "1500.00", dueDate: new Date("2026-12-10T12:00:00Z") });
+    await recover(db as never, config, { minAgeMs: 0, limit: 500 });
+    expect(await intentOf(installmentId)).toMatchObject({ status: "manual_review", lastError: "billing_cancelled" });
+    expect((await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!.status).toBe("open");
+    expect(await reviewAudits(orphan.id)).toHaveLength(1);
+  });
+  it("BAIXA MANUAL e depois pagamento no Asaas (evento NOVO): é duplicidade, não reentrega: auditoria + revisão manual; reentrega do mesmo evento segue duplicate", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("mman", "generated", "open");
+    await caller().markInstallmentPaid({ id: installmentId, paymentMethod: "pix" });
+    expect((await db.select().from(billingRecords).where(eq(billingRecords.installmentId, installmentId)))[0]!.status).toBe("paid"); // marcada paga pela baixa manual
+    const contractId = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!.contractId;
+    const receipts = (await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, contractId))).length;
+    const payload = { id: `evt-novo-${paymentId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } };
+    await expect(processAsaasWebhook(config.webhookToken, payload)).resolves.toMatchObject({ status: 200, needsReview: true, installmentPaid: false });
+    expect((await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, contractId))).length).toBe(receipts); // sem segunda receita
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+    expect(await intentOf(installmentId)).toMatchObject({ status: "manual_review", lastError: "billing_paid_manually" });
+    await expect(processAsaasWebhook(config.webhookToken, payload)).resolves.toMatchObject({ status: 200, duplicate: true });
+    expect(await reviewAudits(paymentId)).toHaveLength(1);
+  });
+
+  it("PAGAMENTO NORMAL sem baixa manual: CONFIRMED baixa; o RECEIVED seguinte do mesmo pagamento segue silencioso (sem revisão)", async () => {
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    const { installmentId, paymentId } = await seedBillingWithIntent("mnorm", "generated", "open");
+    await expect(processAsaasWebhook(config.webhookToken, { id: `evt-c-${paymentId}`, event: "PAYMENT_CONFIRMED", payment: { id: paymentId, status: "CONFIRMED" } })).resolves.toMatchObject({ status: 200, installmentPaid: true });
+    const second = await processAsaasWebhook(config.webhookToken, { id: `evt-r-${paymentId}`, event: "PAYMENT_RECEIVED", payment: { id: paymentId, status: "RECEIVED" } });
+    expect(second).toMatchObject({ status: 200 });
+    expect(second.needsReview).toBeUndefined();
+    expect(await reviewAudits(paymentId)).toHaveLength(0);
+    const inst = (await db.select().from(installments).where(eq(installments.id, installmentId)))[0]!;
+    expect(inst.status).toBe("paid");
+    expect(await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, inst.contractId))).toHaveLength(1);
+    expect((await intentOf(installmentId))?.status).toBe("recorded");
+  });
 });

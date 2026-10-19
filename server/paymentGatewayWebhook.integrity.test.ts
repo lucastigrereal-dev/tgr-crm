@@ -12,7 +12,7 @@ vi.mock("./db", () => dbMocks);
 vi.mock("./paymentGateway", () => paymentMocks);
 vi.mock("./revenueQualitySync", () => syncMocks);
 
-import { auditLogs, billingRecords, domainEvents, installments, paymentGatewayWebhookEvents } from "../drizzle/schema";
+import { auditLogs, billingRecords, domainEvents, installments, paymentGatewayIssueIntents, paymentGatewayWebhookEvents } from "../drizzle/schema";
 import { processAsaasWebhook } from "./paymentGatewayWebhook";
 
 function query(rows: unknown[]) {
@@ -64,11 +64,11 @@ describe("idempotência financeira do webhook Asaas", () => {
     expect(lockedBillingQuery.orderBy).toHaveBeenCalled();
   });
 
-  it("ignora confirmação atrasada de cobrança cancelada sem gerar efeitos financeiros", async () => {
+  it("confirmação atrasada de cobrança cancelada não baixa nada, mas vai para revisão manual (auditoria + intenção)", async () => {
     paymentMocks.isAsaasPaymentConfirmed.mockReturnValue(true);
     paymentMocks.isAsaasPaymentOverdue.mockReturnValue(false);
-    const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
-    const txUpdate = vi.fn();
+    const txInsert = vi.fn(() => ({ values: vi.fn(() => Object.assign(Promise.resolve(undefined), { onDuplicateKeyUpdate: async () => undefined })) }));
+    const txUpdate = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows: 1 })) })) }));
     const tx = { insert: txInsert, update: txUpdate, select: vi.fn(() => query([{ billing: { id: 302, type: "pix", status: "cancelled", gatewayPaymentId: "pay-92" }, installment: { id: 92, status: "cancelled", contractId: 62, sequence: 1, amount: "500.00", dueDate: new Date("2026-09-11T12:00:00Z") } }])) };
     const db = {
       select: vi.fn()
@@ -78,18 +78,21 @@ describe("idempotência financeira do webhook Asaas", () => {
     };
     dbMocks.getDb.mockResolvedValue(db);
 
-    await expect(processAsaasWebhook("secret", { id: "evt-92-cancelled", event: "PAYMENT_CONFIRMED", payment: { id: "pay-92", status: "CONFIRMED" } })).resolves.toMatchObject({ status: 200, billingRecordId: 302, installmentPaid: false });
+    await expect(processAsaasWebhook("secret", { id: "evt-92-cancelled", event: "PAYMENT_CONFIRMED", payment: { id: "pay-92", status: "CONFIRMED" } })).resolves.toMatchObject({ status: 200, billingRecordId: 302, installmentPaid: false, needsReview: true });
 
-    expect(txUpdate).not.toHaveBeenCalled();
-    // Registro do evento recebido + auditoria do recebimento, ambos na transação; nenhum fato financeiro.
-    expect(txInsert).toHaveBeenCalledTimes(2);
+    // Só a intenção de emissão é tocada (revisão manual); cobrança e parcela não mudam.
+    expect(txUpdate).toHaveBeenCalledTimes(1);
+    expect(txUpdate).toHaveBeenCalledWith(paymentGatewayIssueIntents);
+    // Registro do evento recebido + auditoria do recebimento + auditoria de revisão, todos na transação; nenhum fato financeiro.
+    expect(txInsert).toHaveBeenCalledTimes(3);
     expect(txInsert).toHaveBeenNthCalledWith(1, paymentGatewayWebhookEvents);
     expect(txInsert).toHaveBeenNthCalledWith(2, auditLogs);
+    expect(txInsert).toHaveBeenNthCalledWith(3, auditLogs);
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });
 
   it("não cria segunda receita quando a parcela já foi liquidada por outro evento", async () => {
-    const txInsert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
+    const txInsert = vi.fn(() => ({ values: vi.fn(() => Object.assign(Promise.resolve(undefined), { onDuplicateKeyUpdate: async () => undefined })) }));
     const txUpdate = vi.fn(() => {
       const affectedRows = txUpdate.mock.calls.length === 2 ? 0 : 1;
       return { set: vi.fn(() => ({ where: vi.fn(async () => ({ affectedRows })) })) };
@@ -110,12 +113,13 @@ describe("idempotência financeira do webhook Asaas", () => {
       status: 200,
       billingRecordId: 301,
       installmentPaid: false,
+      needsReview: true,
     });
 
     expect(db.select).toHaveBeenCalledTimes(2);
-    expect(txInsert).toHaveBeenCalledTimes(2);
+    expect(txInsert).toHaveBeenCalledTimes(3); // evento + auditoria + auditoria de revisão (pagamento em duplicidade)
     expect(txInsert).toHaveBeenNthCalledWith(2, auditLogs);
-    expect(txUpdate).toHaveBeenCalledTimes(2);
+    expect(txUpdate).toHaveBeenCalledTimes(3); // cobrança, parcela (0 linhas) e intenção em revisão
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
     expect(dbMocks.recordDomainEvent).not.toHaveBeenCalled();
   });

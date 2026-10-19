@@ -9,6 +9,7 @@ import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { recordInstallmentSettlementFacts } from "./installmentSettlementFacts";
 import { txAudit } from "./txOutbox";
+import { markIssueIntentNeedsReview } from "./gatewayIssueRecovery";
 
 export type AsaasWebhookPayload = {
   id?: string;
@@ -26,8 +27,15 @@ export type ProcessAsaasWebhookResult = {
   ignored?: boolean;
   billingRecordId?: number | null;
   installmentPaid?: boolean;
+  /** Dinheiro entrou no gateway mas o CRM não pôde baixar (cobrança cancelada/expirada, parcela encerrada ou já paga): vai para revisão manual. */
+  needsReview?: boolean;
   message: string;
 };
+
+async function recordGatewayPaymentNeedsReview(tx: Parameters<typeof txAudit>[0], input: { billingId: number; installmentId: number; billingType: string; paymentId: string; reason: string }) {
+  await txAudit(tx, { actorUserId: null, entityType: "billing_record", entityId: input.billingId, action: "gateway_payment_needs_review", summary: `Pagamento ${input.paymentId} recebido no Asaas sem baixa no CRM (${input.reason}): revisar e conciliar ou estornar no gateway.`, idempotencyKey: `gateway-review:${input.paymentId}` });
+  await markIssueIntentNeedsReview(tx, { installmentId: input.installmentId, billingType: input.billingType, paymentId: input.paymentId, reason: input.reason });
+}
 
 export async function processAsaasWebhook(token: string | undefined, payload: AsaasWebhookPayload): Promise<ProcessAsaasWebhookResult> {
   const config = getAsaasConfig();
@@ -46,11 +54,13 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
 
   let billing = (await db.select({ billing: billingRecords, installment: installments }).from(billingRecords).innerJoin(installments, eq(billingRecords.installmentId, installments.id)).where(and(eq(billingRecords.gatewayProvider, "asaas"), eq(billingRecords.gatewayPaymentId, paymentId))).limit(1))[0];
   let installmentPaid = false;
+  let needsReview = false;
 
   try {
     // CRM-A27: o MySQL pode derrubar a transação por deadlock (visto no CI da main em 7110fb9, insert em sales_commissions); repete do zero, como a ponte do Sales.
     await withDeadlockRetry(() => db.transaction(async tx => {
       installmentPaid = false; // cada tentativa recomeça sem estado da anterior
+      needsReview = false;
       await tx.insert(paymentGatewayWebhookEvents).values({ gatewayProvider: "asaas", gatewayEventId: eventId, eventType: event, billingRecordId: billing?.billing.id ?? null });
       await txAudit(tx, { actorUserId: null, entityType: "billing_record", entityId: billing?.billing.id ?? paymentId, action: `gateway_${event.toLowerCase()}`, summary: `Webhook Asaas recebido para pagamento ${paymentId}.` });
       if (!billing) return;
@@ -61,7 +71,22 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
       billing = lockedBilling;
 
       if (isAsaasPaymentConfirmed(event)) {
-        if (["cancelled", "expired", "paid"].includes(billing.billing.status) || ["cancelled", "renegotiated"].includes(billing.installment.status)) return;
+        // Cobrança "paid": evento NOVO (eventId diferente) não é reentrega, a deduplicação por eventId já cuida das reais. Se o próprio gateway já
+        // liquidou esta cobrança (há evento confirmado/recebido anterior para ela), o Asaas só está contando o mesmo pagamento de novo (CONFIRMED e depois RECEIVED).
+        // Se NÃO há, a cobrança foi marcada paga por baixa manual da parcela: o cliente pagou de novo no gateway, pagamento em duplicidade.
+        let manualPaidDuplicate = false;
+        if (billing.billing.status === "paid") {
+          const settledByGateway = (await tx.select({ id: paymentGatewayWebhookEvents.id }).from(paymentGatewayWebhookEvents).where(and(eq(paymentGatewayWebhookEvents.gatewayProvider, "asaas"), eq(paymentGatewayWebhookEvents.billingRecordId, billing.billing.id), ne(paymentGatewayWebhookEvents.gatewayEventId, eventId), inArray(paymentGatewayWebhookEvents.eventType, ["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED"]))).limit(1))[0];
+          if (settledByGateway) return;
+          manualPaidDuplicate = true;
+        }
+        const reviewReason = manualPaidDuplicate ? "billing_paid_manually" : ["cancelled", "expired"].includes(billing.billing.status) ? `billing_${billing.billing.status}` : ["cancelled", "renegotiated"].includes(billing.installment.status) ? `installment_${billing.installment.status}` : null;
+        if (reviewReason) {
+          // Antes isto retornava mudo: o dinheiro entrava no Asaas sem baixa e sem rastro. Agora fica auditado e a intenção vai para revisão manual.
+          needsReview = true;
+          await recordGatewayPaymentNeedsReview(tx, { billingId: billing.billing.id, installmentId: billing.installment.id, billingType: billing.billing.type, paymentId, reason: reviewReason });
+          return;
+        }
         await tx.update(billingRecords).set({ status: "paid", gatewayStatus: payload.payment?.status || event }).where(and(eq(billingRecords.id, billing.billing.id), inArray(billingRecords.status, ["pending", "generated", "paid"])));
         const paidAt = new Date();
         const fullAmount = Number(billing.installment.amount);
@@ -76,6 +101,11 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           paymentMethod: billing.billing.type,
         }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
         const paymentRecorded = affectedRows(installmentUpdate) !== 0;
+        if (!paymentRecorded) {
+          // A parcela já não estava aberta (ex.: baixada à mão): pagamento em duplicidade, também vai para revisão.
+          needsReview = true;
+          await recordGatewayPaymentNeedsReview(tx, { billingId: billing.billing.id, installmentId: billing.installment.id, billingType: billing.billing.type, paymentId, reason: "installment_not_open" });
+        }
         if (paymentRecorded) {
           installmentPaid = fullyPaid;
           await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
@@ -117,5 +147,5 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
     await syncRevenueQualityForContract({ contractId: billing.installment.contractId, actorUserId: null, trigger: "webhook Asaas" });
   }
 
-  return { status: 200, billingRecordId: billing?.billing.id ?? null, installmentPaid, message: billing ? "Webhook processado." : "Evento registrado sem cobrança vinculada." };
+  return { status: 200, billingRecordId: billing?.billing.id ?? null, installmentPaid, ...(needsReview ? { needsReview: true } : {}), message: billing ? "Webhook processado." : "Evento registrado sem cobrança vinculada." };
 }
