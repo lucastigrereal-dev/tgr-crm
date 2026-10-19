@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { assertCustomerNotAnonymized } from "../customerAnonymization";
 import { and, desc, eq, inArray, like, or } from "drizzle-orm";
 import { z } from "zod";
 import { customers, opportunities, proposalDiscountApprovals, proposals, salesCampaigns, salesGoals, salesPlaybooks, tasks, users } from "../../drizzle/schema";
@@ -129,6 +130,7 @@ export const salesRouter = router({
     }
     const followUpAt = resolveFollowUpAt(input.nextFollowUpAt);
     const id = await db.transaction(async tx => {
+      await assertCustomerNotAnonymized(tx, input.customerId, { lock: true });
       const result = await tx.insert(opportunities).values({
         ...input,
         sellerId,
@@ -161,7 +163,7 @@ export const salesRouter = router({
   updateOpportunity: salesProcedure.input(z.object({ id: z.number().int().positive(), data: opportunityInput })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const previous = (await db.select({ stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, input.id)).limit(1))[0];
+    const previous = (await db.select({ stage: opportunities.stage, customerId: opportunities.customerId }).from(opportunities).where(eq(opportunities.id, input.id)).limit(1))[0];
     if (!previous) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade não encontrada." });
     if (!canTransitionOpportunityStage(previous.stage, input.data.stage)) throw new TRPCError({ code: "CONFLICT", message: `Transição de oportunidade inválida: ${previous.stage} → ${input.data.stage}.` });
     const customer = (await db.select({ id: customers.id }).from(customers).where(eq(customers.id, input.data.customerId)).limit(1))[0];
@@ -174,14 +176,18 @@ export const salesRouter = router({
       const campaign = (await db.select({ id: salesCampaigns.id }).from(salesCampaigns).where(eq(salesCampaigns.id, input.data.campaignId)).limit(1))[0];
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND", message: "Campanha da oportunidade não encontrada." });
     }
-    const updateResult = await db.update(opportunities).set({
-      ...input.data,
-      expectedAmount: input.data.expectedAmount.toFixed(2),
-      source: input.data.source?.trim() || null,
-      nextFollowUpAt: input.data.nextFollowUpAt ? new Date(input.data.nextFollowUpAt) : null,
-      lossReason: input.data.lossReason?.trim() || null,
-      closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
-    }).where(and(eq(opportunities.id, input.id), eq(opportunities.stage, previous.stage)));
+    const updateResult = await db.transaction(async tx => {
+      // Cliente anonimizado (o atual da oportunidade ou o novo) não recebe mais texto livre.
+      for (const customerId of Array.from(new Set([previous.customerId, input.data.customerId]))) await assertCustomerNotAnonymized(tx, customerId, { lock: true });
+      return tx.update(opportunities).set({
+        ...input.data,
+        expectedAmount: input.data.expectedAmount.toFixed(2),
+        source: input.data.source?.trim() || null,
+        nextFollowUpAt: input.data.nextFollowUpAt ? new Date(input.data.nextFollowUpAt) : null,
+        lossReason: input.data.lossReason?.trim() || null,
+        closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
+      }).where(and(eq(opportunities.id, input.id), eq(opportunities.stage, previous.stage)));
+    });
     if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "opportunity", input.id, "updated", `Oportunidade atualizada para ${input.data.stage}.`);
     await recordDomainEvent({ eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: input.id, actorUserId: ctx.user.id, payload: { sellerId: input.data.sellerId ?? null, campaignId: input.data.campaignId ?? null, previousStage: previous.stage, stage: input.data.stage, expectedAmount: input.data.expectedAmount } });

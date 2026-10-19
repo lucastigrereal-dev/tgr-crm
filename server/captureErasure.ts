@@ -57,17 +57,23 @@ export async function erasureBlockers(executor: Db | Tx, customerId: number, cap
   return blockers;
 }
 
-/** Chaves de payload de evento que carregam dado pessoal ou texto livre do titular. */
-const EVENT_PII_KEYS = ["city", "state", "acquisitionSource", "reason", "notes", "complement"];
+/** Lista de PERMISSÃO das chaves de payload que sobram nos eventos do titular: ids, estados e contadores (nunca texto livre). Qualquer chave nova some por padrão. */
+const EVENT_SAFE_KEYS = new Set([
+  "status", "stage", "type", "direction", "outcome", "ntKind", "presentationStatus", "qualificationStatus", "durationMinutes", "salesRoom", "salesTable",
+  "customerId", "captureId", "opportunityId", "campaignId", "sellerId", "linerId", "closerId", "roomManagerId", "role", "evidenceCount", "model",
+]);
 
 /**
  * Cópias secundárias persistidas do dado pessoal, limpas na mesma transação: snapshot de importação CSV (linha inteira do cliente),
- * payload de eventos de domínio do cliente e das fichas (cidade, UF, origem, motivo) e o motivo de cancelamento de voucher na trilha.
- * Ficam a trilha em si (quem, quando, o quê) e o nome/CPF mínimo. Eventos já entregues a outros sistemas não são recolhidos aqui.
+ * payload dos eventos de domínio do cliente, das fichas, das oportunidades e das interações (lista de permissão: só chaves seguras
+ * com valor simples) e o motivo de cancelamento de voucher na trilha. Ficam a trilha em si (quem, quando, o quê) e o nome/CPF mínimo.
+ * Eventos já entregues a outros sistemas não são recolhidos aqui.
  */
 export async function scrubSecondaryCopies(tx: Tx, customerId: number, captureIds: number[]) {
   await tx.update(csvImportItems).set({ beforeSnapshot: null }).where(and(eq(csvImportItems.entityType, "customer"), eq(csvImportItems.entityId, customerId)));
-  const scopes: Array<[string, string[]]> = [["customer", [String(customerId)]], ["capture", captureIds.map(String)]];
+  const opportunityIds = (await tx.select({ id: opportunities.id }).from(opportunities).where(eq(opportunities.customerId, customerId))).map(row => String(row.id));
+  const interactionIds = (await tx.select({ id: customerInteractions.id }).from(customerInteractions).where(eq(customerInteractions.customerId, customerId))).map(row => String(row.id));
+  const scopes: Array<[string, string[]]> = [["customer", [String(customerId)]], ["capture", captureIds.map(String)], ["opportunity", opportunityIds], ["customer_interaction", interactionIds]];
   for (const [aggregateType, ids] of scopes) {
     if (!ids.length) continue;
     const events = await tx.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents).where(and(eq(domainEvents.aggregateType, aggregateType), inArray(domainEvents.aggregateId, ids)));
@@ -76,11 +82,12 @@ export async function scrubSecondaryCopies(tx: Tx, customerId: number, captureId
       let parsed: unknown;
       try { parsed = JSON.parse(event.payload); } catch { continue; }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      const record = parsed as Record<string, unknown>;
-      const hit = EVENT_PII_KEYS.filter(key => key in record);
-      if (!hit.length) continue;
-      for (const key of hit) delete record[key];
-      await tx.update(domainEvents).set({ payload: JSON.stringify(record) }).where(eq(domainEvents.id, event.id));
+      const kept: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        if (EVENT_SAFE_KEYS.has(key) && (value === null || ["number", "boolean"].includes(typeof value) || (typeof value === "string" && value.length <= 40))) kept[key] = value;
+      }
+      const next = JSON.stringify(kept);
+      if (next !== event.payload) await tx.update(domainEvents).set({ payload: next }).where(eq(domainEvents.id, event.id));
     }
   }
   const voucherRows = await tx.select({ id: vouchers.id, code: vouchers.code }).from(vouchers).where(eq(vouchers.customerId, customerId));

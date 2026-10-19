@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import { assertCustomerNotAnonymized } from "../customerAnonymization";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, gte, isNull, lt, not, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -163,7 +164,7 @@ export const vouchersRouter = router({
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const code = newCode();
       try {
-        const [created] = await db.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, partnerName: input.partnerName || null, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId();
+        const [created] = await db.transaction(async tx => { await assertCustomerNotAnonymized(tx, input.customerId, { lock: true }); return tx.insert(vouchers).values({ code, customerId: input.customerId, captureId: input.captureId ?? null, description: input.description, partnerName: input.partnerName || null, costAmount: input.costAmount.toFixed(2), expiresAt: input.expiresAt ?? null, issuedByUserId: ctx.user.id, requestId: input.requestId }).$returningId(); });
         await auditIssued(ctx.user.id, created.id, code, input.customerId, input.description);
         return { voucherId: created.id, code };
       } catch (error) {
@@ -187,6 +188,7 @@ export const vouchersRouter = router({
       if (state === "cancelled") return { row, refusal: new TRPCError({ code: "PRECONDITION_FAILED", message: "Este voucher foi cancelado." }) };
       if (state === "expired") return { row, refusal: new TRPCError({ code: "PRECONDITION_FAILED", message: `Este voucher venceu em ${row.expiresAt}.` }) };
       const redeemedAt = new Date();
+      await assertCustomerNotAnonymized(tx, row.customerId, { lock: true });
       await tx.update(vouchers).set({ status: "redeemed", redeemedAt, redeemedByUserId: ctx.user.id, redeemNote: input.note || null }).where(and(eq(vouchers.id, row.id), eq(vouchers.status, "issued")));
       return { row: { ...row, status: "redeemed" as const, redeemedByUserId: ctx.user.id }, refusal: null };
     });
@@ -205,6 +207,7 @@ export const vouchersRouter = router({
       if (row.status !== "issued") return { row, refusal: new TRPCError({ code: "CONFLICT", message: row.status === "redeemed" ? "Voucher já usado não pode ser cancelado." : "Voucher já cancelado." }) };
       // Vencido fica vencido: cancelar depois da validade mudaria o histórico (e o custo) de "vencido sem uso" para "cancelado".
       if (voucherState(row, projectToday()) === "expired") throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Este voucher venceu em ${row.expiresAt}; não há o que cancelar.` });
+      await assertCustomerNotAnonymized(tx, row.customerId, { lock: true });
       await tx.update(vouchers).set({ status: "cancelled", cancelledAt: new Date(), cancelledByUserId: ctx.user.id, cancelReason: input.reason }).where(eq(vouchers.id, row.id));
       return { row: { ...row, status: "cancelled" as const, cancelledByUserId: ctx.user.id, cancelReason: input.reason }, refusal: null };
     });

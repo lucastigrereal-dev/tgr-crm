@@ -50,6 +50,14 @@ Não coberto pela revisão manual: varredura de dependências, teste de intrusã
 - P2 um pedido aberto por cliente: o registro trava a linha do cliente e checa pedido aberto por `customerId`; sem índice único parcial (o MySQL não tem; a trava de linha serializa).
 - Prova: `captureErasure.mysql` passou de 6 para 9 testes; com a guarda e a higienização neutralizadas, os 2 testes novos falham.
 
+### Revisão formal do #78 (2 médias, 1 baixa) e receptor dos tempos
+
+- Média 1: `findCaptureOrThrow` (captures) e `captureSheet.recordNt` recusam ficha anonimizada (PRECONDITION_FAILED); todos os updates de ficha em `captures` filtram `anonymizedAt IS NULL` (corrida vira o CONFLICT já existente quando 0 linhas).
+- Média 2: `assertCustomerNotAnonymized` (com trava) em `operations.createTask`, `sales.createOpportunity`/`updateOpportunity` (cliente atual e novo) e `vouchers.issue`/`redeem`/`cancel`.
+- Baixa: a limpeza de eventos virou lista de PERMISSÃO (só ids, estados e contadores) e cobre cliente, ficha, oportunidade e interação; chave nova ou de texto livre some por padrão.
+- Receptor `encounter.times_recorded.v1`: a revisão achou que ele NÃO tinha flag própria (ligava com a chave da ponte Sales, que já existe). Agora `ENCOUNTER_TIMES_RECEIVER_ENABLED=false` por padrão: 404 mesmo com a chave certa (teste MySQL). Sem PII: só `coupleCode`, instantes e um booleano; o log tem só `eventId` e código da recusa; o corpo nunca é registrado. Não prova a segurança do emissor do Sales (não existe).
+- Provas: `captureErasure.mysql` 11 testes; com as guardas neutralizadas os testes de guarda falham.
+
 ## CRM-A07 e CRM-A25
 
 - Varredura de órfãos: lista o diretório do storage local e apaga o que nenhuma linha de documento referencia, com idade mínima. `ORPHAN_BLOB_SWEEP_ENABLED=false` e `ORPHAN_BLOB_SWEEP_DELETE=false` por padrão (ligar a varredura sem a exclusão só relata). Forge/S3 não é varrido: sem listagem segura aqui, fica manual.
@@ -58,7 +66,7 @@ Não coberto pela revisão manual: varredura de dependências, teste de intrusã
 ## Suíte local (MySQL 8.0.46 descartável, banco novo com `drizzle-kit migrate` 0001 a 0066)
 
 - `pnpm check` (tsc): sem erros.
-- `pnpm test`: 180 arquivos passaram, 41 pulados (os `.mysql.test.ts` sem URL); 914 testes passaram, 225 pulados.
-- `.mysql.test.ts` (`--pool=forks`, como no CI): 41 arquivos, 225 testes, todos passaram (após a correção dos achados do #78).
+- `pnpm test`: 180 arquivos passaram, 41 pulados (os `.mysql.test.ts` sem URL); 914 testes passaram, 228 pulados.
+- `.mysql.test.ts` (`--pool=forks`, como no CI): 41 arquivos, 228 testes, todos passaram (após as correções dos achados do #78).
 - `pnpm build` e orçamento de bundle: app 151,3 KB (limite 450), Excel 264,4 (300), PDF 123,4 (150).
 - NOT_RUN localmente: E2E de navegador (Playwright). `nqReadEndpoint.mysql` usa CPF fixo e falha em segunda execução num banco reaproveitado; no CI o banco é novo por execução (não alterei esse teste).

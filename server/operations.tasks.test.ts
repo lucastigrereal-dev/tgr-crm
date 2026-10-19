@@ -21,7 +21,10 @@ function makeDb(options: { customerRows?: unknown[]; contractRows?: unknown[]; a
       return { $returningId: async () => [{ id: 901 }] };
     }),
   }));
-  return { db: { select, insert }, inserted };
+  // Guarda da anonimização: a transação lê o cliente (não anonimizado) com limit(1).for("update") antes do insert.
+  const tx = { select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: () => Object.assign(Promise.resolve([{ anonymizedAt: null }]), { for: async () => [{ anonymizedAt: null }] }) }) }) })), insert };
+  const transaction = vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx));
+  return { db: { select, insert, transaction }, inserted };
 }
 
 describe("integridade referencial de tarefas", () => {

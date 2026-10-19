@@ -128,8 +128,10 @@ async function handle(request: Request, response: Response, integrationKey: stri
   }
 }
 
-export function registerEncounterTimesReceiver(app: Express, integrationKey: string | undefined) {
+export function registerEncounterTimesReceiver(app: Express, integrationKey: string | undefined, enabled: boolean) {
   app.post(ENCOUNTER_TIMES_PATH, async (request, response) => {
+    // DESLIGADO por padrão (ENCOUNTER_TIMES_RECEIVER_ENABLED): com a flag desligada a rota responde 404 como se não existisse, mesmo com a chave certa.
+    if (!enabled) { response.status(404).json({ error: "Not found" }); return; }
     const key = integrationKey?.trim();
     if (!key) { response.status(503).json({ error: "Integration unavailable" }); return; }
     try { await handle(request, response, key); }

@@ -50,7 +50,7 @@ describe.skipIf(!integrationUrl)("contrato encounter.times_recorded.v1: fixture 
     [{ id: captureId }] = await db.insert(captureRecords).values({ customerId, promoterId: userId, salesRoom: `Sala Contrato ${runId}`, coupleCode: fixture.coupleCodeSeed.valid } as never).$returningId();
     const app = express();
     app.use(express.json());
-    registerEncounterTimesReceiver(app, KEY);
+    registerEncounterTimesReceiver(app, KEY, true);
     server = createServer(app);
     await new Promise<void>(resolve => server.listen(0, resolve));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}${ENCOUNTER_TIMES_PATH}`;
@@ -65,6 +65,21 @@ describe.skipIf(!integrationUrl)("contrato encounter.times_recorded.v1: fixture 
       await db.delete(users).where(eq(users.id, userId));
     }
     await pool?.end();
+  });
+
+  it("desligado por padrão: com a flag desligada a rota responde 404 mesmo com a chave certa, e nada é gravado", async () => {
+    const { registerEncounterTimesReceiver, ENCOUNTER_TIMES_PATH } = await import("./encounterTimesReceiver");
+    const app = express();
+    app.use(express.json());
+    registerEncounterTimesReceiver(app, KEY, false);
+    const off = createServer(app);
+    await new Promise<void>(resolve => off.listen(0, resolve));
+    try {
+      const offUrl = `http://127.0.0.1:${(off.address() as AddressInfo).port}${ENCOUNTER_TIMES_PATH}`;
+      const response = await fetch(offUrl, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${KEY}` }, body: JSON.stringify(withRun(fixture.valid[0]!.event)) });
+      expect(response.status).toBe(404);
+    } finally { await new Promise(resolve => off.close(resolve)); }
+    expect(await db.select().from(encounterTimeRecords).where(eq(encounterTimeRecords.captureId, captureId))).toHaveLength(0);
   });
 
   it("sem chave ou com chave errada: 401, antes de olhar o corpo", async () => {

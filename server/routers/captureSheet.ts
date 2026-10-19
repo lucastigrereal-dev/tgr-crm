@@ -531,9 +531,10 @@ export const captureSheetRouter = router({
       const txDb = tx as unknown as SheetDb;
       const [capture] = await tx.select({
         id: captureRecords.id, checkedInAt: captureRecords.checkedInAt, scheduledAt: captureRecords.scheduledAt, createdAt: captureRecords.createdAt, commercialOutcome: captureRecords.commercialOutcome,
-        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom,
+        presentationStatus: captureRecords.presentationStatus, ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, ntComplement: captureRecords.ntComplement, promoterId: captureRecords.promoterId, salesRoom: captureRecords.salesRoom, anonymizedAt: captureRecords.anonymizedAt,
       }).from(captureRecords).where(eq(captureRecords.id, input.captureId)).limit(1).for("update");
       if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Ficha não encontrada." });
+      if (capture.anonymizedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ficha anonimizada a pedido do titular: não aceita novas alterações." });
       await assertCaptureInRoomView(txDb, ctx.user.role, capture);
       if (capture.ntKind) {
         if (capture.ntKind === input.kind && capture.ntMotiveId === input.motiveId && (capture.ntComplement ?? null) === complement) return { ok: true as const, alreadyRecorded: true as const };
@@ -548,7 +549,7 @@ export const captureSheetRouter = router({
       await tx.update(captureRecords).set({
         ntKind: input.kind, ntMotiveId: motive.id, ntComplement: complement, ntCaptorName: captorName, ntRecordedAt: now, ntRecordedByUserId: ctx.user.id, presentationEndedAt: now,
         presentationStatus: "no_tour", noTourReason: reason,
-      }).where(eq(captureRecords.id, capture.id));
+      }).where(and(eq(captureRecords.id, capture.id), isNull(captureRecords.anonymizedAt)));
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
       // O evento entra na mesma transação do status: o fato e a saída para quem escuta capture.no_tour saem juntos.
       await txEvent(tx, { eventName: "capture.no_tour", aggregateType: "capture", aggregateId: capture.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason, ntKind: input.kind } });

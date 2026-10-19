@@ -212,6 +212,49 @@ describe.skipIf(!integrationUrl)("pedido de exclusão/anonimização da ficha em
     expect((await db.select().from(customerInteractions).where(eq(customerInteractions.customerId, customerId)))[0]!.content).toBe("[removido a pedido do titular]");
   });
 
+  it("ficha e cliente anonimizados não aceitam mais texto livre: mutações de captação, tarefa, oportunidade e voucher recusam (revisão formal)", async () => {
+    const { customerId, captureIds, codes } = await seed("revisao");
+    const [opp] = await db.select().from(opportunities).where(eq(opportunities.customerId, customerId));
+    const [voucher] = await db.select().from(vouchers).where(eq(vouchers.customerId, customerId));
+    const { requestId } = await as("finance").captureSheet.erasure.request({ code: codes[0], reason: "titular pediu pelo canal" });
+    await as("admin").captureSheet.erasure.complete({ requestId, confirmCode: codes[0] });
+    const refused = { code: "PRECONDITION_FAILED" };
+    const id = captureIds[0]!;
+
+    await expect(as("admin").captures.updateStatus({ id, presentationStatus: "scheduled", qualificationReason: "texto livre novo" } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").captures.checkIn({ id, receptionNotes: "nota nova com dado" } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").captures.recordCommercialOutcome({ id, outcome: "caiu_em_mesa", reason: "motivo livre novo" } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").captures.markNoTour({ id, reason: "motivo livre novo" } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").captureSheet.recordNt({ captureId: id, kind: "perfil", motiveId: 1, complement: "complemento novo" } as never)).rejects.toMatchObject(refused);
+    const [sheet] = await db.select().from(captureRecords).where(eq(captureRecords.id, id));
+    expect(sheet).toMatchObject({ receptionNotes: null, qualificationReason: null, noTourReason: null, commercialOutcomeReason: null, ntComplement: null });
+
+    await expect(as("admin").operations.createTask({ title: "Ligar para o cliente", description: "dado novo", customerId } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").sales.createOpportunity({ customerId, title: "Nova oportunidade", expectedAmount: 1000 } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").sales.updateOpportunity({ id: opp!.id, data: { customerId, title: "Título livre novo", stage: "new", expectedAmount: 1000 } } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").vouchers.issue({ customerId, description: "Outro brinde", requestId: randomUUID() } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").vouchers.redeem({ code: voucher!.code, note: "nota nova com dado" } as never)).rejects.toMatchObject(refused);
+    await expect(as("admin").vouchers.cancel({ id: voucher!.id, reason: "motivo livre novo" } as never)).rejects.toMatchObject(refused);
+    expect((await db.select().from(opportunities).where(eq(opportunities.id, opp!.id)))[0]!.title).toBe("Oportunidade anonimizada");
+    expect((await db.select().from(vouchers).where(eq(vouchers.id, voucher!.id)))[0]).toMatchObject({ status: "issued", redeemNote: null, cancelReason: null });
+  });
+
+  it("eventos: lista de permissão também cobre oportunidade e interação (chaves novas ou de texto livre somem)", async () => {
+    const { customerId, codes } = await seed("eventos");
+    const [opp] = await db.select().from(opportunities).where(eq(opportunities.customerId, customerId));
+    const [interaction] = await db.select().from(customerInteractions).where(eq(customerInteractions.customerId, customerId));
+    await db.insert(domainEvents).values([
+      { eventName: "opportunity.updated", aggregateType: "opportunity", aggregateId: String(opp!.id), payload: JSON.stringify({ stage: "new", title: "Fulano quer vender", lossReason: "esposa", sellerId: 7 }) },
+      { eventName: "customer.interaction.created", aggregateType: "customer_interaction", aggregateId: String(interaction!.id), payload: JSON.stringify({ customerId, type: "note", content: "conversa íntima", futureKey: "x" }) },
+    ]);
+    const { requestId } = await as("finance").captureSheet.erasure.request({ code: codes[0], reason: "titular pediu pelo canal" });
+    await as("admin").captureSheet.erasure.complete({ requestId, confirmCode: codes[0] });
+    const [oppEvent] = await db.select().from(domainEvents).where(and(eq(domainEvents.aggregateType, "opportunity"), eq(domainEvents.aggregateId, String(opp!.id))));
+    expect(JSON.parse(oppEvent!.payload!)).toEqual({ stage: "new", sellerId: 7 });
+    const [interactionEvent] = await db.select().from(domainEvents).where(and(eq(domainEvents.aggregateType, "customer_interaction"), eq(domainEvents.aggregateId, String(interaction!.id))));
+    expect(JSON.parse(interactionEvent!.payload!)).toEqual({ customerId, type: "note" });
+  });
+
   it("um pedido aberto por CLIENTE: ficha irmã do mesmo cliente não abre segundo pedido, nem em paralelo (P2)", async () => {
     const { codes } = await seed("irma", 2);
     const results = await Promise.allSettled([

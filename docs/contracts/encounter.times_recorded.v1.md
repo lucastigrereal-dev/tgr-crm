@@ -5,7 +5,8 @@ Status: **proposto, receptor pronto e provado no CRM; emissor ainda não existe 
 ## Rota e autenticação
 
 - `POST /api/integrations/sales-command/encounter-times`, corpo JSON.
-- `Authorization: Bearer <SALES_COMMAND_INTEGRATION_KEY>` (a mesma chave da ponte Sales -> CRM). Comparação em tempo constante. Sem chave configurada no CRM a rota responde 503.
+- **Desligada por padrão**: `ENCOUNTER_TIMES_RECEIVER_ENABLED=false`. Com a flag desligada a rota responde 404 como se não existisse, mesmo com a chave certa; só liga depois que o Sales emitir o evento e o contrato for aceito.
+- `Authorization: Bearer <SALES_COMMAND_INTEGRATION_KEY>` (a mesma chave da ponte Sales -> CRM). Comparação em tempo constante. Com a flag ligada e sem chave configurada no CRM a rota responde 503.
 - A chave é validada ANTES de olhar o corpo; o corpo nunca é registrado em log (só `eventId` e código da recusa).
 
 ## Envelope

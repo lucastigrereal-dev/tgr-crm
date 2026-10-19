@@ -10,6 +10,7 @@ export const ENV = {
   salesCommandIntegrationKey: process.env.SALES_COMMAND_INTEGRATION_KEY ?? "",
   // Endpoint de leitura do NQ para o Sales Command: DESLIGADO por padrão; só liga depois do aceite do Lucas.
   nqReadEndpointEnabled: process.env.NQ_READ_ENDPOINT_ENABLED === "true",
+  encounterTimesReceiverEnabled: process.env.ENCOUNTER_TIMES_RECEIVER_ENABLED === "true",
   // CRM-A07: varredura de blob órfão no armazenamento local. DESLIGADA por padrão; ligada sem DELETE só relata (ensaio).
   orphanBlobSweepEnabled: process.env.ORPHAN_BLOB_SWEEP_ENABLED === "true",
   orphanBlobSweepDelete: process.env.ORPHAN_BLOB_SWEEP_DELETE === "true",
