@@ -2,7 +2,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { auditLogs, commercialProjectSettings, resorts, users } from "../../drizzle/schema";
-import { getDb, recordAudit } from "../db";
+import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
@@ -62,7 +62,7 @@ export const projectSettingsRouter = router({
   upsert: adminProcedure.input(settingsInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const operation = await db.transaction(async tx => {
+    await db.transaction(async tx => {
       const resort = (await tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1).for("update"))[0];
       if (!resort) throw new TRPCError({ code: "NOT_FOUND", message: "Empreendimento não encontrado." });
       const current = (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, input.resortId)).limit(1))[0];
@@ -74,9 +74,11 @@ export const projectSettingsRouter = router({
       } else {
         await tx.insert(commercialProjectSettings).values(values);
       }
-      return { kind: current ? "updated" as const : "created" as const, change: describeSettingsChange(current ? Object.fromEntries(SETTING_FIELDS.map(field => [field, current[field] ?? null])) : undefined, Object.fromEntries(SETTING_FIELDS.map(field => [field, values[field] ?? null])), note) };
+      const kind = current ? "updated" as const : "created" as const;
+      const change = describeSettingsChange(current ? Object.fromEntries(SETTING_FIELDS.map(field => [field, current[field] ?? null])) : undefined, Object.fromEntries(SETTING_FIELDS.map(field => [field, values[field] ?? null])), note);
+      // O histórico entra na MESMA transação da mudança: ou grava os dois ou nenhum.
+      await tx.insert(auditLogs).values({ actorUserId: ctx.user.id, entityType: AUDIT_ENTITY, entityId: String(input.resortId), action: kind, summary: JSON.stringify(change), idempotencyKey: null });
     });
-    await recordAudit(ctx.user.id, AUDIT_ENTITY, input.resortId, operation.kind, JSON.stringify(operation.change));
     return { success: true };
   }),
 });

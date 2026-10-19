@@ -47,4 +47,10 @@ describe("regras de comissão V2 (rascunho da Five)", () => {
     expect(() => computeCommissionV2(FIVE_COMMISSION_DRAFT_V2, { quotas: 1, entryCents: -1 })).toThrow();
     expect(() => computeCommissionV2({ ...FIVE_COMMISSION_DRAFT_V2, extra: 1 }, { quotas: 1, entryCents: 1 })).toThrow();
   });
+
+  it("saleTotalCents inválido (negativo, fracionário, NaN, inseguro) vira erro", () => {
+    for (const saleTotalCents of [-1, 10.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => computeCommissionV2(FIVE_COMMISSION_DRAFT_V2, { quotas: 1, entryCents: 399_000, saleTotalCents })).toThrow(/saleTotalCents/);
+    }
+  });
 });

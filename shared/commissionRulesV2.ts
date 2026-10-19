@@ -66,6 +66,7 @@ export function computeCommissionV2(rulesInput: unknown, sale: SaleForCommission
   if (!Number.isInteger(sale.quotas) || sale.quotas < 0) throw new Error("quotas must be a non-negative integer");
   if (!Number.isInteger(sale.entryCents) || sale.entryCents < 0) throw new Error("entryCents must be a non-negative integer");
   if (sale.machineFeeCents !== undefined && (!Number.isInteger(sale.machineFeeCents) || sale.machineFeeCents < 0)) throw new Error("machineFeeCents must be a non-negative integer");
+  if (sale.saleTotalCents !== undefined && (!Number.isSafeInteger(sale.saleTotalCents) || sale.saleTotalCents < 0)) throw new Error("saleTotalCents must be a non-negative safe integer");
   const machineFeeCents = Math.min(sale.entryCents, sale.machineFeeCents ?? pct(sale.entryCents, rules.machineFeeBps));
   const effectiveEntryCents = sale.entryCents - machineFeeCents;
   const lines: CommissionLineV2[] = [];
