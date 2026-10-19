@@ -17,11 +17,11 @@ describe("regras de comissão V2 (rascunho da Five)", () => {
     expect(r.companyRevenueCents).toBe(476_850);
   });
 
-  it("limite exato de R$3.990 cai na faixa de baixo (10%); um centavo acima vai para 15%", () => {
-    expect(amount(computeCommissionV2(FIVE_COMMISSION_DRAFT_V2, { quotas: 1, entryCents: 399_000 }), "fechador")).toBe(39_900);
-    expect(amount(computeCommissionV2(FIVE_COMMISSION_DRAFT_V2, { quotas: 1, entryCents: 399_001 }), "fechador")).toBe(59_850);
-    const fromThreshold = { ...FIVE_COMMISSION_DRAFT_V2, roles: { fechador: { ...(FIVE_COMMISSION_DRAFT_V2.roles.fechador as object), strictlyAbove: false } } };
-    expect(amount(computeCommissionV2(fromThreshold, { quotas: 1, entryCents: 399_000 }), "fechador")).toBe(59_850);
+  it("R$3.990 exato já é 15%; um centavo abaixo é 10% (sobre o líquido)", () => {
+    expect(amount(computeCommissionV2(FIVE_COMMISSION_DRAFT_V2, { quotas: 1, entryCents: 399_000 }), "fechador")).toBe(59_850);
+    expect(amount(computeCommissionV2(FIVE_COMMISSION_DRAFT_V2, { quotas: 1, entryCents: 398_999 }), "fechador")).toBe(39_900);
+    const strict = { ...FIVE_COMMISSION_DRAFT_V2, roles: { fechador: { ...(FIVE_COMMISSION_DRAFT_V2.roles.fechador as object), strictlyAbove: true } } };
+    expect(amount(computeCommissionV2(strict, { quotas: 1, entryCents: 399_000 }), "fechador")).toBe(39_900);
   });
 
   it("taxa da maquininha sai da base: por bps padrão ou pelo valor real da venda", () => {
@@ -34,9 +34,11 @@ describe("regras de comissão V2 (rascunho da Five)", () => {
     expect(amount(byReal, "consultor")).toBe(49_000);
   });
 
-  it("faixa comparando a entrada efetiva muda de faixa quando a taxa derruba o valor", () => {
-    const eff = { ...FIVE_COMMISSION_DRAFT_V2, machineFeeBps: 500, roles: { fechador: { ...(FIVE_COMMISSION_DRAFT_V2.roles.fechador as object), tierBase: "effective" } } };
-    expect(amount(computeCommissionV2(eff, { quotas: 1, entryCents: 410_000 }), "fechador")).toBe(Math.floor((389_500 * 1_000 + 5_000) / 10_000));
+  it("a faixa olha o líquido: entrada de R$4.100 com maquininha de 5% cai para 10%", () => {
+    const fee = { ...FIVE_COMMISSION_DRAFT_V2, machineFeeBps: 500 };
+    expect(amount(computeCommissionV2(fee, { quotas: 1, entryCents: 410_000 }), "fechador")).toBe(38_950);
+    const gross = { ...fee, roles: { fechador: { ...(FIVE_COMMISSION_DRAFT_V2.roles.fechador as object), tierBase: "gross" } } };
+    expect(amount(computeCommissionV2(gross, { quotas: 1, entryCents: 410_000 }), "fechador")).toBe(58_425);
   });
 
   it("papel sem regra não gera linha; entrada/cotas inválidas dão erro, nunca zero silencioso", () => {

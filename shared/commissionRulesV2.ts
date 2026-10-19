@@ -86,9 +86,9 @@ export function computeCommissionV2(rulesInput: unknown, sale: SaleForCommission
 }
 
 /**
- * Rascunho da regra da Five ditada pelo Lucas em 19/10/2026 14:17Z. É DADO NÃO LIBERADO: o admin do sistema confere e libera.
- * Pontos ainda em aberto (padrões abaixo seguem o ditado literal): 3.990 exato cai na faixa de baixo ("acima de 3.990");
- * a faixa compara a entrada bruta; a taxa da maquininha sai da base de fechador e consultor; a taxa real (machineFeeBps) é configurável.
+ * Rascunho da regra da Five ditada pelo Lucas em 19/10/2026 (14:17Z e confirmada 15:21Z). É DADO NÃO LIBERADO: o admin do sistema confere e libera.
+ * Confirmado pelo Lucas: R$ 3.990 exato já é a faixa de cima (15%); tudo é calculado sobre o LÍQUIDO (entrada menos a taxa da maquininha),
+ * inclusive a comparação com R$ 3.990; entrada abaixo de R$ 3.990 paga 10% ao fechador. A taxa real da maquininha (machineFeeBps) é configurável.
  */
 export const FIVE_COMMISSION_DRAFT_V2: CommissionRulesV2 = {
   schema: "tgr.commission-rules.v2",
@@ -97,7 +97,7 @@ export const FIVE_COMMISSION_DRAFT_V2: CommissionRulesV2 = {
   roles: {
     captador: { kind: "fixed_per_quota", amountCents: 40_000 },
     consultor: { kind: "percent_of_effective_entry", rateBps: 1_000, deductMachineFee: true },
-    fechador: { kind: "tiered_percent_of_effective_entry", thresholdCents: 399_000, strictlyAbove: true, belowRateBps: 1_000, aboveRateBps: 1_500, tierBase: "gross", deductMachineFee: true },
+    fechador: { kind: "tiered_percent_of_effective_entry", thresholdCents: 399_000, strictlyAbove: false, belowRateBps: 1_000, aboveRateBps: 1_500, tierBase: "effective", deductMachineFee: true },
   },
   note: "Rascunho da Five (ditado 19/10/2026). NÃO LIBERADO: depende de conferência do admin do sistema.",
 };
