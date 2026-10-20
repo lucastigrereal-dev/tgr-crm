@@ -26,10 +26,13 @@ export function SaleValidationCard({ contractId }: { contractId: number }) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [docOpen, setDocOpen] = useState(false);
+  const [docNote, setDocNote] = useState("");
   const canView = Boolean(user && canCapability(user.role, "sale.validation.view"));
   const status = trpc.saleValidation.getValidationStatus.useQuery({ contractId }, { enabled: Boolean(contractId) && canView });
   const refresh = () => Promise.all([utils.saleValidation.getValidationStatus.invalidate({ contractId }), utils.contracts.detail.invalidate({ id: contractId }), utils.contracts.list.invalidate()]);
   const confirm = trpc.saleValidation.confirmPayment.useMutation({ onSuccess: async () => { await refresh(); setOpen(false); setNote(""); toast.success("Comprovante conferido."); }, onError: error => toast.error(error.message) });
+  const confirmDocs = trpc.saleValidation.confirmDocuments.useMutation({ onSuccess: async () => { await refresh(); setDocOpen(false); setDocNote(""); toast.success("Documentação conferida."); }, onError: error => toast.error(error.message) });
   const validate = trpc.saleValidation.validateSale.useMutation({ onSuccess: async () => { await refresh(); toast.success("Venda validada. Contrato ativo."); }, onError: error => { void refresh(); toast.error(error.message); } });
   const authorization = trpc.saleValidation.myAuthorization.useQuery(undefined, { enabled: canView });
   const canConfirm = Boolean(user && authorization.data?.authorized && canCapability(user.role, "sale.payment.confirm"));
@@ -42,10 +45,12 @@ export function SaleValidationCard({ contractId }: { contractId: number }) {
     <CardContent className="space-y-3 pt-5 text-sm">
       {status.isLoading ? <p className="text-muted-foreground">Lendo portões…</p> : !data ? <p className="text-muted-foreground">Não foi possível ler a validação desta venda.</p> : <>
         <ul className="space-y-2">{GATE_LABELS.map(({ key, label }) => <li key={key} className="flex items-center gap-2" data-testid={`gate-${key}`}>{data.gates[key] ? <Check className="h-4 w-4 text-emerald-700" aria-label="atendido" /> : <Circle className="h-4 w-4 text-muted-foreground" aria-label="pendente" />}<span className={data.gates[key] ? "font-medium" : "text-muted-foreground"}>{label}</span></li>)}</ul>
+        {data.orderGate?.enabled && !data.orderGate.exempt ? <p className="text-xs text-muted-foreground" data-testid="order-gate">Ordem da formalização: comprovante {data.orderGate.receiptConferred ? "conferido" : "pendente"} e documentação {data.orderGate.documentsConferred ? "conferida" : "pendente"}. O contrato só é gerado depois das duas conferências.</p> : null}
         {terminalStatus ? <p className="text-xs text-muted-foreground" data-testid="sale-validation-terminal">Contrato {data.contractStatus === "cancelled" ? "cancelado" : data.contractStatus === "closed" ? "encerrado" : "vencido"}: confirmar pagamento e validar a venda estão indisponíveis.</p> : null}
         {data.gates.missing.length ? <p className="text-xs text-muted-foreground">Pendências para validar: {data.gates.missing.length}.</p> : null}
         {canConfirm || canValidate ? <div className="flex flex-wrap gap-2 pt-1">
           {canConfirm && !data.gates.paymentConfirmed ? <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button variant="outline" className="border-[#d9cfbd]" disabled={terminalStatus}>Confirmar pagamento</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle className="font-serif text-2xl">Confirmar pagamento</DialogTitle></DialogHeader><form className="grid gap-3 py-2" onSubmit={event => { event.preventDefault(); confirm.mutate({ contractId, note }); }}><div className="grid gap-2"><Label htmlFor="payment-note">Nota de conferência</Label><Input id="payment-note" value={note} onChange={event => setNote(event.target.value)} minLength={3} required /></div><Button type="submit" disabled={confirm.isPending || note.trim().length < 3}>Confirmar</Button></form></DialogContent></Dialog> : null}
+          {canConfirm && data.orderGate?.enabled && !data.orderGate.documentsConferred ? <Dialog open={docOpen} onOpenChange={setDocOpen}><DialogTrigger asChild><Button variant="outline" className="border-[#d9cfbd]" disabled={terminalStatus}>Conferir documentação</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle className="font-serif text-2xl">Conferir documentação</DialogTitle></DialogHeader><form className="grid gap-3 py-2" onSubmit={event => { event.preventDefault(); confirmDocs.mutate({ contractId, note: docNote }); }}><div className="grid gap-2"><Label htmlFor="docs-note">Nota de conferência</Label><Input id="docs-note" value={docNote} onChange={event => setDocNote(event.target.value)} minLength={3} required /></div><Button type="submit" disabled={confirmDocs.isPending || docNote.trim().length < 3}>Confirmar</Button></form></DialogContent></Dialog> : null}
           {canValidate && !data.gates.adminValidated ? <Button disabled={terminalStatus || !data.gates.ready || validate.isPending} onClick={() => validate.mutate({ contractId })}>Validar venda</Button> : null}
         </div> : null}
       </>}

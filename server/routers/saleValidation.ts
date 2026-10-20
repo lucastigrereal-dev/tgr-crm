@@ -6,7 +6,7 @@ import { getDb } from "../db";
 import { txAudit } from "../txOutbox";
 import { assertSaleValidator, isSaleValidatorAuthorized, SEGREGATION_KEY } from "../saleValidatorAccess";
 import { router } from "../_core/trpc";
-import { confirmPayment, getValidationStatus, validateSale } from "../saleValidationService";
+import { confirmDocuments, confirmPayment, getValidationStatus, validateSale } from "../saleValidationService";
 import { adminProcedure, assertCapability, contractsProcedure } from "./access";
 
 async function requireDb() { const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." }); return db; }
@@ -78,6 +78,12 @@ export const saleValidationRouter = router({
   })).mutation(async ({ ctx, input }) => {
     await assertSaleValidator(ctx.user, "sale.payment.confirm", "Somente o administrativo autorizado confere o comprovante da venda.");
     return confirmPayment(ctx.user.id, input);
+  }),
+
+  /** CRM-B1: o administrativo autorizado confere a documentação do cliente (o comprovante é o confirmPayment). Sem evento para outro sistema. */
+  confirmDocuments: contractsProcedure.input(z.object({ contractId, note: z.string().trim().min(3, "Informe a nota de conferência da documentação.").max(2000) })).mutation(async ({ ctx, input }) => {
+    await assertSaleValidator(ctx.user, "sale.documents.confer", "Somente o administrativo autorizado confere a documentação da venda.");
+    return confirmDocuments(ctx.user.id, input);
   }),
 
   validateSale: contractsProcedure.input(z.object({ contractId, signedDocumentId: z.number().int().positive().optional().nullable() })).mutation(async ({ ctx, input }) => {

@@ -9,7 +9,7 @@ const example = readFileSync(path.join(root, ".env.example"), "utf8");
 
 describe("flags da rodada 4 no compose do piloto", () => {
   it.each([
-    "FINANCIAL_PROJECT_MAP_ENABLED", "CONTRACT_ADDENDUM_ENABLED", "CSRF_ORIGIN_CHECK_ENABLED",
+    "FINANCIAL_PROJECT_MAP_ENABLED", "CONTRACT_ADDENDUM_ENABLED", "CSRF_ORIGIN_CHECK_ENABLED", "SALE_ORDER_GATE_ENABLED",
   ])("%s está no environment do serviço app com padrão false e documentada no .env.example como false", name => {
     expect(compose).toContain(`${name}: "\${${name}:-false}"`);
     expect(example).toMatch(new RegExp(`^${name}=false`, "m"));
@@ -17,6 +17,9 @@ describe("flags da rodada 4 no compose do piloto", () => {
   it("CSRF_ALLOWED_ORIGINS passa ao app com padrão vazio", () => {
     expect(compose).toContain('CSRF_ALLOWED_ORIGINS: "${CSRF_ALLOWED_ORIGINS:-}"');
     expect(example).toMatch(/^CSRF_ALLOWED_ORIGINS=/m);
+  });
+  it("SALE_ORDER_GATE_SINCE passa ao app com padrão vazio", () => {
+    expect(compose).toContain('SALE_ORDER_GATE_SINCE: "${SALE_ORDER_GATE_SINCE:-}"');
   });
   it("as flags ficam dentro do serviço app (antes do PORT dele)", () => {
     const app = compose.slice(compose.indexOf("\n  app:"));

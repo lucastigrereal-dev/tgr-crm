@@ -678,6 +678,10 @@ export const saleValidations = mysqlTable("sale_validations", {
   paymentConfirmedByUserId: int("paymentConfirmedByUserId"),
   paymentConfirmationNote: text("paymentConfirmationNote"),
   paymentEvidenceRef: varchar("paymentEvidenceRef", { length: 512 }),
+  // CRM-B1: documentação conferida pelo administrativo autorizado (o comprovante conferido segue em paymentConfirmed*). Nulo = ainda não conferida.
+  documentsConferredAt: timestamp("documentsConferredAt"),
+  documentsConferredByUserId: int("documentsConferredByUserId"),
+  documentsConferredNote: text("documentsConferredNote"),
   validatedAt: timestamp("validatedAt"),
   validatedByUserId: int("validatedByUserId"),
   signedDocumentId: int("signedDocumentId"),

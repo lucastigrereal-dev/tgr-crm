@@ -9,8 +9,9 @@ import { getDb, recordAudit } from "./db";
 import { affectedRows } from "./mysqlErrors";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
-import { evaluateSaleValidationGates, gatesNotAfter, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
+import { evaluateSaleValidationGates, gatesNotAfter, isContractDocumentCategory, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
 import { createHash } from "node:crypto";
+import { conferralsBeforeGeneration, saleOrderGateState } from "./saleOrderGate";
 import { isSegregationEnabled } from "./saleValidatorAccess";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { txAudit, txEvent, type Tx } from "./txOutbox";
@@ -77,6 +78,10 @@ export async function getValidationStatus(contractId: number) {
     paymentConfirmedAt: facts.validation?.paymentConfirmedAt ?? null,
     paymentConfirmedByUserId: facts.validation?.paymentConfirmedByUserId ?? null,
     paymentConfirmationNote: facts.validation?.paymentConfirmationNote ?? null,
+    documentsConferredAt: facts.validation?.documentsConferredAt ?? null,
+    documentsConferredByUserId: facts.validation?.documentsConferredByUserId ?? null,
+    documentsConferredNote: facts.validation?.documentsConferredNote ?? null,
+    orderGate: await saleOrderGateState(db, contractId),
     validatedAt: facts.validation?.validatedAt ?? null,
     validatedByUserId: facts.validation?.validatedByUserId ?? null,
     signedDocument: signed ? { id: signed.id, filename: facts.documents.find(document => document.id === signed.id)?.filename ?? null } : null,
@@ -241,6 +246,31 @@ export async function reprocessSkippedCommissions(db: Db, input: { contractId?: 
   return summary;
 }
 
+export async function confirmDocuments(actorUserId: number, input: { contractId: number; note: string }) {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+  const facts = await loadSaleValidationFacts(db, input.contractId);
+  if (!facts.contract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
+  if (facts.validation?.documentsConferredAt) return { success: true as const, alreadyConfirmed: true as const, confirmedAt: facts.validation.documentsConferredAt };
+  const stateError = (status: string) => saleValidationError("CONFLICT", "SALE_PAYMENT_CONTRACT_STATE", `Documentação só pode ser conferida com contrato em rascunho ou aguardando assinatura (atual: ${status}).`);
+  if (!PRE_VALIDATION_STATUSES.includes(facts.contract.status)) throw stateError(facts.contract.status);
+  const confirmedAt = new Date();
+  const outcome = await db.transaction(async tx => {
+    const lockedContract = (await tx.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
+    if (!lockedContract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
+    await tx.insert(saleValidations).values({ contractId: input.contractId }).onDuplicateKeyUpdate({ set: { contractId: sql`contractId` } });
+    const row = (await tx.select().from(saleValidations).where(eq(saleValidations.contractId, input.contractId)).limit(1).for("update"))[0];
+    if (row?.documentsConferredAt) return { alreadyConfirmed: true as const, confirmedAt: row.documentsConferredAt };
+    if (!PRE_VALIDATION_STATUSES.includes(lockedContract.status)) throw stateError(lockedContract.status);
+    const update = await tx.update(saleValidations).set({ documentsConferredAt: confirmedAt, documentsConferredByUserId: actorUserId, documentsConferredNote: input.note }).where(eq(saleValidations.contractId, input.contractId));
+    if (affectedRows(update) === 0) throw new TRPCError({ code: "CONFLICT", message: "Validação da venda alterada por outra operação. Recarregue." });
+    // Fato interno do CRM: sem evento para outro sistema (nenhum contrato muda). A trilha é a auditoria com ator e nota.
+    await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "documents_conferred", summary: `Documentação do contrato ${input.contractId} conferida pelo administrativo autorizado: ${input.note}`, idempotencyKey: `sale-documents-confer:${input.contractId}` });
+    return { alreadyConfirmed: false as const, confirmedAt };
+  });
+  return { success: true as const, ...outcome };
+}
+
 class GatesNotReady extends Error {
   constructor(readonly reason: "gates" | "document" | "state" | "timestamps", readonly missing: SaleGateKey[], readonly detail: string) { super(detail); }
 }
@@ -295,6 +325,15 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       if (paymentConfirmedByUserId === actorUserId && await isSegregationEnabled(tx)) throw saleValidationError("FORBIDDEN", "SALE_SEGREGATION", "A segregação de funções está ligada: quem conferiu o comprovante não valida a mesma venda.");
       // KAN-31 V6: instantes de cada portão congelados aqui; nenhum pode ser posterior à validação (o Sales recusaria).
       const stamps = saleGateTimestamps({ documents: facts.documents, envelopes: facts.envelopes, contractSignedAt: signedAt, storedDocument: documentRow });
+      // CRM-B1: com o gate de ordem ligado, comprovante E documentação conferidos ANTES de existir contrato (documento de contrato ou envelope).
+      const orderGate = await saleOrderGateState(tx, input.contractId);
+      if (orderGate.enabled && !orderGate.exempt) {
+        if (!orderGate.documentsConferred) throw new GatesNotReady("gates", [], "A documentação ainda não foi conferida pelo administrativo (ordem da formalização).");
+        const contractItems = [...facts.documents.filter(item => isContractDocumentCategory(item.category)), ...facts.envelopes];
+        // Só documento/envelope DO CONTRATO conta: comprovante, aditivo e outros anexos subidos antes das conferências não antecedem a geração do contrato.
+        const generatedAt = new Date(Math.min(...contractItems.map(item => item.createdAt?.getTime() ?? Infinity), documentRow.createdAt?.getTime() ?? Infinity));
+        if (!conferralsBeforeGeneration({ contractGeneratedAt: generatedAt, receiptConferredAt: paymentConfirmedAt, documentsConferredAt: orderGate.documentsConferredAt! })) throw new GatesNotReady("timestamps", [], "O contrato foi gerado antes da conferência de comprovante e documentação (ordem da formalização).");
+      }
       if (!gatesNotAfter({ ...stamps, paymentConfirmedAt }, validatedAt)) throw new GatesNotReady("timestamps", [], "Instante de portão posterior à validação (relógio ou dado inconsistente); confira a assinatura e o documento.");
       // Referência OPACA do documento assinado: a mesma vai para a trilha, para sale_validations e para o Sales (gates.documentRef).
       const documentRef = saleDocumentRef(input.contractId, document.id);

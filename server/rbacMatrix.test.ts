@@ -30,6 +30,7 @@ const ACTIONS: Array<{ name: string; capability: Capability; allowed: Role[]; gr
   // CRM-C1 (decisão do titular 20/10): validação oficial é do ADMINISTRATIVO autorizado, sem gate de gerente. Admin sempre; finance só com concessão vigente
   // (sem concessão => FORBIDDEN; a prova com concessão está em saleValidatorGrants.mysql.test.ts). Seller e service nunca.
   { name: "saleValidation.confirmPayment", capability: "sale.payment.confirm", allowed: ["admin", "finance"], grantOnly: ["finance"], call: c => c.saleValidation.confirmPayment({ contractId: 1, note: "SYN conferido" }) },
+  { name: "saleValidation.confirmDocuments", capability: "sale.documents.confer", allowed: ["admin", "finance"], grantOnly: ["finance"], call: c => c.saleValidation.confirmDocuments({ contractId: 1, note: "SYN docs conferidos" }) },
   { name: "saleValidation.validateSale", capability: "sale.validate", allowed: ["admin", "finance"], grantOnly: ["finance"], call: c => c.saleValidation.validateSale({ contractId: 1 }) },
   { name: "contracts.markDocumentSigned", capability: "document.sign", allowed: ["admin"], call: c => c.contracts.markDocumentSigned({ documentId: 1 }) },
   { name: "electronicSignatures.start", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.start({ contractId: 1, contractDocumentId: 1 }) },

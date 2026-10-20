@@ -18,6 +18,8 @@ import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows, withDeadlockRetry } from "../mysqlErrors";
 import { txAudit, txEvent } from "../txOutbox";
 import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
+import { assertContractGenerationAllowed } from "../saleOrderGate";
+import { isContractDocumentCategory } from "../saleValidation";
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -355,6 +357,8 @@ export const contractsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const contract = (await db.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
     if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato do documento não encontrado." });
+    // CRM-B1: documento de contrato só depois que o administrativo conferiu comprovante e documentação (flag SALE_ORDER_GATE_ENABLED).
+    if (isContractDocumentCategory(input.category)) await assertContractGenerationAllowed(db, input.contractId);
     const buffer = decodeUpload(input.base64);
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     // ADR-007: só quem tem document.sign (admin) pode registrar documento já assinado; para os demais a flag é ignorada.
@@ -392,9 +396,10 @@ export const contractsRouter = router({
   markDocumentSigned: contractsProcedure.input(z.object({ documentId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "document.sign", "Somente a administração pode confirmar assinatura documental.");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const document = (await db.select({ id: contractDocuments.id, contractId: contractDocuments.contractId, signed: contractDocuments.signed }).from(contractDocuments).where(eq(contractDocuments.id, input.documentId)).limit(1))[0];
+    const document = (await db.select({ id: contractDocuments.id, contractId: contractDocuments.contractId, signed: contractDocuments.signed, category: contractDocuments.category }).from(contractDocuments).where(eq(contractDocuments.id, input.documentId)).limit(1))[0];
     if (!document) throw new TRPCError({ code: "NOT_FOUND", message: "Documento contratual não encontrado." });
     if (document.signed) return { success: true, alreadySigned: true } as const;
+    if (isContractDocumentCategory(document.category)) await assertContractGenerationAllowed(db, document.contractId);
     const newlySigned = await db.transaction(async tx => {
       const updateResult = await tx.update(contractDocuments).set({ signed: true }).where(and(eq(contractDocuments.id, input.documentId), eq(contractDocuments.signed, false)));
       if (affectedRows(updateResult) === 0) return false;
