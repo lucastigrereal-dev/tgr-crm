@@ -533,6 +533,13 @@
       "when": 1792532946365,
       "tag": "0075_installment_settlement_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "5",
+      "when": 1792534201492,
+      "tag": "0076_commission_policy_versioning",
+      "breakpoints": true
     }
   ]
 }

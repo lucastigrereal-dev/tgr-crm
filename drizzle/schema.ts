@@ -181,6 +181,8 @@ export const commercialPolicyVersions = mysqlTable("commercial_policy_versions",
   effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
   retiredAt: timestamp("retiredAt"),
   approvedByUserId: int("approvedByUserId").references(() => users.id),
+  // CRM-F1: marca as linhas semeadas por migração (ex.: "migration-0076-legacy"); o rollback só apaga estas, nunca versões criadas por pessoas.
+  seededBy: varchar("seededBy", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [
   uniqueIndex("commercial_policy_version_unique").on(table.resortId, table.policyType, table.version),
@@ -594,6 +596,8 @@ export const salesCommissions = mysqlTable(
     commissionRole: mysqlEnum("commissionRole", ["liner", "closer", "ftb", "promoter"]).default("ftb").notNull(),
     // Versão da regra que calculou a comissão automática; o contrato fica na versão do 1º lançamento (liberar o V2 no meio não mistura políticas).
     ruleVersion: varchar("ruleVersion", { length: 8 }).default("v1").notNull(),
+    // CRM-F1: código da versão da política (commercial_policy_versions) que originou a comissão; "legacy" = commercial_project_settings. Nulável: linhas antigas.
+    policyVersion: varchar("policyVersion", { length: 80 }),
     baseAmount: decimal("baseAmount", { precision: 14, scale: 2 }).notNull(),
     rate: decimal("rate", { precision: 5, scale: 2 }).notNull(),
     amount: decimal("amount", { precision: 14, scale: 2 }).notNull(),

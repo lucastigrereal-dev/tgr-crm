@@ -13,6 +13,7 @@ import { evaluateSaleValidationGates, gatesNotAfter, isContractDocumentCategory,
 import { createHash } from "node:crypto";
 import { conferralsBeforeGeneration, saleOrderGateState } from "./saleOrderGate";
 import { isInventoryHoldAtFormalizationEnabled, settleFormalizationInventory } from "./formalizationInventory";
+import { isCommissionPolicyVersioningEnabled, resolveCommissionPolicy } from "./commissionPolicyVersion";
 import { isSegregationEnabled } from "./saleValidatorAccess";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { txAudit, txEvent, type Tx } from "./txOutbox";
@@ -149,8 +150,8 @@ async function loadCommissionContext(tx: Reader, contractId: number) {
   const opportunity = proposal?.opportunityId ? ((await tx.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
   const capture = opportunity?.id ? ((await tx.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).orderBy(desc(captureRecords.createdAt)).limit(1))[0] ?? null) : null;
   const context = { contract, proposal, opportunity, capture };
-  const policyRow = capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, capture.resortId)).limit(1))[0] : null;
-  return { context, policy: parseCompleteCommissionPolicy(policyRow?.commissionPolicy), resortId: capture?.resortId ?? null };
+  const resolved = await resolveCommissionPolicy(tx, capture?.resortId, new Date());
+  return { context, policy: resolved.policy, resortId: capture?.resortId ?? null };
 }
 
 /** ADR-010: registro rastreável (auditoria + evento interno) de parcela paga sem lançamento porque todos os papéis estão a 0%. Idempotente por parcela. */
@@ -180,10 +181,14 @@ export async function releaseCommissionsForValidatedContract(tx: Tx, input: { co
   if (!paid.length) return result;
   const loaded = await loadCommissionContext(tx, input.contractId);
   if (!loaded) return result;
-  const { context, policy, resortId } = loaded;
+  const { context, resortId } = loaded;
   if (!commissionApplies(context)) return result;
-  const reason = commissionBlockReason(context.contract.status, policy, await isSaleValidated(tx, input.contractId));
+  const validated = await isSaleValidated(tx, input.contractId);
+  const versioned = isCommissionPolicyVersioningEnabled();
   for (const installment of paid) {
+    // CRM-F1: com versionamento, cada parcela usa a política vigente na SUA data de pagamento (taxa, portão e policyVersion por parcela).
+    const policy = versioned ? (await resolveCommissionPolicy(tx, resortId, installment.paidAt ?? new Date())).policy : loaded.policy;
+    const reason = commissionBlockReason(context.contract.status, policy, validated);
     if (reason || !policy) {
       const why = reason ?? "incomplete_project_policy";
       await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: installment.id, action: "commission_blocked", summary: COMMISSION_BLOCKED_MESSAGE[why], idempotencyKey: `commission-blocked:${installment.id}:${why}:sale_validation` });
@@ -244,17 +249,23 @@ export async function reprocessSkippedCommissions(db: Db, input: { contractId?: 
       const paid = locked ? await tx.select({ id: installments.id, contractId: installments.contractId, amount: installments.amount, paidAt: installments.paidAt, paymentMethod: installments.paymentMethod }).from(installments).where(and(eq(installments.contractId, contractId), eq(installments.status, "paid"), inArray(installments.id, Array.from(installmentIds)))).orderBy(asc(installments.sequence)).for("update") : [];
       summary.candidates += installmentIds.size;
       const loaded = locked && paid.length ? await loadCommissionContext(tx, contractId) : null;
-      const gateOpen = loaded && commissionApplies(loaded.context) && loaded.policy && commissionBlockReason(locked!.status, loaded.policy, await isSaleValidated(tx, contractId)) === null;
-      if (!loaded || !gateOpen || !loaded.policy) { summary.ineligible += installmentIds.size; return; }
+      const versioned = isCommissionPolicyVersioningEnabled();
+      const validated = loaded ? await isSaleValidated(tx, contractId) : false;
+      // Sem versionamento a política é uma só (a atual): o portão decide antes do loop. Com versionamento, cada parcela tem a política da SUA data (portão e taxa dentro do loop).
+      const gateOpen = loaded && commissionApplies(loaded.context) && (versioned || (loaded.policy && commissionBlockReason(locked!.status, loaded.policy, validated) === null));
+      if (!loaded || !gateOpen) { summary.ineligible += installmentIds.size; return; }
       summary.ineligible += installmentIds.size - paid.length;
       for (const installment of paid) {
         const existing = await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installment.id)).limit(1);
         if (existing.length) { summary.alreadyCommissioned += 1; continue; }
-        if (zeroRateSkippedRoles(loaded.context.capture, loaded.policy)) { summary.stillZeroRate += 1; continue; }
-        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: loaded.policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
+        // CRM-F1: a vigência é a da data da parcela paga, não a de hoje: política efetiva primeiro, e só ela decide portão e taxa zero.
+        const effective = versioned ? (await resolveCommissionPolicy(tx, loaded.resortId, installment.paidAt ?? new Date())).policy : loaded.policy;
+        if (!effective || (versioned && commissionBlockReason(locked!.status, effective, validated) !== null)) { summary.ineligible += 1; continue; }
+        if (zeroRateSkippedRoles(loaded.context.capture, effective)) { summary.stillZeroRate += 1; continue; }
+        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: effective as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
         if (!facts.length) { summary.stillZeroRate += 1; continue; }
         await recordCreatedCommissions(tx, facts, input.actorUserId, "pelo reprocessamento da janela de 0%");
-        await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: installment.id, action: "commission_skipped_reprocessed", summary: `Parcela paga na janela de 0% reprocessada: ${facts.length} comissão(ões) criada(s) com as taxas atuais.`, idempotencyKey: `commission-skipped-reprocessed:${installment.id}` });
+        await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: installment.id, action: "commission_skipped_reprocessed", summary: `Parcela paga na janela de 0% reprocessada: ${facts.length} comissão(ões) criada(s) ${versioned ? "com a política vigente na data do pagamento da parcela" : "com as taxas atuais"}.`, idempotencyKey: `commission-skipped-reprocessed:${installment.id}` });
         summary.created += facts.length; summary.createdInstallmentIds.push(installment.id);
       }
     });

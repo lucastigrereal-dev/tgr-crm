@@ -7,6 +7,7 @@ import { commissionApplies, commissionBlockReason, insertInstallmentCommissions,
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
+import { resolveCommissionPolicy } from "./commissionPolicyVersion";
 import { recordInstallmentSettlementFacts } from "./installmentSettlementFacts";
 import { txAudit } from "./txOutbox";
 import { markIssueIntentNeedsReview } from "./gatewayIssueRecovery";
@@ -116,8 +117,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
             const settledCustomerId = context?.contract?.customerId ?? null;
             let blockedReason: CommissionBlockReason | null = null;
             const createdCommissionFacts: CreatedCommissionFact[] = [];
-            const policyRow = context?.capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, context.capture.resortId)).limit(1))[0] : null;
-            const policy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy);
+            const policy = (await resolveCommissionPolicy(tx, context?.capture?.resortId, paidAt)).policy;
             const saleValidated = await isSaleValidated(tx, context?.contract?.id);
             const commissionContext = context?.contract && context.proposal && context.capture ? { contract: context.contract, proposal: context.proposal, opportunity: context.opportunity, capture: context.capture } : null;
             if (commissionContext && commissionApplies(commissionContext)) {

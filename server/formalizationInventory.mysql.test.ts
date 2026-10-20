@@ -69,8 +69,8 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
 
     it("política stock_hold versionada define o prazo; valor inválido é recusado", async () => {
       const policies = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
-      await expect(policies.create({ resortId, policyType: "stock_hold", version: "bad", policy: { ttlHours: 0 }, effectiveAt: new Date("2026-02-01T00:00:00Z") } as never)).rejects.toThrow();
-      await policies.create({ resortId, policyType: "stock_hold", version: "e1-2h", policy: { ttlHours: 2 }, effectiveAt: new Date("2026-02-01T00:00:00Z") } as never);
+      await expect(policies.create({ resortId, policyType: "stock_hold", version: "bad", policy: { ttlHours: 0 } } as never)).rejects.toThrow();
+      await policies.create({ resortId, policyType: "stock_hold", version: "e1-2h", policy: { ttlHours: 2 }, effectiveAt: new Date(Date.now() - 30_000) } as never);
       const f = await newFraction(); await createContract("ttl", f);
       const hours = ((await holds(f))[0]!.expiresAt.getTime() - Date.now()) / 3_600_000;
       expect(hours).toBeGreaterThan(1.9); expect(hours).toBeLessThan(2.1);
