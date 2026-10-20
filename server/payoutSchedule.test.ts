@@ -22,3 +22,14 @@ describe("CRM-F2: payoutSchedule", () => {
     expect(commissionPolicySchema.safeParse(base).success).toBe(true);
   });
 });
+
+import { isEntryInstallment } from "./commissionAutomation";
+describe("CRM-F2: parcela da entrada", () => {
+  const schedule = [{ id: 1, sequence: 1, amount: "500.00" }, { id: 2, sequence: 2, amount: "500.00" }, { id: 3, sequence: 3, amount: "3000.00" }];
+  it("o acumulado até a parcela precisa caber na entrada", () => {
+    expect(isEntryInstallment(schedule, 1, 1000)).toBe(true);
+    expect(isEntryInstallment(schedule, 2, 1000)).toBe(true);
+    expect(isEntryInstallment(schedule, 3, 1000)).toBe(false);
+    expect(isEntryInstallment(schedule, 99, 1000)).toBe(false);
+  });
+});

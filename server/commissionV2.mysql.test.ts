@@ -178,6 +178,19 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
   });
+  it("F2 Codex P1: baixar o SALDO primeiro não libera nada; método inelegível não libera; a baixa elegível da ENTRADA libera (V2 liberado)", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("saldo", ["1000.00", "3000.00"]);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    const rows = () => db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" }); // saldo primeiro
+    expect(await rows()).toHaveLength(0);
+    const { contractId: other, installmentIds: otherIds } = await seedSale("inelegivel", ["1000.00", "3000.00"]);
+    await caller.markInstallmentPaid({ id: otherIds[0]!, paymentMethod: "cash" }); // entrada, mas método fora de eligiblePaymentMethods
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, other))).toHaveLength(0);
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" }); // entrada elegível
+    expect((await rows()).map(row => [row.commissionRole, row.amount]).sort()).toEqual([["closer", "100.00"], ["liner", "100.00"], ["promoter", "800.00"]]);
+  });
   it("F2: DORMENTE — com o V2 travado, full_upfront não gera nada (o travamento vence)", async () => {
     delete process.env.COMMISSION_V2_RELEASED;
     const upfront = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront" } });
