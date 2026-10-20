@@ -15,6 +15,7 @@ import { customersRouter } from "./routers/customers";
 import { dashboardRouter } from "./routers/dashboard";
 import { financeRouter } from "./routers/finance";
 import { addendaRouter } from "./routers/addenda";
+import { officialIndicatorsRouter } from "./routers/officialIndicators";
 import { financialProjectMapRouter } from "./routers/financialProjectMap";
 import { importsRouter } from "./routers/imports";
 import { operationsRouter } from "./routers/operations";
@@ -89,6 +90,7 @@ export const appRouter = router({
   operations: operationsRouter,
   finance: financeRouter,
   addenda: addendaRouter,
+  officialIndicators: officialIndicatorsRouter,
   financialProjectMap: financialProjectMapRouter,
   dashboard: dashboardRouter,
   imports: importsRouter,
