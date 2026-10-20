@@ -35,6 +35,10 @@ export function exportEventContract() {
         id: 4242, eventName: "contract.created.v2", aggregateType: "contract", aggregateId: "9001", actorUserId: null, occurredAt: AT,
         payload: JSON.stringify({ contractId: 9001, saleId: SYN_LINEAGE.saleId, customerId: 501, totalAmount: "28900.00", currency: "BRL", status: "active", usageModel: "points", source: "sales-command" }),
       }, SYN_PROJECT),
+      renegotiationAppliedSampleEnvelope: financialBridgeEnvelope({
+        id: 4244, eventName: "installment.renegotiation.applied", aggregateType: "installment_renegotiation", aggregateId: "31", actorUserId: 1, occurredAt: AT,
+        payload: JSON.stringify({ installmentId: 701, newInstallmentId: 702, contractId: 9001, proposalAmount: 900, cancelledBillingIds: [55], gatewayPaymentIds: ["pay_syn_1"], internalNote: "nunca sai" }),
+      }, SYN_PROJECT),
       saleValidatedSampleEnvelope: financialBridgeEnvelope({
         id: 4243, eventName: "sale.validated", aggregateType: "contract", aggregateId: "9001", actorUserId: 1, occurredAt: AT,
         payload: JSON.stringify({ ...SYN_SALE_VALIDATED, contractId: 9001, saleId: SYN_LINEAGE.saleId, validatedByUserId: 1, paymentConfirmedByUserId: 1, internalNote: "nunca sai" }),
