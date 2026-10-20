@@ -18,4 +18,5 @@ ALTER TABLE `contract_addenda` ADD CONSTRAINT `contract_addenda_contractId_contr
 ALTER TABLE `contract_addenda` ADD CONSTRAINT `contract_addenda_requestedByUserId_users_id_fk` FOREIGN KEY (`requestedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `contract_addenda` ADD CONSTRAINT `contract_addenda_signedDocumentId_contract_documents_id_fk` FOREIGN KEY (`signedDocumentId`) REFERENCES `contract_documents`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `contract_addenda` ADD CONSTRAINT `contract_addenda_decidedByUserId_users_id_fk` FOREIGN KEY (`decidedByUserId`) REFERENCES `users`(`id`) ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX `contract_addenda_signed_document_unique` ON `contract_addenda` (`signedDocumentId`);--> statement-breakpoint
 CREATE INDEX `contract_addenda_contract_idx` ON `contract_addenda` (`contractId`,`status`);

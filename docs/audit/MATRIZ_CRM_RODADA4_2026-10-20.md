@@ -10,3 +10,9 @@ Base: `main` e1de35c. Ramo `claude/crm-rodada4`. Regras mantidas: nada em banco 
 | CRM-A28 SHA na imagem | IMPLEMENTADO: `ARG GIT_SHA`, label OCI `org.opencontainers.image.revision`, `gitSha` em `/api/health` | n/a | `healthGitSha.test` 3 | build real da imagem (sem Docker aqui) |
 
 Ordem de mudança de contrato: nenhum evento nem contrato mudou nesta rodada (o mapa só escolhe o projeto do envelope existente), portanto não há re-pin da Suite.
+
+## Ordem de aplicação e operação
+
+- As migrações 0070 e 0071 entram no lote D (aplicação em banco real) DEPOIS de 0061 a 0069, com aceite e backup antes. Nada foi aplicado em banco real nesta rodada.
+- Depois de ligar `FINANCIAL_PROJECT_MAP_ENABLED`, NÃO trocar o projeto (externalKey) de um empreendimento que já tem contrato entregue ao Financial: os eventos antigos ficaram no projeto anterior e os novos iriam a outro. Para um empreendimento novo ou ainda sem contrato entregue, pode mapear livremente.
+- As 4 flags novas (`FINANCIAL_PROJECT_MAP_ENABLED`, `CONTRACT_ADDENDUM_ENABLED`, `CSRF_ORIGIN_CHECK_ENABLED`, `CSRF_ALLOWED_ORIGINS`) estão no environment do serviço app do compose do piloto, desligadas por padrão (teste estático `pilotComposeFlags.test.ts`).

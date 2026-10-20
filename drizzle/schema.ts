@@ -1034,7 +1034,7 @@ export const contractAddenda = mysqlTable("contract_addenda", {
   decidedAt: timestamp("decidedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, table => [index("contract_addenda_contract_idx").on(table.contractId, table.status)]);
+}, table => [index("contract_addenda_contract_idx").on(table.contractId, table.status), uniqueIndex("contract_addenda_signed_document_unique").on(table.signedDocumentId)]);
 
 // CRM-A01: mapa empreendimento -> projeto do Financial. Só vale com FINANCIAL_PROJECT_MAP_ENABLED=true; sem linha (ou inativa), o contrato usa o projeto padrão (env).
 export const financialProjectMap = mysqlTable("financial_project_map", {

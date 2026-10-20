@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, contracts, customers, domainEvents, financialProjectMap, resorts, users } from "../drizzle/schema";
+import { auditLogs, financialTransactions, contracts, customers, domainEvents, financialProjectMap, resorts, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // CRM-A01 em MySQL real: mapa empreendimento -> projeto do Financial. Dados sintéticos.
@@ -74,6 +74,25 @@ describe.skipIf(!integrationUrl)("A01: projeto do Financial por empreendimento",
     expect(projectOf.get(eo)).toBe(fallback.externalKey);
     const receipts = await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `financial-event:${ea}`));
     expect(receipts).toHaveLength(1);
+  });
+
+  it("eventos do Financial sem contractId no payload (criação e reconciliação de lançamento, repasse, comissão, parcela) vão ao MESMO projeto do contrato", async () => {
+    const [r] = await db.insert(resorts).values({ name: `Resort PM-ENT ${runId}` } as never).$returningId();
+    await db.insert(financialProjectMap).values({ resortId: r.id, externalKey: `syn-ent-${runId}`, name: "Projeto ENT", timezone: "America/Recife" });
+    const [ct] = await db.insert(contracts).values({ number: `PM-ENT-${runId}`, customerId, usageModel: "fixed_week", status: "draft", totalAmount: "1000.00", resortId: r.id } as never).$returningId();
+    const [tx1] = await db.insert(financialTransactions).values({ contractId: ct.id, type: "income", category: "SYN", description: "lançamento sintético", amount: "10.00" } as never).$returningId();
+    const [tx2] = await db.insert(financialTransactions).values({ contractId: null, type: "expense", category: "SYN", description: "despesa sem contrato", amount: "5.00" } as never).$returningId();
+    const ev = async (eventName: string, aggregateType: string, aggregateId: number, payload: object) =>
+      (await db.insert(domainEvents).values({ eventName, aggregateType, aggregateId: String(aggregateId), actorUserId: null, payload: JSON.stringify(payload), occurredAt: new Date() } as never).$returningId())[0]!.id;
+    const created = await ev("financial.entry.created", "financial_transaction", tx1.id, { type: "income", amount: "10.00" });
+    const reconciled = await ev("financial.entry.reconciled", "financial_transaction", tx1.id, { reference: "R1" });
+    const noContractCreated = await ev("financial.entry.created", "financial_transaction", tx2.id, { type: "expense" });
+    const noContractReconciled = await ev("financial.entry.reconciled", "financial_transaction", tx2.id, { reference: "R2" });
+    await drain([created, reconciled, noContractCreated, noContractReconciled], true);
+    expect(projectOf.get(created)).toBe(`syn-ent-${runId}`);
+    expect(projectOf.get(reconciled)).toBe(projectOf.get(created));
+    expect(projectOf.get(noContractCreated)).toBe(fallback.externalKey);
+    expect(projectOf.get(noContractReconciled)).toBe(projectOf.get(noContractCreated));
   });
 
   it("com a flag desligada (padrão), o mapa é ignorado e tudo vai ao projeto padrão", async () => {
