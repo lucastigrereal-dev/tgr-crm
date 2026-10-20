@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { installments } from "../drizzle/schema";
 import { txAudit, type Tx } from "./txOutbox";
@@ -36,34 +36,21 @@ export function requiredEvidenceOf(policyJson: string | Record<string, unknown> 
 export const isInstallmentEvidenceInEventEnabled = () => process.env.INSTALLMENT_EVIDENCE_IN_EVENT === "true";
 
 /**
- * Conciliação de um lançamento com o extrato: promove a `bank_reconciled` as parcelas pagas do contrato cujo valor recebido soma EXATAMENTE o lançamento
- * (ordem de pagamento). Soma que não fecha = ambíguo: nada é promovido e fica auditoria.
+ * Conciliação de um lançamento com o extrato: promove a `bank_reconciled` SOMENTE a parcela explicitamente vinculada ao lançamento
+ * (`financial_transactions.installmentId`, gravado pela baixa manual e pelo webhook) e só para lançamento de ENTRADA (income).
+ * Nunca infere por contrato+valor: sem vínculo (ex.: entrada informada pelo Sales) ou com despesa/estorno, não promove e deixa auditoria.
  */
-export function pickInstallmentsForEntry(candidates: Array<{ id: number; paidAmount: string }>, entryAmount: string) {
-  const target = Math.round(Number(entryAmount) * 100);
-  let sum = 0;
-  const picked: number[] = [];
-  for (const candidate of candidates) {
-    const cents = Math.round(Number(candidate.paidAmount) * 100);
-    if (cents <= 0) continue;
-    if (sum + cents > target) continue;
-    sum += cents; picked.push(candidate.id);
-    if (sum === target) return picked;
-  }
-  return [];
-}
-
-export async function promoteInstallmentsOnReconcile(tx: Tx, input: { entryId: number; contractId: number | null; amount: string; actorUserId: number | null }) {
-  if (!input.contractId) return { promoted: [] as number[], ambiguous: false };
-  const candidates = await tx.select({ id: installments.id, paidAmount: installments.paidAmount }).from(installments)
-    .where(and(eq(installments.contractId, input.contractId), gt(installments.paidAmount, "0.00"), ne(installments.settlementEvidence, "bank_reconciled")))
-    .orderBy(asc(installments.paidAt), asc(installments.sequence)).for("update");
-  const picked = pickInstallmentsForEntry(candidates, input.amount);
-  if (!picked.length) {
-    if (candidates.length) await txAudit(tx, { actorUserId: input.actorUserId, entityType: "financial_transaction", entityId: input.entryId, action: "reconcile_installments_ambiguous", summary: "Conciliação não promoveu parcelas: a soma recebida não fecha com o lançamento." });
-    return { promoted: [], ambiguous: candidates.length > 0 };
-  }
-  for (const id of picked) await tx.update(installments).set({ settlementEvidence: "bank_reconciled" }).where(eq(installments.id, id));
-  await txAudit(tx, { actorUserId: input.actorUserId, entityType: "financial_transaction", entityId: input.entryId, action: "reconcile_installments_promoted", summary: `Parcelas ${picked.join(", ")} promovidas a conciliadas com o extrato.` });
-  return { promoted: picked, ambiguous: false };
+export async function promoteInstallmentsOnReconcile(tx: Tx, input: { entryId: number; entryType: "income" | "expense"; installmentId: number | null; actorUserId: number | null }) {
+  const skip = async (reason: string) => {
+    await txAudit(tx, { actorUserId: input.actorUserId, entityType: "financial_transaction", entityId: input.entryId, action: "reconcile_installments_skipped", summary: `Conciliação não promoveu parcela: ${reason}.` });
+    return { promoted: [] as number[] };
+  };
+  if (input.entryType !== "income") return skip("lançamento que não é entrada (despesa/estorno nunca promove)");
+  if (!input.installmentId) return skip("sem vínculo explícito lançamento-parcela");
+  const row = (await tx.select({ id: installments.id, paidAmount: installments.paidAmount, evidence: installments.settlementEvidence }).from(installments).where(eq(installments.id, input.installmentId)).limit(1).for("update"))[0];
+  if (!row || Number(row.paidAmount) <= 0) return skip("a parcela vinculada não tem valor pago");
+  if (row.evidence === "bank_reconciled") return { promoted: [] as number[] };
+  await tx.update(installments).set({ settlementEvidence: "bank_reconciled" }).where(eq(installments.id, row.id));
+  await txAudit(tx, { actorUserId: input.actorUserId, entityType: "financial_transaction", entityId: input.entryId, action: "reconcile_installments_promoted", summary: `Parcela ${row.id} promovida a conciliada com o extrato.` });
+  return { promoted: [row.id] };
 }

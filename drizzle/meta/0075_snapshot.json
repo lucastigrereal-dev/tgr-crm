@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "1099afe9-04a9-4e0a-8bfd-d9a4d8e0abca",
+  "id": "826b413a-a14a-4cb8-940b-8bd404b84a94",
   "prevId": "9bcab3ec-26ae-4903-93e9-b832bf9f60c6",
   "tables": {
     "audit_logs": {
@@ -5440,6 +5440,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "installmentId": {
+          "name": "installmentId",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "createdByUserId": {
           "name": "createdByUserId",
           "type": "int",
@@ -5457,6 +5464,13 @@
         }
       },
       "indexes": {
+        "financial_transactions_installment_idx": {
+          "name": "financial_transactions_installment_idx",
+          "columns": [
+            "installmentId"
+          ],
+          "isUnique": false
+        },
         "financial_transactions_status_idx": {
           "name": "financial_transactions_status_idx",
           "columns": [

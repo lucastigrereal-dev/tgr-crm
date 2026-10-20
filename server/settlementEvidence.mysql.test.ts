@@ -61,16 +61,58 @@ describe.skipIf(!integrationUrl)("H1: evidência do recebimento da parcela", () 
     expect(await evidence(ids[0]!)).toBe("gateway_confirmed");
   });
 
-  it("conciliação promove a bank_reconciled só quando a soma recebida fecha; soma que não fecha não promove e deixa auditoria", async () => {
-    const ok = await seed(["50.00", "100.00"], [true, true]);
-    const entry = (await db.insert(financialTransactions).values({ contractId: ok.contractId, type: "income", category: "Entrada Sales Command", description: "SYN entrada", amount: "150.00", dueDate: new Date("2026-10-04T12:00:00Z"), paidAt: new Date(), status: "paid" } as never).$returningId())[0]!.id;
-    await (await finance()).reconcileEntry({ id: entry, reconciliationReference: `EXT-H1-${runId}-1` });
-    expect(await Promise.all(ok.ids.map(evidence))).toEqual(["bank_reconciled", "bank_reconciled"]);
+  const entryFor = async (contractId: number, installmentId: number | null, amount: string, type: "income" | "expense" = "income") =>
+    (await db.insert(financialTransactions).values({ contractId, type, category: type === "income" ? "Parcela de contrato" : "Estorno", description: "SYN lançamento", amount, dueDate: new Date("2026-10-04T12:00:00Z"), paidAt: new Date(), status: "paid", installmentId } as never).$returningId())[0]!.id;
+  const reconcile = async (entryId: number, ref: string) => (await finance()).reconcileEntry({ id: entryId, reconciliationReference: `EXT-H1-${runId}-${ref}` });
+  const auditCount = async (entryId: number, action: string) => (await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "financial_transaction"), eq(auditLogs.entityId, String(entryId)), eq(auditLogs.action, action)))).length;
 
-    const ambiguous = await seed(["50.00", "100.00"], [true, true]);
-    const entry2 = (await db.insert(financialTransactions).values({ contractId: ambiguous.contractId, type: "income", category: "Entrada", description: "SYN", amount: "70.00", dueDate: new Date("2026-10-04T12:00:00Z"), paidAt: new Date(), status: "paid" } as never).$returningId())[0]!.id;
-    await (await finance()).reconcileEntry({ id: entry2, reconciliationReference: `EXT-H1-${runId}-2` });
-    expect(await Promise.all(ambiguous.ids.map(evidence))).toEqual(["receipt_claimed", "receipt_claimed"]);
-    expect(await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "financial_transaction"), eq(auditLogs.entityId, String(entry2)), eq(auditLogs.action, "reconcile_installments_ambiguous")))).toHaveLength(1);
+  it("P1: duas parcelas iguais — só a explicitamente vinculada ao lançamento é promovida (nunca infere por valor)", async () => {
+    const { contractId, ids } = await seed(["100.00", "100.00"], [true, true]);
+    await reconcile(await entryFor(contractId, ids[1]!, "100.00"), "1");
+    expect(await Promise.all(ids.map(evidence))).toEqual(["receipt_claimed", "bank_reconciled"]);
+  });
+
+  it("P1: despesa/estorno nunca promove; entrada sem vínculo explícito (ex.: Sales) não promove e deixa auditoria", async () => {
+    const { contractId, ids } = await seed(["100.00"], [true]);
+    const expense = await entryFor(contractId, ids[0]!, "100.00", "expense");
+    await reconcile(expense, "2");
+    expect(await evidence(ids[0]!)).toBe("receipt_claimed");
+    expect(await auditCount(expense, "reconcile_installments_skipped")).toBe(1);
+    const unlinked = await entryFor(contractId, null, "100.00");
+    await reconcile(unlinked, "3");
+    expect(await evidence(ids[0]!)).toBe("receipt_claimed");
+    expect(await auditCount(unlinked, "reconcile_installments_skipped")).toBe(1);
+  });
+
+  it("baixa manual vincula o lançamento à parcela e a conciliação promove a evidência", async () => {
+    const { contractId, ids } = await seed(["100.00"]);
+    await (await finance()).markInstallmentPaid({ id: ids[0]!, paymentMethod: "pix" });
+    const [entry] = await db.select().from(financialTransactions).where(eq(financialTransactions.contractId, contractId));
+    expect(entry!.installmentId).toBe(ids[0]);
+    await reconcile(entry!.id, "4");
+    expect(await evidence(ids[0]!)).toBe("bank_reconciled");
+  });
+
+  it("P2: webhook tardio não rebaixa bank_reconciled (evidência só sobe)", async () => {
+    const { ids } = await seed(["100.00"]);
+    await db.update(installments).set({ settlementEvidence: "bank_reconciled" }).where(eq(installments.id, ids[0]!));
+    const paymentId = `pay-h1b-${runId}`;
+    await db.insert(billingRecords).values({ installmentId: ids[0]!, type: "pix", status: "generated", gatewayProvider: "asaas", gatewayPaymentId: paymentId, amount: "100.00", dueDate: new Date("2026-10-10T12:00:00Z") });
+    const { processAsaasWebhook } = await import("./paymentGatewayWebhook");
+    await processAsaasWebhook("token-sintetico-h1", { id: `evt-h1b-${runId}`, event: "PAYMENT_CONFIRMED", payment: { id: paymentId, status: "CONFIRMED", billingType: "PIX" } });
+    expect(await evidence(ids[0]!)).toBe("bank_reconciled");
+  });
+
+  it("P1: a promoção chega ao consumidor — financial.entry.reconciled leva installmentIds e evidência só com a flag", async () => {
+    const { toIntegrationEvent } = await import("../shared/integrationContract");
+    const { contractId, ids } = await seed(["100.00"], [true]);
+    const entry = await entryFor(contractId, ids[0]!, "100.00");
+    await reconcile(entry, "5");
+    const row = (await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "financial.entry.reconciled" as never), eq(domainEvents.aggregateId, String(entry)))))[0]!;
+    const wire = () => toIntegrationEvent({ id: row.id, eventName: row.eventName as never, aggregateType: row.aggregateType, aggregateId: row.aggregateId, actorUserId: row.actorUserId, payload: row.payload, occurredAt: row.occurredAt }).payload;
+    delete process.env.INSTALLMENT_EVIDENCE_IN_EVENT;
+    expect(wire()).not.toHaveProperty("installmentIds");
+    process.env.INSTALLMENT_EVIDENCE_IN_EVENT = "true";
+    try { expect(wire()).toMatchObject({ installmentIds: [ids[0]], settlementEvidence: "bank_reconciled" }); } finally { delete process.env.INSTALLMENT_EVIDENCE_IN_EVENT; }
   });
 });

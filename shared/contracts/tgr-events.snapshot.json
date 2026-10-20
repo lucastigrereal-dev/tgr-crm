@@ -73,8 +73,7 @@
         "amount",
         "source",
         "gatewayPaymentId",
-        "commissionBlocked",
-        "settlementEvidence"
+        "commissionBlocked"
       ],
       "commission.created": [
         "sellerId",
