@@ -152,6 +152,8 @@ export const inventoryRouter = router({
         const active = (await tx.select().from(commercialFractionHolds)
           .where(and(eq(commercialFractionHolds.fractionId, fraction.id), eq(commercialFractionHolds.status, "active")))
           .orderBy(desc(commercialFractionHolds.createdAt)).limit(1).for("update"))[0];
+        // CRM-E1: hold de formalização pertence ao contrato; negociação não o reutiliza nem o sobrescreve (vencido => o sweep marca a perda do contrato).
+        if (active?.purpose === "formalization") throw new TRPCError({ code: "CONFLICT", message: isExpired(active.expiresAt, now) ? "A reserva de formalização venceu; execute o sweep de holds antes de reservar de novo." : "A cota está reservada para a formalização de um contrato." });
         if (active && !isExpired(active.expiresAt, now)) {
           if (active.proposalId === (input.proposalId ?? null) && active.heldByUserId === ctx.user.id) {
             return { holdId: active.id, expiresAt: active.expiresAt, reused: true };
@@ -203,6 +205,7 @@ export const inventoryRouter = router({
       if (!fraction) throw new TRPCError({ code: "NOT_FOUND", message: "Cota do hold não encontrada." });
       const hold = (await tx.select().from(commercialFractionHolds).where(eq(commercialFractionHolds.id, input.holdId)).limit(1).for("update"))[0];
       if (!hold) throw new TRPCError({ code: "NOT_FOUND", message: "Hold não encontrado." });
+      if (hold.purpose === "formalization" && hold.status === "active") throw new TRPCError({ code: "CONFLICT", message: "Reserva de formalização não se libera à mão: ela é consumida pelas conferências, vence pelo prazo ou cai com o distrato do contrato." });
       if (ctx.user.role !== "admin" && hold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "Somente o dono do hold ou a administração pode liberar esta cota." });
       if (hold.status !== "active") return { fractionId: hold.fractionId, alreadyClosed: true };
       await tx.update(commercialFractionHolds).set({ status: "released", activeKey: null, releasedAt: now, releaseReason: input.reason }).where(and(eq(commercialFractionHolds.id, hold.id), eq(commercialFractionHolds.status, "active")));

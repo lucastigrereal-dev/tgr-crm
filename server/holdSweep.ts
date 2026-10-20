@@ -1,10 +1,12 @@
 import { and, eq, inArray, lte } from "drizzle-orm";
 import { commercialFractionHistory, commercialFractionHolds, commercialFractions } from "../drizzle/schema";
 import type { getDb } from "./db";
+import { withDeadlockRetry } from "./mysqlErrors";
+import { markContractInventoryLost } from "./formalizationInventory";
 import { txAudit, txEvent } from "./txOutbox";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
-export type HoldSweepOutcome = { holds: number; fractions: number[] };
+export type HoldSweepOutcome = { holds: number; fractions: number[]; /** CRM-E1: contratos cuja reserva de formalização venceu (marcados como reserva perdida logo após o commit). */ lostContractIds?: number[] };
 
 /**
  * Libera holds vencidos (CRM-PK-11). Serve ao botão do admin e ao job automático.
@@ -14,7 +16,8 @@ export type HoldSweepOutcome = { holds: number; fractions: number[] };
  */
 export async function sweepExpiredHolds(db: Db, options: { actorUserId: number | null; now?: Date; /** Restringe a limpeza a estas cotas (usado por testes que dividem o banco com outros). */ fractionIds?: number[] }): Promise<HoldSweepOutcome> {
   const now = options.now ?? new Date();
-  return db.transaction(async tx => {
+  // Deadlock do InnoDB (índice secundário da cota x conferência final) desfaz a transação inteira; repetir é seguro (relê tudo).
+  const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
     const candidates = await tx.select({ id: commercialFractionHolds.id, fractionId: commercialFractionHolds.fractionId })
       .from(commercialFractionHolds)
       .where(and(eq(commercialFractionHolds.status, "active"), lte(commercialFractionHolds.expiresAt, now), ...(options.fractionIds ? [inArray(commercialFractionHolds.fractionId, options.fractionIds)] : [])));
@@ -30,7 +33,7 @@ export async function sweepExpiredHolds(db: Db, options: { actorUserId: number |
     const expiredFractionIds = new Set(expired.map(item => item.fractionId));
     const released = lockedFractions.filter(item => item.status === "held" && expiredFractionIds.has(item.id)).map(item => item.id);
     if (released.length) {
-      await tx.update(commercialFractions).set({ status: "available", currentProposalId: null, heldUntil: null }).where(and(inArray(commercialFractions.id, released), eq(commercialFractions.status, "held")));
+      await tx.update(commercialFractions).set({ status: "available", currentProposalId: null, currentContractId: null, heldUntil: null }).where(and(inArray(commercialFractions.id, released), eq(commercialFractions.status, "held")));
       await tx.insert(commercialFractionHistory).values(released.map(fractionId => ({
         fractionId, fromStatus: "held" as const, toStatus: "available" as const,
         proposalId: expired.find(item => item.fractionId === fractionId)?.proposalId ?? null,
@@ -42,6 +45,10 @@ export async function sweepExpiredHolds(db: Db, options: { actorUserId: number |
       }
     }
     await txAudit(tx, { actorUserId: options.actorUserId, entityType: "commercial_inventory", entityId: "expired_holds", action: "swept", summary: `${expired.length} holds expirados; ${released.length} cotas liberadas.` });
-    return { holds: expired.length, fractions: released };
-  });
+    const lostContractIds = Array.from(new Set(expired.filter(item => item.purpose === "formalization" && item.contractId && released.includes(item.fractionId)).map(item => item.contractId!)));
+    return { holds: expired.length, fractions: released, lostContractIds };
+  }));
+  // Fora da transação das cotas (ordem de trava contrato -> cota -> hold do settle): cada contrato é marcado e a tarefa criada à parte.
+  for (const contractId of outcome.lostContractIds ?? []) await db.transaction(tx => markContractInventoryLost(tx, contractId, options.actorUserId, now));
+  return outcome;
 }

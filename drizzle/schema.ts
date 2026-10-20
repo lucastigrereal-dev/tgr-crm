@@ -175,7 +175,7 @@ export const commercialProjectSettings = mysqlTable("commercial_project_settings
 export const commercialPolicyVersions = mysqlTable("commercial_policy_versions", {
   id: int("id").autoincrement().primaryKey(),
   resortId: int("resortId").notNull().references(() => resorts.id),
-  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality", "monetary_adjustment", "sale_terms"]).notNull(),
+  policyType: mysqlEnum("policyType", ["commission", "cancellation", "revenue_quality", "monetary_adjustment", "sale_terms", "stock_hold"]).notNull(),
   version: varchar("version", { length: 80 }).notNull(),
   policyJson: text("policyJson").notNull(),
   effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
@@ -643,6 +643,8 @@ export const contracts = mysqlTable(
     signedAt: timestamp("signedAt"),
     activatedAt: timestamp("activatedAt"),
     cancelledAt: timestamp("cancelledAt"),
+    // CRM-E1: reserva de formalização venceu antes da conferência; a cota voltou ao estoque e o contrato não pode ser validado (refazer a venda).
+    inventoryLostAt: timestamp("inventoryLostAt"),
     cancellationReason: text("cancellationReason"),
     notes: text("notes"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -773,7 +775,11 @@ export const commercialFractionHolds = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     fractionId: int("fractionId").notNull(),
     proposalId: int("proposalId"),
-    heldByUserId: int("heldByUserId").notNull(),
+    // CRM-E1: nulo quando o hold nasce da ingestão do Sales (sem usuário do CRM).
+    heldByUserId: int("heldByUserId"),
+    // CRM-E1: 'negotiation' (reserva manual) ou 'formalization' (cota presa ao contrato até comprovante+documentação conferidos).
+    purpose: mysqlEnum("purpose", ["negotiation", "formalization"]).default("negotiation").notNull(),
+    contractId: int("contractId"),
     activeKey: varchar("activeKey", { length: 128 }),
     status: mysqlEnum("status", ["active", "released", "expired", "consumed"]).default("active").notNull(),
     expiresAt: timestamp("expiresAt").notNull(),
