@@ -14,6 +14,8 @@ function chain<T>(value: T) {
   return promise;
 }
 
+const validCommission = { linerRate: 0, closerRate: 0, ftbRate: 0, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" };
+
 describe("commercial policies router", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -56,7 +58,7 @@ describe("commercial policies router", () => {
   it("rejeita versão duplicada antes do insert", async () => {
     const fixture = createDb([[{ id: 2 }], [{ id: 15 }]]);
     dbMocks.getDb.mockResolvedValue(fixture.db);
-    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: {} })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: validCommission })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(fixture.values).not.toHaveBeenCalled();
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
@@ -64,7 +66,7 @@ describe("commercial policies router", () => {
   it("normaliza corrida da unique key da versão como conflito", async () => {
     const fixture = createDb([[{ id: 2 }], []], { code: "ER_DUP_ENTRY", errno: 1062 });
     dbMocks.getDb.mockResolvedValue(fixture.db);
-    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: {} })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: validCommission })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
   });
 

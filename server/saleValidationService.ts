@@ -6,13 +6,14 @@ import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { captureRecords, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
 import { canTransitionContractStatus } from "../shared/contractLifecycle";
 import { getDb, recordAudit } from "./db";
-import { affectedRows } from "./mysqlErrors";
+import { affectedRows, withDeadlockRetry } from "./mysqlErrors";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { evaluateSaleValidationGates, gatesNotAfter, isContractDocumentCategory, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
 import { createHash } from "node:crypto";
 import { conferralsBeforeGeneration, saleOrderGateState } from "./saleOrderGate";
 import { isInventoryHoldAtFormalizationEnabled, settleFormalizationInventory } from "./formalizationInventory";
+import { isCommissionPolicyVersioningEnabled, resolveCommissionPolicy } from "./commissionPolicyVersion";
 import { isSegregationEnabled } from "./saleValidatorAccess";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { txAudit, txEvent, type Tx } from "./txOutbox";
@@ -108,7 +109,7 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
   const saleId = facts.contract.externalSaleId ?? null;
   const confirmedAt = new Date();
   const correlationId = correlationIdForContract(input.contractId);
-  const outcome = await db.transaction(async tx => {
+  const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
     // Mesma ordem de trava da validação final (contrato -> sale_validations): um distrato/cancelamento concorrente não passa.
     const lockedContract = (await tx.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
     if (!lockedContract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
@@ -130,7 +131,7 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
     await txEvent(tx, { eventName: "sale.payment.confirmed", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { contractId: input.contractId, saleId, confirmedAt: confirmedAt.toISOString(), confirmedByUserId: actorUserId }, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
     const settle = await settleFormalizationInventory(tx, input.contractId, actorUserId, confirmedAt);
     return { alreadyConfirmed: false as const, confirmedAt, settle };
-  });
+  }));
   throwIfInventoryLost(outcome);
   return { success: true as const, alreadyConfirmed: outcome.alreadyConfirmed, confirmedAt: outcome.confirmedAt };
 }
@@ -142,8 +143,8 @@ async function loadCommissionContext(tx: Reader, contractId: number) {
   const opportunity = proposal?.opportunityId ? ((await tx.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
   const capture = opportunity?.id ? ((await tx.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).orderBy(desc(captureRecords.createdAt)).limit(1))[0] ?? null) : null;
   const context = { contract, proposal, opportunity, capture };
-  const policyRow = capture?.resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, capture.resortId)).limit(1))[0] : null;
-  return { context, policy: parseCompleteCommissionPolicy(policyRow?.commissionPolicy), resortId: capture?.resortId ?? null };
+  const resolved = await resolveCommissionPolicy(tx, capture?.resortId, new Date());
+  return { context, policy: resolved.policy, resortId: capture?.resortId ?? null };
 }
 
 /** ADR-010: registro rastreável (auditoria + evento interno) de parcela paga sem lançamento porque todos os papéis estão a 0%. Idempotente por parcela. */
@@ -244,7 +245,10 @@ export async function reprocessSkippedCommissions(db: Db, input: { contractId?: 
         const existing = await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installment.id)).limit(1);
         if (existing.length) { summary.alreadyCommissioned += 1; continue; }
         if (zeroRateSkippedRoles(loaded.context.capture, loaded.policy)) { summary.stillZeroRate += 1; continue; }
-        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: loaded.policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
+        // CRM-F1: a vigência é a da data da parcela paga, não a de hoje (reprocesso de parcela antiga usa a política da época).
+        const effective = isCommissionPolicyVersioningEnabled() ? (await resolveCommissionPolicy(tx, loaded.resortId, installment.paidAt ?? new Date())).policy : loaded.policy;
+        if (!effective) { summary.ineligible += 1; continue; }
+        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: effective as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
         if (!facts.length) { summary.stillZeroRate += 1; continue; }
         await recordCreatedCommissions(tx, facts, input.actorUserId, "pelo reprocessamento da janela de 0%");
         await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: installment.id, action: "commission_skipped_reprocessed", summary: `Parcela paga na janela de 0% reprocessada: ${facts.length} comissão(ões) criada(s) com as taxas atuais.`, idempotencyKey: `commission-skipped-reprocessed:${installment.id}` });
@@ -264,7 +268,7 @@ export async function confirmDocuments(actorUserId: number, input: { contractId:
   const stateError = (status: string) => saleValidationError("CONFLICT", "SALE_PAYMENT_CONTRACT_STATE", `Documentação só pode ser conferida com contrato em rascunho ou aguardando assinatura (atual: ${status}).`);
   if (!PRE_VALIDATION_STATUSES.includes(facts.contract.status)) throw stateError(facts.contract.status);
   const confirmedAt = new Date();
-  const outcome = await db.transaction(async tx => {
+  const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
     const lockedContract = (await tx.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
     if (!lockedContract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
     await tx.insert(saleValidations).values({ contractId: input.contractId }).onDuplicateKeyUpdate({ set: { contractId: sql`contractId` } });
@@ -277,7 +281,7 @@ export async function confirmDocuments(actorUserId: number, input: { contractId:
     await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "documents_conferred", summary: `Documentação do contrato ${input.contractId} conferida pelo administrativo autorizado: ${input.note}`, idempotencyKey: `sale-documents-confer:${input.contractId}` });
     const settle = await settleFormalizationInventory(tx, input.contractId, actorUserId, confirmedAt);
     return { alreadyConfirmed: false as const, confirmedAt, settle };
-  });
+  }));
   throwIfInventoryLost(outcome);
   return { success: true as const, alreadyConfirmed: outcome.alreadyConfirmed, confirmedAt: outcome.confirmedAt };
 }

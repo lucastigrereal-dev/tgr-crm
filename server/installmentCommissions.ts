@@ -1,6 +1,7 @@
 // Comissão automática de parcela paga: UM só construtor/portão para baixa manual, webhook do gateway e validação final da
 // venda (ADR-007). Parcela paga ANTES da validação fica bloqueada; ao validar, as parcelas já pagas são reavaliadas aqui.
 import { and, asc, eq, ne, isNotNull, sql } from "drizzle-orm";
+import { commissionPolicyVersionOf } from "./commissionPolicyVersion";
 import { txAudit, txEvent } from "./txOutbox";
 import { commercialFractions, salesCommissions } from "../drizzle/schema";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
@@ -129,7 +130,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
     rates: { liner: policy.linerRate, closer: policy.closerRate, ftb: policy.ftbRate }, alreadyReleased, calendar,
   })).filter(row => !existingRoles.has(row.commissionRole));
   if (!rows.length) return [];
-  const values = rows.map(row => ({ ...row, ruleVersion: useV2 ? "v2" : "v1", contractId: installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
+  const values = rows.map(row => ({ ...row, ruleVersion: useV2 ? "v2" : "v1", policyVersion: commissionPolicyVersionOf(policy), contractId: installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
   const inserted = await tx.insert(salesCommissions).values(values).$returningId();
   const facts: CreatedCommissionFact[] = [];
   inserted.forEach((row, index) => { const value = values[index]; if (value && row?.id) facts.push({ id: row.id, sellerId: value.sellerId, campaignId: value.campaignId, opportunityId: value.opportunityId, contractId: value.contractId, sourceInstallmentId: value.sourceInstallmentId, commissionRole: value.commissionRole, amount: Number(value.amount), rate: Number(value.rate) });  });

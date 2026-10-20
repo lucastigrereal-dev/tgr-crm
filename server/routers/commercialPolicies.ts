@@ -6,6 +6,7 @@ import { getDb, recordAudit } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { monetaryAdjustmentPolicySchema } from "../monetaryAdjustment";
+import { parseCompleteCommissionPolicy } from "../projectPolicy";
 import { stockHoldPolicySchema } from "../formalizationInventory";
 import { saleTermsPolicySchema } from "../saleTermsPolicy";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
@@ -27,6 +28,10 @@ export const commercialPoliciesRouter = router({
     if (input.policyType === "monetary_adjustment") {
       const parsed = monetaryAdjustmentPolicySchema.safeParse(input.policy);
       if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: "Política monetária inválida. Informe indexCode, periodicityMonths, spreadMonthlyPercent e applyTo." });
+    }
+    if (input.policyType === "commission") {
+      // Mesma validação do motor: política incompleta/ilegível não vira versão (o motor travado segue sem ler V2 enquanto COMMISSION_V2_RELEASED não for liberada).
+      if (!parseCompleteCommissionPolicy(JSON.stringify(input.policy))) throw new TRPCError({ code: "BAD_REQUEST", message: "Política de comissão inválida ou incompleta." });
     }
     if (input.policyType === "stock_hold") {
       const parsed = stockHoldPolicySchema.safeParse(input.policy);

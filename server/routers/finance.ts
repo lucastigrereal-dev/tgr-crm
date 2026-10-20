@@ -9,6 +9,7 @@ import { assertCapability, financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
 import { buildCampaignDre } from "../financeDre";
 import { isSaleValidated, recordZeroRateSkip } from "../saleValidationService";
+import { resolveCommissionPolicy } from "../commissionPolicyVersion";
 import { promoteInstallmentsOnReconcile } from "../settlementEvidence";
 import { recordInstallmentSettlementFacts } from "../installmentSettlementFacts";
 import { COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "../installmentCommissions";
@@ -434,7 +435,7 @@ export const financeRouter = router({
       const capture = opportunity?.id ? ((await db.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).orderBy(desc(captureRecords.createdAt)).limit(1))[0] ?? null) : null;
       const commissionContext = contract ? { contract, proposal, opportunity, capture } : null;
       // ADR-007: a validação da venda é lida DENTRO da transação, depois da trava do contrato (mesma ordem de trava da validação final).
-      const policyRow = commissionContext?.capture?.resortId ? (await db.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, commissionContext.capture.resortId)).limit(1))[0] : null; const commissionPolicy = parseCompleteCommissionPolicy(policyRow?.commissionPolicy); const commissionNeedsPolicy = commissionApplies(commissionContext);
+      const commissionPolicy = (await resolveCommissionPolicy(db, commissionContext?.capture?.resortId, new Date())).policy; const commissionNeedsPolicy = commissionApplies(commissionContext);
       let blockedReason: CommissionBlockReason | null = null;
       const createdCommissionFacts: CreatedCommissionFact[] = [];
       const settled = await db.transaction(async tx => {
