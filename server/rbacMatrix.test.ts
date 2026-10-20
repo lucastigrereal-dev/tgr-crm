@@ -20,16 +20,17 @@ function callerFor(role: Role) {
 type Caller = ReturnType<typeof callerFor>;
 
 // Gabarito da política (fixado aqui de propósito: mudar a matriz sem mudar este teste deve quebrar).
-const ACTIONS: Array<{ name: string; capability: Capability; allowed: Role[]; call: (c: Caller) => Promise<unknown> }> = [
+const ACTIONS: Array<{ name: string; capability: Capability; allowed: Role[]; grantOnly?: Role[]; call: (c: Caller) => Promise<unknown> }> = [
   // ADR-002 + correção canônica (Jira KAN-31 #10176): finance/service/seller SOLICITAM; só admin (papel superior) decide e executa.
   { name: "contracts.requestCancellation", capability: "contract.cancel.request", allowed: ["admin", "seller", "finance", "service"], call: c => c.contracts.requestCancellation({ contractId: 1, reason: "SYN motivo" }) },
   { name: "contracts.decideCancellation", capability: "contract.cancel.decide", allowed: ["admin"], call: c => c.contracts.decideCancellation({ requestId: 1, decision: "approved" }) },
   { name: "contracts.executeCancellation", capability: "contract.cancel.execute", allowed: ["admin"], call: c => c.contracts.executeCancellation({ requestId: 1 }) },
   // PRD Apêndice B #11: ativação do contrato é registro da administração (seller passava antes).
   { name: "contracts.updateStatus(active)", capability: "contract.activate", allowed: ["admin"], call: c => c.contracts.updateStatus({ id: 1, status: "active" }) },
-  // ADR-007 (V6): "gerente" do CRM = admin (CRM_MANAGER_ROLE pendente). Closer (seller), finance e service NÃO confirmam pagamento nem validam venda.
-  { name: "saleValidation.confirmPayment", capability: "sale.payment.confirm", allowed: ["admin"], call: c => c.saleValidation.confirmPayment({ contractId: 1, note: "SYN conferido" }) },
-  { name: "saleValidation.validateSale", capability: "sale.validate", allowed: ["admin"], call: c => c.saleValidation.validateSale({ contractId: 1 }) },
+  // CRM-C1 (decisão do titular 20/10): validação oficial é do ADMINISTRATIVO autorizado, sem gate de gerente. Admin sempre; finance só com concessão vigente
+  // (sem concessão => FORBIDDEN; a prova com concessão está em saleValidatorGrants.mysql.test.ts). Seller e service nunca.
+  { name: "saleValidation.confirmPayment", capability: "sale.payment.confirm", allowed: ["admin", "finance"], grantOnly: ["finance"], call: c => c.saleValidation.confirmPayment({ contractId: 1, note: "SYN conferido" }) },
+  { name: "saleValidation.validateSale", capability: "sale.validate", allowed: ["admin", "finance"], grantOnly: ["finance"], call: c => c.saleValidation.validateSale({ contractId: 1 }) },
   { name: "contracts.markDocumentSigned", capability: "document.sign", allowed: ["admin"], call: c => c.contracts.markDocumentSigned({ documentId: 1 }) },
   { name: "electronicSignatures.start", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.start({ contractId: 1, contractDocumentId: 1 }) },
   { name: "electronicSignatures.reconcile", capability: "document.sign", allowed: ["admin"], call: c => c.electronicSignatures.reconcile({ envelopeId: 1 }) },
@@ -60,7 +61,8 @@ describe("matriz RBAC papel x ação crítica (routers reais)", () => {
       const allowed: string[] = action.allowed;
       for (const role of ROLES) {
         const result = await outcome(action.call(callerFor(role)));
-        if (allowed.includes(role)) expect(result, `${role} deveria passar do RBAC`).not.toBe("FORBIDDEN");
+        if (action.grantOnly?.includes(role)) expect(result, `${role} sem concessão deveria ser FORBIDDEN`).toBe("FORBIDDEN");
+        else if (allowed.includes(role)) expect(result, `${role} deveria passar do RBAC`).not.toBe("FORBIDDEN");
         else expect(result, `${role} deveria ser FORBIDDEN`).toBe("FORBIDDEN");
       }
     });

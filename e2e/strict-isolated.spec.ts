@@ -376,11 +376,11 @@ test.describe("homologação isolada estrita", () => {
     const confirmed = waitForMutation(page, "saleValidation.confirmPayment");
     await page.getByRole("button", { name: "Confirmar", exact: true }).click();
     await confirmed;
-    await expect(page.getByText("Pagamento confirmado.")).toBeVisible();
+    await expect(page.getByText("Comprovante conferido.")).toBeVisible();
     await expect(page.getByTestId("gate-paymentConfirmed").getByLabel("atendido")).toBeVisible();
     await expect(page.getByTestId("gate-contractSigned").getByLabel("pendente")).toBeVisible();
     await expect(page.getByRole("button", { name: "Validar venda" })).toBeDisabled();
-    await expect(page.getByTestId("gate-managerValidated").getByLabel("pendente")).toBeVisible();
+    await expect(page.getByTestId("gate-adminValidated").getByLabel("pendente")).toBeVisible();
 
     const validation = await queryDatabase<Array<{ paymentConfirmedAt: Date | null; paymentConfirmationNote: string | null }>>(
       "SELECT paymentConfirmedAt, paymentConfirmationNote FROM sale_validations WHERE contractId = ?", [contract!.id],

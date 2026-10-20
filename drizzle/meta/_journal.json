@@ -505,6 +505,13 @@
       "when": 1792526425325,
       "tag": "0071_contract_addenda",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "5",
+      "when": 1792530460907,
+      "tag": "0072_sale_validator_grants",
+      "breakpoints": true
     }
   ]
 }

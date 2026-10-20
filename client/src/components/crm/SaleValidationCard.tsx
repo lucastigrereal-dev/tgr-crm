@@ -10,15 +10,15 @@ import { Check, Circle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-// ADR-007 (V6): os cinco portões da venda validada. O servidor decide; aqui só mostramos e oferecemos as ações ao gerente (admin).
-const GATE_LABELS: Array<{ key: "paymentConfirmed" | "contractGenerated" | "contractSigned" | "signedDocumentStored" | "noOpenCancellation" | "noOpenSignatureEnvelope" | "managerValidated"; label: string }> = [
-  { key: "paymentConfirmed", label: "Pagamento confirmado" },
+// ADR-007 (V6): os cinco portões da venda validada. O servidor decide; aqui só mostramos e oferecemos as ações ao administrativo autorizado.
+const GATE_LABELS: Array<{ key: "paymentConfirmed" | "contractGenerated" | "contractSigned" | "signedDocumentStored" | "noOpenCancellation" | "noOpenSignatureEnvelope" | "adminValidated"; label: string }> = [
+  { key: "paymentConfirmed", label: "Comprovante conferido (não é recebimento)" },
   { key: "contractGenerated", label: "Contrato gerado" },
   { key: "contractSigned", label: "Contrato assinado" },
   { key: "signedDocumentStored", label: "Contrato assinado armazenado (arquivo assinado enviado)" },
   { key: "noOpenCancellation", label: "Sem pedido de distrato em aberto" },
   { key: "noOpenSignatureEnvelope", label: "Sem envelope de assinatura em andamento" },
-  { key: "managerValidated", label: "Validação final do gerente" },
+  { key: "adminValidated", label: "Validação oficial (administrativo autorizado)" },
 ];
 
 export function SaleValidationCard({ contractId }: { contractId: number }) {
@@ -29,10 +29,11 @@ export function SaleValidationCard({ contractId }: { contractId: number }) {
   const canView = Boolean(user && canCapability(user.role, "sale.validation.view"));
   const status = trpc.saleValidation.getValidationStatus.useQuery({ contractId }, { enabled: Boolean(contractId) && canView });
   const refresh = () => Promise.all([utils.saleValidation.getValidationStatus.invalidate({ contractId }), utils.contracts.detail.invalidate({ id: contractId }), utils.contracts.list.invalidate()]);
-  const confirm = trpc.saleValidation.confirmPayment.useMutation({ onSuccess: async () => { await refresh(); setOpen(false); setNote(""); toast.success("Pagamento confirmado."); }, onError: error => toast.error(error.message) });
+  const confirm = trpc.saleValidation.confirmPayment.useMutation({ onSuccess: async () => { await refresh(); setOpen(false); setNote(""); toast.success("Comprovante conferido."); }, onError: error => toast.error(error.message) });
   const validate = trpc.saleValidation.validateSale.useMutation({ onSuccess: async () => { await refresh(); toast.success("Venda validada. Contrato ativo."); }, onError: error => { void refresh(); toast.error(error.message); } });
-  const canConfirm = Boolean(user && canCapability(user.role, "sale.payment.confirm"));
-  const canValidate = Boolean(user && canCapability(user.role, "sale.validate"));
+  const authorization = trpc.saleValidation.myAuthorization.useQuery(undefined, { enabled: canView });
+  const canConfirm = Boolean(user && authorization.data?.authorized && canCapability(user.role, "sale.payment.confirm"));
+  const canValidate = Boolean(user && authorization.data?.authorized && canCapability(user.role, "sale.validate"));
   const data = status.data;
   // O servidor recusa (CONFLICT) validar/confirmar contrato cancelado, encerrado ou vencido; aqui a UI nem oferece o clique.
   const terminalStatus = Boolean(data && ["cancelled", "closed", "overdue"].includes(data.contractStatus));
@@ -45,7 +46,7 @@ export function SaleValidationCard({ contractId }: { contractId: number }) {
         {data.gates.missing.length ? <p className="text-xs text-muted-foreground">Pendências para validar: {data.gates.missing.length}.</p> : null}
         {canConfirm || canValidate ? <div className="flex flex-wrap gap-2 pt-1">
           {canConfirm && !data.gates.paymentConfirmed ? <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button variant="outline" className="border-[#d9cfbd]" disabled={terminalStatus}>Confirmar pagamento</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle className="font-serif text-2xl">Confirmar pagamento</DialogTitle></DialogHeader><form className="grid gap-3 py-2" onSubmit={event => { event.preventDefault(); confirm.mutate({ contractId, note }); }}><div className="grid gap-2"><Label htmlFor="payment-note">Nota de conferência</Label><Input id="payment-note" value={note} onChange={event => setNote(event.target.value)} minLength={3} required /></div><Button type="submit" disabled={confirm.isPending || note.trim().length < 3}>Confirmar</Button></form></DialogContent></Dialog> : null}
-          {canValidate && !data.gates.managerValidated ? <Button disabled={terminalStatus || !data.gates.ready || validate.isPending} onClick={() => validate.mutate({ contractId })}>Validar venda</Button> : null}
+          {canValidate && !data.gates.adminValidated ? <Button disabled={terminalStatus || !data.gates.ready || validate.isPending} onClick={() => validate.mutate({ contractId })}>Validar venda</Button> : null}
         </div> : null}
       </>}
     </CardContent>

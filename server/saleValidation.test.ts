@@ -69,7 +69,8 @@ describe("evaluateSaleValidationGates (ADR-007)", () => {
 
   it("validatedAt sozinho não substitui os pré-requisitos", () => {
     const g = evaluateSaleValidationGates({ contract, documents: [], validation: { paymentConfirmedAt: null, validatedAt: T } });
-    expect(g.managerValidated).toBe(true);
+    expect(g.adminValidated).toBe(true);
+    expect(g.managerValidated).toBe(true); // alias legado
     expect(g.ready).toBe(false);
     expect(g.missing).toEqual(SALE_GATE_KEYS.filter(key => key !== "noOpenCancellation" && key !== "noOpenSignatureEnvelope"));
   });
