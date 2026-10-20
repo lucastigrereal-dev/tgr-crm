@@ -1,3 +1,5 @@
+import { qualificationVersionToStamp } from "../qualificationPolicy";
+import { DEFAULT_NQ_SETTINGS } from "../captureSheetDomain";
 import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -418,7 +420,8 @@ export const capturesRouter = router({
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `COMMERCIAL_OUTCOME_REQUIRES_PRESENTATION: o resultado comercial só pode ser registrado depois que a apresentação começou (atual: ${capture.presentationStatus}).` });
     }
     const recordedAt = new Date();
-    const updateResult = await db.update(captureRecords).set({ commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id, commercialOutcomeMotiveId: motiveId, commercialOutcomeComplement: complement })
+    const nqPolicyVersion = await qualificationVersionToStamp(db, DEFAULT_NQ_SETTINGS);
+    const updateResult = await db.update(captureRecords).set({ ...(nqPolicyVersion ? { nqPolicyVersion } : {}), commercialOutcome: input.outcome, commercialOutcomeReason: reason, commercialOutcomeAt: recordedAt, commercialOutcomeByUserId: ctx.user.id, commercialOutcomeMotiveId: motiveId, commercialOutcomeComplement: complement })
       .where(and(eq(captureRecords.id, input.id), isNull(captureRecords.anonymizedAt), isNull(captureRecords.commercialOutcome)));
     if (affectedRows(updateResult) === 0) {
       const current = (await db.select().from(captureRecords).where(eq(captureRecords.id, input.id)).limit(1))[0];

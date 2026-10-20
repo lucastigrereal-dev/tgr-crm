@@ -1,3 +1,4 @@
+import { isQualificationVersioningEnabled } from "./qualificationPolicy";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import type { NqResult } from "./captureSheetDomain";
@@ -41,6 +42,8 @@ export function toIntegrationNq(nq: NqResult) {
     missing: nq.missing,
     outcome: nq.outcome,
     label: nq.label,
+    // CRM-G1: versão da política que produziu o resultado; campo aditivo, só com QUALIFICATION_POLICY_VERSIONING_ENABLED (endpoint já é desligado por padrão).
+    ...(isQualificationVersioningEnabled() && nq.policyVersion ? { policyVersion: nq.policyVersion } : {}),
   };
 }
 
