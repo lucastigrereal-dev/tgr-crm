@@ -24,6 +24,7 @@ import {
 } from "./clicksign";
 import { storageReadBytes } from "./storage";
 import { affectedRows, isDuplicateKeyError } from "./mysqlErrors";
+import { assertContractGenerationAllowed } from "./saleOrderGate";
 
 function contentTypeFor(filename: string) {
   const lower = filename.toLowerCase();
@@ -80,6 +81,8 @@ export async function startContractElectronicSignature(input: {
   if (!source.customer.email) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "O associado precisa ter e-mail antes da assinatura eletrônica." });
   if (source.contract.status === "cancelled" || source.contract.status === "closed") throw new TRPCError({ code: "CONFLICT", message: "Contrato encerrado não pode iniciar assinatura." });
   if (source.document.signed) throw new TRPCError({ code: "CONFLICT", message: "Este documento já está marcado como assinado." });
+  // CRM-B1: assinatura eletrônica só depois da conferência de comprovante e documentação (flag SALE_ORDER_GATE_ENABLED).
+  await assertContractGenerationAllowed(db, input.contractId);
 
   const activeKey = `contract-document:${input.contractDocumentId}`;
   const active = (await db.select().from(contractSignatureEnvelopes)
