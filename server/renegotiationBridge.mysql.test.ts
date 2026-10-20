@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { billingRecords, contracts, customers, domainEvents, installments, users } from "../drizzle/schema";
+import { acquireFinancialPumpTestLock } from "./testPumpLock";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // Rodada 3: renegociar -> installment.renegotiation.applied entra na fila da ponte CRM->Financial -> chega com o payload do contrato
@@ -21,6 +22,9 @@ describe.skipIf(!integrationUrl)("ponte CRM->Financial encaminha installment.ren
   const bodies = new Map<number, Array<Record<string, any>>>();
   const previousEnv = { ...process.env };
 
+  let releasePumpLock: (() => Promise<void>) | undefined;
+  beforeAll(async () => { releasePumpLock = await acquireFinancialPumpTestLock(integrationUrl!); }, 600_000);
+  afterAll(async () => { await releasePumpLock?.(); });
   beforeAll(async () => {
     validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
     process.env.DATABASE_URL = integrationUrl;

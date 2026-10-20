@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, financialTransactions, contracts, customers, domainEvents, financialProjectMap, resorts, users } from "../drizzle/schema";
+import { acquireFinancialPumpTestLock } from "./testPumpLock";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // CRM-A01 em MySQL real: mapa empreendimento -> projeto do Financial. Dados sintéticos.
@@ -23,6 +24,9 @@ describe.skipIf(!integrationUrl)("A01: projeto do Financial por empreendimento",
   const previousEnv = { ...process.env };
   const fallback = { externalKey: `syn-default-${runId}`, name: `SYN padrão ${runId}`, timezone: "America/Recife" };
 
+  let releasePumpLock: (() => Promise<void>) | undefined;
+  beforeAll(async () => { releasePumpLock = await acquireFinancialPumpTestLock(integrationUrl!); }, 600_000);
+  afterAll(async () => { await releasePumpLock?.(); });
   beforeAll(async () => {
     validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
     process.env.DATABASE_URL = integrationUrl;

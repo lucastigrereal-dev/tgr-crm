@@ -1339,3 +1339,16 @@ export const ownerPortalLinks = mysqlTable("owner_portal_links", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+// CRM-C1: "administrativo autorizado" = papel finance COM concessão vigente (admin concede e revoga). Admin é sempre autorizado.
+export const saleValidatorGrants = mysqlTable("sale_validator_grants", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().references(() => users.id),
+  grantedByUserId: int("grantedByUserId").notNull().references(() => users.id),
+  validFrom: timestamp("validFrom").defaultNow().notNull(),
+  validUntil: timestamp("validUntil"),
+  note: text("note"),
+  revokedAt: timestamp("revokedAt"),
+  revokedByUserId: int("revokedByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("sale_validator_grants_user_idx").on(table.userId, table.revokedAt)]);

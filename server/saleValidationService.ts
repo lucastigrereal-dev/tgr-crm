@@ -10,6 +10,8 @@ import { affectedRows } from "./mysqlErrors";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { evaluateSaleValidationGates, gatesNotAfter, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
+import { createHash } from "node:crypto";
+import { isSegregationEnabled } from "./saleValidatorAccess";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { txAudit, txEvent, type Tx } from "./txOutbox";
 
@@ -24,12 +26,18 @@ export type SaleValidationErrorCode =
   | "SALE_SIGNED_DOCUMENT_INVALID"
   | "SALE_GATE_TIMESTAMP_INVALID"
   | "SALE_VALIDATION_REQUIRED"
+  | "SALE_SEGREGATION"
   | "COMMISSION_REQUIRES_VALIDATED_SALE";
 
 /** O código de recusa vai no início da mensagem (`CODE: texto`) e em `cause.code`; tRPC não tem campo próprio. */
 export function saleValidationError(trpcCode: TRPCError["code"], code: SaleValidationErrorCode, message: string, extra: Record<string, unknown> = {}) {
   return new TRPCError({ code: trpcCode, message: `${code}: ${message}`, cause: Object.assign(new Error(code), { code, ...extra }) });
 }
+
+/** Atestado gravado na trilha da validação final (CRM-C1): quem validou declara ter conferido o conjunto cujo hash segue. */
+export const SALE_VALIDATION_ATTESTATION = "Declaro ter conferido o comprovante, a documentação e o documento assinado desta venda.";
+/** SHA-256 do conjunto conferido (referência opaca do documento, referência do comprovante e nota de conferência). */
+export const saleEvidenceHash = (parts: { documentRef: string; paymentEvidenceRef: string | null; paymentConfirmationNote: string | null }) => createHash("sha256").update(JSON.stringify([parts.documentRef, parts.paymentEvidenceRef, parts.paymentConfirmationNote])).digest("hex");
 
 export const correlationIdForContract = (contractId: number) => `crm-sale-${contractId}`;
 
@@ -106,7 +114,7 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
       afterJson: JSON.stringify({ paymentConfirmedAt: confirmedAt.toISOString(), paymentConfirmedByUserId: actorUserId }),
       reason: input.note, documentRef: null, correlationId, externalSaleId: saleId,
     });
-    await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "payment_confirmed", summary: `Pagamento da venda do contrato ${input.contractId} confirmado pelo gerente.`, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
+    await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "payment_confirmed", summary: `Pagamento da venda do contrato ${input.contractId} conferido pelo administrativo autorizado.`, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
     await txEvent(tx, { eventName: "sale.payment.confirmed", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { contractId: input.contractId, saleId, confirmedAt: confirmedAt.toISOString(), confirmedByUserId: actorUserId }, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
     return { alreadyConfirmed: false as const, confirmedAt };
   });
@@ -283,6 +291,8 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       const signedAt = locked.signedAt ?? documentRow.createdAt;
       const paymentConfirmedAt = facts.validation!.paymentConfirmedAt!;
       const paymentConfirmedByUserId = facts.validation!.paymentConfirmedByUserId!;
+      // CRM-C1: segregação opcional (padrão desligada). A mesma pessoa PODE conferir e validar; a trilha registra quem fez cada ato.
+      if (paymentConfirmedByUserId === actorUserId && await isSegregationEnabled(tx)) throw saleValidationError("FORBIDDEN", "SALE_SEGREGATION", "A segregação de funções está ligada: quem conferiu o comprovante não valida a mesma venda.");
       // KAN-31 V6: instantes de cada portão congelados aqui; nenhum pode ser posterior à validação (o Sales recusaria).
       const stamps = saleGateTimestamps({ documents: facts.documents, envelopes: facts.envelopes, contractSignedAt: signedAt, storedDocument: documentRow });
       if (!gatesNotAfter({ ...stamps, paymentConfirmedAt }, validatedAt)) throw new GatesNotReady("timestamps", [], "Instante de portão posterior à validação (relógio ou dado inconsistente); confira a assinatura e o documento.");
@@ -296,7 +306,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       await tx.insert(saleValidationEvents).values({
         contractId: input.contractId, step: "final_validated", actorUserId, occurredAt: validatedAt,
         beforeJson: JSON.stringify({ contractStatus: locked.status, validatedAt: null }),
-        afterJson: JSON.stringify({ contractStatus: "active", validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, signedDocumentId: document.id, paymentConfirmedAt: paymentConfirmedAt.toISOString(), paymentConfirmedByUserId, contractGeneratedAt: stamps.contractGeneratedAt.toISOString(), contractSignedAt: stamps.contractSignedAt.toISOString(), documentStoredAt: stamps.documentStoredAt.toISOString(), documentRef }),
+        afterJson: JSON.stringify({ contractStatus: "active", validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, signedDocumentId: document.id, paymentConfirmedAt: paymentConfirmedAt.toISOString(), paymentConfirmedByUserId, contractGeneratedAt: stamps.contractGeneratedAt.toISOString(), contractSignedAt: stamps.contractSignedAt.toISOString(), documentStoredAt: stamps.documentStoredAt.toISOString(), documentRef, attestation: SALE_VALIDATION_ATTESTATION, evidenceHash: saleEvidenceHash({ documentRef, paymentEvidenceRef: facts.validation!.paymentEvidenceRef ?? null, paymentConfirmationNote: facts.validation!.paymentConfirmationNote ?? null }) }),
         // Referência opaca, nunca storageKey/filename (podem carregar nome/CPF do cliente).
         reason: null, documentRef, correlationId, externalSaleId: saleId,
       });

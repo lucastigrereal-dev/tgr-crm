@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { auditLogs, domainEvents, users } from "../drizzle/schema";
+import { acquireFinancialPumpTestLock } from "./testPumpLock";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // RED TEAM P2 em MySQL real: eventos antigos presos em 503 (sem code) não escondem o evento novo, mesmo com mais presos
@@ -22,6 +23,9 @@ describe.skipIf(!integrationUrl)("Financial pump em MySQL real: sem inanição e
   const hits = new Map<number, number>();
   const seen: number[] = [];
 
+  let releasePumpLock: (() => Promise<void>) | undefined;
+  beforeAll(async () => { releasePumpLock = await acquireFinancialPumpTestLock(integrationUrl!); }, 600_000);
+  afterAll(async () => { await releasePumpLock?.(); });
   beforeAll(async () => {
     validateIsolatedE2EDatabase(integrationUrl, process.env.DATABASE_URL);
     process.env.DATABASE_URL = integrationUrl;

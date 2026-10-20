@@ -1,6 +1,6 @@
 // ADR-007 (V6): portões puros da venda VALIDADA. Sem banco, sem relógio: quem chama carrega os fatos.
-// Contrato `active` (= venda validada) só nasce depois que os quatro pré-requisitos estão abertos E o gerente
-// (capacidade `sale.validate`, hoje admin) confirma a validação final.
+// Contrato `active` (= venda validada) só nasce depois que os quatro pré-requisitos estão abertos E o administrativo
+// autorizado (capacidade `sale.validate` + concessão, CRM-C1) confirma a validação final.
 
 export const SALE_GATE_KEYS = ["paymentConfirmed", "contractGenerated", "contractSigned", "signedDocumentStored", "noOpenCancellation", "noOpenSignatureEnvelope"] as const;
 export type SaleGateKey = (typeof SALE_GATE_KEYS)[number];
@@ -31,6 +31,8 @@ export type SaleValidationGates = {
   noOpenCancellation: boolean;
   /** Nenhum envelope de e-assinatura em andamento (draft|running): o contrato ainda pode mudar/ser assinado. */
   noOpenSignatureEnvelope: boolean;
+  adminValidated: boolean;
+  /** Alias legado de adminValidated (lido por uma versão; removível). */
   managerValidated: boolean;
   /** Pré-requisitos ainda fechados (não inclui a validação final, que é a própria ação do gerente). */
   missing: SaleGateKey[];
@@ -57,10 +59,10 @@ export function evaluateSaleValidationGates(input: {
   const signedDocumentStored = Boolean(contract) && documents.some(document => isSignedArtifactOfContract(document) && hasStorageKey(document));
   const noOpenSignatureEnvelope = !envelopes.some(envelope => OPEN_ENVELOPE_STATUSES.has(envelope.status));
   const noOpenCancellation = (input.openCancellationRequests ?? 0) === 0;
-  const managerValidated = Boolean(validation?.validatedAt);
+  const adminValidated = Boolean(validation?.validatedAt);
   const flags: Record<SaleGateKey, boolean> = { paymentConfirmed, contractGenerated, contractSigned, signedDocumentStored, noOpenCancellation, noOpenSignatureEnvelope };
   const missing = SALE_GATE_KEYS.filter(key => !flags[key]);
-  return { paymentConfirmed, contractGenerated, contractSigned, signedDocumentStored, noOpenCancellation, noOpenSignatureEnvelope, managerValidated, missing, ready: missing.length === 0 };
+  return { paymentConfirmed, contractGenerated, contractSigned, signedDocumentStored, noOpenCancellation, noOpenSignatureEnvelope, adminValidated, managerValidated: adminValidated, missing, ready: missing.length === 0 };
 }
 
 /** Arquivo assinado (signedArtifact), da categoria do contrato, com storageKey. Se `preferredId` vier, só ele serve (nunca cai em outro em silêncio). */

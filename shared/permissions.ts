@@ -32,8 +32,12 @@ export const capabilityMatrix = {
   "contract.activate": ["admin"],
   // ADR-007 (V6): o papel "gerente" do CRM é MAPEADO para `admin` (o CRM não tem papel manager; seller = closer não tem).
   // POLICY_PENDING CRM_MANAGER_ROLE: se o CRM ganhar papel "gerente" próprio, só esta matriz muda.
-  "sale.payment.confirm": ["admin"],
-  "sale.validate": ["admin"],
+  // CRM-C1 (decisão do titular, 20/10): a validação oficial é do ADMINISTRATIVO autorizado, sem gate final de gerente. Papel admin sempre; papel finance
+  // só com concessão vigente (sale_validator_grants, dada pelo admin; conferido no servidor). A matriz acima é só o teto por papel.
+  "sale.payment.confirm": ["admin", "finance"],
+  "sale.documents.confer": ["admin", "finance"],
+  "sale.receipt.confer": ["admin", "finance"],
+  "sale.validate": ["admin", "finance"],
   // Leitura dos portões da venda (inclui nota de conferência do pagamento e referência de documento): só gerência e financeiro.
   "sale.validation.view": ["admin", "finance"],
   "document.read": ["admin", "seller", "finance", "service"],
