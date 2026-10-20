@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { billingRecords, domainEvents, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, customerContacts, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
+import { billingRecords, contractAddenda, domainEvents, contractDocuments, contracts, csvImportBatches, csvImportItems, customers, financialTransactions, customerContacts, installments, ownerPortalLinks, ownershipEntitlements, reservationWaitlist, reservations, resorts, saleValidationEvents, saleValidations, tasks, unitMaintenanceBlocks, units } from "../drizzle/schema";
 
 const dbMocks = vi.hoisted(() => ({ getDb: vi.fn(), recordAudit: vi.fn() }));
 vi.mock("./db", () => dbMocks);
@@ -9,7 +9,7 @@ import { importsRouter } from "./routers/imports";
 type Batch = { id: number; kind: "customers" | "contracts" | "units"; status: "completed" | "reverted" };
 type Item = { entityType: "customer" | "contract" | "resort" | "unit"; entityId: number; action: "created" | "updated"; beforeSnapshot: string | null };
 
-function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }>; deleteError?: unknown } = {}) {
+function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: number }> = [], options: { saleValidations?: Array<{ id: number }>; saleValidationEvents?: Array<{ id: number }>; installments?: Array<{ id: number }>; documents?: Array<{ id: number }>; reservations?: Array<{ id: number }>; tasks?: Array<{ id: number }>; financial?: Array<{ id: number }>; billings?: Array<{ id: number }>; entitlements?: Array<{ id: number }>; maintenance?: Array<{ id: number }>; waitlist?: Array<{ id: number }>; units?: Array<{ id: number }>; portalLinks?: Array<{ id: number }>; addenda?: Array<{ id: number }>; deleteError?: unknown } = {}) {
   const deletes: unknown[] = [];
   const updates: Array<{ table: unknown; values: unknown }> = [];
   const inserts: Array<{ table: unknown; values: Record<string, unknown> }> = [];
@@ -38,6 +38,7 @@ function makeDb(batch: Batch, items: Item[], contractDependencies: Array<{ id: n
           if (table === reservationWaitlist) return options.waitlist ?? [];
           if (table === units) return options.units ?? [];
           if (table === ownerPortalLinks) return options.portalLinks ?? [];
+          if (table === contractAddenda) return options.addenda ?? [];
           return [];
         },
       };
@@ -198,6 +199,14 @@ describe("imports.undoLast", () => {
     dbMocks.getDb.mockResolvedValue(fixture.db);
 
     await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("validação de venda") });
+    expect(fixture.deletes).toEqual([]);
+    expect(fixture.updates).toEqual([]);
+  });
+
+  it("CRM-A12: recusa reverter lote cujo contrato já tem aditivo, com erro de domínio claro e sem apagar nada", async () => {
+    const fixture = makeDb({ id: 89, kind: "contracts", status: "completed" }, [{ entityType: "contract", entityId: 705, action: "created", beforeSnapshot: null }], [], { addenda: [{ id: 1 }] });
+    dbMocks.getDb.mockResolvedValue(fixture.db);
+    await expect(adminCaller().undoLast({ confirm: true })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("aditivo") });
     expect(fixture.deletes).toEqual([]);
     expect(fixture.updates).toEqual([]);
   });

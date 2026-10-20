@@ -59,8 +59,43 @@ export function buildContentSecurityPolicy(scriptHashes: string[] = inlineScript
   ].join("; ");
 }
 
-export const applySecurityHeaders: RequestHandler = (_req, res, next) => {
+/**
+ * CRM-A26: toda resposta de /api carrega dado de sessão ou de portal por token; nada disso pode ficar em cache de navegador ou proxy.
+ * Rotas que já definem Cache-Control (ex.: SSE, storage) mantêm o seu: o header só é posto se ainda não existir quando a resposta sai.
+ */
+export const apiNoStore: RequestHandler = (req, res, next) => {
+  if ((req.path ?? "").startsWith("/api/")) {
+    const original = res.writeHead;
+    res.writeHead = function patched(this: typeof res, ...args: Parameters<typeof original>) {
+      if (!this.getHeader("Cache-Control")) this.setHeader("Cache-Control", "no-store");
+      return original.apply(this, args);
+    } as typeof res.writeHead;
+  }
+  next();
+};
+
+/**
+ * CRM-A26 (defesa em profundidade além do SameSite=Lax): com CSRF_ORIGIN_CHECK_ENABLED=true, mutação em /api/trpc cujo Origin
+ * (quando o navegador envia) não é a própria origem nem está em CSRF_ALLOWED_ORIGINS (lista separada por vírgula) é recusada com 403.
+ * Sem Origin (cliente não navegador, webhook) passa: a autenticação continua sendo da sessão/chave. Desligado por padrão.
+ */
+export function createOriginGuard(options: { enabled: boolean; allowedOrigins?: string[] }): RequestHandler {
+  const allowed = new Set((options.allowedOrigins ?? []).map(origin => origin.trim().replace(/\/+$/, "")).filter(Boolean));
+  return (req, res, next) => {
+    if (!options.enabled || !req.path.startsWith("/api/trpc") || ["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+    const origin = req.get("origin");
+    if (!origin) return next();
+    let originHost = "";
+    try { originHost = new URL(origin).host; } catch { /* Origin ilegível */ }
+    if (originHost && originHost === req.get("host")) return next();
+    if (allowed.has(origin.replace(/\/+$/, ""))) return next();
+    res.status(403).json({ error: "Origem não autorizada." });
+  };
+}
+
+export const applySecurityHeaders: RequestHandler = (req, res, next) => {
   Object.entries(securityHeaders).forEach(([name, value]) => res.setHeader(name, value));
+  apiNoStore(req, res, () => undefined);
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     res.setHeader("Content-Security-Policy", buildContentSecurityPolicy());

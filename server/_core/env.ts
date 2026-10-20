@@ -29,6 +29,9 @@ export const ENV = {
   financialEndpoint: process.env.FINANCIAL_ENDPOINT ?? "",
   financialCrmIntegrationKey: process.env.FINANCIAL_CRM_INTEGRATION_KEY ?? "",
   financialProjectExternalKey: process.env.FINANCIAL_PROJECT_EXTERNAL_KEY ?? "",
+  csrfOriginCheckEnabled: process.env.CSRF_ORIGIN_CHECK_ENABLED === "true",
+  csrfAllowedOrigins: (process.env.CSRF_ALLOWED_ORIGINS ?? "").split(",").map(item => item.trim()).filter(Boolean),
+  financialProjectMapEnabled: process.env.FINANCIAL_PROJECT_MAP_ENABLED === "true",
   financialProjectName: process.env.FINANCIAL_PROJECT_NAME ?? "",
   financialProjectTimezone: process.env.FINANCIAL_PROJECT_TIMEZONE ?? "America/Recife",
 };

@@ -1,10 +1,10 @@
 # ADR-012: aditivo contratual não monetário (CRM-A12)
 
-Status: **especificação com padrão sensato; NÃO implementado** (nem atrás de flag). Só existe hoje o reajuste monetário (`contract_monetary_adjustments`). Aditivo como categoria de documento (`Aditivo`) existe apenas como anexo e NÃO conta como contrato assinado (`server/saleValidation.ts`).
+Status: **mínimo IMPLEMENTADO, DESLIGADO por padrão** (`CONTRACT_ADDENDUM_ENABLED=false`; migração 0071 com rollback; roteador `addenda`). Conjunto fechado: `clause` (cláusula livre) e `contact` (telefone/e-mail do associado). Fluxo: rascunho, aguardando assinatura, assinado | cancelado. Só `signed` produz efeito, e só com documento de categoria `Aditivo` realmente assinado (`signedArtifact`), vinculado por administrador, na mesma transação do efeito, com antes/depois na auditoria. Nenhum evento sai para outro sistema; o schema recusa qualquer campo monetário.
 
-## Por que só especificação
+## O que continua fora (decisão de produto e jurídico)
 
-Implementar exige tabela nova, migração, máquina de estados, assinatura (Clicksign) do aditivo, regras de efeito sobre parcelas/cota e telas. Isso não cabe como "mínimo atrás de flag" sem decidir produto e jurídico; uma implementação parcial criaria um fluxo que parece valer e não vale. O CRM também não pode virar dono de nada que o Financial ou o Relationship já são donos.
+Titular/co-titular, endereço, prazo de uso da cota, data de vigência, assinatura eletrônica automática do aditivo (Clicksign) e telas. Aditivo como categoria de documento segue NÃO contando como contrato assinado em `server/saleValidation.ts`. O CRM não vira dono de nada que o Financial ou o Relationship já são donos.
 
 ## Escopo (padrão proposto)
 

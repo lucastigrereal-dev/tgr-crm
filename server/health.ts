@@ -6,13 +6,19 @@ import { getDb } from "./db";
 import { localAuthStatus } from "./localAuth";
 import { getLocalStorageRoot } from "./localStorage";
 
+/** CRM-A28: SHA do commit gravado na imagem (ARG GIT_SHA do Dockerfile). Só aceita hex de 7 a 64 caracteres; qualquer outra coisa vira "unknown". */
+export function buildGitSha(env: NodeJS.ProcessEnv = process.env) {
+  const raw = (env.GIT_SHA ?? "").trim().toLowerCase();
+  return /^[0-9a-f]{7,64}$/.test(raw) ? raw : "unknown";
+}
+
 function requestId(req: Request) {
   return req.requestId ?? null;
 }
 
 export function registerHealthRoutes(app: Express) {
   app.get("/api/health/live", (req: Request, res: Response) => {
-    res.status(200).json({ status: "ok", service: "tgr-crm", requestId: requestId(req), now: new Date().toISOString() });
+    res.status(200).json({ status: "ok", service: "tgr-crm", gitSha: buildGitSha(), requestId: requestId(req), now: new Date().toISOString() });
   });
 
   app.get("/api/health/ready", async (req: Request, res: Response) => {
@@ -47,6 +53,6 @@ export function registerHealthRoutes(app: Express) {
     }
 
     const ready = Object.values(checks).every(value => value === "ok");
-    res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready", service: "tgr-crm", requestId: requestId(req), checks, now: new Date().toISOString() });
+    res.status(ready ? 200 : 503).json({ status: ready ? "ready" : "not_ready", service: "tgr-crm", gitSha: buildGitSha(), requestId: requestId(req), checks, now: new Date().toISOString() });
   });
 }
