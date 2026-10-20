@@ -8,6 +8,7 @@
       "contract.cancellation.executed",
       "sale.validated",
       "installment.scheduled",
+      "installment.renegotiation.applied",
       "installment.paid",
       "commission.created",
       "commission.status.updated",
@@ -54,6 +55,14 @@
         "sequence",
         "dueDate",
         "amount"
+      ],
+      "installment.renegotiation.applied": [
+        "installmentId",
+        "newInstallmentId",
+        "contractId",
+        "proposalAmount",
+        "cancelledBillingIds",
+        "gatewayPaymentIds"
       ],
       "installment.paid": [
         "installmentId",
@@ -128,6 +137,38 @@
           "status": "active",
           "usageModel": "points",
           "source": "sales-command"
+        }
+      }
+    },
+    "renegotiationAppliedSampleEnvelope": {
+      "source": "crm",
+      "correlationId": "crm-fin-4244",
+      "project": {
+        "externalKey": "SYN-PONTA-NEGRA",
+        "name": "SYN Ponta Negra",
+        "timezone": "America/Recife"
+      },
+      "event": {
+        "contractVersion": "tgr.events.v1",
+        "eventId": 4244,
+        "eventName": "installment.renegotiation.applied",
+        "aggregate": {
+          "type": "installment_renegotiation",
+          "id": "31"
+        },
+        "actorUserId": 1,
+        "occurredAt": "2026-10-05T12:00:00.000Z",
+        "payload": {
+          "installmentId": 701,
+          "newInstallmentId": 702,
+          "contractId": 9001,
+          "proposalAmount": 900,
+          "cancelledBillingIds": [
+            55
+          ],
+          "gatewayPaymentIds": [
+            "pay_syn_1"
+          ]
         }
       }
     },

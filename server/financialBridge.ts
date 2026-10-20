@@ -16,6 +16,8 @@ export const FINANCIAL_EVENT_NAMES = [
   // o Financial recusaria com 400 e o evento acabaria em recibo terminal.
   "sale.validated",
   "installment.scheduled",
+  // CRM-A11: parcela original encerrada como renegociada + nova parcela; sem isto o Financial veria as duas abertas. Campos estritos do contrato (sem enriquecimento).
+  "installment.renegotiation.applied",
   "installment.paid",
   "commission.created",
   "commission.status.updated",
@@ -124,7 +126,7 @@ export function startFinancialBridgePump(
           ? Number(contractIdRaw)
           : null;
       // sale.validated tem payload estrito no Financial: nenhum enriquecimento (customerId lá seria 400).
-      if (contractId && body.event.payload.customerId == null && event.eventName !== "sale.validated") {
+      if (contractId && body.event.payload.customerId == null && event.eventName !== "sale.validated" && event.eventName !== "installment.renegotiation.applied") {
         const [contract] = await db.select({ customerId: contracts.customerId }).from(contracts)
           .where(eq(contracts.id, contractId)).limit(1);
         if (contract?.customerId) body.event.payload.customerId = contract.customerId;
