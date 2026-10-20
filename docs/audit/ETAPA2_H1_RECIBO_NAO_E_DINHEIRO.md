@@ -9,9 +9,13 @@ Status: proposta, tudo atrás de padrão seguro. Comissão monetária segue TRAV
 - Rótulos: "Comprovante conferido (não é recebimento)" (C1) e, no detalhe do contrato, "Recebimento declarado / Confirmado pelo gateway / Conciliado com o extrato" ao lado de cada parcela com valor pago.
 - Política de comissão (F1 consome): `requiredEvidence` com padrão `receipt_claimed` (`requiredEvidenceOf`, `evidenceSatisfies` em `server/settlementEvidence.ts`). Nada é bloqueado agora.
 
-## Contrato (muda: Suite/Financial primeiro)
-- `installment.paid` ganha o campo OPCIONAL `settlementEvidence`, emitido somente com `INSTALLMENT_EVIDENCE_IN_EVENT=true` (padrão false). O Financial precisa aceitá-lo antes de a flag ligar.
-- `shared/integrationContract.ts` inclui o campo na lista permitida, então a seção `financial` do snapshot muda: hash `141f940e...` -> `6aad5c8a3fb6b04720b4f9c2cdf918401cdc89b9717323dd978b7e657dad9ea8`. Re-pin em commit separado (ordem Suite -> CRM -> re-pin). Seção `sales` não muda além do E1.
+## Conciliação (vínculo explícito)
+- `financial_transactions.installmentId` (migração 0075) é gravado pela baixa manual e pelo webhook. `reconcileEntry` promove a `bank_reconciled` SOMENTE a parcela vinculada e só para lançamento de entrada (income). Sem vínculo (ex.: entrada informada pelo Sales), despesa ou estorno: não promove e audita (`reconcile_installments_skipped`). Nunca se infere por contrato+valor.
+- A evidência só sobe: webhook tardio não rebaixa `bank_reconciled`.
+
+## Contrato (aditivo, só com flag; Suite #130 aceita `settlementEvidence` opcional)
+- Com `INSTALLMENT_EVIDENCE_IN_EVENT=true`: `installment.paid` leva `settlementEvidence`; `financial.entry.reconciled` leva `installmentIds` e `settlementEvidence` quando houve promoção. NOVO para o Financial/Suite: `installmentIds` em `financial.entry.reconciled` (a Suite precisa aceitar antes de ligar a flag).
+- Os campos NÃO entram em `allowedPayloadFields` nem no snapshot: são acrescentados pelo filtro só com a flag. Snapshot e `consumers.lock.json` ficam intactos neste PR; o PR de re-pin (depois do #130 mergeado) os promove à lista estática.
 
 ## Migração proposta 0075 (nada aplicado)
 Rollback `docs/rollback/0075_installment_settlement_evidence.down.sql` (apaga a coluna; desligar a flag antes), sobe-desce-sobe testado em MySQL descartável.

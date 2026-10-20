@@ -66,11 +66,21 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       expect(await resolve(resort, "2026-03-01T00:00:00Z")).toMatchObject({ policy: null, version: "quebrada", source: "versioned" });
     });
 
+    it("Opus: vigência retroativa é recusada para commission e stock_hold; futura e atual passam", async () => {
+      const resort = await newResort("retro", null);
+      const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const past = new Date(Date.now() - 3_600_000);
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "retro", policy: JSON.parse(policy(0.02)), effectiveAt: past } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(api.create({ resortId: resort, policyType: "stock_hold", version: "retro", policy: { ttlHours: 2 }, effectiveAt: past } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "agora", policy: JSON.parse(policy(0.02)) } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "futura", policy: JSON.parse(policy(0.03)), effectiveAt: new Date(Date.now() + 86_400_000) } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+    });
+
     it("a criação de versão 'commission' recusa política incompleta", async () => {
       const resort = await newResort("create", null);
       const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
       await expect(api.create({ resortId: resort, policyType: "commission", version: "ruim", policy: { linerRate: 0.1 } } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
-      await expect(api.create({ resortId: resort, policyType: "commission", version: "boa", policy: JSON.parse(policy(0.02)), effectiveAt: new Date("2026-02-01T00:00:00Z") } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "boa", policy: JSON.parse(policy(0.02)) } as never)).resolves.toMatchObject({ id: expect.any(Number) });
     });
 
     it("a baixa de parcela grava a versão aplicada na comissão (policyVersion)", async () => {

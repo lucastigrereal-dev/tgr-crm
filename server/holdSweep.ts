@@ -16,6 +16,7 @@ export type HoldSweepOutcome = { holds: number; fractions: number[]; /** CRM-E1:
  */
 export async function sweepExpiredHolds(db: Db, options: { actorUserId: number | null; now?: Date; /** Restringe a limpeza a estas cotas (usado por testes que dividem o banco com outros). */ fractionIds?: number[] }): Promise<HoldSweepOutcome> {
   const now = options.now ?? new Date();
+  // Deadlock do InnoDB (índice secundário da cota x conferência final) desfaz a transação inteira; repetir é seguro (relê tudo).
   const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
     const candidates = await tx.select({ id: commercialFractionHolds.id, fractionId: commercialFractionHolds.fractionId })
       .from(commercialFractionHolds)

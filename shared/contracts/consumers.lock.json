@@ -2,8 +2,8 @@
   "_doc": "Trava do contrato CRM -> tgr-commercial-suite. sha256 do JSON canônico (chaves ordenadas) de cada seção de tgr-events.snapshot.json. Mudou o contrato? 1) na suite: node scripts/sync-crm-contract-fixtures.mjs <este snapshot> <sha>, consumidores ajustados e jornadas integradas 54/54; 2) suite mergeada ANTES deste CRM; 3) só então atualize estes hashes (a suite guarda o mesmo arquivo em scripts/crm-contract.lock.json).",
   "contractVersion": "tgr.events.v1",
   "sections": {
-    "financial": "6aad5c8a3fb6b04720b4f9c2cdf918401cdc89b9717323dd978b7e657dad9ea8",
+    "financial": "141f940ecfb00779bf55b9daa0e8adf1fbd4f54726d5eef8cd5bf6733d4d5626",
     "relationship": "b9f7cf68717565bc902d638e596057a89a3467a84b9618e83021b7b45c2e602a",
-    "sales": "bfebebd0970a35a2a84005634d81e1ff6950747f85e23f51c269e46acb859fa7"
+    "sales": "a9567eb918f2537cbc7a9dc602fffd488a2f302e7795f1c3e24b632fddd9fc0a"
   }
 }

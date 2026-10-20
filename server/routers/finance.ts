@@ -450,7 +450,7 @@ export const financeRouter = router({
         const updateResult = await tx.update(installments).set({ status: "paid", paidAmount: Number(lockedItem.amount).toFixed(2), paidAt: new Date(), paymentMethod: input.paymentMethod || null }).where(and(eq(installments.id, input.id), inArray(installments.status, ["open", "overdue"])));
         if (affectedRows(updateResult) === 0) return false;
         await tx.update(billingRecords).set({ status: "paid" }).where(and(eq(billingRecords.installmentId, input.id), inArray(billingRecords.status, ["pending", "generated"])));
-        await tx.insert(financialTransactions).values({ contractId: item.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: remainingAmount.toFixed(2), dueDate: item.dueDate, paidAt: new Date(), status: "paid", createdByUserId: ctx.user.id });
+        await tx.insert(financialTransactions).values({ contractId: item.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Baixa da parcela ${item.sequence}`, amount: remainingAmount.toFixed(2), dueDate: item.dueDate, paidAt: new Date(), status: "paid", installmentId: input.id, createdByUserId: ctx.user.id });
         if (commissionContext && commissionNeedsPolicy) {
           blockedReason = commissionBlockReason(lockedContract?.status, commissionPolicy, await isSaleValidated(tx, item.contractId));
           // ADR-010: portão passou, mas nenhum papel tem taxa > 0 (janela de 0%): rastreável (auditoria + evento) para reprocesso.
@@ -579,8 +579,9 @@ export const financeRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi conciliado por outra operação com referência diferente." });
       }
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_transaction", entityId: input.id, action: "reconciled", summary: `Lançamento conciliado pela referência ${input.reconciliationReference}.` });
-      await promoteInstallmentsOnReconcile(tx, { entryId: input.id, contractId: entry.contractId ?? null, amount: String(entry.amount), actorUserId: ctx.user.id });
-      await txEvent(tx, { eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt } });
+      const promotion = await promoteInstallmentsOnReconcile(tx, { entryId: input.id, entryType: entry.type, installmentId: entry.installmentId ?? null, actorUserId: ctx.user.id });
+      // installmentIds/settlementEvidence só saem com INSTALLMENT_EVIDENCE_IN_EVENT (filtro do contrato os acrescenta só com a flag); o fato de promoção nasce na mesma transação.
+      await txEvent(tx, { eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt, ...(promotion.promoted.length ? { installmentIds: promotion.promoted, settlementEvidence: "bank_reconciled" } : {}) } });
     });
     if (alreadyReconciled) return { success: true, alreadyReconciled: true };
     return { success: true };

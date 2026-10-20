@@ -62,7 +62,7 @@ export type SettleOutcome = { status: "off" | "pending" | "nothing" | "sold" | "
  * FOR UPDATE; só quando ambas existem trava cotas e holds e faz held -> sold por compare-and-set. Hold ausente/vencido => cota ao estoque + contrato perdido.
  */
 export async function settleFormalizationInventory(tx: Tx, contractId: number, actorUserId: number | null, now = new Date()): Promise<SettleOutcome> {
-  if (!isInventoryHoldAtFormalizationEnabled()) return { status: "off", fractionIds: [] };
+  // A flag só controla CRIAR holds novos: contrato que já tem hold de formalização continua sendo liquidado/rejeitado mesmo com a flag desligada depois.
   const validation = (await tx.select({ paymentConfirmedAt: saleValidations.paymentConfirmedAt, documentsConferredAt: saleValidations.documentsConferredAt }).from(saleValidations).where(eq(saleValidations.contractId, contractId)).limit(1).for("update"))[0];
   if (!validation?.paymentConfirmedAt || !validation.documentsConferredAt) return { status: "pending", fractionIds: [] };
   const fractions = await tx.select().from(commercialFractions).where(and(eq(commercialFractions.currentContractId, contractId), eq(commercialFractions.status, "held"))).orderBy(asc(commercialFractions.id)).for("update");

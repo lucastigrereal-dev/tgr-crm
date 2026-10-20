@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_REQUIRED_EVIDENCE, evidenceSatisfies, pickInstallmentsForEntry, requiredEvidenceOf, strongerEvidence } from "./settlementEvidence";
+import { DEFAULT_REQUIRED_EVIDENCE, evidenceSatisfies, requiredEvidenceOf, strongerEvidence } from "./settlementEvidence";
 import { salesCommandSaleSchema } from "./salesCommandBridge";
 
 describe("CRM-H1: evidência do recebimento (puro)", () => {
@@ -15,13 +15,6 @@ describe("CRM-H1: evidência do recebimento (puro)", () => {
     expect(requiredEvidenceOf("{nao-json")).toBe("receipt_claimed");
     expect(requiredEvidenceOf({ requiredEvidence: "valor-invalido" })).toBe("receipt_claimed");
     expect(requiredEvidenceOf(JSON.stringify({ requiredEvidence: "bank_reconciled" }))).toBe("bank_reconciled");
-  });
-  it("conciliação promove só quando a soma recebida fecha exatamente com o lançamento", () => {
-    const rows = [{ id: 1, paidAmount: "50.00" }, { id: 2, paidAmount: "100.00" }, { id: 3, paidAmount: "30.00" }];
-    expect(pickInstallmentsForEntry(rows, "150.00")).toEqual([1, 2]);
-    expect(pickInstallmentsForEntry(rows, "180.00")).toEqual([1, 2, 3]);
-    expect(pickInstallmentsForEntry(rows, "70.00")).toEqual([]);
-    expect(pickInstallmentsForEntry(rows, "0.01")).toEqual([]);
   });
 });
 
