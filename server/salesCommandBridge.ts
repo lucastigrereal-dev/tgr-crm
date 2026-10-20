@@ -25,6 +25,7 @@ import {
   localDateInTimezone,
   parseSaleTermsPolicy,
 } from "./saleTermsPolicy";
+import { holdFractionForFormalization, isInventoryHoldAtFormalizationEnabled } from "./formalizationInventory";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { logger } from "./logger";
@@ -33,7 +34,7 @@ import { logger } from "./logger";
 // O Sales lê o código, para de tentar e deixa a venda visível para revisão (PRD v4, resposta 7: REJECTED_BY_CRM com motivo).
 export const SALES_INGEST_REJECTION_CODES = [
   "INSUFFICIENT_INVENTORY", "SALE_TERMS_POLICY_MISSING", "SALE_TERMS_POLICY_AMBIGUOUS",
-  "PROJECT_NOT_MAPPED", "PROJECT_MAPPING_CONFLICT", "INVALID_COMMERCIAL_SNAPSHOT", "INSTALLMENT_LIMIT_EXCEEDED",
+  "PROJECT_NOT_MAPPED", "PROJECT_MAPPING_CONFLICT", "INVALID_COMMERCIAL_SNAPSHOT", "INSTALLMENT_LIMIT_EXCEEDED", "INVENTORY_HELD_EXPIRED",
 ] as const;
 export type SalesIngestRejectionCode = (typeof SALES_INGEST_REJECTION_CODES)[number];
 export class SalesIngestRejection extends Error {
@@ -160,6 +161,7 @@ async function findFormalization(db: any, saleId: string) {
     opportunityId: opportunity.id,
     proposalId: proposal.id,
     contractId: contract.id,
+    inventoryLostAt: (contract.inventoryLostAt as Date | null) ?? null,
     installmentCount: installmentRows.length,
     fractionIds: fractionRows.map((row: { id: number }) => row.id),
   };
@@ -299,7 +301,13 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   )).orderBy(asc(commercialFractions.id)).limit(event.sale.quotasCount).for("update");
   if (available.length !== event.sale.quotasCount) throw new SalesIngestRejection("INSUFFICIENT_INVENTORY", "Insufficient commercial fraction inventory for confirmed sale");
   const fractionIds = available.map((item: typeof commercialFractions.$inferSelect) => item.id);
+  const holdAtFormalization = isInventoryHoldAtFormalizationEnabled();
   for (const fraction of available) {
+    if (holdAtFormalization) {
+      // CRM-E1: reserva com prazo até o administrativo conferir comprovante e documentação; a cota só vira vendida lá.
+      await holdFractionForFormalization(tx, fraction, { contractId, proposalId, userId: null });
+      continue;
+    }
     const updateResult = await tx.update(commercialFractions).set({
       status: "sold",
       currentProposalId: proposalId,
@@ -450,6 +458,11 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
   }
   const event = parsed.data;
   const already = await findFormalization(db, event.saleId);
+  if (already?.inventoryLostAt) {
+    // CRM-E1: a reserva venceu antes da conferência e a cota voltou ao estoque; o Sales não pode seguir como se a venda estivesse formalizada.
+    response.status(422).json({ accepted: false, code: "INVENTORY_HELD_EXPIRED", error: "A reserva da cota venceu antes da conferência; refaça a venda." });
+    return;
+  }
   if (already) {
     await syncRevenueQualityForContract({ contractId: already.contractId, actorUserId: null, trigger: "replay Sales Command" });
     response.status(200).json({ accepted: true, replay: true, ...already, saleId: event.saleId });
@@ -463,6 +476,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       const raced = await findFormalization(db, event.saleId);
+      if (raced?.inventoryLostAt) { response.status(422).json({ accepted: false, code: "INVENTORY_HELD_EXPIRED", error: "A reserva da cota venceu antes da conferência; refaça a venda." }); return; }
       if (raced) {
         await syncRevenueQualityForContract({ contractId: raced.contractId, actorUserId: null, trigger: "race replay Sales Command" });
         response.status(200).json({ accepted: true, replay: true, ...raced, saleId: event.saleId });

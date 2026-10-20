@@ -1,3 +1,4 @@
+import { holdFractionForFormalization, isInventoryHoldAtFormalizationEnabled } from "../formalizationInventory";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -87,6 +88,7 @@ export const contractsRouter = router({
             .limit(1).for("update"))[0] ?? null;
           if (!activeHold) throw new TRPCError({ code: "CONFLICT", message: "A cota está marcada como reservada sem hold ativo. Reprocesse o estoque antes de vender." });
           if (new Date(activeHold.expiresAt).getTime() <= Date.now()) throw new TRPCError({ code: "CONFLICT", message: "O hold da cota expirou. Reserve a cota novamente antes de criar o contrato." });
+          if (activeHold.purpose === "formalization") throw new TRPCError({ code: "CONFLICT", message: "A cota está reservada para a formalização de outro contrato." });
           if (activeHold.proposalId !== (input.proposalId ?? null)) throw new TRPCError({ code: "CONFLICT", message: "O hold da cota pertence a outra proposta." });
           if (ctx.user.role !== "admin" && activeHold.heldByUserId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "A cota está em hold de outro operador." });
         }
@@ -127,7 +129,10 @@ export const contractsRouter = router({
       // ADR-004: evento versionado com valor total do contrato (não é pagamento). v1 acima continua para quem já o consome.
       await txEvent(tx, { eventName: "contract.created.v2", aggregateType: "contract", aggregateId: contractId, actorUserId: ctx.user.id, payload: { contractId, saleId: null, customerId: input.customerId, totalAmount: input.totalAmount.toFixed(2), currency: "BRL", status: input.status, usageModel: input.usageModel, source: "manual" } });
       await recordInstallmentsScheduled(tx, { contractId, actorUserId: ctx.user.id });
-      if (lockedFraction) {
+      if (lockedFraction && isInventoryHoldAtFormalizationEnabled()) {
+        // CRM-E1: a cota fica reservada (held) até a conferência de comprovante e documentação; só então vira vendida.
+        await holdFractionForFormalization(tx, lockedFraction, { contractId, proposalId: input.proposalId ?? null, userId: ctx.user.id, existingHold: activeHold });
+      } else if (lockedFraction) {
         const previousStatus = lockedFraction.status;
         await tx.update(commercialFractions).set({
           status: "sold",
@@ -264,15 +269,18 @@ export const contractsRouter = router({
       await tx.update(financialTransactions).set({ status: "cancelled" }).where(and(eq(financialTransactions.contractId, contract.id), eq(financialTransactions.status, "open")));
       await tx.update(financialTransfers).set({ status: "cancelled" }).where(and(eq(financialTransfers.contractId, contract.id), eq(financialTransfers.status, "pending")));
       await tx.update(ownershipEntitlements).set({ status: "cancelled" }).where(and(eq(ownershipEntitlements.contractId, contract.id), ne(ownershipEntitlements.status, "cancelled")));
-      const soldFractions = await tx.select({ id: commercialFractions.id }).from(commercialFractions)
-        .where(and(eq(commercialFractions.currentContractId, contract.id), eq(commercialFractions.status, "sold"))).for("update");
+      const soldFractions = await tx.select({ id: commercialFractions.id, status: commercialFractions.status }).from(commercialFractions)
+        .where(and(eq(commercialFractions.currentContractId, contract.id), inArray(commercialFractions.status, ["sold", "held"]))).for("update");
       const returnedFractionIds = soldFractions.map(item => item.id);
       if (returnedFractionIds.length) {
+        // CRM-E1: cota ainda reservada na formalização (held): libera o hold ativo junto com a devolução ao estoque.
+        const heldIds = soldFractions.filter(item => item.status === "held").map(item => item.id);
+        if (heldIds.length) await tx.update(commercialFractionHolds).set({ status: "released", activeKey: null, releasedAt: new Date(), releaseReason: "Contrato distratado antes da conferência" }).where(and(inArray(commercialFractionHolds.fractionId, heldIds), eq(commercialFractionHolds.status, "active")));
         await tx.update(commercialFractions).set({ status: "available", currentContractId: null, currentProposalId: null, heldUntil: null, blockedReason: null })
           .where(inArray(commercialFractions.id, returnedFractionIds));
-        await tx.insert(commercialFractionHistory).values(returnedFractionIds.map(fractionId => ({
+        await tx.insert(commercialFractionHistory).values(soldFractions.map(({ id: fractionId, status: fromStatus }) => ({
           fractionId,
-          fromStatus: "sold",
+          fromStatus,
           toStatus: "available",
           contractId: contract.id,
           actorUserId: ctx.user.id,

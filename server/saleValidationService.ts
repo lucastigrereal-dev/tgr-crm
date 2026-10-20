@@ -3,7 +3,7 @@
 // (sale_validation_events), audit_logs e domain_events. Rejeições também deixam trilha (validation_rejected).
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
-import { captureRecords, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
+import { captureRecords, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
 import { canTransitionContractStatus } from "../shared/contractLifecycle";
 import { getDb, recordAudit } from "./db";
 import { affectedRows } from "./mysqlErrors";
@@ -12,6 +12,7 @@ import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { evaluateSaleValidationGates, gatesNotAfter, isContractDocumentCategory, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
 import { createHash } from "node:crypto";
 import { conferralsBeforeGeneration, saleOrderGateState } from "./saleOrderGate";
+import { isInventoryHoldAtFormalizationEnabled, settleFormalizationInventory } from "./formalizationInventory";
 import { isSegregationEnabled } from "./saleValidatorAccess";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { txAudit, txEvent, type Tx } from "./txOutbox";
@@ -28,6 +29,7 @@ export type SaleValidationErrorCode =
   | "SALE_GATE_TIMESTAMP_INVALID"
   | "SALE_VALIDATION_REQUIRED"
   | "SALE_SEGREGATION"
+  | "INVENTORY_HELD_EXPIRED"
   | "COMMISSION_REQUIRES_VALIDATED_SALE";
 
 /** O código de recusa vai no início da mensagem (`CODE: texto`) e em `cause.code`; tRPC não tem campo próprio. */
@@ -88,6 +90,11 @@ export async function getValidationStatus(contractId: number) {
   };
 }
 
+/** Conferência gravada, mas a reserva da cota venceu antes: a cota voltou ao estoque (já commitado); o administrativo precisa saber. */
+function throwIfInventoryLost(outcome: { settle?: { status: string } }) {
+  if (outcome.settle?.status === "lost") throw saleValidationError("CONFLICT", "INVENTORY_HELD_EXPIRED", "A reserva da cota venceu antes da conferência; a cota voltou ao estoque. Refazer a venda.");
+}
+
 const PRE_VALIDATION_STATUSES = ["draft", "pending_signature"];
 
 export async function confirmPayment(actorUserId: number, input: { contractId: number; note: string; evidenceRef?: string | null }) {
@@ -121,9 +128,11 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
     });
     await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "payment_confirmed", summary: `Pagamento da venda do contrato ${input.contractId} conferido pelo administrativo autorizado.`, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
     await txEvent(tx, { eventName: "sale.payment.confirmed", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { contractId: input.contractId, saleId, confirmedAt: confirmedAt.toISOString(), confirmedByUserId: actorUserId }, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
-    return { alreadyConfirmed: false as const, confirmedAt };
+    const settle = await settleFormalizationInventory(tx, input.contractId, actorUserId, confirmedAt);
+    return { alreadyConfirmed: false as const, confirmedAt, settle };
   });
-  return { success: true as const, ...outcome };
+  throwIfInventoryLost(outcome);
+  return { success: true as const, alreadyConfirmed: outcome.alreadyConfirmed, confirmedAt: outcome.confirmedAt };
 }
 
 async function loadCommissionContext(tx: Reader, contractId: number) {
@@ -266,13 +275,15 @@ export async function confirmDocuments(actorUserId: number, input: { contractId:
     if (affectedRows(update) === 0) throw new TRPCError({ code: "CONFLICT", message: "Validação da venda alterada por outra operação. Recarregue." });
     // Fato interno do CRM: sem evento para outro sistema (nenhum contrato muda). A trilha é a auditoria com ator e nota.
     await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "documents_conferred", summary: `Documentação do contrato ${input.contractId} conferida pelo administrativo autorizado: ${input.note}`, idempotencyKey: `sale-documents-confer:${input.contractId}` });
-    return { alreadyConfirmed: false as const, confirmedAt };
+    const settle = await settleFormalizationInventory(tx, input.contractId, actorUserId, confirmedAt);
+    return { alreadyConfirmed: false as const, confirmedAt, settle };
   });
-  return { success: true as const, ...outcome };
+  throwIfInventoryLost(outcome);
+  return { success: true as const, alreadyConfirmed: outcome.alreadyConfirmed, confirmedAt: outcome.confirmedAt };
 }
 
 class GatesNotReady extends Error {
-  constructor(readonly reason: "gates" | "document" | "state" | "timestamps", readonly missing: SaleGateKey[], readonly detail: string) { super(detail); }
+  constructor(readonly reason: "gates" | "document" | "state" | "timestamps" | "inventory", readonly missing: SaleGateKey[], readonly detail: string) { super(detail); }
 }
 
 export async function validateSale(actorUserId: number, input: { contractId: number; signedDocumentId?: number | null }) {
@@ -311,6 +322,11 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       // Segunda validação concorrente: quem perdeu a corrida encontra o contrato já validado => sucesso idempotente (sem rejeição).
       if (locked.status === "active" && facts.validation?.validatedAt) return { alreadyValidated: true as const, validatedAt: facts.validation.validatedAt };
       if (!PRE_VALIDATION_STATUSES.includes(locked.status)) throw new GatesNotReady("state", [], `Contrato em estado ${locked.status} não pode ser validado.`);
+      if (isInventoryHoldAtFormalizationEnabled()) {
+        const stock = (await tx.select({ lost: contracts.inventoryLostAt }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
+        const held = await tx.select({ id: commercialFractions.id }).from(commercialFractions).where(and(eq(commercialFractions.currentContractId, input.contractId), eq(commercialFractions.status, "held"))).limit(1);
+        if (stock?.lost || held.length) throw new GatesNotReady("inventory", [], "A cota deste contrato não está vendida (reserva vencida ou conferências pendentes).");
+      }
       const gates = gatesOf({ ...facts, contract: { ...facts.contract!, signedAt: locked.signedAt } });
       if (!gates.ready) throw new GatesNotReady("gates", gates.missing, `Portões abertos: faltam ${gates.missing.join(", ")}.`);
       const document = pickSignedDocument(facts.documents, input.signedDocumentId ?? null);
@@ -380,6 +396,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
     const detail = isGate ? error.detail : (error as TRPCError).message;
     await recordRejection(detail, isGate ? error.missing : [], facts.contract?.status ?? "unknown", gates);
     if (!isGate) throw error;
+    if (error.reason === "inventory") throw saleValidationError("CONFLICT", "INVENTORY_HELD_EXPIRED", error.detail);
     if (error.reason === "state") throw saleValidationError("CONFLICT", "SALE_VALIDATION_CONTRACT_STATE", error.detail);
     if (error.reason === "timestamps") throw saleValidationError("PRECONDITION_FAILED", "SALE_GATE_TIMESTAMP_INVALID", error.detail);
     if (error.reason === "document") throw saleValidationError("PRECONDITION_FAILED", "SALE_SIGNED_DOCUMENT_INVALID", error.detail);

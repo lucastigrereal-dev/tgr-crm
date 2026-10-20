@@ -519,6 +519,13 @@
       "when": 1792531392056,
       "tag": "0073_sale_documents_conferred",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "5",
+      "when": 1792532279202,
+      "tag": "0074_stock_hold_formalization",
+      "breakpoints": true
     }
   ]
 }
