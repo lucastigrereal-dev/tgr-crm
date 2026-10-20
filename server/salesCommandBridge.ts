@@ -82,12 +82,17 @@ export const salesCommandSaleSchema = z.strictObject({
     quotasCount: z.number().int().min(1).max(104),
     vgvCents: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
     entryContractedCents: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    entryReceivedCents: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    // CRM-H1: recebimento DECLARADO pelo Sales (comprovante), não dinheiro conferido. `entryReceiptClaimedCents` é o nome novo; `entryReceivedCents` segue aceito.
+    entryReceivedCents: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    entryReceiptClaimedCents: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     entryInstallmentCount: z.number().int().min(1).max(100),
     entrySchedule: z.array(entryScheduleRow).min(1).max(100),
     firstBalanceDueInDays: z.number().int().min(0).max(365),
     paymentMethods: z.array(z.string().trim().min(1).max(64)).min(1).max(20),
-  }),
+  }).superRefine((sale, ctx) => {
+    if (sale.entryReceivedCents === undefined && sale.entryReceiptClaimedCents === undefined) ctx.addIssue({ code: "custom", path: ["entryReceiptClaimedCents"], message: "Informe entryReceiptClaimedCents (ou entryReceivedCents)." });
+    if (sale.entryReceivedCents !== undefined && sale.entryReceiptClaimedCents !== undefined && sale.entryReceivedCents !== sale.entryReceiptClaimedCents) ctx.addIssue({ code: "custom", path: ["entryReceiptClaimedCents"], message: "entryReceivedCents e entryReceiptClaimedCents divergem." });
+  }).transform(({ entryReceiptClaimedCents, entryReceivedCents, ...rest }) => ({ ...rest, entryReceivedCents: (entryReceivedCents ?? entryReceiptClaimedCents)! })),
 });
 
 export type SalesCommandSale = z.infer<typeof salesCommandSaleSchema>;

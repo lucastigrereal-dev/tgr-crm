@@ -19,8 +19,16 @@ function safeObject(value: string | null) {
   try { const parsed = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; }
 }
 
+/** CRM-H1: campos ADITIVOS fora do snapshot; só saem com INSTALLMENT_EVIDENCE_IN_EVENT=true (o consumidor precisa aceitá-los antes). */
+function flagGatedFields(eventName: string): readonly string[] {
+  if (typeof process === "undefined" || process.env.INSTALLMENT_EVIDENCE_IN_EVENT !== "true") return [];
+  if (eventName === "installment.paid") return ["settlementEvidence"];
+  if (eventName === "financial.entry.reconciled") return ["installmentIds", "settlementEvidence"];
+  return [];
+}
+
 export function toIntegrationEvent(input: { id: number; eventName: DomainEventName; aggregateType: string; aggregateId: string; actorUserId: number | null; payload: string | null; occurredAt: Date }) {
   const source = safeObject(input.payload);
-  const payload = Object.fromEntries(allowedPayloadFields[input.eventName].flatMap(key => key in source ? [[key, source[key]]] : []));
+  const payload = Object.fromEntries([...allowedPayloadFields[input.eventName], ...flagGatedFields(input.eventName)].flatMap(key => key in source ? [[key, source[key]]] : []));
   return { contractVersion: integrationContractVersion, eventId: input.id, eventName: input.eventName, aggregate: { type: input.aggregateType, id: input.aggregateId }, actorUserId: input.actorUserId, occurredAt: input.occurredAt.toISOString(), payload };
 }

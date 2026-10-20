@@ -11,14 +11,14 @@ import { validateIsolatedE2EDatabase } from "./e2eSafety";
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const root = path.resolve(import.meta.dirname, "..");
 const BREAKPOINT = "--> statement-breakpoint";
-const ROLLED = ["0061", "0062", "0063", "0064", "0065", "0066", "0067", "0068", "0069", "0070", "0071", "0072", "0073", "0074"];
+const ROLLED = ["0061", "0062", "0063", "0064", "0065", "0066", "0067", "0068", "0069", "0070", "0071", "0072", "0073", "0074", "0075"];
 
 type JournalEntry = { idx: number; tag: string; when: number };
 const journal = (JSON.parse(readFileSync(path.join(root, "drizzle/meta/_journal.json"), "utf8")) as { entries: JournalEntry[] }).entries;
 const entryOf = (prefix: string) => journal.find(entry => entry.tag.startsWith(`${prefix}_`))!;
 const chunks = (file: string) => readFileSync(path.join(root, file), "utf8").split(BREAKPOINT).map(part => part.trim()).filter(Boolean);
 
-describe.skipIf(!integrationUrl)("rollbacks 0061 a 0074 em MySQL descartável (sobe-desce-sobe, estado parcial)", () => {
+describe.skipIf(!integrationUrl)("rollbacks 0061 a 0075 em MySQL descartável (sobe-desce-sobe, estado parcial)", () => {
   let admin: mysql.Connection;
   let conn: mysql.Connection;
   const dbName = `tgr_crm_rb_${randomUUID().replace(/-/g, "").slice(0, 10)}_test`;
@@ -42,9 +42,9 @@ describe.skipIf(!integrationUrl)("rollbacks 0061 a 0074 em MySQL descartável (s
     prints: await tableExists("capture_sheet_prints"), members: await tableExists("capture_team_members"), roles: await tableExists("capture_team_roles"), settings: await tableExists("capture_sheet_settings"),
     motives: await tableExists("capture_motives"), times: await tableExists("encounter_time_records"), erasure: await tableExists("capture_erasure_requests"),
     coupleCode: await columnExists("capture_records", "coupleCode"), coupleIdx: await indexExists("capture_records", "captures_couple_code_unique"), maleSpouse: await columnExists("capture_records", "maleSpouse"),
-    collectedAt: await columnExists("capture_sheet_prints", "collectedAt"), ntKind: await columnExists("capture_records", "ntKind"), captureAnon: await columnExists("capture_records", "anonymizedAt"), customerAnon: await columnExists("customers", "anonymizedAt"), promoterRole: await enumHas("sales_commissions", "commissionRole", "promoter"), issueIntents: await tableExists("payment_gateway_issue_intents"), ruleVersion: await columnExists("sales_commissions", "ruleVersion"), projectMap: await tableExists("financial_project_map"), addenda: await tableExists("contract_addenda"), grants: await tableExists("sale_validator_grants"), docsConferred: await columnExists("sale_validations", "documentsConferredAt"), holdPurpose: await columnExists("commercial_fraction_holds", "purpose"), inventoryLost: await columnExists("contracts", "inventoryLostAt"), stockHoldEnum: await enumHas("commercial_policy_versions", "policyType", "stock_hold"),
+    collectedAt: await columnExists("capture_sheet_prints", "collectedAt"), ntKind: await columnExists("capture_records", "ntKind"), captureAnon: await columnExists("capture_records", "anonymizedAt"), customerAnon: await columnExists("customers", "anonymizedAt"), promoterRole: await enumHas("sales_commissions", "commissionRole", "promoter"), issueIntents: await tableExists("payment_gateway_issue_intents"), ruleVersion: await columnExists("sales_commissions", "ruleVersion"), projectMap: await tableExists("financial_project_map"), addenda: await tableExists("contract_addenda"), grants: await tableExists("sale_validator_grants"), docsConferred: await columnExists("sale_validations", "documentsConferredAt"), holdPurpose: await columnExists("commercial_fraction_holds", "purpose"), inventoryLost: await columnExists("contracts", "inventoryLostAt"), stockHoldEnum: await enumHas("commercial_policy_versions", "policyType", "stock_hold"), settlementEvidence: await columnExists("installments", "settlementEvidence"),
   });
-  const allPresent = { prints: true, members: true, roles: true, settings: true, motives: true, times: true, erasure: true, coupleCode: true, coupleIdx: true, maleSpouse: true, collectedAt: true, ntKind: true, captureAnon: true, customerAnon: true, promoterRole: true, issueIntents: true, ruleVersion: true, projectMap: true, addenda: true, grants: true, docsConferred: true, holdPurpose: true, inventoryLost: true, stockHoldEnum: true };
+  const allPresent = { prints: true, members: true, roles: true, settings: true, motives: true, times: true, erasure: true, coupleCode: true, coupleIdx: true, maleSpouse: true, collectedAt: true, ntKind: true, captureAnon: true, customerAnon: true, promoterRole: true, issueIntents: true, ruleVersion: true, projectMap: true, addenda: true, grants: true, docsConferred: true, holdPurpose: true, inventoryLost: true, stockHoldEnum: true, settlementEvidence: true };
   const allGone = Object.fromEntries(Object.entries(allPresent).map(([key]) => [key, false]));
 
   beforeAll(async () => {
@@ -71,7 +71,7 @@ describe.skipIf(!integrationUrl)("rollbacks 0061 a 0074 em MySQL descartável (s
     expect(await appliedRolled()).toBe(ROLLED.length);
   });
 
-  it("desce na ordem inversa (0074 a 0061), sobe de novo (0061 a 0074) e desce outra vez: cada passo deixa o banco no estado esperado", async () => {
+  it("desce na ordem inversa (0075 a 0061), sobe de novo (0061 a 0075) e desce outra vez: cada passo deixa o banco no estado esperado", async () => {
     for (const prefix of [...ROLLED].reverse()) await down(prefix);
     expect(await probes()).toEqual(allGone);
     expect(await appliedRolled()).toBe(0);

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { billingRecords, captureRecords, commercialProjectSettings, contracts, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, salesCommissions } from "../drizzle/schema";
 import { getDb } from "./db";
 import { getAsaasConfig, isAsaasPaymentConfirmed, isAsaasPaymentOverdue, isAsaasWebhookTokenValid } from "./paymentGateway";
@@ -99,6 +99,8 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           paidAmount: nextPaid.toFixed(2),
           paidAt: fullyPaid ? paidAt : billing.installment.paidAt,
           paymentMethod: billing.billing.type,
+          // Evidência só sobe: webhook tardio não rebaixa uma parcela já conciliada com o extrato.
+          settlementEvidence: sql`CASE WHEN ${installments.settlementEvidence} = 'bank_reconciled' THEN 'bank_reconciled' ELSE 'gateway_confirmed' END`,
         }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
         const paymentRecorded = affectedRows(installmentUpdate) !== 0;
         if (!paymentRecorded) {
@@ -108,7 +110,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
         }
         if (paymentRecorded) {
           installmentPaid = fullyPaid;
-          await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", createdByUserId: null });
+          await tx.insert(financialTransactions).values({ contractId: billing.installment.contractId, campaignId: null, type: "income", category: "Parcela de contrato", description: `Recebimento via gateway Asaas · parcela ${billing.installment.sequence}`, amount: receivedNow.toFixed(2), dueDate: billing.installment.dueDate, paidAt, status: "paid", installmentId: billing.installment.id, createdByUserId: null });
           if (fullyPaid) {
             const context = (await tx.select({ contract: contracts, proposal: proposals, opportunity: opportunities, capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, billing.installment.contractId)).orderBy(desc(captureRecords.createdAt)).limit(1))[0];
             const settledCustomerId = context?.contract?.customerId ?? null;

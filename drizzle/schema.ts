@@ -957,6 +957,8 @@ export const installments = mysqlTable(
     status: mysqlEnum("status", ["open", "paid", "overdue", "cancelled", "renegotiated"]).default("open").notNull(),
     paidAt: timestamp("paidAt"),
     paymentMethod: varchar("paymentMethod", { length: 64 }),
+    // CRM-H1: o que sustenta o "pago". receipt_claimed = recebimento declarado (comprovante/baixa manual/entrada informada pelo Sales); gateway_confirmed = webhook do gateway; bank_reconciled = conciliado com o extrato.
+    settlementEvidence: mysqlEnum("settlementEvidence", ["receipt_claimed", "gateway_confirmed", "bank_reconciled"]).default("receipt_claimed").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -1099,10 +1101,12 @@ export const financialTransactions = mysqlTable(
     reconciliationReference: varchar("reconciliationReference", { length: 255 }),
     reconciledAt: timestamp("reconciledAt"),
     reconciledByUserId: int("reconciledByUserId").references(() => users.id),
+    // CRM-H1: vínculo EXPLÍCITO lançamento -> parcela (baixa manual e webhook). A conciliação só promove a evidência da parcela vinculada; nunca infere por valor.
+    installmentId: int("installmentId"),
     createdByUserId: int("createdByUserId").references(() => users.id),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
-  table => [index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status), index("financial_transactions_paid_idx").on(table.status, table.paidAt, table.type), uniqueIndex("financial_transactions_idempotency_unique").on(table.idempotencyKey)],
+  table => [index("financial_transactions_installment_idx").on(table.installmentId), index("financial_transactions_status_idx").on(table.status, table.type), index("financial_transactions_campaign_idx").on(table.campaignId, table.status), index("financial_transactions_paid_idx").on(table.status, table.paidAt, table.type), uniqueIndex("financial_transactions_idempotency_unique").on(table.idempotencyKey)],
 );
 
 export const financialPortfolioAssignments = mysqlTable("financial_portfolio_assignments", {

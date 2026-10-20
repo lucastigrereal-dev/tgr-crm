@@ -526,6 +526,13 @@
       "when": 1792532279202,
       "tag": "0074_stock_hold_formalization",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "5",
+      "when": 1792532946365,
+      "tag": "0075_installment_settlement_evidence",
+      "breakpoints": true
     }
   ]
 }
