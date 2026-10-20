@@ -16,7 +16,7 @@ Status: proposta, flag `INVENTORY_HOLD_AT_FORMALIZATION` DESLIGADA por padrão. 
 - Nenhum evento de saída novo (os eventos de cota são internos).
 
 ## Migração proposta 0074 (nada aplicado)
-`commercial_fraction_holds.heldByUserId` nulável, `purpose`, `contractId`; `commercial_policy_versions.policyType` + `stock_hold`; `contracts.inventoryLostAt`. Rollback em `docs/rollback/0074_stock_hold_formalization.down.sql`, sobe-desce-sobe testado em MySQL descartável.
+`commercial_fraction_holds.heldByUserId` nulável (o rollback a mantém nulável, sem fabricar autor), `purpose`, `contractId`; `commercial_policy_versions.policyType` + `stock_hold`; `contracts.inventoryLostAt`. Rollback em `docs/rollback/0074_stock_hold_formalization.down.sql`, sobe-desce-sobe testado em MySQL descartável.
 
 ## Testes (MySQL)
 `server/formalizationInventory.mysql.test.ts`: flag off vende na criação; reserva de 48 h e venda só após as duas conferências; política stock_hold (2 h, inválida recusada); dois contratos na mesma cota; hold vencido na segunda conferência (estoque, tarefa, erro, validação recusada, cota revendável); conferência final concorrente com sweep (3 rodadas, sem deadlock); conferências simultâneas vendem uma vez; ingestão reserva sem usuário, estoque insuficiente continua 422, replay com reserva perdida devolve 422.
