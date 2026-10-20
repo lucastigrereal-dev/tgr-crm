@@ -10,10 +10,11 @@ Status: proposta, flag `INVENTORY_HOLD_AT_FORMALIZATION` DESLIGADA por padrão. 
 - Distrato antes da conferência libera o hold ativo e devolve a cota.
 - Hold da ingestão tem `heldByUserId` nulo.
 
-## Contrato com o Sales (muda: Suite primeiro)
-- `INVENTORY_HELD_EXPIRED` entra em `SALES_INGEST_REJECTION_CODES`, portanto na seção `sales` de `shared/contracts/tgr-events.snapshot.json` (`ingestRejection.codes`). O replay de um `saleId` cuja reserva foi perdida responde 422 `{accepted:false, code:"INVENTORY_HELD_EXPIRED", error}` em vez de 200 replay.
-- Hash da seção sales: `a9567eb9...` -> `bfebebd0970a35a2a84005634d81e1ff6950747f85e23f51c269e46acb859fa7`. O re-pin está num commit separado; ordem Suite -> CRM -> re-pin. O Sales deve tratar 422 como "reserva vencida, refaça", sem retry cego e sem marcar a venda.
+## Contrato com o Sales (Suite #130 já tolera o código)
+- Replay de um `saleId` cuja reserva foi perdida responde 422 `{accepted:false, code:"INVENTORY_HELD_EXPIRED", error}` em vez de 200 replay. O Sales deve tratar como "reserva vencida, refaça", sem retry cego e sem marcar a venda.
+- O código NÃO entra em `SALES_INGEST_REJECTION_CODES` neste PR, então snapshot e `consumers.lock.json` ficam intactos. Um PR de re-pin separado, depois do #130 mergeado, move `INVENTORY_HELD_EXPIRED_CODE` para a lista (seção `sales`: `a9567eb9...` -> `bfebebd0970a35a2a84005634d81e1ff6950747f85e23f51c269e46acb859fa7`).
 - Nenhum evento de saída novo (os eventos de cota são internos).
+- A flag só controla CRIAR holds: com ela desligada depois, contratos que já têm hold de formalização continuam sendo liquidados ou perdidos, e `validateSale` mantém a guarda. Caminhos genéricos (`releaseHold`, `createHold`) recusam hold de formalização. Reserva perdida é persistida: repetir a conferência devolve o mesmo `INVENTORY_HELD_EXPIRED`.
 
 ## Migração proposta 0074 (nada aplicado)
 `commercial_fraction_holds.heldByUserId` nulável (o rollback a mantém nulável, sem fabricar autor), `purpose`, `contractId`; `commercial_policy_versions.policyType` + `stock_hold`; `contracts.inventoryLostAt`. Rollback em `docs/rollback/0074_stock_hold_formalization.down.sql`, sobe-desce-sobe testado em MySQL descartável.

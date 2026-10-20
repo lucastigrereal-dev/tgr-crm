@@ -6,7 +6,7 @@ import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { captureRecords, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contractSignatureEnvelopes, contracts, domainEvents, installments, opportunities, proposals, saleValidationEvents, saleValidations, salesCommissions } from "../drizzle/schema";
 import { canTransitionContractStatus } from "../shared/contractLifecycle";
 import { getDb, recordAudit } from "./db";
-import { affectedRows } from "./mysqlErrors";
+import { affectedRows, withDeadlockRetry } from "./mysqlErrors";
 import { COMMISSION_BLOCKED_MESSAGE, COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CompleteCommissionPolicy } from "./installmentCommissions";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 import { evaluateSaleValidationGates, gatesNotAfter, isContractDocumentCategory, pickSignedDocument, saleDocumentRef, saleGateTimestamps, type SaleGateKey, type SaleValidationGates } from "./saleValidation";
@@ -48,7 +48,7 @@ export const correlationIdForContract = (contractId: number) => `crm-sale-${cont
 const iso = (value: Date | null | undefined) => (value ? value.toISOString() : null);
 
 export async function loadSaleValidationFacts(reader: Reader, contractId: number) {
-  const contract = (await reader.select({ id: contracts.id, status: contracts.status, signedAt: contracts.signedAt, externalSource: contracts.externalSource, externalSaleId: contracts.externalSaleId }).from(contracts).where(eq(contracts.id, contractId)).limit(1))[0] ?? null;
+  const contract = (await reader.select({ id: contracts.id, status: contracts.status, signedAt: contracts.signedAt, externalSource: contracts.externalSource, externalSaleId: contracts.externalSaleId, inventoryLostAt: contracts.inventoryLostAt }).from(contracts).where(eq(contracts.id, contractId)).limit(1))[0] ?? null;
   const documents = contract ? await reader.select({ id: contractDocuments.id, signedArtifact: contractDocuments.signedArtifact, storageKey: contractDocuments.storageKey, category: contractDocuments.category, filename: contractDocuments.filename, createdAt: contractDocuments.createdAt }).from(contractDocuments).where(eq(contractDocuments.contractId, contractId)) : [];
   const envelopes = contract ? await reader.select({ status: contractSignatureEnvelopes.status, createdAt: contractSignatureEnvelopes.createdAt }).from(contractSignatureEnvelopes).where(eq(contractSignatureEnvelopes.contractId, contractId)) : [];
   const validation = (await reader.select().from(saleValidations).where(eq(saleValidations.contractId, contractId)).limit(1))[0] ?? null;
@@ -95,6 +95,11 @@ function throwIfInventoryLost(outcome: { settle?: { status: string } }) {
   if (outcome.settle?.status === "lost") throw saleValidationError("CONFLICT", "INVENTORY_HELD_EXPIRED", "A reserva da cota venceu antes da conferência; a cota voltou ao estoque. Refazer a venda.");
 }
 
+/** Reserva perdida é fato persistido: retry/idempotência devolvem o mesmo erro, nunca sucesso. */
+function throwIfContractInventoryLost(contract: { inventoryLostAt?: Date | null } | null) {
+  if (contract?.inventoryLostAt) throw saleValidationError("CONFLICT", "INVENTORY_HELD_EXPIRED", "A reserva da cota venceu antes da conferência; a cota voltou ao estoque. Refazer a venda.");
+}
+
 const PRE_VALIDATION_STATUSES = ["draft", "pending_signature"];
 
 export async function confirmPayment(actorUserId: number, input: { contractId: number; note: string; evidenceRef?: string | null }) {
@@ -102,16 +107,18 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
   const facts = await loadSaleValidationFacts(db, input.contractId);
   if (!facts.contract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
+  throwIfContractInventoryLost(facts.contract);
   if (facts.validation?.paymentConfirmedAt) return { success: true as const, alreadyConfirmed: true as const, confirmedAt: facts.validation.paymentConfirmedAt };
   const stateError = (status: string) => saleValidationError("CONFLICT", "SALE_PAYMENT_CONTRACT_STATE", `Pagamento só pode ser confirmado com contrato em rascunho ou aguardando assinatura (atual: ${status}).`);
   if (!PRE_VALIDATION_STATUSES.includes(facts.contract.status)) throw stateError(facts.contract.status);
   const saleId = facts.contract.externalSaleId ?? null;
   const confirmedAt = new Date();
   const correlationId = correlationIdForContract(input.contractId);
-  const outcome = await db.transaction(async tx => {
+  const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
     // Mesma ordem de trava da validação final (contrato -> sale_validations): um distrato/cancelamento concorrente não passa.
-    const lockedContract = (await tx.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
+    const lockedContract = (await tx.select({ status: contracts.status, inventoryLostAt: contracts.inventoryLostAt }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
     if (!lockedContract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
+    throwIfContractInventoryLost(lockedContract);
     // Garante a linha e a trava; a unique(contractId) serializa dois cliques concorrentes.
     await tx.insert(saleValidations).values({ contractId: input.contractId }).onDuplicateKeyUpdate({ set: { contractId: sql`contractId` } });
     const row = (await tx.select().from(saleValidations).where(eq(saleValidations.contractId, input.contractId)).limit(1).for("update"))[0];
@@ -130,7 +137,7 @@ export async function confirmPayment(actorUserId: number, input: { contractId: n
     await txEvent(tx, { eventName: "sale.payment.confirmed", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { contractId: input.contractId, saleId, confirmedAt: confirmedAt.toISOString(), confirmedByUserId: actorUserId }, idempotencyKey: `sale-payment-confirmed:${input.contractId}` });
     const settle = await settleFormalizationInventory(tx, input.contractId, actorUserId, confirmedAt);
     return { alreadyConfirmed: false as const, confirmedAt, settle };
-  });
+  }));
   throwIfInventoryLost(outcome);
   return { success: true as const, alreadyConfirmed: outcome.alreadyConfirmed, confirmedAt: outcome.confirmedAt };
 }
@@ -260,13 +267,15 @@ export async function confirmDocuments(actorUserId: number, input: { contractId:
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
   const facts = await loadSaleValidationFacts(db, input.contractId);
   if (!facts.contract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
+  throwIfContractInventoryLost(facts.contract);
   if (facts.validation?.documentsConferredAt) return { success: true as const, alreadyConfirmed: true as const, confirmedAt: facts.validation.documentsConferredAt };
   const stateError = (status: string) => saleValidationError("CONFLICT", "SALE_PAYMENT_CONTRACT_STATE", `Documentação só pode ser conferida com contrato em rascunho ou aguardando assinatura (atual: ${status}).`);
   if (!PRE_VALIDATION_STATUSES.includes(facts.contract.status)) throw stateError(facts.contract.status);
   const confirmedAt = new Date();
-  const outcome = await db.transaction(async tx => {
-    const lockedContract = (await tx.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
+  const outcome = await withDeadlockRetry(() => db.transaction(async tx => {
+    const lockedContract = (await tx.select({ status: contracts.status, inventoryLostAt: contracts.inventoryLostAt }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
     if (!lockedContract) throw saleValidationError("NOT_FOUND", "SALE_CONTRACT_NOT_FOUND", "Contrato não encontrado.");
+    throwIfContractInventoryLost(lockedContract);
     await tx.insert(saleValidations).values({ contractId: input.contractId }).onDuplicateKeyUpdate({ set: { contractId: sql`contractId` } });
     const row = (await tx.select().from(saleValidations).where(eq(saleValidations.contractId, input.contractId)).limit(1).for("update"))[0];
     if (row?.documentsConferredAt) return { alreadyConfirmed: true as const, confirmedAt: row.documentsConferredAt };
@@ -277,7 +286,7 @@ export async function confirmDocuments(actorUserId: number, input: { contractId:
     await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "documents_conferred", summary: `Documentação do contrato ${input.contractId} conferida pelo administrativo autorizado: ${input.note}`, idempotencyKey: `sale-documents-confer:${input.contractId}` });
     const settle = await settleFormalizationInventory(tx, input.contractId, actorUserId, confirmedAt);
     return { alreadyConfirmed: false as const, confirmedAt, settle };
-  });
+  }));
   throwIfInventoryLost(outcome);
   return { success: true as const, alreadyConfirmed: outcome.alreadyConfirmed, confirmedAt: outcome.confirmedAt };
 }
@@ -322,7 +331,7 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       // Segunda validação concorrente: quem perdeu a corrida encontra o contrato já validado => sucesso idempotente (sem rejeição).
       if (locked.status === "active" && facts.validation?.validatedAt) return { alreadyValidated: true as const, validatedAt: facts.validation.validatedAt };
       if (!PRE_VALIDATION_STATUSES.includes(locked.status)) throw new GatesNotReady("state", [], `Contrato em estado ${locked.status} não pode ser validado.`);
-      if (isInventoryHoldAtFormalizationEnabled()) {
+      {
         const stock = (await tx.select({ lost: contracts.inventoryLostAt }).from(contracts).where(eq(contracts.id, input.contractId)).limit(1))[0];
         const held = await tx.select({ id: commercialFractions.id }).from(commercialFractions).where(and(eq(commercialFractions.currentContractId, input.contractId), eq(commercialFractions.status, "held"))).limit(1);
         if (stock?.lost || held.length) throw new GatesNotReady("inventory", [], "A cota deste contrato não está vendida (reserva vencida ou conferências pendentes).");
