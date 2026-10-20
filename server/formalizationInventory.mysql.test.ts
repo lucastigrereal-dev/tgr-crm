@@ -136,6 +136,51 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
       expect(consumed).toHaveLength(1);
     });
 
+    it("Codex P1: flag desligada depois de criar o hold não encalha a cota — conferências ainda liquidam (vende) e a guarda do validateSale continua", async () => {
+      const f = await newFraction(); const id = await createContract("flagoff", f);
+      const api = await saleApi();
+      process.env.INVENTORY_HOLD_AT_FORMALIZATION = "false";
+      try {
+        await expect(api.validateSale({ contractId: id })).rejects.toThrow(/INVENTORY_HELD_EXPIRED|SALE_/); // cota ainda held: nunca valida
+        await api.confirmPayment({ contractId: id, note: "comprovante conferido" });
+        await api.confirmDocuments({ contractId: id, note: "documentação conferida" });
+      } finally { process.env.INVENTORY_HOLD_AT_FORMALIZATION = "true"; }
+      expect((await fraction(f)).status).toBe("sold");
+      const g = await newFraction(); const id2 = await createContract("flagoff2", g);
+      process.env.INVENTORY_HOLD_AT_FORMALIZATION = "false";
+      try {
+        await api.confirmPayment({ contractId: id2, note: "comprovante conferido" });
+        await expireHolds(g);
+        await expect(api.confirmDocuments({ contractId: id2, note: "documentação conferida" })).rejects.toThrow(/INVENTORY_HELD_EXPIRED/);
+        await expect(api.validateSale({ contractId: id2 })).rejects.toThrow();
+      } finally { process.env.INVENTORY_HOLD_AT_FORMALIZATION = "true"; }
+      expect((await fraction(g)).status).toBe("available");
+    });
+
+    it("Codex P1: caminhos genéricos de estoque não liberam nem reutilizam hold de formalização", async () => {
+      const f = await newFraction(); const id = await createContract("generic", f);
+      const [hold] = await holds(f);
+      const inv = (await import("./routers/inventory")).inventoryRouter;
+      const asAdmin = inv.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      await expect(asAdmin.releaseHold({ holdId: hold!.id, reason: "tentativa manual" })).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(asAdmin.createHold({ fractionId: f } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await fraction(f)).toMatchObject({ status: "held", currentContractId: id });
+      expect((await contractRow(id)).inventoryLostAt).toBeNull();
+      // vencido: createHold também recusa (o sweep marca a perda do contrato)
+      await expireHolds(f);
+      await expect(asAdmin.createHold({ fractionId: f } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("Codex P2: reserva perdida é fato persistido — repetir a conferência devolve o mesmo INVENTORY_HELD_EXPIRED, nunca sucesso", async () => {
+      const f = await newFraction(); const id = await createContract("retry", f);
+      const api = await saleApi();
+      await api.confirmPayment({ contractId: id, note: "comprovante conferido" });
+      await expireHolds(f);
+      await expect(api.confirmDocuments({ contractId: id, note: "documentação conferida" })).rejects.toThrow(/INVENTORY_HELD_EXPIRED/);
+      await expect(api.confirmDocuments({ contractId: id, note: "de novo" })).rejects.toThrow(/INVENTORY_HELD_EXPIRED/);
+      await expect(api.confirmPayment({ contractId: id, note: "de novo" })).rejects.toThrow(/INVENTORY_HELD_EXPIRED/);
+    });
+
     it("distrato executado antes da conferência libera a cota held e o hold ativo (executeCancellation de verdade)", async () => {
       const f = await newFraction(); const id = await createContract("cancel-real", f);
       expect((await fraction(f)).status).toBe("held");

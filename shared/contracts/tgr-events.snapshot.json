@@ -308,8 +308,7 @@
         "PROJECT_NOT_MAPPED",
         "PROJECT_MAPPING_CONFLICT",
         "INVALID_COMMERCIAL_SNAPSHOT",
-        "INSTALLMENT_LIMIT_EXCEEDED",
-        "INVENTORY_HELD_EXPIRED"
+        "INSTALLMENT_LIMIT_EXCEEDED"
       ]
     },
     "ingestTransientFailure": {

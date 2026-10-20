@@ -34,8 +34,13 @@ import { logger } from "./logger";
 // O Sales lê o código, para de tentar e deixa a venda visível para revisão (PRD v4, resposta 7: REJECTED_BY_CRM com motivo).
 export const SALES_INGEST_REJECTION_CODES = [
   "INSUFFICIENT_INVENTORY", "SALE_TERMS_POLICY_MISSING", "SALE_TERMS_POLICY_AMBIGUOUS",
-  "PROJECT_NOT_MAPPED", "PROJECT_MAPPING_CONFLICT", "INVALID_COMMERCIAL_SNAPSHOT", "INSTALLMENT_LIMIT_EXCEEDED", "INVENTORY_HELD_EXPIRED",
+  "PROJECT_NOT_MAPPED", "PROJECT_MAPPING_CONFLICT", "INVALID_COMMERCIAL_SNAPSHOT", "INSTALLMENT_LIMIT_EXCEEDED",
 ] as const;
+/**
+ * CRM-E1: 422 de replay quando a reserva da cota venceu. Fica FORA de SALES_INGEST_REJECTION_CODES (lista do snapshot do contrato compartilhado) até a Suite #130
+ * ser mergeada: o PR de re-pin move este código para a lista e atualiza snapshot + consumers.lock.json (ordem Suite -> CRM -> re-pin).
+ */
+export const INVENTORY_HELD_EXPIRED_CODE = "INVENTORY_HELD_EXPIRED" as const;
 export type SalesIngestRejectionCode = (typeof SALES_INGEST_REJECTION_CODES)[number];
 export class SalesIngestRejection extends Error {
   constructor(readonly code: SalesIngestRejectionCode, message: string) { super(message); this.name = "SalesIngestRejection"; }
@@ -465,7 +470,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
   const already = await findFormalization(db, event.saleId);
   if (already?.inventoryLostAt) {
     // CRM-E1: a reserva venceu antes da conferência e a cota voltou ao estoque; o Sales não pode seguir como se a venda estivesse formalizada.
-    response.status(422).json({ accepted: false, code: "INVENTORY_HELD_EXPIRED", error: "A reserva da cota venceu antes da conferência; refaça a venda." });
+    response.status(422).json({ accepted: false, code: INVENTORY_HELD_EXPIRED_CODE, error: "A reserva da cota venceu antes da conferência; refaça a venda." });
     return;
   }
   if (already) {
@@ -481,7 +486,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       const raced = await findFormalization(db, event.saleId);
-      if (raced?.inventoryLostAt) { response.status(422).json({ accepted: false, code: "INVENTORY_HELD_EXPIRED", error: "A reserva da cota venceu antes da conferência; refaça a venda." }); return; }
+      if (raced?.inventoryLostAt) { response.status(422).json({ accepted: false, code: INVENTORY_HELD_EXPIRED_CODE, error: "A reserva da cota venceu antes da conferência; refaça a venda." }); return; }
       if (raced) {
         await syncRevenueQualityForContract({ contractId: raced.contractId, actorUserId: null, trigger: "race replay Sales Command" });
         response.status(200).json({ accepted: true, replay: true, ...raced, saleId: event.saleId });
