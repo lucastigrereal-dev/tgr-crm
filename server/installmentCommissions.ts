@@ -5,6 +5,7 @@ import { commissionPolicyVersionOf } from "./commissionPolicyVersion";
 import { txAudit, txEvent } from "./txOutbox";
 import { commercialFractions, salesCommissions } from "../drizzle/schema";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
+import { DEFAULT_PAYOUT_MODE } from "../shared/projectPolicySchemas";
 import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, type CommissionRoleV2Mapped } from "./commissionAutomation";
 import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
 import type { getDb } from "./db";
@@ -112,7 +113,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
       const userId = capture[V2_PAYEE[role]];
       return userId ? [{ role, userId, totalReais: line.amountCents / 100 }] : [];
     });
-    return buildInstallmentCommissionsV2({ installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal, paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt, lines, alreadyReleased, calendar });
+    return buildInstallmentCommissionsV2({ installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal, paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt, lines, alreadyReleased, calendar, payoutMode: policy.payoutSchedule?.mode ?? DEFAULT_PAYOUT_MODE });
   };
   // Versão fixada por contrato: a do primeiro lançamento automático ainda vigente. Liberar o V2 depois que o V1 já gerou comissão NÃO troca de regra no meio
   // do contrato (os totais não bateriam com nenhuma política). V2 fixado com o V2 travado de novo não gera nada: o travamento vence.

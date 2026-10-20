@@ -103,11 +103,15 @@ export function buildInstallmentCommissionsV2(input: {
   lines: Array<{ role: CommissionRoleV2Mapped; userId: number; totalReais: number }>;
   alreadyReleased?: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>>;
   calendar?: { cancellationDeadlineDay?: number; expectedPaymentDay?: number };
+  /** CRM-F2: `full_upfront` libera o total do papel (menos o já liberado) de uma vez; `per_installment` (padrão desta função pura) é proporcional à parcela. */
+  payoutMode?: "full_upfront" | "per_installment";
 }) {
   const dates = commissionDates(input.paymentMethod, input.compensatedAt, input.calendar);
   const rows = input.lines.filter(line => line.totalReais > 0).map(line => {
     const total = Math.round(line.totalReais * 100) / 100;
-    const amount = releasedCommission(input.installmentAmount, input.entryTotal, total, input.alreadyReleased?.[line.role] ?? 0);
+    const amount = input.payoutMode === "full_upfront" && input.installmentAmount > 0 && input.entryTotal > 0
+      ? Math.max(0, Math.round((total - (input.alreadyReleased?.[line.role] ?? 0)) * 100) / 100)
+      : releasedCommission(input.installmentAmount, input.entryTotal, total, input.alreadyReleased?.[line.role] ?? 0);
     return {
       sellerId: line.userId,
       commissionRole: line.role,
