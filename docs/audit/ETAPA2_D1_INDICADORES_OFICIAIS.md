@@ -8,3 +8,4 @@
 - Sem migration, sem evento, sem contrato novo. Dados de teste SYN-.
 - Desfecho também vale quando o mesmo associado tem venda validada do CRM a partir do check-in (casal "em andamento" na sala mas já vendido não sai do denominador).
 - Datas do período: dia real (2026-02-31 é recusado) e dia civil no fuso do projeto (America/Recife), não UTC.
+- Coortes: o numerador (venda validada NO período) e o denominador (check-in NO período) são coortes diferentes; uma venda validada hoje de um casal atendido no mês passado entra no numerador deste mês e no denominador do mês passado. Aceitável no provisório; a visão por coorte única fica como evolução.
