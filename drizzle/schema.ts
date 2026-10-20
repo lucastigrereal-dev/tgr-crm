@@ -1019,6 +1019,35 @@ export const paymentGatewayIssueIntents = mysqlTable("payment_gateway_issue_inte
   index("pg_issue_intent_status_idx").on(table.status, table.updatedAt),
 ]);
 
+// CRM-A12 / ADR-012: aditivo contratual NÃO monetário, mínimo. Nasce desligado (CONTRACT_ADDENDUM_ENABLED). Só `signed` produz efeito; nunca mexe em valor, parcela ou comissão.
+export const contractAddenda = mysqlTable("contract_addenda", {
+  id: int("id").autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  kind: mysqlEnum("kind", ["clause", "contact"]).notNull(),
+  status: mysqlEnum("status", ["draft", "awaiting_signature", "signed", "cancelled"]).default("draft").notNull(),
+  reason: text("reason").notNull(),
+  // clause: {"text": "..."}; contact: {"before": {...}, "after": {...}} com phone/email (antes preenchido no pedido, depois definido no pedido).
+  payload: text("payload").notNull(),
+  requestedByUserId: int("requestedByUserId").notNull().references(() => users.id),
+  signedDocumentId: int("signedDocumentId").references(() => contractDocuments.id),
+  decidedByUserId: int("decidedByUserId").references(() => users.id),
+  decidedAt: timestamp("decidedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [index("contract_addenda_contract_idx").on(table.contractId, table.status)]);
+
+// CRM-A01: mapa empreendimento -> projeto do Financial. Só vale com FINANCIAL_PROJECT_MAP_ENABLED=true; sem linha (ou inativa), o contrato usa o projeto padrão (env).
+export const financialProjectMap = mysqlTable("financial_project_map", {
+  id: int("id").autoincrement().primaryKey(),
+  resortId: int("resortId").notNull().references(() => resorts.id),
+  externalKey: varchar("externalKey", { length: 64 }).notNull(),
+  name: varchar("name", { length: 160 }).notNull(),
+  timezone: varchar("timezone", { length: 64 }).default("America/Recife").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex("financial_project_map_resort_unique").on(table.resortId)]);
+
 export const installmentRenegotiations = mysqlTable("installment_renegotiations", {
   id: int("id").autoincrement().primaryKey(),
   contractId: int("contractId").notNull().references(() => contracts.id),

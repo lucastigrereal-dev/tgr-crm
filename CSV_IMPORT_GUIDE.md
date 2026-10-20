@@ -40,6 +40,7 @@ O sistema identifica associados por `documento` normalizado. Se o documento já 
 | quantidade_parcelas | Sim | 12 | Inteiro entre 1 e 360. |
 | primeiro_vencimento | Sim | 2026-09-10 | Formato AAAA-MM-DD. |
 | email_vendedor | Não | vendedor@empresa.com | Quando existir, vincula o vendedor interno correspondente. |
+| empreendimento | Não | Resort Ponta Negra | Nome exato de um empreendimento já cadastrado (importe o inventário antes). Grava o empreendimento do contrato e define o projeto no Financial quando o mapa por empreendimento está ligado. Em branco: contrato sem empreendimento (usa o projeto padrão). |
 | observacoes | Não | Entrada paga no ato | Livre. |
 
 > A importação de contrato gera todas as parcelas automaticamente, preservando o total em centavos. Registros com erro não são parcialmente gravados.

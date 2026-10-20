@@ -67,4 +67,13 @@ describe("importação CSV", () => {
     const report = buildImportErrorReport([{ line: 7, field: "email", message: "E-mail inválido; revise o campo." }]);
     expect(report).toContain('7;email;"E-mail inválido; revise o campo."');
   });
+
+  it("CRM-A01: contratos aceitam a coluna opcional empreendimento ; sem a coluna fica nulo", () => {
+    const base = "numero_contrato;documento_associado;modelo_uso;status;valor_total;quantidade_parcelas;primeiro_vencimento";
+    const row = "CT-A01-1;12345678900;semana_fixa;rascunho;3000;3;2026-12-10";
+    const withColumn = parseContractsCsv(`${base};empreendimento\n${row};Resort Sintético\n`);
+    expect(withColumn.issues).toEqual([]);
+    expect(withColumn.records[0]?.resortName).toBe("Resort Sintético");
+    expect(parseContractsCsv(`${base}\n${row}\n`).records[0]?.resortName).toBeNull();
+  });
 });

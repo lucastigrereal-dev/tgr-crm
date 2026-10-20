@@ -8,7 +8,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
-import { applySecurityHeaders } from "../securityHeaders";
+import { applySecurityHeaders, createOriginGuard } from "../securityHeaders";
 import { attachRequestId } from "../requestId";
 import { subscribeSalesRoom } from "../realtime";
 import { processAsaasWebhook } from "../paymentGatewayWebhook";
@@ -66,6 +66,7 @@ async function startServer() {
   if (ENV.trustProxyHops > 0) app.set("trust proxy", ENV.trustProxyHops);
   app.use(attachRequestId);
   app.use(applySecurityHeaders);
+  app.use(createOriginGuard({ enabled: ENV.csrfOriginCheckEnabled, allowedOrigins: ENV.csrfAllowedOrigins }));
   app.post("/api/webhooks/clicksign", express.raw({ type: "*/*", limit: "2mb" }), async (req, res) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? "");
     const signature = req.get("x-clicksign-signature") || req.get("content-hmac") || undefined;
@@ -189,6 +190,7 @@ async function startServer() {
     }
     if (bridges.financial) {
       financialPump = startFinancialBridgePump(bridges.financial.endpoint, bridges.financial.key, bridges.financial.project, {
+        projectMapEnabled: ENV.financialProjectMapEnabled,
         onError: error => logger.error("Financial bridge delivery failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       });
     }

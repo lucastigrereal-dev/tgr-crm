@@ -1,6 +1,6 @@
 import { takeBridgeRewind } from "./bridgeRewind";
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
-import { auditLogs, contracts, domainEvents } from "../drizzle/schema";
+import { auditLogs, contracts, domainEvents, financialProjectMap } from "../drizzle/schema";
 import { isKnownDomainEvent, type DomainEventName } from "../shared/domainEvents";
 import { toIntegrationEvent } from "../shared/integrationContract";
 import { getDb, recordAudit } from "./db";
@@ -83,6 +83,22 @@ export function financialOrderKey(event: { aggregateType: string; aggregateId: s
   return event.aggregateType === "contract" ? "contract:" + Number(event.aggregateId) : event.aggregateType + ":" + event.aggregateId;
 }
 
+/**
+ * CRM-A01: projeto do Financial por empreendimento. Desligado por padrão (FINANCIAL_PROJECT_MAP_ENABLED): tudo vai ao projeto padrão (env).
+ * Ligado: o contrato do evento (payload.contractId ou o agregado contrato) -> contracts.resortId -> financial_project_map ativo. Sem contrato,
+ * sem empreendimento ou sem linha no mapa: projeto padrão (nunca segura nem descarta evento).
+ */
+export async function resolveFinancialProject(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, event: { aggregateType: string; aggregateId: string; payload: string | null }, fallback: FinancialBridgeProject): Promise<FinancialBridgeProject> {
+  const orderKey = financialOrderKey(event);
+  if (!orderKey.startsWith("contract:")) return fallback;
+  const contractId = Number(orderKey.slice("contract:".length));
+  if (!Number.isInteger(contractId) || contractId <= 0) return fallback;
+  const [row] = await db.select({ externalKey: financialProjectMap.externalKey, name: financialProjectMap.name, timezone: financialProjectMap.timezone })
+    .from(contracts).innerJoin(financialProjectMap, eq(financialProjectMap.resortId, contracts.resortId))
+    .where(and(eq(contracts.id, contractId), eq(financialProjectMap.active, true))).limit(1);
+  return row ? { externalKey: row.externalKey, name: row.name, timezone: row.timezone } : fallback;
+}
+
 export interface FinancialBridgePump { tick(): Promise<number>; stop(): void; }
 
 type DomainEventRow = typeof domainEvents.$inferSelect;
@@ -91,7 +107,7 @@ export function startFinancialBridgePump(
   endpoint: string,
   integrationKey: string,
   project: FinancialBridgeProject,
-  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number; retryExclusionCap?: number } = {},
+  options: { intervalMs?: number; autoStart?: boolean; onError?: (error: unknown) => void; rejectionWindowMs?: number; now?: () => number; batchSize?: number; retryExclusionCap?: number; projectMapEnabled?: boolean } = {},
 ): FinancialBridgePump {
   const target = financialBridgeTarget(endpoint);
   if (!integrationKey.trim()) throw new Error("Financial CRM integration key required");
@@ -115,7 +131,7 @@ export function startFinancialBridgePump(
   async function attempt(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, event: DomainEventRow): Promise<boolean> {
     try {
       if (await alreadyHandled(db, event.id)) { retry.remove(event.id); return false; }
-      const body = financialBridgeEnvelope(event, project);
+      const body = financialBridgeEnvelope(event, options.projectMapEnabled ? await resolveFinancialProject(db, event, project) : project);
       // KAN-30: sale.validated vai ao Financial mesmo sem saleId (contrato criado direto no CRM, sem linhagem Sales Command).
       // O Financial aceita saleId nulo e reconhece pelo contractId; segurar o evento deixava venda validada fora do oficial.
       // saleId nunca é inventado: vai null.
