@@ -6,3 +6,5 @@
 - Configurável só por admin (tela/API `officialIndicators.setConfig`, chave `official_indicators_include_in_progress` em `capture_sheet_settings`, com trilha em auditoria). Marcado `provisional: true` e `definitionVersion: provisorio-1`.
 - Leitura: admin e financeiro (`officialIndicators.get`). `closeRate`/`wins` do dashboard de sala continuam como indicador de sala, NÃO oficial.
 - Sem migration, sem evento, sem contrato novo. Dados de teste SYN-.
+- Desfecho também vale quando o mesmo associado tem venda validada do CRM a partir do check-in (casal "em andamento" na sala mas já vendido não sai do denominador).
+- Datas do período: dia real (2026-02-31 é recusado) e dia civil no fuso do projeto (America/Recife), não UTC.
