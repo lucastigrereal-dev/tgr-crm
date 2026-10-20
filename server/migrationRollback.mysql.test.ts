@@ -104,4 +104,18 @@ describe.skipIf(!integrationUrl)("rollbacks 0061 a 0076 em MySQL descartável (s
     expect(await probes()).toEqual(allGone);
     expect(await appliedRolled()).toBe(0);
   }, 120_000);
+
+  it("rollback 0076 apaga só a legacy-1 semeada pela migração; uma legacy-1 criada por pessoa permanece", async () => {
+    for (const prefix of ROLLED) await up(entryOf(prefix));
+    await conn.query("INSERT INTO `resorts` (`name`) VALUES ('SYN F1 rb A'), ('SYN F1 rb B')");
+    const [rows] = (await conn.query("SELECT `id`, `name` FROM `resorts` WHERE `name` IN ('SYN F1 rb A','SYN F1 rb B') ORDER BY `name`")) as unknown as [Array<{ id: number; name: string }>];
+    const [a, b] = rows;
+    const policy = "{\"linerRate\":0.01}";
+    await conn.query("INSERT INTO `commercial_policy_versions` (`resortId`, `policyType`, `version`, `policyJson`) VALUES (?, 'commission', 'legacy-1', ?)", [a!.id, policy]);
+    await conn.query("INSERT INTO `commercial_policy_versions` (`resortId`, `policyType`, `version`, `policyJson`, `seededBy`) VALUES (?, 'commission', 'legacy-1', ?, 'migration-0076-legacy')", [b!.id, policy]);
+    await down("0076");
+    const [left] = (await conn.query("SELECT `resortId` FROM `commercial_policy_versions` WHERE `version` = 'legacy-1' AND `resortId` IN (?, ?)", [a!.id, b!.id])) as unknown as [Array<{ resortId: number }>];
+    expect(left.map(row => row.resortId)).toEqual([a!.id]);
+    for (const prefix of [...ROLLED].reverse().slice(1)) await down(prefix);
+  }, 120_000);
 });

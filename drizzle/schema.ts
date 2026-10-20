@@ -181,6 +181,8 @@ export const commercialPolicyVersions = mysqlTable("commercial_policy_versions",
   effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
   retiredAt: timestamp("retiredAt"),
   approvedByUserId: int("approvedByUserId").references(() => users.id),
+  // CRM-F1: marca as linhas semeadas por migração (ex.: "migration-0076-legacy"); o rollback só apaga estas, nunca versões criadas por pessoas.
+  seededBy: varchar("seededBy", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [
   uniqueIndex("commercial_policy_version_unique").on(table.resortId, table.policyType, table.version),

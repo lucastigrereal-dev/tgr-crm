@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "0b4dcbe9-bb62-4062-9c8a-c61dd30fc092",
+  "id": "876d5258-f3f8-4a95-a0a1-e5329dec16f3",
   "prevId": "1099afe9-04a9-4e0a-8bfd-d9a4d8e0abca",
   "tables": {
     "audit_logs": {
@@ -2463,6 +2463,13 @@
         "approvedByUserId": {
           "name": "approvedByUserId",
           "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "seededBy": {
+          "name": "seededBy",
+          "type": "varchar(40)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

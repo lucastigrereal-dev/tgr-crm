@@ -6,6 +6,6 @@ Status: proposta; flag `COMMISSION_POLICY_VERSIONING_ENABLED` DESLIGADA por padr
 - Flag desligada: comportamento idêntico ao anterior (só legado).
 - `sales_commissions.policyVersion` (varchar 80, nulável) grava a versão aplicada ("legacy" para o legado). Desvio do desenho do gap: `ruleVersion` (v1/v2) NÃO foi ampliada porque a fixação v1/v2 por contrato depende dela; a versão da política vai em coluna própria.
 - `commercialPolicies.create` com `policyType='commission'` valida a política com o mesmo parser do motor.
-- Migração proposta 0076: coluna + dado idempotente `legacy-1` (política atual de cada empreendimento, vigência 2000-01-01). Rollback `docs/rollback/0076_commission_policy_versioning.down.sql`, testado sobe-desce-sobe. Nada aplicado.
+- Migração proposta 0076: colunas `policyVersion` e `commercial_policy_versions.seededBy` + dado idempotente `legacy-1` marcado `seededBy` (política atual de cada empreendimento, vigência 2000-01-01); o rollback apaga só as linhas semeadas. Rollback `docs/rollback/0076_commission_policy_versioning.down.sql`, testado sobe-desce-sobe. Nada aplicado.
 - A tela de `projectSettings.upsert` continua gravando o legado; com a flag ligada e versões existentes ela deixa de valer (editar pela tela de versões). Aviso na UI fica para o F2/F3.
 - Testes: `server/commissionPolicyVersion.mysql.test.ts` (flag off, vigência por data, versão ilegível fecha, criação validada, baixa grava `policyVersion`).
