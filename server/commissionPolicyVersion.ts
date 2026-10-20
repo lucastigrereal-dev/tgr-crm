@@ -38,3 +38,16 @@ export async function resolveCommissionPolicy(tx: Reader, resortId: number | nul
   if (policy) versionOfPolicy.set(policy, LEGACY_COMMISSION_POLICY_VERSION);
   return { policy, version: policy ? LEGACY_COMMISSION_POLICY_VERSION : null, source: policy ? "legacy" : "none" };
 }
+
+export const isPaidCommissionCancellationPolicyEnabled = () => process.env.COMMISSION_CANCEL_POLICY_ENABLED === "true";
+
+/**
+ * CRM-F3: política `onPaidCommissionCancellation` para comissão já paga de contrato distratado. NUNCA estorno/clawback automático: `manual_review` abre a fila manual
+ * (ADR-010), `none` só registra auditoria informativa. Com COMMISSION_CANCEL_POLICY_ENABLED desligada (padrão) vale sempre `manual_review` (comportamento de hoje);
+ * ligada, vale a política vigente do empreendimento e, se ela não disser, `none` (padrão da empresa, configurável).
+ */
+export async function paidCommissionCancellationMode(tx: Reader, resortId: number | null | undefined): Promise<"none" | "manual_review"> {
+  if (!isPaidCommissionCancellationPolicyEnabled()) return "manual_review";
+  const resolved = await resolveCommissionPolicy(tx, resortId, new Date());
+  return resolved.policy?.onPaidCommissionCancellation ?? "none";
+}
