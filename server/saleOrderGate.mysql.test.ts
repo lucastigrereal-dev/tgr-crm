@@ -66,6 +66,19 @@ describe.skipIf(!integrationUrl)("B1: ordem da formalização", () => {
       try { await expect(upload(contractId)).resolves.toMatchObject({ id: expect.any(Number) }); } finally { delete process.env.SALE_ORDER_GATE_SINCE; }
     });
 
+    it("Codex P1: comprovante/aditivo anexado ANTES das conferências não atrapalha; contrato gerado DEPOIS valida", async () => {
+      const contractId = await newContract("ok");
+      const { eq } = await import("drizzle-orm");
+      const receipt = await upload(contractId, "Comprovante");
+      await db.update(contractDocuments).set({ createdAt: new Date(Date.now() - 3_600_000) }).where(eq(contractDocuments.id, receipt.id));
+      const api = await saleApi(adminId, "admin");
+      await api.confirmPayment({ contractId, note: "comprovante conferido" });
+      await api.confirmDocuments({ contractId, note: "documentação conferida" });
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      await (await contractsApi(adminId, "admin")).uploadDocument({ contractId, category: "Contrato assinado", filename: "assinado.pdf", contentType: "application/pdf", base64: pdf, signed: true });
+      await expect(api.validateSale({ contractId })).resolves.toMatchObject({ success: true });
+    });
+
     it("validação final recusa contrato gerado ANTES das conferências (gerado com a flag desligada, conferido depois)", async () => {
       const contractId = await newContract("late");
       delete process.env.SALE_ORDER_GATE_ENABLED;

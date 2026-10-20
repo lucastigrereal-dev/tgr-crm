@@ -330,7 +330,8 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       if (orderGate.enabled && !orderGate.exempt) {
         if (!orderGate.documentsConferred) throw new GatesNotReady("gates", [], "A documentação ainda não foi conferida pelo administrativo (ordem da formalização).");
         const contractItems = [...facts.documents.filter(item => isContractDocumentCategory(item.category)), ...facts.envelopes];
-        const generatedAt = new Date(Math.min(...contractItems.map(item => item.createdAt?.getTime() ?? Infinity), stamps.contractGeneratedAt.getTime()));
+        // Só documento/envelope DO CONTRATO conta: comprovante, aditivo e outros anexos subidos antes das conferências não antecedem a geração do contrato.
+        const generatedAt = new Date(Math.min(...contractItems.map(item => item.createdAt?.getTime() ?? Infinity), documentRow.createdAt?.getTime() ?? Infinity));
         if (!conferralsBeforeGeneration({ contractGeneratedAt: generatedAt, receiptConferredAt: paymentConfirmedAt, documentsConferredAt: orderGate.documentsConferredAt! })) throw new GatesNotReady("timestamps", [], "O contrato foi gerado antes da conferência de comprovante e documentação (ordem da formalização).");
       }
       if (!gatesNotAfter({ ...stamps, paymentConfirmedAt }, validatedAt)) throw new GatesNotReady("timestamps", [], "Instante de portão posterior à validação (relógio ou dado inconsistente); confira a assinatura e o documento.");
