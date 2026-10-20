@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { commercialFractionHolds, commercialFractions, commercialPolicyVersions, contracts, customers, resorts, tasks, units, users } from "../drizzle/schema";
+import { commercialFractionHistory, commercialFractionHolds, commercialFractions, contractCancellationRequests, commercialPolicyVersions, contracts, customers, resorts, tasks, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { materializeSalesCommandSale, registerSalesCommandBridge, type SalesCommandSale } from "./salesCommandBridge";
 import { sweepExpiredHolds } from "./holdSweep";
@@ -134,6 +134,21 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
       expect((await fraction(f)).status).toBe("sold");
       const consumed = (await holds(f)).filter(item => item.status === "consumed");
       expect(consumed).toHaveLength(1);
+    });
+
+    it("distrato executado antes da conferência libera a cota held e o hold ativo (executeCancellation de verdade)", async () => {
+      const f = await newFraction(); const id = await createContract("cancel-real", f);
+      expect((await fraction(f)).status).toBe("held");
+      const requestId = (await db.insert(contractCancellationRequests).values({ contractId: id, status: "approved", reason: "Cliente desistiu (sintético)", simulationSnapshot: JSON.stringify({ paidAmount: 0, policyConfigured: false }), requestedByUserId: adminId, decidedByUserId: adminId }).$returningId())[0]!.id;
+      await expect((await contractsApi()).executeCancellation({ requestId })).resolves.toMatchObject({ success: true, returnedFractionIds: [f] });
+      expect(await fraction(f)).toMatchObject({ status: "available", currentContractId: null });
+      const [hold] = await holds(f);
+      expect(hold).toMatchObject({ status: "released", activeKey: null });
+      const history = await db.select().from(commercialFractionHistory).where(eq(commercialFractionHistory.fractionId, f));
+      expect(history.some(row => row.fromStatus === "held" && row.toStatus === "available" && row.contractId === id)).toBe(true);
+      // a cota volta ao estoque e pode ser reservada por outro contrato
+      await createContract("cancel-again", f);
+      expect((await fraction(f)).status).toBe("held");
     });
 
     it("sweep devolve a cota de contrato cancelado cujo hold venceu", async () => {

@@ -6,9 +6,7 @@ DELETE FROM `commercial_policy_versions` WHERE `policyType` = 'stock_hold';
 --> statement-breakpoint
 ALTER TABLE `commercial_policy_versions` MODIFY COLUMN `policyType` enum('commission','cancellation','revenue_quality','monetary_adjustment','sale_terms') NOT NULL;
 --> statement-breakpoint
-UPDATE `commercial_fraction_holds` SET `heldByUserId` = (SELECT `id` FROM `users` ORDER BY `id` LIMIT 1) WHERE `heldByUserId` IS NULL;
---> statement-breakpoint
-ALTER TABLE `commercial_fraction_holds` MODIFY COLUMN `heldByUserId` int NOT NULL;
+-- heldByUserId PERMANECE nulável de propósito: holds vindos da ingestão do Sales não têm usuário e inventar um autor falsificaria a trilha. O código anterior sempre grava o usuário, então a coluna nulável não o afeta.
 --> statement-breakpoint
 SET @s = (SELECT IF(COUNT(*) > 0, 'ALTER TABLE `commercial_fraction_holds` DROP COLUMN `purpose`', 'DO 0') FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'commercial_fraction_holds' AND COLUMN_NAME = 'purpose');
 PREPARE stmt FROM @s; EXECUTE stmt; DEALLOCATE PREPARE stmt;
