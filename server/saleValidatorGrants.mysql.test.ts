@@ -67,6 +67,11 @@ describe.skipIf(!integrationUrl)("C1: administrativo autorizado valida a venda",
   it("concessão vencida não vale; vendedor e service nunca", async () => {
     await db.insert(saleValidatorGrants).values({ userId: finance2Id, grantedByUserId: adminId, validFrom: new Date(Date.now() - 86_400_000), validUntil: new Date(Date.now() - 1000) } as never);
     expect((await (await router(finance2Id, "finance")).myAuthorization()).authorized).toBe(false);
+    // Codex P2: concessão vencida (sem revogação) não bloqueia a renovação.
+    const admin = await router(adminId, "admin");
+    await admin.grants.grant({ userId: finance2Id, note: "renovação SYN" });
+    expect((await (await router(finance2Id, "finance")).myAuthorization()).authorized).toBe(true);
+    await expect(admin.grants.grant({ userId: finance2Id })).rejects.toThrow(/já tem concessão/);
     const { contractId } = await seedReady("g2");
     await expect((await router(sellerId, "seller")).confirmPayment({ contractId, note: "tentativa" })).rejects.toThrow();
   });

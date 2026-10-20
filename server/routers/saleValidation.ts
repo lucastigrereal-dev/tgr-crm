@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { captureSheetSettings, saleValidatorGrants, users } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -35,7 +35,7 @@ export const saleValidationRouter = router({
         const target = (await tx.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, input.userId)).limit(1).for("update"))[0];
         if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado." });
         if (target.role !== "finance") throw new TRPCError({ code: "BAD_REQUEST", message: "A concessão vale para o perfil financeiro (administrativo). A administração já é autorizada." });
-        const active = (await tx.select({ id: saleValidatorGrants.id }).from(saleValidatorGrants).where(and(eq(saleValidatorGrants.userId, target.id), isNull(saleValidatorGrants.revokedAt))).limit(1))[0];
+        const active = (await tx.select({ id: saleValidatorGrants.id }).from(saleValidatorGrants).where(and(eq(saleValidatorGrants.userId, target.id), isNull(saleValidatorGrants.revokedAt), or(isNull(saleValidatorGrants.validUntil), gt(saleValidatorGrants.validUntil, new Date())))).limit(1))[0];
         if (active) throw new TRPCError({ code: "CONFLICT", message: "Este usuário já tem concessão ativa. Revogue antes de conceder de novo." });
         const created = await tx.insert(saleValidatorGrants).values({ userId: target.id, grantedByUserId: ctx.user.id, validUntil: input.validUntil ?? null, note: input.note ?? null }).$returningId();
         await txAudit(tx, { actorUserId: ctx.user.id, entityType: "sale_validator_grant", entityId: created[0]!.id, action: "granted", summary: `Usuário ${target.id} autorizado a conferir e validar vendas${input.validUntil ? ` até ${input.validUntil.toISOString()}` : ""}.` });
