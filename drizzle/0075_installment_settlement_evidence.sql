@@ -1,0 +1,1 @@
+ALTER TABLE `installments` ADD `settlementEvidence` enum('receipt_claimed','gateway_confirmed','bank_reconciled') DEFAULT 'receipt_claimed' NOT NULL;

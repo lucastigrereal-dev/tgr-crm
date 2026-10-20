@@ -99,6 +99,7 @@ export async function processAsaasWebhook(token: string | undefined, payload: As
           paidAmount: nextPaid.toFixed(2),
           paidAt: fullyPaid ? paidAt : billing.installment.paidAt,
           paymentMethod: billing.billing.type,
+          settlementEvidence: "gateway_confirmed",
         }).where(and(eq(installments.id, billing.installment.id), inArray(installments.status, ["open", "overdue"])));
         const paymentRecorded = affectedRows(installmentUpdate) !== 0;
         if (!paymentRecorded) {

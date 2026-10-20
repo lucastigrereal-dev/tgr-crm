@@ -957,6 +957,8 @@ export const installments = mysqlTable(
     status: mysqlEnum("status", ["open", "paid", "overdue", "cancelled", "renegotiated"]).default("open").notNull(),
     paidAt: timestamp("paidAt"),
     paymentMethod: varchar("paymentMethod", { length: 64 }),
+    // CRM-H1: o que sustenta o "pago". receipt_claimed = recebimento declarado (comprovante/baixa manual/entrada informada pelo Sales); gateway_confirmed = webhook do gateway; bank_reconciled = conciliado com o extrato.
+    settlementEvidence: mysqlEnum("settlementEvidence", ["receipt_claimed", "gateway_confirmed", "bank_reconciled"]).default("receipt_claimed").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

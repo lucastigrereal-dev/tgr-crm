@@ -9,6 +9,7 @@ import { assertCapability, financeProcedure } from "./access";
 import { getCollectionStage } from "../domain";
 import { buildCampaignDre } from "../financeDre";
 import { isSaleValidated, recordZeroRateSkip } from "../saleValidationService";
+import { promoteInstallmentsOnReconcile } from "../settlementEvidence";
 import { recordInstallmentSettlementFacts } from "../installmentSettlementFacts";
 import { COMMISSION_SKIPPED_MESSAGE, COMMISSION_SKIPPED_REASON, commissionApplies, commissionBlockReason, insertInstallmentCommissions, normalizePaymentMethod, zeroRateSkippedRoles, type CommissionBlockReason, type CreatedCommissionFact } from "../installmentCommissions";
 import { parseCompleteCommissionPolicy } from "../projectPolicy";
@@ -577,6 +578,7 @@ export const financeRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "O lançamento foi conciliado por outra operação com referência diferente." });
       }
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "financial_transaction", entityId: input.id, action: "reconciled", summary: `Lançamento conciliado pela referência ${input.reconciliationReference}.` });
+      await promoteInstallmentsOnReconcile(tx, { entryId: input.id, contractId: entry.contractId ?? null, amount: String(entry.amount), actorUserId: ctx.user.id });
       await txEvent(tx, { eventName: "financial.entry.reconciled", aggregateType: "financial_transaction", aggregateId: input.id, actorUserId: ctx.user.id, payload: { reference: input.reconciliationReference, reconciledAt } });
     });
     if (alreadyReconciled) return { success: true, alreadyReconciled: true };
