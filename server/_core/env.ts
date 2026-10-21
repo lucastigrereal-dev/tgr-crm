@@ -14,6 +14,8 @@ export const ENV = {
   // C2/C3: elegibilidade de não-comprador para o Recovery. DESLIGADA por padrão (a fatia 1 só tem a função pura; a flag vale nas próximas fatias).
   // C2/C3: chave do Recovery para o receptor de opt-out (par endpoint+chave obrigatório; sem chave a rota responde 404).
   recoveryIntegrationKey: process.env.RECOVERY_INTEGRATION_KEY ?? "",
+  // Item 10 (admin): catálogo editável/versionado dos indicadores oficiais. DESLIGADO por padrão (tabela é PROPOSTA 0081).
+  officialIndicatorCatalogEnabled: process.env.OFFICIAL_INDICATOR_CATALOG_ENABLED === "true",
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",

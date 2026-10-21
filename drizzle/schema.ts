@@ -527,6 +527,18 @@ export const nonBuyerEligibilityState = mysqlTable("non_buyer_eligibility_state"
   index("non_buyer_eligibility_state_customer_idx").on(table.customerId),
 ]);
 
+/** Lista editável e VERSIONADA dos indicadores oficiais do CRM (nome e descrição exibidos; a fórmula continua no código). Append-only: a versão vigente é a maior por código. PROPOSTA 0081. */
+export const officialIndicatorVersions = mysqlTable("official_indicator_versions", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  code: varchar("code", { length: 40 }).notNull(),
+  version: int("version").notNull(),
+  label: varchar("label", { length: 160 }).notNull(),
+  description: varchar("description", { length: 500 }).notNull().default(""),
+  active: boolean("active").default(true).notNull(),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("official_indicator_versions_code_version_unique").on(table.code, table.version)]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {
