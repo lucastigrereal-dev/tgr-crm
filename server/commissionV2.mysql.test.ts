@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, billingRecords, captureRecords, commercialFractions, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, resorts, installmentRenegotiations, salesCommissions, units, users } from "../drizzle/schema";
+import { auditLogs, commercialPolicyVersions, billingRecords, captureRecords, commercialFractions, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, resorts, installmentRenegotiations, salesCommissions, units, users } from "../drizzle/schema";
 import { FIVE_COMMISSION_DRAFT_V2 } from "../shared/commissionRulesV2";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { runTriggerDdl } from "./mysqlTestDdl";
@@ -70,7 +70,7 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     await svc.confirmPayment(adminId, { contractId: contract.id, note: "conferido" });
     await svc.validateSale(adminId, { contractId: contract.id });
     await db.update(contracts).set({ status: "active" }).where(eq(contracts.id, contract.id));
-    return { contractId: contract.id, installmentIds: ids, users: { promoter: promoter.id, liner: liner.id, closer: closer.id } };
+    return { contractId: contract.id, resortId: resort.id, installmentIds: ids, users: { promoter: promoter.id, liner: liner.id, closer: closer.id } };
   }
 
   async function failCommissionEvent(contractId: number) {
@@ -251,6 +251,41 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, b.contractId))).toHaveLength(0);
     await caller.markInstallmentPaid({ id: b.installmentIds[1]!, paymentMethod: "debit" });
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, b.contractId))).toHaveLength(3);
+  });
+  /** Parcelas pagas ANTES da validação (o portão bloqueou a baixa); o reprocesso da validação lança as comissões. */
+  const markPaidDirect = (id: number, paidAt: string, amount: string) => db.update(installments).set({ status: "paid", paidAt: new Date(paidAt), paidAmount: amount, paymentMethod: "pix" } as never).where(eq(installments.id, id));
+  const releaseOnValidation = (contractId: number) => db.transaction(tx => svc.releaseCommissionsForValidatedContract(tx as never, { contractId, actorUserId: adminId }));
+  it("Codex P1 (reprocesso da validação): entry_total avalia o acumulado COMO DE CADA parcela; a comissão cheia nasce na parcela que completou a entrada", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const total = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront", releaseOn: "entry_total" } });
+    const { contractId, installmentIds } = await seedSale("asof", ["500.00", "500.00", "3000.00"], total);
+    await markPaidDirect(installmentIds[0]!, "2026-10-11T12:00:00Z", "500.00");
+    await markPaidDirect(installmentIds[1]!, "2026-10-12T12:00:00Z", "500.00");
+    await releaseOnValidation(contractId);
+    const rows = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+    expect(rows).toHaveLength(3);
+    expect(rows.every(row => row.sourceInstallmentId === installmentIds[1]!)).toBe(true);
+    expect(rows.every(row => new Date(row.compensatedAt as never).toISOString().startsWith("2026-10-12"))).toBe(true);
+    expect((await heldReasons(installmentIds[0]!)).join(" ")).toContain("releaseOn = entry_total");
+    await releaseOnValidation(contractId); // reentrega idempotente
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
+  });
+  it("Codex P1: política que muda ENTRE as parcelas — a comissão cheia usa a versão vigente na parcela que completou a entrada", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    process.env.COMMISSION_POLICY_VERSIONING_ENABLED = "true";
+    try {
+      const { contractId, resortId, installmentIds } = await seedSale("asof-version", ["500.00", "500.00", "3000.00"]);
+      const json = (version: string) => JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront", releaseOn: "entry_total" }, _v: version });
+      const strip = (text: string) => { const { _v, ...rest } = JSON.parse(text); return JSON.stringify(rest); };
+      await db.insert(commercialPolicyVersions).values({ resortId, policyType: "commission", version: "vA", policyJson: strip(json("A")), effectiveAt: new Date("2026-10-01T00:00:00Z"), retiredAt: new Date("2026-10-12T00:00:00Z") });
+      await db.insert(commercialPolicyVersions).values({ resortId, policyType: "commission", version: "vB", policyJson: strip(json("B")), effectiveAt: new Date("2026-10-12T00:00:00Z") });
+      await markPaidDirect(installmentIds[0]!, "2026-10-11T12:00:00Z", "500.00"); // vA
+      await markPaidDirect(installmentIds[1]!, "2026-10-13T12:00:00Z", "500.00"); // vB completa a entrada
+      await releaseOnValidation(contractId);
+      const rows = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+      expect(rows).toHaveLength(3);
+      expect(rows.every(row => row.sourceInstallmentId === installmentIds[1]! && row.policyVersion === "vB")).toBe(true);
+    } finally { delete process.env.COMMISSION_POLICY_VERSIONING_ENABLED; }
   });
   it("F2: DORMENTE — com o V2 travado, full_upfront não gera nada (o travamento vence)", async () => {
     delete process.env.COMMISSION_V2_RELEASED;
