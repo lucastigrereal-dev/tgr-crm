@@ -6,7 +6,7 @@ Status: **receptor pronto no CRM, desligado por flag; emissor ainda não existe 
 
 - `POST /api/integrations/sales-command/encounter-outcome`, corpo JSON. Um evento por atendimento encerrado, qualquer desfecho (`SALE_CONFIRMED`, `NO_SALE`, `CAIU_EM_MESA`, `NT`).
 - **Desligada por padrão**: `ATTENDANCE_RECEIVER_ENABLED=false` (flag nova; nenhuma flag existente mudou). Desligada, ou sem chave configurada, responde 404 como se a rota não existisse, mesmo com a chave certa.
-- `Authorization: Bearer <SALES_COMMAND_INTEGRATION_KEY>`, comparação em tempo constante, validada antes de olhar o corpo. O corpo nunca é registrado em log.
+- `Authorization: Bearer <SALES_COMMAND_INTEGRATION_KEY>`, comparação em tempo constante, validada ANTES de ler o corpo por um portão montado acima do parser JSON global só para esta rota (`registerAttendanceGate`): chave ausente/errada = 401 mesmo com JSON malformado ou enorme; com chave, o corpo é lido com limite de 64 KB e JSON malformado/grande = 400 `INVALID_EVENT`. As outras rotas e o parser global não mudam. O corpo nunca é registrado em log.
 - **Depende de migration**: `migrations/proposed/PROPOSED_0079_couple_registry_attendance.sql` (PROPOSTA, não aplicada, fora do journal). Só `CREATE TABLE IF NOT EXISTS` de `couple_registry` e `attendance_records`. Ligar a flag antes do GO e da migration = 503 em todo evento. Rollback: `DROP TABLE attendance_records; DROP TABLE couple_registry;`.
 
 ## Respostas

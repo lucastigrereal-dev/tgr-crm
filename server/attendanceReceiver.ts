@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { Express, Request, Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { attendanceRecords, auditLogs, coupleRegistry, resorts } from "../drizzle/schema";
@@ -148,6 +148,26 @@ async function handle(request: Request, response: Response, integrationKey: stri
     logger.error("Attendance ingest failed", { eventId: parsed.data.eventId, errorName: error instanceof Error ? error.name : "non-Error" });
     response.status(503).json({ accepted: false, code: "EVENT_PROCESSING_FAILED", error: "Event processing failed" });
   }
+}
+
+/**
+ * Portão leve ANTES do parser JSON global (montado em server/_core/index.ts acima de express.json) só para ESTA rota: flag desligada ou sem chave = 404;
+ * chave ausente/errada = 401 sem ler o corpo (JSON malformado ou enorme sem chave não chega ao parser); com chave, o corpo é lido aqui com limite pequeno
+ * (o evento tem poucos KB) e JSON malformado/grande vira 400 INVALID_EVENT. O parser global pula o corpo já lido. Não toca nenhuma outra rota.
+ */
+export function registerAttendanceGate(app: Express, integrationKey: string | undefined, enabled: boolean) {
+  const parse = express.json({ limit: "64kb" });
+  app.post(ATTENDANCE_PATH, (request: Request, response: Response, next: NextFunction) => {
+    const key = integrationKey?.trim();
+    if (!enabled || !key) { response.status(404).json({ error: "Not found" }); return; }
+    const authorization = request.get("authorization") ?? "";
+    const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    if (!supplied || !safeEqual(supplied, key)) { response.status(401).json({ error: "Unauthorized" }); return; }
+    parse(request, response, error => {
+      if (error) { response.status(400).json({ accepted: false, code: "INVALID_EVENT", error: "Invalid event" }); return; }
+      next();
+    });
+  });
 }
 
 export function registerAttendanceReceiver(app: Express, integrationKey: string | undefined, enabled: boolean) {
