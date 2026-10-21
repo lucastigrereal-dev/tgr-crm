@@ -85,6 +85,19 @@ export function buildInstallmentCommissions(input: {
 // PRD Apêndice B #17 (PILOTO V1) + ADR-007 (V6): comissão só pode virar devida com contrato ATIVO, política completa do
 // empreendimento e VENDA VALIDADA (sale_validations.validatedAt). `saleValidated` é obrigatório de propósito: sem ele a
 // comissão ficaria liberada por engano. Sem qualquer um, fica bloqueada (auditado como commission_blocked).
+/**
+ * CRM-F2: a parcela pertence à ENTRADA quando o acumulado do cronograma (em ordem de sequência) até ela cabe no valor de entrada da proposta.
+ * Sales guarda entrada e saldo juntos: baixar o saldo não pode disparar a comissão do V2.
+ */
+export function isEntryInstallment(schedule: Array<{ id: number; sequence: number; amount: string | number }>, installmentId: number, entryTotal: number) {
+  let cumulative = 0;
+  for (const item of [...schedule].sort((a, b) => a.sequence - b.sequence)) {
+    cumulative = Math.round((cumulative + Number(item.amount)) * 100) / 100;
+    if (item.id === installmentId) return cumulative <= Math.round(entryTotal * 100) / 100 + 0.005;
+  }
+  return false;
+}
+
 export function canCommissionBecomeDue(contractStatus: string | null | undefined, completePolicy: unknown, saleValidated: boolean): boolean {
   return Boolean(completePolicy) && contractStatus === "active" && saleValidated === true;
 }
@@ -103,11 +116,15 @@ export function buildInstallmentCommissionsV2(input: {
   lines: Array<{ role: CommissionRoleV2Mapped; userId: number; totalReais: number }>;
   alreadyReleased?: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>>;
   calendar?: { cancellationDeadlineDay?: number; expectedPaymentDay?: number };
+  /** CRM-F2: `full_upfront` libera o total do papel (menos o já liberado) de uma vez; `per_installment` (padrão desta função pura) é proporcional à parcela. */
+  payoutMode?: "full_upfront" | "per_installment";
 }) {
   const dates = commissionDates(input.paymentMethod, input.compensatedAt, input.calendar);
   const rows = input.lines.filter(line => line.totalReais > 0).map(line => {
     const total = Math.round(line.totalReais * 100) / 100;
-    const amount = releasedCommission(input.installmentAmount, input.entryTotal, total, input.alreadyReleased?.[line.role] ?? 0);
+    const amount = input.payoutMode === "full_upfront" && input.installmentAmount > 0 && input.entryTotal > 0
+      ? Math.max(0, Math.round((total - (input.alreadyReleased?.[line.role] ?? 0)) * 100) / 100)
+      : releasedCommission(input.installmentAmount, input.entryTotal, total, input.alreadyReleased?.[line.role] ?? 0);
     return {
       sellerId: line.userId,
       commissionRole: line.role,

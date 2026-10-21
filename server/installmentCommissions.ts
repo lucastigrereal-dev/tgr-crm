@@ -3,9 +3,10 @@
 import { and, asc, eq, ne, isNotNull, sql } from "drizzle-orm";
 import { commissionPolicyVersionOf } from "./commissionPolicyVersion";
 import { txAudit, txEvent } from "./txOutbox";
-import { commercialFractions, salesCommissions } from "../drizzle/schema";
+import { commercialFractions, installments, salesCommissions } from "../drizzle/schema";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
-import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, type CommissionRoleV2Mapped } from "./commissionAutomation";
+import { DEFAULT_PAYOUT_MODE } from "../shared/projectPolicySchemas";
+import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, isEntryInstallment, type CommissionRoleV2Mapped } from "./commissionAutomation";
 import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
 import type { getDb } from "./db";
 import type { parseCompleteCommissionPolicy } from "./projectPolicy";
@@ -103,6 +104,10 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   const calendar = { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay };
   const entryTotal = Number(context.proposal.downPaymentAmount);
   const v2Rows = async () => {
+    // CRM-F2 (Codex P1): o V2 só dispara numa baixa ELEGÍVEL da ENTRADA — método dentro de eligiblePaymentMethods e parcela do cronograma de entrada. Saldo ou método inelegível seguram a comissão.
+    if (!policy.eligiblePaymentMethods.includes(input.paymentMethod as never)) return [];
+    const schedule = await tx.select({ id: installments.id, sequence: installments.sequence, amount: installments.amount }).from(installments).where(eq(installments.contractId, installment.contractId));
+    if (!isEntryInstallment(schedule, installment.id, entryTotal)) return [];
     // Cotas da venda = frações vendidas ao contrato (mínimo 1: contrato sem fração ligada, ex. importado por CSV, conta uma cota).
     const [quotaRow] = await tx.select({ n: sql<number>`COUNT(*)` }).from(commercialFractions).where(eq(commercialFractions.currentContractId, installment.contractId));
     const result = computeCommissionV2(policy.rulesV2, { quotas: Math.max(1, Number(quotaRow?.n ?? 0)), entryCents: Math.round(entryTotal * 100), saleTotalCents: Math.round(Number(context.contract.totalAmount) * 100) });
@@ -112,7 +117,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
       const userId = capture[V2_PAYEE[role]];
       return userId ? [{ role, userId, totalReais: line.amountCents / 100 }] : [];
     });
-    return buildInstallmentCommissionsV2({ installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal, paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt, lines, alreadyReleased, calendar });
+    return buildInstallmentCommissionsV2({ installmentId: installment.id, installmentAmount: Number(installment.amount), entryTotal, paymentMethod: input.paymentMethod, compensatedAt: input.compensatedAt, lines, alreadyReleased, calendar, payoutMode: policy.payoutSchedule?.mode ?? DEFAULT_PAYOUT_MODE });
   };
   // Versão fixada por contrato: a do primeiro lançamento automático ainda vigente. Liberar o V2 depois que o V1 já gerou comissão NÃO troca de regra no meio
   // do contrato (os totais não bateriam com nenhuma política). V2 fixado com o V2 travado de novo não gera nada: o travamento vence.
