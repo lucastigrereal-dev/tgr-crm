@@ -14,7 +14,7 @@ const pdf = Buffer.from("%PDF-1.4 SYN conteudo de teste").toString("base64");
 describe.skipIf(!integrationUrl)("B1: ordem da formalização", () => {
   let pool: mysql.Pool;
   let db: ReturnType<typeof drizzle>;
-  let adminId = 0, sellerId = 0, customerId = 0;
+  let adminId = 0, validatorId = 0, sellerId = 0, customerId = 0;
   const previousEnv = { ...process.env };
   const contractsApi = async (id: number, role: "admin" | "seller") => (await import("./routers/contracts")).contractsRouter.createCaller({ user: { id, role } } as never);
   const saleApi = async (id: number, role: "admin" | "seller") => (await import("./routers/saleValidation")).saleValidationRouter.createCaller({ user: { id, role } } as never);
@@ -25,6 +25,9 @@ describe.skipIf(!integrationUrl)("B1: ordem da formalização", () => {
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
     adminId = (await db.insert(users).values({ openId: `b1-admin-${runId}`, name: "SYN admin", role: "admin" }).$returningId())[0]!.id;
+    // Segregação (captureSheetSettings.sale_validation_segregation) é estado global do banco, alternado por saleValidatorGrants.mysql.test.ts em outro processo.
+    // Quem confere (adminId) nunca valida a venda: o validador é outro admin, então o resultado não depende da configuração.
+    validatorId = (await db.insert(users).values({ openId: `b1-validator-${runId}`, name: "SYN validador", role: "admin" }).$returningId())[0]!.id;
     sellerId = (await db.insert(users).values({ openId: `b1-seller-${runId}`, name: "SYN seller", role: "seller" }).$returningId())[0]!.id;
     customerId = (await db.insert(customers).values({ fullName: `SYN B1 ${runId}`, status: "active" }).$returningId())[0]!.id;
   });
@@ -76,7 +79,7 @@ describe.skipIf(!integrationUrl)("B1: ordem da formalização", () => {
       await api.confirmDocuments({ contractId, note: "documentação conferida" });
       await new Promise(resolve => setTimeout(resolve, 1500));
       await (await contractsApi(adminId, "admin")).uploadDocument({ contractId, category: "Contrato assinado", filename: "assinado.pdf", contentType: "application/pdf", base64: pdf, signed: true });
-      await expect(api.validateSale({ contractId })).resolves.toMatchObject({ success: true });
+      await expect((await saleApi(validatorId, "admin")).validateSale({ contractId })).resolves.toMatchObject({ success: true });
     });
 
     it("validação final recusa contrato gerado ANTES das conferências (gerado com a flag desligada, conferido depois)", async () => {
@@ -90,7 +93,7 @@ describe.skipIf(!integrationUrl)("B1: ordem da formalização", () => {
       const api = await saleApi(adminId, "admin");
       await api.confirmPayment({ contractId, note: "comprovante conferido" });
       await api.confirmDocuments({ contractId, note: "documentação conferida" });
-      await expect(api.validateSale({ contractId })).rejects.toThrow(/SALE_GATE_TIMESTAMP_INVALID.*ordem da formalização/);
+      await expect((await saleApi(validatorId, "admin")).validateSale({ contractId })).rejects.toThrow(/SALE_GATE_TIMESTAMP_INVALID.*ordem da formalização/);
     });
   });
 });
