@@ -5,8 +5,8 @@ import {
   customerDocuments,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { canCapability, type InternalPermissionRole } from "../shared/permissions";
 
-const internalRoles = new Set(["admin", "seller", "finance", "service"]);
 
 type StorageScope = "customer" | "contract";
 
@@ -49,7 +49,8 @@ export async function authorizeStorageRead(
   if (!user) {
     return { allowed: false, status: 401, reason: "unauthenticated" };
   }
-  if (!internalRoles.has(user.role)) {
+  // Item 4: capacidade `document.read` (padrão idêntico ao de antes: os quatro papéis internos; editável com PERMISSION_OVERRIDES_ENABLED, admin sempre passa).
+  if (!canCapability(user.role as InternalPermissionRole | "user", "document.read")) {
     return { allowed: false, status: 403, reason: "forbidden" };
   }
 

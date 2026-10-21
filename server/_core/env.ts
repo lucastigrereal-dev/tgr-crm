@@ -20,6 +20,8 @@ export const ENV = {
   commissionRoleMapEnabled: process.env.COMMISSION_ROLE_MAP_ENABLED === "true",
   // Item 6 (admin): interruptor MESTRE das sobrescritas de flags pela tela. DESLIGADO por padrão e fora da allow-list (não se liga pela tela). Tabela é PROPOSTA 0084.
   featureFlagOverridesEnabled: process.env.FEATURE_FLAG_OVERRIDES_ENABLED === "true",
+  // Item 4 (admin): permissão por papel editável. DESLIGADO por padrão e fora da tela de flags (segurança). Tabela é PROPOSTA 0085.
+  permissionOverridesEnabled: process.env.PERMISSION_OVERRIDES_ENABLED === "true",
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",

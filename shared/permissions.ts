@@ -43,6 +43,8 @@ export const capabilityMatrix = {
   "document.read": ["admin", "seller", "finance", "service"],
   "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],
+  // Ficha arquivada (casal que não comprou saiu da vista da sala): quem ainda abre. Era ARCHIVED_SHEET_ROLES fixo; agora capacidade editável (item 4).
+  "sheet.archived.open": ["admin", "finance"],
 } as const satisfies Record<string, readonly InternalPermissionRole[]>;
 
 export type Capability = keyof typeof capabilityMatrix;
@@ -53,8 +55,45 @@ export function canAccess(role: InternalPermissionRole, area: PermissionArea) {
 
 export function canCapability(role: InternalPermissionRole | "user", capability: Capability) {
   if (role === "user") return false;
-  return (capabilityMatrix[capability] as readonly InternalPermissionRole[]).includes(role);
+  const overridden = overrides.capabilities[capability];
+  return ((overridden ?? capabilityMatrix[capability]) as readonly InternalPermissionRole[]).includes(role);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Item 4 (admin): permissão por papel EDITÁVEL por AÇÃO (capacidade), sobre estes padrões (fallback = os valores acima, sempre). Atrás de PERMISSION_OVERRIDES_ENABLED (desligada: nada é
+// carregado e tudo vale como antes). Regras fixas (piso), aplicadas por `sanitizePermissionOverrides` no servidor E no navegador, nunca confiando no que veio da tela:
+//  1. SÓ as capacidades de EDITABLE_CAPABILITIES são editáveis, e cada uma está LIGADA de verdade na autorização do servidor (ver comentário de cada uma). O resto (validar venda,
+//     pagar, distrato, financeiro, assinar...) é piso fixo.
+//  2. O admin sempre está em toda lista editável (admin nunca se tranca).
+//  3. Papel desconhecido é descartado; lista vazia vira apenas ["admin"].
+// TELAS (menuPathRoles) ficam FIXAS por enquanto: esconder item do menu não fecha a rota digitada nem a API; fechar rota + procedures por tela é um PR próprio.
+// ---------------------------------------------------------------------------------------------------------------------
+export const INTERNAL_ROLES = ["admin", "seller", "finance", "service"] as const satisfies readonly InternalPermissionRole[];
+/**
+ * Ligadas ao servidor: `export.pii` (captureSheet.export, assertCapability), `sheet.archived.open` (canOpenArchivedSheet), `document.read` (storageAccess.authorizeStorageRead:
+ * leitura de documento de cliente/contrato) e `commission.view` (commissionsProcedure: scorecards e overview; conceder a um papel sem escopo próprio mostra TODAS, como o finance).
+ */
+export const EDITABLE_CAPABILITIES = ["export.pii", "sheet.archived.open", "document.read", "commission.view"] as const satisfies readonly Capability[];
+
+export type PermissionOverrides = { capabilities: Partial<Record<Capability, readonly InternalPermissionRole[]>> };
+let overrides: PermissionOverrides = { capabilities: {} };
+
+const cleanRoles = (value: unknown): InternalPermissionRole[] => {
+  const given = Array.isArray(value) ? value.filter((role): role is InternalPermissionRole => typeof role === "string" && (INTERNAL_ROLES as readonly string[]).includes(role)) : [];
+  return INTERNAL_ROLES.filter(role => role === "admin" || given.includes(role));
+};
+
+export function sanitizePermissionOverrides(raw: unknown): PermissionOverrides {
+  const out: PermissionOverrides = { capabilities: {} };
+  const input = (raw && typeof raw === "object" ? raw : {}) as { capabilities?: Record<string, unknown> };
+  for (const capability of EDITABLE_CAPABILITIES) {
+    if (input.capabilities && Object.prototype.hasOwnProperty.call(input.capabilities, capability)) out.capabilities[capability] = cleanRoles(input.capabilities[capability]);
+  }
+  return out;
+}
+
+export function setPermissionOverrides(raw: unknown) { overrides = sanitizePermissionOverrides(raw); }
+export function getPermissionOverrides(): PermissionOverrides { return overrides; }
 
 // KAN-31 (teste de navegador): telas do menu seguem o RBAC do procedure principal de cada rota (server/routers/access.ts).
 // Rota ausente aqui = qualquer papel interno. A tela nunca mostra o que o servidor recusaria (403 virava R$ 0,00 na UI).

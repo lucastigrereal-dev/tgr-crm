@@ -30,6 +30,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { canOpenMenuPath } from "@shared/permissions";
+import { syncPermissionOverrides } from "@/lib/permissionOverridesSync";
 
 const menuGroups = [
   { label: "Hoje", items: [{ icon: LayoutDashboard, label: "Visão geral", path: "/" }, { icon: DoorOpen, label: "Sala de vendas", path: "/sala-de-vendas" }, { icon: Gift, label: "Vouchers", path: "/vouchers" }] },
@@ -179,6 +180,9 @@ function DashboardLayoutContent({
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
+  // Item 4: sobrescritas de permissão (flag OFF no servidor = vazio = padrões de hoje). Aplicadas durante o render, antes de qualquer canOpenMenuPath abaixo.
+  const permissionOverrides = trpc.permissionOverrides.effective.useQuery(undefined, { enabled: Boolean(user), retry: false, refetchOnWindowFocus: true });
+  syncPermissionOverrides(permissionOverrides.data);
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === "collapsed";

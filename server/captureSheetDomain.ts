@@ -1,4 +1,5 @@
 import { paperDestroyPromise } from "../shared/paperPromise";
+import { canCapability, INTERNAL_ROLES, type InternalPermissionRole } from "../shared/permissions";
 /**
  * Código do casal: o código legível (publicCode) do Sales Command, que fica na tela da sala; o QR de bip é outro (token secreto só na Suite). A ficha abre por ele, só para quem tem login e permissão
  * (o código não é segredo: o acesso é controlado pelo login). Aceita só letras, números, "-" e "_"; nunca CPF ou telefone.
@@ -134,7 +135,8 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
 
 /** Papéis que continuam abrindo a ficha depois que ela sai da vista da sala ("administrativo", decisão do Lucas). */
 export const ARCHIVED_SHEET_ROLES = ["admin", "finance"] as const;
-export const canOpenArchivedSheet = (role: string | null | undefined) => (ARCHIVED_SHEET_ROLES as readonly string[]).includes(role ?? "");
+/** Item 4: lê a capacidade `sheet.archived.open` (padrão = ARCHIVED_SHEET_ROLES; a administração pode ajustar com PERMISSION_OVERRIDES_ENABLED). */
+export const canOpenArchivedSheet = (role: string | null | undefined) => (INTERNAL_ROLES as readonly string[]).includes(role ?? "") && canCapability(role as InternalPermissionRole, "sheet.archived.open");
 
 /** Soma dias a uma data local AAAA-MM-DD (sem fuso: aritmética de calendário em UTC). */
 export function addCalendarDays(day: string, days: number) {
