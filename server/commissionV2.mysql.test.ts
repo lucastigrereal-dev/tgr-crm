@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, billingRecords, captureRecords, commercialFractions, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, resorts, salesCommissions, units, users } from "../drizzle/schema";
+import { auditLogs, billingRecords, captureRecords, commercialFractions, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, financialTransactions, installments, opportunities, paymentGatewayWebhookEvents, proposals, resorts, installmentRenegotiations, salesCommissions, units, users } from "../drizzle/schema";
 import { FIVE_COMMISSION_DRAFT_V2 } from "../shared/commissionRulesV2";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { runTriggerDdl } from "./mysqlTestDdl";
@@ -190,6 +190,52 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, other))).toHaveLength(0);
     await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" }); // entrada elegível
     expect((await rows()).map(row => [row.commissionRole, row.amount]).sort()).toEqual([["closer", "100.00"], ["liner", "100.00"], ["promoter", "800.00"]]);
+  });
+  const heldReasons = async (installmentId: number) => (await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "installment"), eq(auditLogs.entityId, String(installmentId)), eq(auditLogs.action, "commission_v2_held")))).map(row => row.entityId && row.summary);
+  it("F2 correção: retenção deixa auditoria commission_v2_held (saldo e método inelegível), sem evento novo", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { installmentIds } = await seedSale("held", ["1000.00", "3000.00"]);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    expect((await heldReasons(installmentIds[1]!)).join(" ")).toContain("não faz parte da entrada");
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "cash" });
+    expect((await heldReasons(installmentIds[0]!)).join(" ")).toContain("não está entre os elegíveis");
+    const keys = await db.select().from(auditLogs).where(and(eq(auditLogs.action, "commission_v2_held"), eq(auditLogs.entityId, String(installmentIds[0]!))));
+    expect(keys).toHaveLength(1);
+  });
+  it("F2 correção: parcela CANCELADA não entra no acumulado da entrada", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("cancelada", ["500.00", "1000.00", "3000.00"]);
+    await db.update(installments).set({ status: "cancelled" }).where(eq(installments.id, installmentIds[0]!));
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
+  });
+  it("F2 correção: a parcela criada por acordo de uma parcela de ENTRADA conta como entrada; a renegociada não soma", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("acordo", ["1000.00", "3000.00"]);
+    await db.update(installments).set({ status: "renegotiated" }).where(eq(installments.id, installmentIds[0]!));
+    const [created] = await db.insert(installments).values({ contractId, sequence: 3, dueDate: new Date("2026-12-01T12:00:00Z"), amount: "900.00", status: "open", paidAmount: "0.00" }).$returningId();
+    await db.insert(installmentRenegotiations).values({ contractId, originalInstallmentId: installmentIds[0]!, originalAmount: "1000.00", proposedAmount: "900.00", proposedDueDate: "2026-12-01" as never, status: "applied" });
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" }); // saldo continua sem liberar
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(0);
+    await caller.markInstallmentPaid({ id: created!.id, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
+  });
+  it("F2 correção: releaseOn = entry_total só libera quando o acumulado pago da entrada atinge a entrada; padrão (first_entry_installment) libera na primeira", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const total = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront", releaseOn: "entry_total" } });
+    const { contractId, installmentIds } = await seedSale("entrytotal", ["500.00", "500.00", "3000.00"], total);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(0);
+    expect((await heldReasons(installmentIds[0]!)).join(" ")).toContain("releaseOn = entry_total");
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    expect((await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).map(row => [row.commissionRole, row.amount]).sort()).toEqual([["closer", "100.00"], ["liner", "100.00"], ["promoter", "800.00"]]);
+    const first = await seedSale("firstentry", ["500.00", "500.00"], JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront", releaseOn: "first_entry_installment" } }));
+    await caller.markInstallmentPaid({ id: first.installmentIds[0]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, first.contractId))).toHaveLength(3);
   });
   it("F2: DORMENTE — com o V2 travado, full_upfront não gera nada (o travamento vence)", async () => {
     delete process.env.COMMISSION_V2_RELEASED;
