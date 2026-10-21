@@ -1,8 +1,9 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { auditLogs, captureErasureRequests, captureRecords, contracts, csvImportItems, customerContacts, customerDocuments, customerInteractions, customers, domainEvents, opportunities, reservations, tasks, vouchers, reservationWaitlist } from "../drizzle/schema";
 import type { getDb } from "./db";
 import { txAudit } from "./txOutbox";
+import { withDeadlockRetry } from "./mysqlErrors";
 
 /**
  * Pedido de exclusão/anonimização do titular (LGPD art. 18, CRM-A18). Dois passos, os dois na trilha:
@@ -76,7 +77,7 @@ export async function scrubSecondaryCopies(tx: Tx, customerId: number, captureId
   const scopes: Array<[string, string[]]> = [["customer", [String(customerId)]], ["capture", captureIds.map(String)], ["opportunity", opportunityIds], ["customer_interaction", interactionIds]];
   for (const [aggregateType, ids] of scopes) {
     if (!ids.length) continue;
-    const events = await tx.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents).where(and(eq(domainEvents.aggregateType, aggregateType), inArray(domainEvents.aggregateId, ids)));
+    const events = await tx.select({ id: domainEvents.id, payload: domainEvents.payload }).from(domainEvents).where(and(eq(domainEvents.aggregateType, aggregateType), inArray(domainEvents.aggregateId, ids))).orderBy(asc(domainEvents.id));
     for (const event of events) {
       if (!event.payload) continue;
       let parsed: unknown;
@@ -121,7 +122,9 @@ export async function requestErasure(db: Db, input: { code: string; reason: stri
 
 /** Passo 2: cumpre o pedido. A confirmação é o código do casal digitado igual ao da ficha. */
 export async function completeErasure(db: Db, input: { requestId: number; confirmCode: string; actorUserId: number }) {
-  return db.transaction(async tx => {
+  // O scrub varre e atualiza domain_events enquanto outras transações inserem eventos: o InnoDB pode derrubar esta por deadlock (1213).
+  // A transação roda do zero e só usa `input` de fora, então repetir é seguro (mesmo padrão do salesCommandBridge).
+  return withDeadlockRetry(() => db.transaction(async tx => {
     const [request] = await tx.select().from(captureErasureRequests).where(eq(captureErasureRequests.id, input.requestId)).limit(1).for("update");
     if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido não encontrado." });
     if (request.status !== "requested") throw refuse("Este pedido já foi decidido.");
@@ -150,7 +153,7 @@ export async function completeErasure(db: Db, input: { requestId: number; confir
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "capture", entityId: capture.id, action: "erasure_completed", summary: `Ficha ${capture.id}: pedido ${request.id} cumprido. ${sheets.length} ficha(s) do cliente ${customer.id} anonimizada(s); ficam só nome, CPF e a data do brinde.` });
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "customer", entityId: customer.id, action: "anonymized", summary: `Cliente ${customer.id} anonimizado a pedido do titular (pedido ${request.id}).` });
     return { requestId: request.id, sheetsAnonymized: sheets.length, giftDate };
-  });
+  }));
 }
 
 /** Recusa o pedido com justificativa (ex.: não é o titular, ou a guarda legal manda guardar). Nada é apagado. */
