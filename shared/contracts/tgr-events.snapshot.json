@@ -267,6 +267,7 @@
       "contractId": "9001",
       "validatedAt": "2026-10-05T12:00:00.000Z",
       "validatedBy": "1",
+      "quotasCount": 2,
       "gates": {
         "paymentConfirmedAt": "2026-10-04T12:00:00.000Z",
         "paymentConfirmedBy": "1",

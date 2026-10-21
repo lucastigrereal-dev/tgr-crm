@@ -10,11 +10,9 @@ on:
       - 'docs/**'
       - '.claude/**'
   pull_request:
+    # Sem paths-ignore em PR: com ele um PR so de docs nunca criava os checks obrigatorios e ficava preso. O job `changes` detecta PR so de docs
+    # e os jobs pesados (mesmos nomes dos checks obrigatorios) sao PULADOS por condicao; job pulado conta como sucesso na protecao de branch.
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.claude/**'
   workflow_dispatch:
 
 permissions:
@@ -25,9 +23,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Detecta PR so de docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.docs.outputs.docs_only }}
+    steps:
+      - name: PR so de docs (**.md, docs/**, .claude/**)?
+        id: docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          docs_only=false
+          if [ "$EVENT" = "pull_request" ]; then
+            files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)')"
+            # Fail-safe: lista vazia ou qualquer arquivo fora de docs => roda tudo; se o `gh api` falhar o step falha (set -e do shell) e os jobs pesados rodam (result != success).
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -vE '(\.md$|^docs/|^\.claude/)' | grep -q .; then docs_only=true; fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "docs_only=$docs_only"
+
   quality:
     name: Typecheck, tests, build e bundle budget
-    if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+    needs: changes
+    # Fail-safe: so PULA quando o detector rodou COM SUCESSO e disse docs_only. Detector falhou/pulado => roda tudo (!cancelled() deixa o job rodar mesmo com `needs` falho, mas run cancelado pelo concurrency nao sobe job pesado; previous_filename cobre renames para fora de docs).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') && (github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -78,7 +105,9 @@ jobs:
 
   mysql-integration:
     name: Testes *.mysql.test.ts em MySQL descartável
-    if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+    needs: changes
+    # Fail-safe: so PULA quando o detector rodou COM SUCESSO e disse docs_only. Detector falhou/pulado => roda tudo (!cancelled() deixa o job rodar mesmo com `needs` falho, mas run cancelado pelo concurrency nao sobe job pesado; previous_filename cobre renames para fora de docs).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') && (github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -135,7 +164,9 @@ jobs:
 
   e2e:
     name: E2E autenticado em MySQL descartável
-    if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+    needs: changes
+    # Fail-safe: so PULA quando o detector rodou COM SUCESSO e disse docs_only. Detector falhou/pulado => roda tudo (!cancelled() deixa o job rodar mesmo com `needs` falho, mas run cancelado pelo concurrency nao sobe job pesado; previous_filename cobre renames para fora de docs).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true') && (github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:

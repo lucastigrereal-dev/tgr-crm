@@ -38,7 +38,7 @@ describe("CRM event contract export", () => {
 
   it("ADR-007: crm.sale.validated.v1 to Sales has no PII; Financial sale.* samples carry only whitelisted fields", () => {
     const { sales, financial } = exportEventContract();
-    expect(Object.keys(sales.saleValidatedSampleBody).sort()).toEqual(["contractId", "correlationId", "eventId", "eventName", "gates", "occurredAt", "project", "saleId", "source", "validatedAt", "validatedBy"]);
+    expect(Object.keys(sales.saleValidatedSampleBody).sort()).toEqual(["contractId", "correlationId", "eventId", "eventName", "gates", "occurredAt", "project", "quotasCount", "saleId", "source", "validatedAt", "validatedBy"]);
     expect(Object.keys(sales.saleValidatedSampleBody.gates).sort()).toEqual(["contractGeneratedAt", "contractSignedAt", "documentRef", "documentStoredAt", "paymentConfirmedAt", "paymentConfirmedBy"]);
     expect(JSON.stringify(sales.saleValidatedSampleBody)).not.toMatch(/customer|phone|\.pdf|storageKey/i);
     // KAN-31 V6: payload ESTRITO do Financial (z.strictObject): exatamente estes quatro campos, contractId como texto.
