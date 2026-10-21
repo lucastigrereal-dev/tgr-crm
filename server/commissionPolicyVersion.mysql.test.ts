@@ -83,6 +83,19 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       await expect(api.create({ resortId: resort, policyType: "commission", version: "boa", policy: JSON.parse(policy(0.02)) } as never)).resolves.toMatchObject({ id: expect.any(Number) });
     });
 
+    it("Opus: commercialPolicies.create MATERIALIZA releaseOn=entry_total no JSON gravado (full_upfront sem releaseOn); explícito e per_installment ficam como estão", async () => {
+      const resort = await newResort("materializa", null);
+      const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const stored = async (version: string, extra: object) => {
+        const { id } = await api.create({ resortId: resort, policyType: "commission", version, policy: { ...JSON.parse(policy(0.02)), ...extra } } as never);
+        return JSON.parse((await db.select().from(commercialPolicyVersions).where(eq(commercialPolicyVersions.id, id)))[0]!.policyJson);
+      };
+      expect((await stored("m-sem", {})).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
+      expect((await stored("m-full", { payoutSchedule: { mode: "full_upfront" } })).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
+      expect((await stored("m-expl", { payoutSchedule: { mode: "full_upfront", releaseOn: "first_entry_installment" } })).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "first_entry_installment" });
+      expect((await stored("m-per", { payoutSchedule: { mode: "per_installment" } })).payoutSchedule).toEqual({ mode: "per_installment" });
+    });
+
     it("a baixa de parcela grava a versão aplicada na comissão (policyVersion)", async () => {
       const resort = await newResort("e2e", policy(0.01));
       await addVersion(resort, "vigente-f1", policy(0.1), "2026-01-01T00:00:00Z");

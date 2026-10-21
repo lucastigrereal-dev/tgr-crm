@@ -22,11 +22,12 @@ export const commissionPaymentMethodSchema = z.enum([
  */
 export const payoutScheduleSchema = z.strictObject({
   mode: z.enum(["full_upfront", "per_installment"]),
-  /** Só com `full_upfront`: `first_entry_installment` (padrão atual) libera na primeira baixa elegível da entrada; `entry_total` só quando o acumulado PAGO da entrada >= entryTotal. */
+  /** Só com `full_upfront`: `first_entry_installment` (explícito) libera na primeira baixa elegível da entrada; `entry_total` (padrão) só quando o acumulado PAGO da entrada >= entryTotal. */
   releaseOn: z.enum(["first_entry_installment", "entry_total"]).optional(),
 }).refine(value => value.releaseOn === undefined || value.mode === "full_upfront", { message: "releaseOn só vale com mode full_upfront.", path: ["releaseOn"] });
 export const DEFAULT_PAYOUT_MODE = "full_upfront" as const;
-export const DEFAULT_RELEASE_ON = "first_entry_installment" as const;
+/** Decisão do titular 21/10/2026: a comissão se paga sobre a ENTRADA INTEIRA efetivamente recebida (qualquer forma, 1ª ou 2ª parcela). Um default só, com ou sem versionamento. `first_entry_installment` só vale quando dito explicitamente. */
+export const DEFAULT_RELEASE_ON = "entry_total" as const;
 
 export const commissionPolicySchema = z
   .object({

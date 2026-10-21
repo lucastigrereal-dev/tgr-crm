@@ -139,6 +139,16 @@ export function isEntryInstallment(schedule: EntryScheduleRow[], installmentId: 
   return entryInstallmentIds(schedule, entryTotal, renegotiations).has(installmentId);
 }
 
+/** Mesmo acumulado, em centavos inteiros (comparação exata contra `cents(entryTotal)`, sem tolerância de ponto flutuante). */
+export function paidEntryCents(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
+  return Math.round(paidEntryAmount(schedule, entryTotal, renegotiations) * 100);
+}
+
+/** Entrada inteira recebida? Centavos inteiros, sem folga. */
+export function isEntryFullyPaid(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
+  return paidEntryCents(schedule, entryTotal, renegotiations) >= cents(entryTotal);
+}
+
 /** Acumulado PAGO da entrada (parcelas da entrada com status paid), em reais. */
 export function paidEntryAmount(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
   const { ids, ancestors } = resolveEntry(schedule, entryTotal, renegotiations);

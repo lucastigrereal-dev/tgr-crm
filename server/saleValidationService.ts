@@ -202,7 +202,7 @@ export async function releaseCommissionsForValidatedContract(tx: Tx, input: { co
       result.skipped += 1;
       continue;
     }
-    const facts = await insertInstallmentCommissions(tx, { installment, context, policy: policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
+    const facts = await insertInstallmentCommissions(tx, { installment, context, policy: policy as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date(), paidAsOf: installment.paidAt });
     await recordCreatedCommissions(tx, facts, input.actorUserId, "na validação da venda");
     result.created += facts.length;
   }
@@ -262,7 +262,7 @@ export async function reprocessSkippedCommissions(db: Db, input: { contractId?: 
         const effective = versioned ? (await resolveCommissionPolicy(tx, loaded.resortId, installment.paidAt ?? new Date())).policy : loaded.policy;
         if (!effective || (versioned && commissionBlockReason(locked!.status, effective, validated) !== null)) { summary.ineligible += 1; continue; }
         if (zeroRateSkippedRoles(loaded.context.capture, effective)) { summary.stillZeroRate += 1; continue; }
-        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: effective as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date() });
+        const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: effective as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date(), paidAsOf: installment.paidAt });
         if (!facts.length) { summary.stillZeroRate += 1; continue; }
         await recordCreatedCommissions(tx, facts, input.actorUserId, "pelo reprocessamento da janela de 0%");
         await txAudit(tx, { actorUserId: input.actorUserId, entityType: "installment", entityId: installment.id, action: "commission_skipped_reprocessed", summary: `Parcela paga na janela de 0% reprocessada: ${facts.length} comissão(ões) criada(s) ${versioned ? "com a política vigente na data do pagamento da parcela" : "com as taxas atuais"}.`, idempotencyKey: `commission-skipped-reprocessed:${installment.id}` });
