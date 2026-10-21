@@ -374,7 +374,13 @@ export type SaleValidatedFacts = {
   validatedAt: string; validatedBy: string;
   paymentConfirmedAt: string; paymentConfirmedBy: string;
   contractGeneratedAt: string; contractSignedAt: string; documentStoredAt: string; documentRef: string;
+  /** CRM-C4: cotas oficiais da venda (inteiro 1..100000), ADITIVO e opcional no topo do corpo. Só sai com SALE_VALIDATED_QUOTAS_COUNT_ENABLED; ausente = contrato anterior. */
+  quotasCount?: number;
 };
+
+export const MAX_QUOTAS_COUNT = 100_000;
+export const isQuotasCountValid = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_QUOTAS_COUNT;
+export const isSaleValidatedQuotasCountEnabled = () => process.env.SALE_VALIDATED_QUOTAS_COUNT_ENABLED === "true";
 
 // KAN-31 V6: fato "venda validada" para o Sales Command, no formato exato que o intake do Sales aceita
 // (crm-sale-validation-intake.ts). SEM dados pessoais do cliente; documentRef é a chave opaca crm-doc:<contrato>:<doc>.
@@ -395,6 +401,7 @@ export function buildSaleValidatedBody(lineage: ContractLineage, contractId: num
     contractId: String(contractId),
     validatedAt: facts.validatedAt,
     validatedBy: facts.validatedBy,
+    ...(isQuotasCountValid(facts.quotasCount) ? { quotasCount: facts.quotasCount } : {}),
     gates: {
       paymentConfirmedAt: facts.paymentConfirmedAt,
       paymentConfirmedBy: facts.paymentConfirmedBy,
@@ -425,6 +432,8 @@ export function saleValidatedFactsFrom(payload: Record<string, unknown>): SaleVa
   };
   if (Object.values(facts).some(value => value === null)) return null;
   const complete = facts as SaleValidatedFacts;
+  // CRM-C4: opcional e atrás de flag; valor fora de 1..100000 é omitido (nunca inventado, nunca recusa a venda).
+  if (isSaleValidatedQuotasCountEnabled() && isQuotasCountValid(payload.quotasCount)) complete.quotasCount = payload.quotasCount;
   const validated = Date.parse(complete.validatedAt);
   if ([complete.paymentConfirmedAt, complete.contractGeneratedAt, complete.contractSignedAt, complete.documentStoredAt].some(value => Date.parse(value) > validated)) return null;
   return complete;

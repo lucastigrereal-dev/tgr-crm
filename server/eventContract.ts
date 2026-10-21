@@ -17,7 +17,7 @@ const AT = new Date("2026-10-05T12:00:00.000Z");
 // KAN-31 V6: fatos de sale.validated (instantes, atores opacos e documentRef opaco crm-doc:<contrato>:<documento>).
 const SYN_SALE_VALIDATED = {
   validatedAt: "2026-10-05T12:00:00.000Z", validatedBy: "1", paymentConfirmedAt: "2026-10-04T12:00:00.000Z", paymentConfirmedBy: "1",
-  contractGeneratedAt: "2026-10-03T12:00:00.000Z", contractSignedAt: "2026-10-04T18:00:00.000Z", documentStoredAt: "2026-10-04T18:05:00.000Z", documentRef: "crm-doc:9001:77",
+  contractGeneratedAt: "2026-10-03T12:00:00.000Z", contractSignedAt: "2026-10-04T18:00:00.000Z", documentStoredAt: "2026-10-04T18:05:00.000Z", documentRef: "crm-doc:9001:77", quotasCount: 2,
 };
 
 function sampleFailure(error: unknown, codes: string[] | undefined) {

@@ -292,6 +292,14 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
       expect(rows.every(row => row.sourceInstallmentId === installmentIds[1]! && row.policyVersion === "vB")).toBe(true);
     } finally { delete process.env.COMMISSION_POLICY_VERSIONING_ENABLED; }
   });
+  it("CRM-C4: a validação grava quotasCount (frações do contrato) no fato sale.validated; a Financial segue sem o campo", async () => {
+    const { contractId } = await seedSale("quotas", ["1000.00"]); // seedSale vincula 2 frações
+    const [event] = (await db.select().from(domainEvents).where(eq(domainEvents.eventName, "sale.validated" as never))).filter(row => String(row.aggregateId) === String(contractId));
+    expect(JSON.parse(event!.payload as string).quotasCount).toBe(2);
+    const { financialBridgeEnvelope } = await import("./financialBridge");
+    const envelope = financialBridgeEnvelope(event as never, { externalKey: "p", name: "P", timezone: "America/Sao_Paulo" } as never);
+    expect(Object.keys(envelope.event.payload).sort()).toEqual(["contractId", "saleId", "validatedAt", "validatedBy"].sort());
+  });
   it("F2: DORMENTE — com o V2 travado, full_upfront não gera nada (o travamento vence)", async () => {
     delete process.env.COMMISSION_V2_RELEASED;
     const upfront = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront" } });
