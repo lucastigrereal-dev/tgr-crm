@@ -1,11 +1,13 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { captureRecords, captureSheetSettings, commercialFractions, contracts, saleValidations } from "../../drizzle/schema";
+import { captureRecords, captureSheetSettings, commercialFractions, contracts, officialIndicatorVersions, saleValidations } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { txAudit } from "../txOutbox";
+import { isIndicatorCode, OFFICIAL_INDICATOR_CODES, resolveIndicatorCatalog } from "../officialIndicatorCatalog";
 import { classifyAttendances, computeOfficialIndicators, INCLUDE_IN_PROGRESS_KEY, OFFICIAL_INDICATORS_DEFINITION_VERSION, type AttendanceFact } from "../officialIndicators";
+import { withDeadlockRetry } from "../mysqlErrors";
 import { ENV } from "../_core/env";
 import { addCalendarDays, localDayStart } from "../captureSheetDomain";
 import { localDateInTimezone } from "../saleTermsPolicy";
@@ -22,7 +24,35 @@ async function includeInProgress(db: Awaited<ReturnType<typeof requireDb>>) {
   return row?.value === "1";
 }
 
+function requireCatalogFlag() {
+  if (!ENV.officialIndicatorCatalogEnabled) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Catálogo de indicadores desligado (OFFICIAL_INDICATOR_CATALOG_ENABLED)." });
+}
+
 export const officialIndicatorsRouter = router({
+  // Item 10: lista editável e versionada (só admin; desligada por padrão; não altera o cálculo nem a bridge do Relationship).
+  catalog: adminProcedure.query(async () => {
+    requireCatalogFlag();
+    const db = await requireDb();
+    return resolveIndicatorCatalog(await db.select().from(officialIndicatorVersions));
+  }),
+  catalogHistory: adminProcedure.input(z.object({ code: z.enum(OFFICIAL_INDICATOR_CODES) })).query(async ({ input }) => {
+    requireCatalogFlag();
+    const db = await requireDb();
+    return db.select().from(officialIndicatorVersions).where(eq(officialIndicatorVersions.code, input.code)).orderBy(desc(officialIndicatorVersions.version)).limit(200);
+  }),
+  saveCatalogEntry: adminProcedure.input(z.object({ code: z.enum(OFFICIAL_INDICATOR_CODES), label: z.string().trim().min(3).max(160), description: z.string().trim().max(500).default(""), active: z.boolean() })).mutation(async ({ ctx, input }) => {
+    requireCatalogFlag();
+    if (!isIndicatorCode(input.code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Indicador desconhecido." });
+    const db = await requireDb();
+    return withDeadlockRetry(() => db.transaction(async tx => {
+      // Serializa a nova versão por código: o maior número vigente é lido com lock, a unique (code, version) é a rede.
+      const [last] = await tx.select({ version: officialIndicatorVersions.version }).from(officialIndicatorVersions).where(eq(officialIndicatorVersions.code, input.code)).orderBy(desc(officialIndicatorVersions.version)).limit(1).for("update");
+      const version = (last?.version ?? 0) + 1;
+      await tx.insert(officialIndicatorVersions).values({ code: input.code, version, label: input.label, description: input.description, active: input.active, createdByUserId: ctx.user.id });
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "official_indicator", entityId: input.code, action: "catalog_version_saved", summary: `Indicador ${input.code}: versão ${version} (${input.active ? "ativo" : "oculto"}).` });
+      return { code: input.code, version };
+    }));
+  }),
   config: financeProcedure.query(async () => {
     const db = await requireDb();
     return { includeInProgress: await includeInProgress(db), definitionVersion: OFFICIAL_INDICATORS_DEFINITION_VERSION, provisional: true };
