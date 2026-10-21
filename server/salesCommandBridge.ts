@@ -440,8 +440,8 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     idempotencyKey: "audit:" + idempotencyKey,
   });
 
-  // C2/C3: a venda confirmada tira o casal do feed (contrato novo). Último passo da tx de formalização; falha do gancho não derruba a venda. Flag OFF = no-op.
   await fixContractCommissionRoleMapAtFormalization(tx, contractId); // item 5: mapa de papéis fixado com o contrato (flag OFF = no-op)
+  // C2/C3: a venda confirmada tira o casal do feed (contrato novo). Último passo da tx de formalização; falha do gancho não derruba a venda. Flag OFF = no-op.
   await eligibilityHook(tx, { customerId });
 
   return {

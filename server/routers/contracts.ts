@@ -164,8 +164,8 @@ export const contractsRouter = router({
         await txAudit(tx, { actorUserId: ctx.user.id, entityType: "commercial_fraction", entityId: lockedFraction.id, action: "sold", summary: `Cota vinculada ao contrato ${input.number}.` });
         await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: lockedFraction.id, actorUserId: ctx.user.id, payload: { fractionId: lockedFraction.id, status: "sold", proposalId: input.proposalId ?? null, contractId, reason: "Contrato criado" } });
       }
-      // C2/C3: contrato novo tira o casal do feed (venda em andamento). Último passo da tx; falha do gancho não derruba a venda (reconciliação cobre). Flag OFF = no-op.
       await fixContractCommissionRoleMapAtFormalization(tx, contractId); // item 5: mapa de papéis fixado com o contrato (flag OFF = no-op)
+      // C2/C3: contrato novo tira o casal do feed (venda em andamento). Último passo da tx; falha do gancho não derruba a venda (reconciliação cobre). Flag OFF = no-op.
       await eligibilityHook(tx, { customerId: input.customerId });
       return contractId;
     });
