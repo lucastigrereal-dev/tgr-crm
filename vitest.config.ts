@@ -4,6 +4,8 @@ import path from "path";
 const templateRoot = path.resolve(import.meta.dirname);
 
 export default defineConfig({
+  // Testes de componente renderizam em Node (react-dom/server); o JSX usa o runtime automático como o Vite do cliente.
+  esbuild: { jsx: "automatic" },
   root: templateRoot,
   resolve: {
     alias: {

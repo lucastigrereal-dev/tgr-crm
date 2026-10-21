@@ -113,6 +113,7 @@ export const menuPathRoles: Record<string, readonly InternalPermissionRole[]> = 
   "/equipe": ["admin"],
   "/importar": ["admin"],
   "/configuracoes-projeto": ["admin"],
+  "/configuracoes-empresa": ["admin"],
   "/dicionarios": ["admin"],
   "/integracoes": ["admin"],
   "/auditoria": ["admin"],
