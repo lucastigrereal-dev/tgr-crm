@@ -11,14 +11,17 @@ import mysql from "mysql2/promise";
 import { attendanceRecords, auditLogs, coupleRegistry, customers, resorts } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
-// C1: receptor encounter.attendance_recorded.v1 em MySQL real, pela rota HTTP. As tabelas vêm da migration PROPOSTA (migrations/proposed), aplicada só neste
-// banco descartável; em produção nada é criado até o GO.
+// C1: receptor encounter.attendance_recorded.v1 em MySQL real, pela rota HTTP. A migration PROPOSTA (migrations/proposed) é aplicada INTEIRA (com as 2 FKs) num
+// banco descartável PRÓPRIO deste teste (CREATE DATABASE temporário só com as tabelas-pai: resorts, audit_logs, customers), para não sujar o banco compartilhado que
+// schemaDrift.mysql.test.ts compara com o journal. Em produção nada é criado até o GO.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const runId = randomUUID().slice(0, 8);
 const KEY = `chave-teste-${runId}`;
 
 describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do casal) em MySQL real", () => {
   let pool: mysql.Pool;
+  let admin: mysql.Pool;
+  let scratchName: string;
   let db: ReturnType<typeof drizzle>;
   let server: Server;
   let offServer: Server;
@@ -44,24 +47,28 @@ describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do
   const records = async () => { const [row] = await registry(); return row ? db.select().from(attendanceRecords).where(eq(attendanceRecords.coupleRegistryId, row.id)) : []; };
 
   beforeAll(async () => {
-    validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
-    process.env.DATABASE_URL = integrationUrl;
+    const { database } = validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
+    scratchName = `${database.replace(/_test$/i, "")}_att${runId}_test`;
+    admin = mysql.createPool({ uri: integrationUrl, connectionLimit: 1 });
+    await admin.query(`CREATE DATABASE \`${scratchName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    // LIKE copia colunas e índices, não FKs: só as tabelas-pai que o receptor lê/escreve. As 2 FKs da 0079 vêm da própria proposta.
+    for (const table of ["resorts", "audit_logs", "customers"]) await admin.query(`CREATE TABLE \`${scratchName}\`.\`${table}\` LIKE \`${database}\`.\`${table}\``);
+    const scratchUrl = new URL(integrationUrl!);
+    scratchUrl.pathname = `/${scratchName}`;
+    process.env.DATABASE_URL = scratchUrl.toString();
     const { registerAttendanceReceiver, ATTENDANCE_PATH, attendanceEventId: derive } = await import("./attendanceReceiver");
     attendanceEventId = derive;
-    pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 6 });
+    pool = mysql.createPool({ uri: scratchUrl.toString(), connectionLimit: 6 });
     db = drizzle({ client: pool });
-    // Migration PROPOSTA aplicada só neste banco descartável (CREATE TABLE IF NOT EXISTS).
     const sql = readFileSync(path.resolve(__dirname, "../migrations/proposed/PROPOSED_0079_couple_registry_attendance.sql"), "utf8");
-    // O banco é COMPARTILHADO com schemaDrift.mysql.test.ts, que exige FKs == snapshot do journal; como a proposta não está no journal, as tabelas entram aqui SEM as linhas
-    // FOREIGN KEY (a proposta as tem: conferido abaixo) e saem no afterAll. Só a integridade referencial deixa de ser exercida; colunas, uniques e índices são os da proposta.
     expect(sql.match(/FOREIGN KEY/g)).toHaveLength(2);
-    for (const statement of sql.split("--> statement-breakpoint")) await pool.query(statement.replace(/^--.*$/gm, "").replace(/^\s*CONSTRAINT `\w+` FOREIGN KEY[^\n]*\n/gm, "").trim());
+    for (const statement of sql.split("--> statement-breakpoint")) await pool.query(statement.replace(/^--.*$/gm, "").trim());
     [{ id: resortId }] = await db.insert(resorts).values({ name: `Resort ATT ${runId}`, externalKey: projectKey, city: "Natal", state: "RN", status: "active" } as never).$returningId();
     const mount = (enabled: boolean) => { const app = express(); app.use(express.json()); registerAttendanceReceiver(app, KEY, enabled); const s = createServer(app); return new Promise<{ s: Server; u: string }>(resolve => s.listen(0, () => resolve({ s, u: `http://127.0.0.1:${(s.address() as AddressInfo).port}${ATTENDANCE_PATH}` }))); };
     ({ s: server, u: url } = await mount(true));
     ({ s: offServer, u: offUrl } = await mount(false));
   });
-  afterAll(async () => { process.env = previousEnv; await pool?.query("DROP TABLE IF EXISTS attendance_records"); await pool?.query("DROP TABLE IF EXISTS couple_registry"); await new Promise(resolve => server?.close(resolve)); await new Promise(resolve => offServer?.close(resolve)); await pool?.end(); });
+  afterAll(async () => { process.env = previousEnv;  await new Promise(resolve => server?.close(resolve)); await new Promise(resolve => offServer?.close(resolve)); await pool?.end(); if (scratchName) await admin?.query(`DROP DATABASE IF EXISTS \`${scratchName}\``); await admin?.end(); });
 
   it("flag desligada: 404 mesmo com a chave certa e nada é gravado; sem chave ou chave errada: 401; corpo inválido: 400", async () => {
     expect((await post(body(), KEY, offUrl)).status).toBe(404);
@@ -131,6 +138,13 @@ describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do
     [row] = await registry();
     expect(row).toMatchObject({ lastEncounterId: newer, lastOutcome: "NO_SALE", encountersCount: 3 });
     expect(await registry()).toHaveLength(1);
+  });
+
+  it("FKs da 0079 existem de verdade: filho sem pai é recusado pelo banco", async () => {
+    const [fks] = await pool.query("SELECT CONSTRAINT_NAME AS n FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() ORDER BY 1") as [Array<{ n: string }>, unknown];
+    expect(fks.map(f => f.n)).toEqual(["attendance_records_coupleRegistryId_fk", "couple_registry_resortId_fk"]);
+    await expect(db.insert(coupleRegistry).values({ resortId: 2_000_000_000, salesCoupleId: randomUUID(), coupleCode: "X", lastEncounterId: randomUUID(), lastRevision: 0, lastOutcome: "NT", lastClosedAt: new Date("2026-10-21T10:00:00Z") })).rejects.toThrow();
+    await expect(db.insert(attendanceRecords).values({ eventId: randomUUID(), coupleRegistryId: 2_000_000_000, encounterId: randomUUID(), revision: 0, outcome: "NT", closedAt: new Date("2026-10-21T10:00:00Z"), occurredAt: new Date("2026-10-21T10:00:00Z"), correlationId: "c", payloadHash: "h" })).rejects.toThrow();
   });
 
   it("corrida: o mesmo eventId em paralelo grava uma linha; atendimentos distintos de um casal NOVO em paralelo criam um só registro", async () => {
