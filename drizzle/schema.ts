@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   date,
   decimal,
@@ -513,7 +514,7 @@ export const customerContactOptouts = mysqlTable("customer_contact_optouts", {
 
 /** C2/C3 fatia 2: projeção da elegibilidade por ficha (linha travada com FOR UPDATE pelos ganchos e pela reconciliação, fatias 3/4). Mesma PROPOSTA 0080. */
 export const nonBuyerEligibilityState = mysqlTable("non_buyer_eligibility_state", {
-  id: int("id").autoincrement().primaryKey(),
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
   captureId: int("captureId").notNull().references(() => captureRecords.id),
   customerId: int("customerId").notNull().references(() => customers.id),
   eligible: boolean("eligible").default(false).notNull(),

@@ -1,4 +1,5 @@
 import { applyQualificationPolicy, isQualificationVersioningEnabled, LEGACY_QUALIFICATION_VERSION, qualificationParamsSchema, qualificationVersionToStamp } from "../qualificationPolicy";
+import { eligibilityHook } from "../nonBuyerEligibilityService";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/mysql-core";
@@ -599,6 +600,7 @@ export const captureSheetRouter = router({
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: capture.id, action: "nt_recorded", summary: `Não tour de ${input.kind} registrado (motivo "${motive.label}").` });
       // O evento entra na mesma transação do status: o fato e a saída para quem escuta capture.no_tour saem juntos.
       await txEvent(tx, { eventName: "capture.no_tour", aggregateType: "capture", aggregateId: capture.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason, ntKind: input.kind } });
+      await eligibilityHook(tx, { captureId: capture.id }); // C2/C3: não-tour registrado (ramo B). Último passo da tx; flag OFF = no-op.
       return { ok: true as const, alreadyRecorded: false as const, salesRoom: capture.salesRoom };
     }).then(result => {
       // O painel da sala atualiza em tempo real (mesmo caminho do markNoTour).

@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { eligibilityHook } from "./nonBuyerEligibilityService";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -58,6 +59,7 @@ export async function recordRecoveryOptOut(db: Db, event: RecoveryOptOut): Promi
         actorUserId: null, entityType: "capture", entityId: String(capture.id), action: "recovery_opt_out_received",
         summary: `Opt-out de contato recebido do Recovery (evento ${event.eventId}).`, idempotencyKey: `audit:recovery-optout:${event.eventId}`,
       });
+      await eligibilityHook(tx, { customerId: capture.customerId }); // C2/C3: opt-out tem efeito imediato e revoga. Último passo da tx.
       return { replay: false, optOutId: id, customerId: capture.customerId };
     }));
   } catch (error) {

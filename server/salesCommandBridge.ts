@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { eligibilityHook } from "./nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "./installmentScheduledFacts";
 import type { Express, Request, Response } from "express";
 import { and, asc, desc, eq, gt, isNull, lte, or } from "drizzle-orm";
@@ -437,6 +438,9 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     summary: `Venda ${event.saleId} formalizada em cliente, oportunidade, proposta, contrato e ${installmentValues.length} parcelas.`,
     idempotencyKey: "audit:" + idempotencyKey,
   });
+
+  // C2/C3: a venda confirmada tira o casal do feed (contrato novo). Último passo da tx de formalização; falha do gancho não derruba a venda. Flag OFF = no-op.
+  await eligibilityHook(tx, { customerId });
 
   return {
     customerId,

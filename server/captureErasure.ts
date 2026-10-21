@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { eligibilityHook } from "./nonBuyerEligibilityService";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { auditLogs, captureErasureRequests, captureRecords, contracts, csvImportItems, customerContacts, customerDocuments, customerInteractions, customers, domainEvents, opportunities, reservations, tasks, vouchers, reservationWaitlist } from "../drizzle/schema";
 import type { getDb } from "./db";
@@ -116,6 +117,7 @@ export async function requestErasure(db: Db, input: { code: string; reason: stri
     if (blockers.length) throw refuse(`Não dá para anonimizar por aqui: o cliente ${blockers.join(", ")}. A guarda legal do contrato pede decisão da administração e do jurídico.`);
     const [{ id }] = await tx.insert(captureErasureRequests).values({ captureId: capture.id, customerId: capture.customerId, coupleCode: input.code, reason: input.reason, requestedByUserId: input.actorUserId }).$returningId();
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "capture", entityId: capture.id, action: "erasure_requested", summary: `Ficha ${capture.id}: pedido de exclusão ${id} registrado (aguarda confirmação da administração).` });
+    await eligibilityHook(tx, { customerId: capture.customerId }); // C2/C3: exclusão pendente revoga. Último passo da tx.
     return { requestId: id };
   });
 }
@@ -152,6 +154,7 @@ export async function completeErasure(db: Db, input: { requestId: number; confir
     await tx.update(captureErasureRequests).set({ status: "completed", decidedByUserId: input.actorUserId, decidedAt: now, giftDate, sheetsAnonymized: sheets.length }).where(eq(captureErasureRequests.id, request.id));
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "capture", entityId: capture.id, action: "erasure_completed", summary: `Ficha ${capture.id}: pedido ${request.id} cumprido. ${sheets.length} ficha(s) do cliente ${customer.id} anonimizada(s); ficam só nome, CPF e a data do brinde.` });
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "customer", entityId: customer.id, action: "anonymized", summary: `Cliente ${customer.id} anonimizado a pedido do titular (pedido ${request.id}).` });
+    await eligibilityHook(tx, { customerId: customer.id }); // C2/C3: anonimizado sai do feed. Último passo da tx.
     return { requestId: request.id, sheetsAnonymized: sheets.length, giftDate };
   }));
 }
@@ -164,6 +167,7 @@ export async function rejectErasure(db: Db, input: { requestId: number; note: st
     if (request.status !== "requested") throw refuse("Este pedido já foi decidido.");
     await tx.update(captureErasureRequests).set({ status: "rejected", decidedByUserId: input.actorUserId, decidedAt: new Date(), decisionNote: input.note }).where(eq(captureErasureRequests.id, request.id));
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "capture", entityId: request.captureId, action: "erasure_rejected", summary: `Ficha ${request.captureId}: pedido de exclusão ${request.id} recusado pela administração.` });
+    await eligibilityHook(tx, { customerId: request.customerId }); // C2/C3: pedido recusado pode devolver o casal ao predicado. Último passo da tx.
     return { requestId: request.id };
   });
 }

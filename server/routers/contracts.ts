@@ -19,6 +19,7 @@ import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows, withDeadlockRetry } from "../mysqlErrors";
 import { txAudit, txEvent } from "../txOutbox";
+import { eligibilityHook } from "../nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
 import { assertContractGenerationAllowed } from "../saleOrderGate";
 import { isContractDocumentCategory } from "../saleValidation";
@@ -162,6 +163,8 @@ export const contractsRouter = router({
         await txAudit(tx, { actorUserId: ctx.user.id, entityType: "commercial_fraction", entityId: lockedFraction.id, action: "sold", summary: `Cota vinculada ao contrato ${input.number}.` });
         await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: lockedFraction.id, actorUserId: ctx.user.id, payload: { fractionId: lockedFraction.id, status: "sold", proposalId: input.proposalId ?? null, contractId, reason: "Contrato criado" } });
       }
+      // C2/C3: contrato novo tira o casal do feed (venda em andamento). Último passo da tx; falha do gancho não derruba a venda (reconciliação cobre). Flag OFF = no-op.
+      await eligibilityHook(tx, { customerId: input.customerId });
       return contractId;
     });
     await syncRevenueQualityForContract({ contractId: result, actorUserId: ctx.user.id, trigger: "criação de contrato" });
@@ -324,6 +327,8 @@ export const contractsRouter = router({
         await txAudit(tx, { actorUserId: actor, entityType: "commercial_fraction", entityId: fractionId, action: "returned_to_inventory", summary: `Cota retornou ao estoque após distrato do contrato ${contract.id}.` });
         await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: fractionId, actorUserId: actor, payload: { fractionId, status: "available", contractId: contract.id, reason: "Distrato executado" }, idempotencyKey: `fraction-returned:${fractionId}:${contract.id}` });
       }
+      // C2/C3: distrato executado devolve o casal ao predicado (se não restar venda em andamento). Último passo da tx.
+      await eligibilityHook(tx, { customerId: contract.customerId });
       return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, manualReviewCommissionIds: reviewIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
     }));
     await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
@@ -339,7 +344,7 @@ export const contractsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     if (input.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Cancelamento direto bloqueado. Solicite e execute um distrato aprovado." });
-    const current = (await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
+    const current = (await db.select({ status: contracts.status, customerId: contracts.customerId }).from(contracts).where(eq(contracts.id, input.id)).limit(1))[0];
     if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
     // ADR-007 (V6): única reativação permitida por aqui é a regularização overdue -> active (exige venda já validada, abaixo).
     if (input.status === "active" && current.status !== "overdue") throw saleValidationError("CONFLICT", "SALE_VALIDATION_REQUIRED", "A ativação do contrato só ocorre pela validação final da venda (saleValidation.validateSale): pagamento confirmado, contrato assinado, documento assinado armazenado e confirmação do gerente.");
@@ -356,6 +361,7 @@ export const contractsRouter = router({
       if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "O contrato foi alterado por outra operação. Recarregue e tente novamente." });
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract", entityId: input.id, action: "status_updated", summary: `Status alterado para ${input.status}.` });
       await txEvent(tx, { eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.id, actorUserId: ctx.user.id, payload: { status: input.status, cancellationReason: null } });
+      await eligibilityHook(tx, { customerId: current.customerId }); // C2/C3: mudança de status do contrato (último passo da tx)
     });
     await syncRevenueQualityForContract({ contractId: input.id, actorUserId: ctx.user.id, trigger: "alteração de status do contrato" });
     return { success: true };
