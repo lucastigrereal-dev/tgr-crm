@@ -1,0 +1,11 @@
+# Contrato `recovery.opted_out.v1` (Recovery emite, CRM recebe)
+
+Status: **receptor pronto no CRM, desligado por flag; o emissor no Recovery ainda não existe** (C2/C3 fatia 2, desenho em `docs/audit/ETAPA2_I_DESENHO_ELEGIBILIDADE_RECOVERY.md` §4.3). Este contrato é do Recovery -> CRM e NÃO entra na seção do snapshot/lock com a Suite (nenhuma mudança em `consumers.lock.json`); o emissor é trabalho futuro do lado do Recovery.
+
+- `POST /api/integrations/recovery/opt-out`, corpo JSON estrito `{ eventId, coupleCode, optedOutAt, source: "recovery" }` (`eventId` 1..120, `coupleCode` 1..64, `optedOutAt` UTC entre 2000 e 2037). Sem nome, telefone nem texto livre.
+- **Desligada por padrão**: `RECOVERY_ELIGIBILITY_ENABLED=false` (flag da elegibilidade; nenhuma flag existente mudou). Desligada, ou sem `RECOVERY_INTEGRATION_KEY`, responde 404 mesmo com a chave certa. Chave própria do Recovery (não é a do Sales), `Authorization: Bearer`, `timingSafeEqual`.
+- Portão de auth montado antes do parser JSON global só para esta rota (mesmo padrão de `encounter.attendance_recorded.v1`): sem chave 401 sem ler o corpo; com chave o corpo é lido com limite de 16 KB e JSON ruim = 400 `INVALID_EVENT`.
+- Respostas: 201 aceito; 200 replay (mesmo `eventId`, mesmo corpo); 409 `EVENT_ID_CONFLICT` (mesmo `eventId`, corpo diferente); 422 `UNKNOWN_COUPLE_CODE` (não reenviável); 503 transitório.
+- Efeito: uma linha append-only em `customer_contact_optouts` (por CLIENTE: vale para todas as fichas dele) e uma linha de auditoria sem PII. A elegibilidade (`nonBuyerEligibility`, opção `readOptOut`) passa a devolver `opt_out`. O opt-out é definitivo por ora: reativação por novo ciente depende de decisão do Lucas (pendente).
+- **Não emite** `crm.non_buyer.eligibility_revoked.v1` ainda: isso vem com a projeção e os ganchos (fatias 3/4).
+- **Depende de migration**: `migrations/proposed/PROPOSED_0080_contact_optouts_eligibility_state.sql` (PROPOSTA, fora do journal): `customer_contact_optouts` e `non_buyer_eligibility_state` (esta já guarda `customerId` indexado para a reavaliação ser disparada também por mudança de contrato, proposta ou oportunidade: cliente -> fichas -> reavaliar). Ligar a flag antes do GO + migration = 503.

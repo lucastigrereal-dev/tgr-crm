@@ -492,6 +492,40 @@ export const attendanceRecords = mysqlTable("attendance_records", {
   index("attendance_records_couple_idx").on(table.coupleRegistryId, table.closedAt),
 ]);
 
+/**
+ * C2/C3 fatia 2: opt-out de contato do Recovery (append-only, por cliente). PROPOSTA de migration: migrations/proposed/PROPOSED_0080_contact_optouts_eligibility_state.sql
+ * (a tabela só existe depois do GO; o receptor fica atrás de RECOVERY_ELIGIBILITY_ENABLED=false).
+ */
+export const customerContactOptouts = mysqlTable("customer_contact_optouts", {
+  id: int("id").autoincrement().primaryKey(),
+  customerId: int("customerId").notNull().references(() => customers.id),
+  coupleCode: varchar("coupleCode", { length: 64 }).notNull(),
+  optedOutAt: timestamp("optedOutAt", { fsp: 3 }).notNull(),
+  source: mysqlEnum("source", ["crm_staff", "recovery", "owner_request"]).notNull(),
+  eventId: varchar("eventId", { length: 120 }),
+  payloadHash: varchar("payloadHash", { length: 64 }),
+  reasonCode: varchar("reasonCode", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("customer_contact_optouts_event_unique").on(table.eventId),
+  index("customer_contact_optouts_customer_idx").on(table.customerId, table.optedOutAt),
+]);
+
+/** C2/C3 fatia 2: projeção da elegibilidade por ficha (linha travada com FOR UPDATE pelos ganchos e pela reconciliação, fatias 3/4). Mesma PROPOSTA 0080. */
+export const nonBuyerEligibilityState = mysqlTable("non_buyer_eligibility_state", {
+  id: int("id").autoincrement().primaryKey(),
+  captureId: int("captureId").notNull().references(() => captureRecords.id),
+  customerId: int("customerId").notNull().references(() => customers.id),
+  eligible: boolean("eligible").default(false).notNull(),
+  seq: int("seq").default(0).notNull(),
+  lastReason: varchar("lastReason", { length: 40 }),
+  lastEmittedAt: timestamp("lastEmittedAt", { fsp: 3 }),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("non_buyer_eligibility_state_capture_unique").on(table.captureId),
+  index("non_buyer_eligibility_state_customer_idx").on(table.customerId),
+]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {

@@ -15,6 +15,7 @@ import { processAsaasWebhook } from "../paymentGatewayWebhook";
 import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
+import { registerRecoveryOptOutGate, registerRecoveryOptOutReceiver } from "../recoveryOptOutReceiver";
 import { registerAttendanceGate, registerAttendanceReceiver } from "../attendanceReceiver";
 import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
 import { registerNqReadEndpoint } from "../nqReadEndpoint";
@@ -76,12 +77,14 @@ async function startServer() {
   });
   // C1: portão de auth do receptor de atendimento ANTES do parser global (401 sem ler o corpo; JSON ruim = 400 só com chave).
   registerAttendanceGate(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
+  registerRecoveryOptOutGate(app, ENV.recoveryIntegrationKey, ENV.recoveryEligibilityEnabled);
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
   registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey, ENV.encounterTimesReceiverEnabled);
   registerAttendanceReceiver(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
+  registerRecoveryOptOutReceiver(app, ENV.recoveryIntegrationKey, ENV.recoveryEligibilityEnabled);
   registerNqReadEndpoint(app, ENV.salesCommandIntegrationKey, ENV.nqReadEndpointEnabled);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
