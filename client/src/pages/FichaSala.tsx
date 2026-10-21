@@ -8,6 +8,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Printer } from "lucide-react";
 import { paperDestroyPromise } from "@shared/paperPromise";
+import { retryUnlessDefinitive } from "@shared/queryRetry";
 import { buildCaptureExportFilename, buildCaptureExportRows, downloadBlob, toCsv, writeCaptureExportXlsx } from "@shared/captureSheetExport";
 import { useEffect, useState } from "react";
 import { useSearch } from "wouter";
@@ -34,7 +35,8 @@ function FichaImpressa({ code }: { code: string }) {
   const isAdmin = user?.role === "admin";
   // O financeiro abre a ficha (administrativo), mas imprimir e mexer no papel é da recepção/sala: sem botões que o servidor recusaria.
   const canHandlePaper = user?.role !== "finance";
-  const sheet = trpc.captureSheet.byCode.useQuery({ code });
+  // NOT_FOUND/FORBIDDEN são respostas definitivas: sem repetir, "Ficha não encontrada" aparece na hora (o padrão repetiria 3x, ~7s).
+  const sheet = trpc.captureSheet.byCode.useQuery({ code }, { retry: retryUnlessDefinitive });
   const roles = trpc.captureSheet.roles.list.useQuery();
   const [roleId, setRoleId] = useState("");
   const [birth, setBirth] = useState("");
