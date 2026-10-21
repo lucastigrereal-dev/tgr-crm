@@ -67,3 +67,14 @@ export function isLockWaitTimeoutError(error: unknown): boolean {
   }
   return false;
 }
+
+// Tabela inexistente (ER_NO_SUCH_TABLE, 1146): migration proposta ainda não aplicada.
+export function isMissingTableError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const candidate = current as { code?: unknown; errno?: unknown; cause?: unknown };
+    if (candidate.code === "ER_NO_SUCH_TABLE" || Number(candidate.errno) === 1146) return true;
+    current = candidate.cause;
+  }
+  return false;
+}

@@ -27,7 +27,9 @@ describe("mapa de papéis da comissão (puro)", () => {
     expect(source.indexOf("await resolveContractCommissionRoleMap(")).toBeGreaterThan(source.indexOf("const v2Rows = async"));
     expect(source.indexOf("await resolveContractCommissionRoleMap(")).toBeLessThan(source.indexOf("const pinned ="));
     ENV.commissionRoleMapEnabled = false;
-    expect(await commissionRoleMapForContract(undefined as never, 1)).toEqual({ map: COMMISSION_V2_ROLE_MAP });
+    // flag OFF com a tabela ausente (migration 0083 não aplicada): constante, sem derrubar o motor
+    const noTable = { select: () => ({ from: () => ({ where: () => ({ limit: async () => { throw Object.assign(new Error("Failed query"), { cause: { errno: 1146, code: "ER_NO_SUCH_TABLE" } }); } }) }) }) } as never;
+    expect(await commissionRoleMapForContract(noTable, 1)).toEqual({ map: COMMISSION_V2_ROLE_MAP });
   });
 });
 
@@ -132,5 +134,21 @@ describe.skipIf(!integrationUrl)("mapa de papéis da comissão em MySQL real (00
     expect(await db.select().from(contractCommissionRoleMaps).where(eq(contractCommissionRoleMaps.contractId, fresh))).toHaveLength(0);
     expect(readFileSync(path.resolve(__dirname, "installmentCommissions.ts"), "utf8")).toMatch(/"blocked" in resolution\) return hold\("role_map_invalid"/);
     await db.delete(commissionRoleMapVersions).where(eq(commissionRoleMapVersions.version, maxVersion + 1));
+  });
+
+  it("(C2) flag OFF: snapshot já gravado vale (não-padrão paga pelo snapshot; ilegível bloqueia); sem snapshot cai na constante e NÃO cria nada", async () => {
+    const custom = { captador: "liner", consultor: "promoter", fechador: "closer" } as const;
+    const fixed = await newContract();
+    await db.insert(contractCommissionRoleMaps).values({ contractId: fixed, mapVersion: 3, roleMap: JSON.stringify(custom) });
+    const broken = await newContract();
+    await db.insert(contractCommissionRoleMaps).values({ contractId: broken, mapVersion: 3, roleMap: "{lixo" });
+    const none = await newContract();
+    ENV.commissionRoleMapEnabled = false;
+    try {
+      expect(await commissionRoleMapForContract(db as never, fixed)).toEqual({ map: custom });
+      expect(await commissionRoleMapForContract(db as never, broken)).toEqual({ blocked: "snapshot_invalid" });
+      expect(await commissionRoleMapForContract(db as never, none)).toEqual({ map: COMMISSION_V2_ROLE_MAP });
+      expect(await db.select().from(contractCommissionRoleMaps).where(eq(contractCommissionRoleMaps.contractId, none))).toHaveLength(0);
+    } finally { ENV.commissionRoleMapEnabled = true; }
   });
 });
