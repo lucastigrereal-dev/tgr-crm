@@ -15,6 +15,7 @@ import { processAsaasWebhook } from "../paymentGatewayWebhook";
 import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
+import { registerAttendanceGate, registerAttendanceReceiver } from "../attendanceReceiver";
 import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
 import { registerNqReadEndpoint } from "../nqReadEndpoint";
 import { ENV } from "./env";
@@ -73,11 +74,14 @@ async function startServer() {
     const result = await processClicksignWebhook(signature, rawBody);
     res.status(result.status).json(result);
   });
+  // C1: portão de auth do receptor de atendimento ANTES do parser global (401 sem ler o corpo; JSON ruim = 400 só com chave).
+  registerAttendanceGate(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
   registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey, ENV.encounterTimesReceiverEnabled);
+  registerAttendanceReceiver(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
   registerNqReadEndpoint(app, ENV.salesCommandIntegrationKey, ENV.nqReadEndpointEnabled);
   registerStorageProxy(app);
   registerOAuthRoutes(app);

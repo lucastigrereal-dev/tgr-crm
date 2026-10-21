@@ -445,6 +445,53 @@ export const encounterTimeRecords = mysqlTable("encounter_time_records", {
   index("encounter_time_records_capture_idx").on(table.captureId, table.occurredAt),
 ]);
 
+/**
+ * C1: registro canônico do casal, vindo de `encounter.attendance_recorded.v1` (Sales -> CRM). Chave: (resort mapeado pelo projeto do Sales, id do casal no Sales).
+ * PII mínima: nomes e telefone SÓ em dígitos (o Sales manda texto livre). Guarda o último atendimento encerrado; o histórico fica em attendance_records.
+ * PROPOSTA de migration: migrations/proposed/PROPOSED_0079_couple_registry_attendance.sql (a tabela só existe depois do GO; receptor desligado por flag).
+ */
+export const coupleRegistry = mysqlTable("couple_registry", {
+  id: int("id").autoincrement().primaryKey(),
+  resortId: int("resortId").notNull().references(() => resorts.id),
+  salesCoupleId: varchar("salesCoupleId", { length: 36 }).notNull(),
+  coupleCode: varchar("coupleCode", { length: 32 }).notNull(),
+  primaryName: varchar("primaryName", { length: 160 }),
+  secondaryName: varchar("secondaryName", { length: 160 }),
+  phoneDigits: varchar("phoneDigits", { length: 64 }),
+  lastEncounterId: varchar("lastEncounterId", { length: 36 }).notNull(),
+  lastRevision: int("lastRevision").notNull(),
+  lastOutcome: mysqlEnum("lastOutcome", ["SALE_CONFIRMED", "NO_SALE", "CAIU_EM_MESA", "NT"]).notNull(),
+  lastReasonCode: varchar("lastReasonCode", { length: 100 }),
+  lastClosedAt: timestamp("lastClosedAt", { fsp: 3 }).notNull(),
+  encountersCount: int("encountersCount").default(1).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("couple_registry_resort_couple_unique").on(table.resortId, table.salesCoupleId),
+  index("couple_registry_resort_code_idx").on(table.resortId, table.coupleCode),
+  index("couple_registry_phone_idx").on(table.phoneDigits),
+]);
+
+/** C1: um registro por evento de atendimento recebido (eventId único; (atendimento, revisão) único). Só adiciona. Sem nome nem telefone. */
+export const attendanceRecords = mysqlTable("attendance_records", {
+  id: int("id").autoincrement().primaryKey(),
+  eventId: varchar("eventId", { length: 36 }).notNull(),
+  coupleRegistryId: int("coupleRegistryId").notNull().references(() => coupleRegistry.id),
+  encounterId: varchar("encounterId", { length: 36 }).notNull(),
+  revision: int("revision").notNull(),
+  outcome: mysqlEnum("outcome", ["SALE_CONFIRMED", "NO_SALE", "CAIU_EM_MESA", "NT"]).notNull(),
+  reasonCode: varchar("reasonCode", { length: 100 }),
+  closedAt: timestamp("closedAt", { fsp: 3 }).notNull(),
+  occurredAt: timestamp("occurredAt", { fsp: 3 }).notNull(),
+  correlationId: varchar("correlationId", { length: 128 }).notNull(),
+  payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+  receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("attendance_records_event_unique").on(table.eventId),
+  uniqueIndex("attendance_records_encounter_revision_unique").on(table.encounterId, table.revision),
+  index("attendance_records_couple_idx").on(table.coupleRegistryId, table.closedAt),
+]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {

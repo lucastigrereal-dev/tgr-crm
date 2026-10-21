@@ -5,6 +5,7 @@
 import { FINANCIAL_EVENT_NAMES, financialBridgeEnvelope } from "./financialBridge";
 import { buildContractStateBody, buildSaleValidatedBody, CONTRACT_STATE_TARGETS, type ContractLineage } from "./relationshipBridge";
 import { mapSalesIngestError, SALES_INGEST_REJECTION_CODES, SalesIngestRejection, salesIngestFailureBody } from "./salesCommandBridge";
+import { ATTENDANCE_CONTRACT_SECTION } from "../shared/contracts/attendanceSection";
 import { allowedPayloadFields, integrationContractVersion } from "../shared/integrationContract";
 
 const SYN_PROJECT = { externalKey: "SYN-PONTA-NEGRA", name: "SYN Ponta Negra", timezone: "America/Recife" };
@@ -56,5 +57,7 @@ export function exportEventContract() {
       ingestRejection: sampleFailure(new SalesIngestRejection("INSUFFICIENT_INVENTORY", "SYN estoque insuficiente"), [...SALES_INGEST_REJECTION_CODES]),
       ingestTransientFailure: sampleFailure(new Error("SYN falha interna com detalhe que nunca sai"), undefined),
     },
+    // S4/C1: contrato Sales -> CRM (dono: Suite). O CRM só o publica; o receptor está em attendanceReceiver.ts, atrás de ATTENDANCE_RECEIVER_ENABLED (desligada).
+    attendance: ATTENDANCE_CONTRACT_SECTION,
   };
 }
