@@ -89,13 +89,55 @@ export function buildInstallmentCommissions(input: {
  * CRM-F2: a parcela pertence à ENTRADA quando o acumulado do cronograma (em ordem de sequência) até ela cabe no valor de entrada da proposta.
  * Sales guarda entrada e saldo juntos: baixar o saldo não pode disparar a comissão do V2.
  */
-export function isEntryInstallment(schedule: Array<{ id: number; sequence: number; amount: string | number }>, installmentId: number, entryTotal: number) {
-  let cumulative = 0;
-  for (const item of [...schedule].sort((a, b) => a.sequence - b.sequence)) {
-    cumulative = Math.round((cumulative + Number(item.amount)) * 100) / 100;
-    if (item.id === installmentId) return cumulative <= Math.round(entryTotal * 100) / 100 + 0.005;
+export type EntryScheduleRow = { id: number; sequence: number; amount: string | number; status?: string; dueDate?: string | Date | null; paidAmount?: string | number | null };
+export type AppliedRenegotiation = { originalInstallmentId: number; proposedAmount: string | number; proposedDueDate: string | Date | null };
+const cents = (value: string | number) => Math.round(Number(value) * 100);
+const dayOf = (value: string | Date | null | undefined) => value == null ? "" : value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+
+/**
+ * CRM-F2 (correção): conjunto das parcelas que compõem a ENTRADA. Canceladas ficam fora do acumulado. Uma parcela renegociada ocupa a posição da
+ * original (valor original) e a parcela criada pelo acordo (installment_renegotiations.originalInstallmentId; sem FK, casada por contrato, valor, vencimento
+ * e sequência posterior) NÃO soma de novo: ela herda a condição de entrada da original. Renegociada sem parcela de acordo localizável fica fora.
+ */
+export function entryInstallmentIds(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []): Set<number> {
+  const rows = [...schedule].sort((a, b) => a.sequence - b.sequence);
+  const byId = new Map(rows.map(row => [row.id, row]));
+  const successorOf = new Map<number, number>();
+  const claimed = new Set<number>();
+  for (const reneg of renegotiations) {
+    const original = byId.get(reneg.originalInstallmentId);
+    if (!original || successorOf.has(original.id)) continue;
+    const successor = rows.find(row => row.sequence > original.sequence && !claimed.has(row.id) && row.status !== "cancelled" && cents(row.amount) === cents(reneg.proposedAmount) && dayOf(row.dueDate) === dayOf(reneg.proposedDueDate));
+    if (successor) { successorOf.set(original.id, successor.id); claimed.add(successor.id); }
   }
-  return false;
+  const limit = cents(entryTotal);
+  const inEntry: number[] = [];
+  let cumulative = 0;
+  for (const row of rows) {
+    if (row.status === "cancelled" || claimed.has(row.id)) continue;
+    if (row.status === "renegotiated" && !successorOf.has(row.id)) continue;
+    cumulative += cents(row.amount);
+    if (cumulative <= limit + 1) inEntry.push(row.id);
+  }
+  const result = new Set<number>();
+  for (const id of inEntry) {
+    let current = id;
+    const seen = new Set<number>();
+    while (byId.get(current)?.status === "renegotiated" && successorOf.has(current) && !seen.has(current)) { seen.add(current); current = successorOf.get(current)!; }
+    const final = byId.get(current);
+    if (final && final.status !== "renegotiated" && final.status !== "cancelled") result.add(current);
+  }
+  return result;
+}
+
+export function isEntryInstallment(schedule: EntryScheduleRow[], installmentId: number, entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
+  return entryInstallmentIds(schedule, entryTotal, renegotiations).has(installmentId);
+}
+
+/** Acumulado PAGO da entrada (parcelas da entrada com status paid), em reais. */
+export function paidEntryAmount(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
+  const ids = entryInstallmentIds(schedule, entryTotal, renegotiations);
+  return schedule.filter(row => ids.has(row.id) && row.status === "paid").reduce((sum, row) => sum + cents(row.paidAmount ?? row.amount), 0) / 100;
 }
 
 export function canCommissionBecomeDue(contractStatus: string | null | undefined, completePolicy: unknown, saleValidated: boolean): boolean {

@@ -20,8 +20,13 @@ export const commissionPaymentMethodSchema = z.enum([
  * (a confirmação de recebimento da entrada); `per_installment` = proporcional a cada parcela paga (o comportamento histórico). Ausente = `full_upfront`
  * (padrão da empresa, configurável), mas DORMENTE: só o motor V2 lê, e ele segue travado por COMMISSION_V2_RELEASED. O V1 não muda.
  */
-export const payoutScheduleSchema = z.strictObject({ mode: z.enum(["full_upfront", "per_installment"]) });
+export const payoutScheduleSchema = z.strictObject({
+  mode: z.enum(["full_upfront", "per_installment"]),
+  /** Só com `full_upfront`: `first_entry_installment` (padrão atual) libera na primeira baixa elegível da entrada; `entry_total` só quando o acumulado PAGO da entrada >= entryTotal. */
+  releaseOn: z.enum(["first_entry_installment", "entry_total"]).optional(),
+}).refine(value => value.releaseOn === undefined || value.mode === "full_upfront", { message: "releaseOn só vale com mode full_upfront.", path: ["releaseOn"] });
 export const DEFAULT_PAYOUT_MODE = "full_upfront" as const;
+export const DEFAULT_RELEASE_ON = "first_entry_installment" as const;
 
 export const commissionPolicySchema = z
   .object({
