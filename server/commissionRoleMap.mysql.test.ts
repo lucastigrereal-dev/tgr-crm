@@ -110,7 +110,7 @@ describe.skipIf(!integrationUrl)("mapa de papéis da comissão em MySQL real (00
     await expect(fixContractCommissionRoleMapAtFormalization(common, 1)).resolves.toBeUndefined();
     ENV.commissionRoleMapEnabled = false;
     try { await expect(fixContractCommissionRoleMapAtFormalization(undefined as never, 1)).resolves.toBeUndefined(); } finally { ENV.commissionRoleMapEnabled = true; }
-    for (const file of ["routers/contracts.ts", "salesCommandBridge.ts"]) expect(readFileSync(path.resolve(__dirname, file), "utf8"), file).toMatch(/fixContractCommissionRoleMapAtFormalization\(tx, contractId\);[^\n]*\n\s*await eligibilityHook/);
+    for (const file of ["routers/contracts.ts", "salesCommandBridge.ts"]) expect(readFileSync(path.resolve(__dirname, file), "utf8"), file).toMatch(/fixContractCommissionRoleMapAtFormalization\(tx, contractId\);[^\n]*\n(\s*\/\/[^\n]*\n)*\s*await eligibilityHook/);
   });
 
   it("(2) o snapshot é relido com FOR UPDATE depois do INSERT ON DUPLICATE (REPEATABLE READ não enxerga commit concorrente)", () => {

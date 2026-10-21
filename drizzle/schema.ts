@@ -556,6 +556,15 @@ export const contractCommissionRoleMaps = mysqlTable("contract_commission_role_m
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+/** Item 6: sobrescritas de flags da allow-list (append-only; vigente = a última por flagKey). Quem mudou e quando ficam na própria linha. PROPOSTA 0084. */
+export const featureFlagOverrides = mysqlTable("feature_flag_overrides", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  flagKey: varchar("flagKey", { length: 60 }).notNull(),
+  enabled: boolean("enabled").notNull(),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("feature_flag_overrides_key_idx").on(table.flagKey, table.id)]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {
