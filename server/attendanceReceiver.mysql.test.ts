@@ -17,6 +17,8 @@ import { validateIsolatedE2EDatabase } from "./e2eSafety";
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const runId = randomUUID().slice(0, 8);
 const KEY = `chave-teste-${runId}`;
+// drizzle embrulha o erro do driver em `cause`; 1452 = ER_NO_REFERENCED_ROW_2 (filho sem pai).
+const FK_VIOLATION = { cause: { errno: 1452 } };
 
 describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do casal) em MySQL real", () => {
   let pool: mysql.Pool;
@@ -143,8 +145,8 @@ describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do
   it("FKs da 0079 existem de verdade: filho sem pai é recusado pelo banco", async () => {
     const [fks] = await pool.query("SELECT CONSTRAINT_NAME AS n FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() ORDER BY 1") as [Array<{ n: string }>, unknown];
     expect(fks.map(f => f.n)).toEqual(["attendance_records_coupleRegistryId_fk", "couple_registry_resortId_fk"]);
-    await expect(db.insert(coupleRegistry).values({ resortId: 2_000_000_000, salesCoupleId: randomUUID(), coupleCode: "X", lastEncounterId: randomUUID(), lastRevision: 0, lastOutcome: "NT", lastClosedAt: new Date("2026-10-21T10:00:00Z") })).rejects.toThrow();
-    await expect(db.insert(attendanceRecords).values({ eventId: randomUUID(), coupleRegistryId: 2_000_000_000, encounterId: randomUUID(), revision: 0, outcome: "NT", closedAt: new Date("2026-10-21T10:00:00Z"), occurredAt: new Date("2026-10-21T10:00:00Z"), correlationId: "c", payloadHash: "h" })).rejects.toThrow();
+    await expect(db.insert(coupleRegistry).values({ resortId: 2_000_000_000, salesCoupleId: randomUUID(), coupleCode: "X", lastEncounterId: randomUUID(), lastRevision: 0, lastOutcome: "NT", lastClosedAt: new Date("2026-10-21T10:00:00Z") })).rejects.toMatchObject(FK_VIOLATION);
+    await expect(db.insert(attendanceRecords).values({ eventId: randomUUID(), coupleRegistryId: 2_000_000_000, encounterId: randomUUID(), revision: 0, outcome: "NT", closedAt: new Date("2026-10-21T10:00:00Z"), occurredAt: new Date("2026-10-21T10:00:00Z"), correlationId: "c", payloadHash: "h" })).rejects.toMatchObject(FK_VIOLATION);
   });
 
   it("corrida: o mesmo eventId em paralelo grava uma linha; atendimentos distintos de um casal NOVO em paralelo criam um só registro", async () => {
