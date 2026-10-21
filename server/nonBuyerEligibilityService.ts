@@ -1,0 +1,112 @@
+import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { captureRecords, nonBuyerEligibilityState } from "../drizzle/schema";
+import { ENV } from "./_core/env";
+import type { getDb } from "./db";
+import { evaluateNonBuyerEligibility, loadEligibilityFacts, type IneligibleReason } from "./nonBuyerEligibility";
+import { withDeadlockRetry } from "./mysqlErrors";
+import { txEvent, type Tx } from "./txOutbox";
+
+/**
+ * C2/C3 fatia 3: projeção `non_buyer_eligibility_state` + serviço de reavaliação + reconciliação (desenho §3.4). Tabela PROPOSTA (0080): só existe depois do GO.
+ * DESLIGADO por padrão (RECOVERY_ELIGIBILITY_ENABLED=false): `reevaluateIfEnabled*` não toca em nada e o job nem sobe. Eventos de saída para o Recovery NÃO existem aqui
+ * (fatia 5, exige contrato novo com a Suite): a transição só grava um evento INTERNO sem PII em domain_events (`non_buyer.eligible` / `non_buyer.eligibility_revoked`),
+ * que nenhuma ponte drena (todas filtram por lista de nomes).
+ *
+ * ORDEM DE LOCKS (para os ganchos da fatia 4 não darem deadlock com a reconciliação nem entre si):
+ *  1. O gancho roda DEPOIS da escrita de negócio, na MESMA transação, como seu ÚLTIMO passo; ela já segura os locks das suas linhas de negócio (contrato, proposta,
+ *     oportunidade, ficha). O serviço nunca pede lock de linha de negócio: lê os fatos SEM lock (SELECT consistente).
+ *  2. Único lock que o serviço adquire: a linha de `non_buyer_eligibility_state` da ficha (SELECT ... FOR UPDATE; criada ANTES, se faltar, por INSERT ... ON DUPLICATE KEY no-op
+ *     e então lida com FOR UPDATE; a ordem inversa dá deadlock por lock de gap). Vários casais do mesmo cliente (reavaliação por contrato/proposta/oportunidade): sempre em ORDEM CRESCENTE de captureId.
+ *  3. Nada espera linha de negócio enquanto segura linha de estado (leituras sem lock não esperam). Logo não há ciclo: quem segura estado nunca espera negócio, e quem espera
+ *     estado (gancho, já segurando negócio) só espera alguém que termina sem esperar negócio. Reconciliação = uma transação curta POR FICHA (nunca segura mais de uma linha de estado).
+ *  4. O serviço não abre transação própria quando recebe `tx` (usa a do chamador); o job abre uma por ficha, com `withDeadlockRetry`. Um gancho que levar deadlock repete a
+ *     transação de negócio inteira (mesmo contrato dos demais ganchos do CRM).
+ *  Limite honesto: em REPEATABLE READ o snapshot do gancho pode ser anterior a um commit concorrente; quem comitar por último reavalia com a base já visível, e a reconciliação
+ *  (transação nova, snapshot fresco) fecha qualquer lacuna: o estado converge mesmo sem gancho nenhum.
+ */
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+export type RevokedReason = IneligibleReason;
+// Prioridade do motivo único do evento de revogação (o desenho lista opt_out | anonymized | erasure | sale_validated | sale_in_progress | notice_invalid; o mapeamento
+// para os nomes de saída e a distinção sale_validated x sale_in_progress ficam para a fatia 5).
+const REASON_PRIORITY: IneligibleReason[] = ["anonymized", "erasure", "opt_out", "sale_in_progress", "attendance_not_finished"];
+export const primaryReason = (reasons: IneligibleReason[]): IneligibleReason => REASON_PRIORITY.find(reason => reasons.includes(reason)) ?? reasons[0]!;
+
+export type ReevaluationResult = { captureId: number; changed: boolean; eligible: boolean; seq: number; eventId: string | null };
+
+/** Garante e TRAVA a linha de estado da ficha (única aquisição de lock do serviço). */
+async function lockState(tx: Tx, captureId: number, customerId: number) {
+  // INSERT ... ON DUPLICATE KEY (no-op) ANTES do SELECT ... FOR UPDATE: o SELECT FOR UPDATE numa linha que ainda não existe pega lock de GAP nas duas transações e o INSERT
+  // seguinte de ambas dá deadlock (reproduzido em teste). Com o INSERT primeiro, quem chega depois espera o lock exclusivo da linha, sem ciclo.
+  await tx.insert(nonBuyerEligibilityState).values({ captureId, customerId }).onDuplicateKeyUpdate({ set: { captureId: sql`captureId` } });
+  const [row] = await tx.select().from(nonBuyerEligibilityState).where(eq(nonBuyerEligibilityState.captureId, captureId)).limit(1).for("update");
+  return row!;
+}
+
+/** Reavalia UMA ficha dentro da transação do chamador; emite no máximo um evento interno (a DIFERENÇA em relação à projeção). */
+export async function reevaluateCapture(tx: Tx, captureId: number, now: Date = new Date()): Promise<ReevaluationResult | null> {
+  const [capture] = await tx.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1);
+  if (!capture) return null;
+  const state = await lockState(tx, captureId, capture.customerId);
+  const facts = await loadEligibilityFacts(tx, captureId, { readOptOut: true });
+  const verdict = evaluateNonBuyerEligibility(facts!);
+  if (verdict.eligible === state.eligible) return { captureId, changed: false, eligible: state.eligible, seq: state.seq, eventId: null };
+  const seq = state.seq + 1;
+  const kind = verdict.eligible ? "eligible" : "revoked";
+  const eventId = `crm-nb-${captureId}-${kind}-${seq}`;
+  const reason = verdict.eligible ? null : primaryReason(verdict.reasons);
+  await tx.update(nonBuyerEligibilityState).set({ eligible: verdict.eligible, seq, lastReason: reason, lastEmittedAt: now }).where(eq(nonBuyerEligibilityState.id, state.id));
+  await txEvent(tx, {
+    eventName: verdict.eligible ? "non_buyer.eligible" : "non_buyer.eligibility_revoked", aggregateType: "capture", aggregateId: captureId, actorUserId: null, idempotencyKey: eventId,
+    // Sem PII: ids, sequência, ramo e motivo. Nome e telefone nunca entram aqui (montados na entrega, fatia 5).
+    payload: { eventId, captureId, customerId: capture.customerId, seq, ...(verdict.eligible ? { branch: verdict.branch } : { reason }) },
+  });
+  return { captureId, changed: true, eligible: verdict.eligible, seq, eventId };
+}
+
+/** Reavaliação disparada por CLIENTE (contrato, proposta ou oportunidade só conhecem o cliente): todas as fichas dele, em ordem crescente de captureId. */
+export async function reevaluateCustomer(tx: Tx, customerId: number, now: Date = new Date()): Promise<ReevaluationResult[]> {
+  const captures = await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.customerId, customerId)).orderBy(asc(captureRecords.id));
+  const results: ReevaluationResult[] = [];
+  for (const { id } of captures) { const result = await reevaluateCapture(tx, id, now); if (result) results.push(result); }
+  return results;
+}
+
+/** Porta dos ganchos (fatia 4): com a flag desligada não faz NADA (nem lê a tabela, que pode nem existir). */
+export async function reevaluateIfEnabled(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled): Promise<ReevaluationResult[]> {
+  if (!enabled) return [];
+  if ("captureId" in target) { const result = await reevaluateCapture(tx, target.captureId); return result ? [result] : []; }
+  return reevaluateCustomer(tx, target.customerId);
+}
+
+export type ReconciliationOutcome = { scanned: number; changed: number; eligible: number; revoked: number; nextCursor: number | null };
+
+/**
+ * Rede de segurança durável: percorre as fichas candidatas por cursor de captureId (encerradas/não-tour, ou já marcadas elegíveis na projeção, para poder revogar) e
+ * reavalia cada uma em transação PRÓPRIA e curta. Idempotente: rodar de novo não emite nada que a projeção já reflita; recomeçar do zero após queda é seguro.
+ */
+export async function reconcileNonBuyerEligibility(db: Db, options: { afterCaptureId?: number; batchSize?: number; now?: () => Date } = {}): Promise<ReconciliationOutcome> {
+  const batchSize = Math.max(1, Math.min(1000, options.batchSize ?? 200));
+  const rows = await db.select({ id: captureRecords.id }).from(captureRecords)
+    .leftJoin(nonBuyerEligibilityState, eq(nonBuyerEligibilityState.captureId, captureRecords.id))
+    .where(and(gt(captureRecords.id, options.afterCaptureId ?? 0), or(inArray(captureRecords.presentationStatus, ["closed", "no_tour"]), eq(nonBuyerEligibilityState.eligible, true))))
+    .orderBy(asc(captureRecords.id)).limit(batchSize);
+  const outcome: ReconciliationOutcome = { scanned: rows.length, changed: 0, eligible: 0, revoked: 0, nextCursor: rows.length === batchSize ? rows[rows.length - 1]!.id : null };
+  for (const { id } of rows) {
+    const result = await withDeadlockRetry(() => db.transaction(tx => reevaluateCapture(tx, id, options.now?.())));
+    if (result?.changed) { outcome.changed += 1; if (result.eligible) outcome.eligible += 1; else outcome.revoked += 1; }
+  }
+  return outcome;
+}
+
+/** Uma varredura completa (todas as páginas). */
+export async function reconcileAllNonBuyerEligibility(db: Db, options: { batchSize?: number; now?: () => Date } = {}): Promise<ReconciliationOutcome> {
+  const total: ReconciliationOutcome = { scanned: 0, changed: 0, eligible: 0, revoked: 0, nextCursor: null };
+  let cursor: number | undefined;
+  do {
+    const page = await reconcileNonBuyerEligibility(db, { ...options, afterCaptureId: cursor });
+    total.scanned += page.scanned; total.changed += page.changed; total.eligible += page.eligible; total.revoked += page.revoked;
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return total;
+}

@@ -26,6 +26,7 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "../nonBuyerReconciliationJob";
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
 import { getDb } from "../db";
 import { getAsaasConfig } from "../paymentGateway";
@@ -59,6 +60,7 @@ async function startServer() {
   let financialPump: FinancialBridgePump | undefined;
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
+  let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   const app = express();
@@ -170,6 +172,7 @@ async function startServer() {
     financialPump?.stop();
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
+    nonBuyerReconciliationJob?.stop();
     orphanBlobSweepJob?.stop();
     gatewayRecoveryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
@@ -209,6 +212,13 @@ async function startServer() {
       onError: error => logger.error("Hold expiry job failed", { error: error instanceof Error ? error.message : "unknown_error" }),
       onRun: result => { if (result.holds > 0) logger.info("Hold expiry job released", { holds: result.holds, fractions: result.fractions.length }); },
     });
+    // C2/C3: DESLIGADA por padrão. Reconciliação durável da elegibilidade de não-comprador (precisa da migration 0080 aplicada); não entrega nada a ninguém.
+    if (ENV.recoveryEligibilityEnabled) {
+      nonBuyerReconciliationJob = startNonBuyerReconciliationJob({
+        onError: error => logger.error("Non-buyer eligibility reconciliation failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+        onRun: result => { if (result.changed > 0) logger.info("Non-buyer eligibility reconciled", { ...result }); },
+      });
+    }
     // CRM-A10: só lê o Asaas e reconcilia intenções de emissão pendentes; sem Asaas configurado não faz nada.
     if (ENV.gatewayRecoveryEnabled) {
       gatewayRecoveryJob = startGatewayRecoveryJob({

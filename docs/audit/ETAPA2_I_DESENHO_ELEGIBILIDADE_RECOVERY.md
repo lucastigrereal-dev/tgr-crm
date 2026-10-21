@@ -59,3 +59,11 @@ Recebe: o par acima, só de elegíveis; nunca CAIU EM MESA/NT sem ciente. **CAIU
 ## 6. Perguntas que sobram para o Lucas (máx. 2)
 1. **Canais**: quais canais a ficha autoriza para o Recovery contatar (WhatsApp, ligação, SMS, e-mail; todos ou um conjunto fixo) e se o casal pode escolher na própria ficha?
 2. **Texto e escopo do ciente**: a faixa do "ciente" da ficha passa a dizer expressamente que autoriza contato de recuperação comercial (e por quanto tempo guardamos o não-comprador), e quem aprova esse texto/aviso v4 antes de qualquer casal real? Junto: depois de um opt-out, um novo ciente posterior reativa a elegibilidade ou o opt-out é definitivo?
+
+## 7. Implementação da fatia 3: ordem de locks (para os ganchos da fatia 4)
+Código: `server/nonBuyerEligibilityService.ts` (comentário "ORDEM DE LOCKS"). Resumo:
+1. O gancho roda como ÚLTIMO passo da transação de negócio (já segura seus locks de contrato/proposta/oportunidade/ficha) e chama `reevaluateCapture(tx, captureId)` ou `reevaluateCustomer(tx, customerId)` (contrato, proposta e oportunidade só conhecem o cliente). Via `reevaluateIfEnabled`, com a flag desligada nada acontece.
+2. O serviço só adquire UM tipo de lock: a linha de `non_buyer_eligibility_state` da ficha, por `INSERT ... ON DUPLICATE KEY` no-op seguido de `SELECT ... FOR UPDATE` (nessa ordem: o SELECT FOR UPDATE primeiro, numa linha inexistente, dá deadlock por lock de gap; reproduzido em teste). Vários casais do mesmo cliente: sempre em ordem crescente de `captureId`.
+3. Fatos de negócio são lidos SEM lock; portanto quem segura a linha de estado nunca espera linha de negócio e não há ciclo. A reconciliação usa uma transação curta POR FICHA (uma linha de estado por vez).
+4. Eventos internos `non_buyer.eligible` / `non_buyer.eligibility_revoked` (sem PII, `eventId` = `crm-nb-<captureId>-<eligible|revoked>-<seq>`, também `idempotencyKey`) saem em `domain_events` na mesma transação. Nenhuma ponte os drena; a entrega ao Recovery é a fatia 5 (contrato novo com a Suite).
+Limite honesto: em REPEATABLE READ o snapshot do gancho pode ser anterior a um commit concorrente; quem comitar por último reavalia com a base visível e a reconciliação (snapshot fresco) fecha qualquer lacuna.
