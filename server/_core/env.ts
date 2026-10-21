@@ -16,6 +16,8 @@ export const ENV = {
   recoveryIntegrationKey: process.env.RECOVERY_INTEGRATION_KEY ?? "",
   // Item 10 (admin): catálogo editável/versionado dos indicadores oficiais. DESLIGADO por padrão (tabela é PROPOSTA 0081).
   officialIndicatorCatalogEnabled: process.env.OFFICIAL_INDICATOR_CATALOG_ENABLED === "true",
+  // Item 5 (admin): mapa de papéis da comissão V2 configurável. DESLIGADO por padrão; só é lido com o V2 liberado (tabelas são PROPOSTA 0083).
+  commissionRoleMapEnabled: process.env.COMMISSION_ROLE_MAP_ENABLED === "true",
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",

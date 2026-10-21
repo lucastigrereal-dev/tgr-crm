@@ -539,6 +539,23 @@ export const officialIndicatorVersions = mysqlTable("official_indicator_versions
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [uniqueIndex("official_indicator_versions_code_version_unique").on(table.code, table.version)]);
 
+/** Item 5: mapa de papéis da comissão V2, versionado (append-only; vigente = maior versão). PROPOSTA 0083. */
+export const commissionRoleMapVersions = mysqlTable("commission_role_map_versions", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  version: int("version").notNull(),
+  roleMap: varchar("roleMap", { length: 255 }).notNull(),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("commission_role_map_versions_version_unique").on(table.version)]);
+
+/** Item 5: mapa fixado por contrato no primeiro lançamento V2 (snapshot; mudar a configuração depois não troca o mapa de contrato em andamento). PROPOSTA 0083. */
+export const contractCommissionRoleMaps = mysqlTable("contract_commission_role_maps", {
+  contractId: int("contractId").primaryKey().references(() => contracts.id),
+  mapVersion: int("mapVersion").notNull(),
+  roleMap: varchar("roleMap", { length: 255 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {
