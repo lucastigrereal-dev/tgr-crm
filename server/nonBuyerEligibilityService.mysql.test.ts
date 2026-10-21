@@ -138,4 +138,55 @@ describe.skipIf(!integrationUrl)("elegibilidade de não-comprador: projeção, r
     expect(all).toHaveLength(2 + 3); // 2 elegíveis iniciais + 3 transições; nenhuma duplicata
     expect(new Set(all.map(e => e.idempotencyKey)).size).toBe(all.length);
   });
+
+  it("Codex P1: corrida opt-out x cancelamento de contrato. Sem leitura fresca o gancho com snapshot velho emitiria 'elegível' depois do opt-out; com ela não emite", async () => {
+    const setup = async () => {
+      const c = await couple();
+      const [{ id: contractId }] = await db.insert(contracts).values({ number: `SV-P1-${c.captureId}-${runId}`, customerId: c.customerId, usageModel: "fixed_week", status: "active", totalAmount: "1000.00" } as never).$returningId();
+      expect(await reevaluate(c.captureId)).toMatchObject({ changed: false, eligible: false, seq: 0 }); // contrato ativo: inelegível
+      return { ...c, contractId };
+    };
+    // Gancho T1: a transação de negócio (REPEATABLE READ) já leu algo, depois um opt-out de OUTRA transação comita, depois T1 cancela o contrato e reavalia.
+    class Rollback extends Error {}
+    const race = async (c: Awaited<ReturnType<typeof setup>>, useFresh: boolean, rollback: boolean) => {
+      let result: Awaited<ReturnType<typeof svc.reevaluateCapture>> = null;
+      try {
+        await db.transaction(async tx => {
+          await tx.select().from(contracts).where(eq(contracts.customerId, c.customerId)); // estabelece o snapshot ANTES do opt-out
+          await db.insert(customerContactOptouts).values({ customerId: c.customerId, coupleCode: c.code, optedOutAt: new Date("2026-10-21T16:00:00Z"), source: "recovery", eventId: `oo-p1-${c.captureId}-${useFresh}` }); // comita em OUTRA conexão
+          await tx.update(contracts).set({ status: "cancelled" }).where(eq(contracts.id, c.contractId));
+          result = await svc.reevaluateCapture(tx, c.captureId, useFresh ? { fresh: db } : {});
+          if (rollback) throw new Rollback();
+        }, { isolationLevel: "repeatable read" });
+      } catch (error) { if (!(error instanceof Rollback)) throw error; }
+      return result;
+    };
+    const control = await setup();
+    // CONTROLE (prova que o teste reproduz o bug): só com os fatos do snapshot velho o gancho veria "elegível" e emitiria depois do opt-out
+    expect(await race(control, false, true)).toMatchObject({ changed: true, eligible: true });
+    // COM a leitura fresca: o opt-out comitado é visto, continua inelegível, nenhum evento
+    const fixed = await setup();
+    expect(await race(fixed, true, false)).toMatchObject({ changed: false, eligible: false, seq: 0, eventId: null });
+    expect(await eventsOf(fixed.captureId)).toHaveLength(0);
+    expect(await stateOf(fixed.captureId)).toMatchObject({ eligible: false, seq: 0 });
+    // a reconciliação (READ COMMITTED) confirma: segue inelegível por opt_out
+    await svc.reconcileAllNonBuyerEligibility(db);
+    expect(await stateOf(fixed.captureId)).toMatchObject({ eligible: false, seq: 0 });
+  });
+
+  it("reconciliação (READ COMMITTED): um opt-out que comita ENQUANTO ela espera o lock do estado é visto (sem snapshot velho)", async () => {
+    const c = await couple();
+    expect(await reevaluate(c.captureId)).toMatchObject({ eligible: true, seq: 1 });
+    const holder = await pool.getConnection();
+    try {
+      await holder.beginTransaction();
+      await holder.query("SELECT id FROM non_buyer_eligibility_state WHERE captureId = ? FOR UPDATE", [c.captureId]); // segura o lock do estado
+      const reconciling = svc.reconcileNonBuyerEligibility(db, { afterCaptureId: c.captureId - 1, batchSize: 1 });
+      await new Promise(resolve => setTimeout(resolve, 500)); // a reconciliação já está bloqueada esperando o lock
+      await holder.query("INSERT INTO customer_contact_optouts (customerId, coupleCode, optedOutAt, source, eventId) VALUES (?, ?, '2026-10-21 16:00:00.000', 'recovery', ?)", [c.customerId, c.code, `oo-rc-${c.captureId}`]);
+      await holder.commit();
+      expect(await reconciling).toMatchObject({ scanned: 1, changed: 1, revoked: 1 });
+    } finally { holder.release(); }
+    expect(await stateOf(c.captureId)).toMatchObject({ eligible: false, seq: 2, lastReason: "opt_out" });
+  });
 });

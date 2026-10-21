@@ -1,8 +1,8 @@
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { captureRecords, nonBuyerEligibilityState } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import type { getDb } from "./db";
-import { evaluateNonBuyerEligibility, loadEligibilityFacts, type IneligibleReason } from "./nonBuyerEligibility";
+import { getDb } from "./db";
+import { evaluateNonBuyerEligibility, loadEligibilityFacts, mergeBlockingFacts, type IneligibleReason } from "./nonBuyerEligibility";
 import { withDeadlockRetry } from "./mysqlErrors";
 import { txEvent, type Tx } from "./txOutbox";
 
@@ -21,8 +21,14 @@ import { txEvent, type Tx } from "./txOutbox";
  *     estado (gancho, já segurando negócio) só espera alguém que termina sem esperar negócio. Reconciliação = uma transação curta POR FICHA (nunca segura mais de uma linha de estado).
  *  4. O serviço não abre transação própria quando recebe `tx` (usa a do chamador); o job abre uma por ficha, com `withDeadlockRetry`. Um gancho que levar deadlock repete a
  *     transação de negócio inteira (mesmo contrato dos demais ganchos do CRM).
- *  Limite honesto: em REPEATABLE READ o snapshot do gancho pode ser anterior a um commit concorrente; quem comitar por último reavalia com a base já visível, e a reconciliação
- *  (transação nova, snapshot fresco) fecha qualquer lacuna: o estado converge mesmo sem gancho nenhum.
+ *  FRESCOR DOS FATOS (Codex P1 do #102): em REPEATABLE READ o snapshot nasce na primeira leitura sem lock, que pode ser ANTES de esperar o lock da linha de estado; o perdedor
+ *  da corrida leria a projeção nova (FOR UPDATE) com fatos velhos e poderia emitir a transição inversa (ex.: opt-out concorrente com cancelamento de contrato => "elegível"
+ *  depois do opt-out). Locking read nos fatos de negócio criaria ciclo (quem segura estado esperaria linha de negócio de quem espera estado), então:
+ *   a) transação NOSSA (reconciliação): READ COMMITTED, cada leitura vê o último commit, e o lock do estado vem antes de qualquer fato;
+ *   b) transação do GANCHO (isolamento do negócio, não nos pertence): depois de travar o estado, os fatos são lidos DE NOVO numa conexão separada em autocommit
+ *      (`fresh`, leitura simples: não espera lock nenhum) e fundidos com os da transação por UNIÃO dos fatos que bloqueiam (mergeBlockingFacts). A transação enxerga as escritas
+ *      do próprio gancho; a conexão separada enxerga todo commit anterior ao lock. O pior caso é ADIAR uma elegibilidade para a reconciliação, nunca emitir elegível a quem
+ *      já fez opt-out, comprou ou foi anonimizado. Quem comitar depois reavalia com o mesmo método e enxerga o nosso commit.
  */
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -44,12 +50,15 @@ async function lockState(tx: Tx, captureId: number, customerId: number) {
 }
 
 /** Reavalia UMA ficha dentro da transação do chamador; emite no máximo um evento interno (a DIFERENÇA em relação à projeção). */
-export async function reevaluateCapture(tx: Tx, captureId: number, now: Date = new Date()): Promise<ReevaluationResult | null> {
+export async function reevaluateCapture(tx: Tx, captureId: number, options: { now?: Date; fresh?: Db } = {}): Promise<ReevaluationResult | null> {
+  const now = options.now ?? new Date();
   const [capture] = await tx.select({ customerId: captureRecords.customerId }).from(captureRecords).where(eq(captureRecords.id, captureId)).limit(1);
   if (!capture) return null;
   const state = await lockState(tx, captureId, capture.customerId);
-  const facts = await loadEligibilityFacts(tx, captureId, { readOptOut: true });
-  const verdict = evaluateNonBuyerEligibility(facts!);
+  // Só DEPOIS do lock do estado. `fresh` (hooks) = leitura sem lock em outra conexão com o último commit; ver "FRESCOR DOS FATOS".
+  const own = (await loadEligibilityFacts(tx, captureId, { readOptOut: true }))!;
+  const fresh = options.fresh ? await loadEligibilityFacts(options.fresh, captureId, { readOptOut: true }) : null;
+  const verdict = evaluateNonBuyerEligibility(fresh ? mergeBlockingFacts(own, fresh) : own);
   if (verdict.eligible === state.eligible) return { captureId, changed: false, eligible: state.eligible, seq: state.seq, eventId: null };
   const seq = state.seq + 1;
   const kind = verdict.eligible ? "eligible" : "revoked";
@@ -65,18 +74,19 @@ export async function reevaluateCapture(tx: Tx, captureId: number, now: Date = n
 }
 
 /** Reavaliação disparada por CLIENTE (contrato, proposta ou oportunidade só conhecem o cliente): todas as fichas dele, em ordem crescente de captureId. */
-export async function reevaluateCustomer(tx: Tx, customerId: number, now: Date = new Date()): Promise<ReevaluationResult[]> {
+export async function reevaluateCustomer(tx: Tx, customerId: number, options: { now?: Date; fresh?: Db } = {}): Promise<ReevaluationResult[]> {
   const captures = await tx.select({ id: captureRecords.id }).from(captureRecords).where(eq(captureRecords.customerId, customerId)).orderBy(asc(captureRecords.id));
   const results: ReevaluationResult[] = [];
-  for (const { id } of captures) { const result = await reevaluateCapture(tx, id, now); if (result) results.push(result); }
+  for (const { id } of captures) { const result = await reevaluateCapture(tx, id, options); if (result) results.push(result); }
   return results;
 }
 
 /** Porta dos ganchos (fatia 4): com a flag desligada não faz NADA (nem lê a tabela, que pode nem existir). */
-export async function reevaluateIfEnabled(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled): Promise<ReevaluationResult[]> {
+export async function reevaluateIfEnabled(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<ReevaluationResult[]> {
   if (!enabled) return [];
-  if ("captureId" in target) { const result = await reevaluateCapture(tx, target.captureId); return result ? [result] : []; }
-  return reevaluateCustomer(tx, target.customerId);
+  const options = { fresh: fresh ?? (await getDb()) ?? undefined }; // conexão separada do pool para a leitura fresca do gancho
+  if ("captureId" in target) { const result = await reevaluateCapture(tx, target.captureId, options); return result ? [result] : []; }
+  return reevaluateCustomer(tx, target.customerId, options);
 }
 
 export type ReconciliationOutcome = { scanned: number; changed: number; eligible: number; revoked: number; nextCursor: number | null };
@@ -93,7 +103,8 @@ export async function reconcileNonBuyerEligibility(db: Db, options: { afterCaptu
     .orderBy(asc(captureRecords.id)).limit(batchSize);
   const outcome: ReconciliationOutcome = { scanned: rows.length, changed: 0, eligible: 0, revoked: 0, nextCursor: rows.length === batchSize ? rows[rows.length - 1]!.id : null };
   for (const { id } of rows) {
-    const result = await withDeadlockRetry(() => db.transaction(tx => reevaluateCapture(tx, id, options.now?.())));
+    // READ COMMITTED: transação nossa, cada leitura vê o último commit (ver "FRESCOR DOS FATOS"); o lock do estado ainda vem antes de qualquer fato.
+    const result = await withDeadlockRetry(() => db.transaction(tx => reevaluateCapture(tx, id, { now: options.now?.() }), { isolationLevel: "read committed" }));
     if (result?.changed) { outcome.changed += 1; if (result.eligible) outcome.eligible += 1; else outcome.revoked += 1; }
   }
   return outcome;

@@ -28,6 +28,12 @@ describe("C2/C3 fatia 3: serviço de reavaliação (sem banco)", () => {
     const loader = readFileSync(path.resolve(__dirname, "nonBuyerEligibility.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(loader).not.toMatch(/\.for\(/);
   });
+  it("frescor dos fatos: reconciliação em READ COMMITTED e o gancho lê os fatos também por conexão separada (fresh), sem locking read em negócio", () => {
+    const code = readFileSync(path.resolve(__dirname, "nonBuyerEligibilityService.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).toContain('isolationLevel: "read committed"');
+    expect(code).toContain("mergeBlockingFacts(own, fresh)");
+    expect(readFileSync(path.resolve(__dirname, "nonBuyerEligibilityService.ts"), "utf8")).toContain("FRESCOR DOS FATOS");
+  });
   it("o job só sobe com a flag ligada, no index", () => {
     const index = readFileSync(path.resolve(__dirname, "_core/index.ts"), "utf8");
     const at = index.indexOf("startNonBuyerReconciliationJob({");
