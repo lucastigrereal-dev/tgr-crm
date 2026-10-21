@@ -12,6 +12,8 @@ export const ENV = {
   nqReadEndpointEnabled: process.env.NQ_READ_ENDPOINT_ENABLED === "true",
   encounterTimesReceiverEnabled: process.env.ENCOUNTER_TIMES_RECEIVER_ENABLED === "true",
   // C2/C3: elegibilidade de não-comprador para o Recovery. DESLIGADA por padrão (a fatia 1 só tem a função pura; a flag vale nas próximas fatias).
+  // C2/C3: chave do Recovery para o receptor de opt-out (par endpoint+chave obrigatório; sem chave a rota responde 404).
+  recoveryIntegrationKey: process.env.RECOVERY_INTEGRATION_KEY ?? "",
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",

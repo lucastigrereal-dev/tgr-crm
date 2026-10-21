@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { captureErasureRequests, captureRecords, contracts, customers, opportunities, proposals } from "../drizzle/schema";
+import { captureErasureRequests, captureRecords, contracts, customerContactOptouts, customers, opportunities, proposals } from "../drizzle/schema";
 import type { getDb } from "./db";
 
 /**
@@ -7,7 +7,7 @@ import type { getDb } from "./db";
  * SOMENTE LEITURA e sem efeito: função pura + carregador de fatos. Não grava, não emite evento, não chama ninguém e NÃO consulta a flag
  * (RECOVERY_ELIGIBILITY_ENABLED vale nos chamadores das próximas fatias: projeção, hooks, reconciliação e entrega).
  * Decisão do Lucas (21/10): a FICHA é o consentimento de contato do Recovery; por isso NÃO há gate de "ciente" nem de canal (pendência dele: canais e texto
- * do ciente). Opt-out entra como fato de entrada (`optedOut`); a tabela de opt-out e o receptor chegam na fatia 2, até lá o carregador devolve false.
+ * do ciente). Opt-out entra como fato de entrada (`optedOut`), lido de customer_contact_optouts (PROPOSTA 0080) só com `readOptOut`; o receptor recovery.opted_out.v1 grava nela (recoveryOptOutReceiver.ts).
  */
 export type EligibilityFacts = {
   presentationStatus: string;
@@ -58,8 +58,17 @@ export function evaluateNonBuyerEligibility(facts: EligibilityFacts): Eligibilit
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
+/**
+ * Opt-out vigente do CLIENTE (vale para todas as fichas dele). A tabela é PROPOSTA (0080): `readOptOut` fica desligado até a migration existir e os chamadores
+ * (fatias 3/4, atrás de RECOVERY_ELIGIBILITY_ENABLED) o ligarem; assim este módulo continua funcionando num banco sem a tabela.
+ */
+export async function hasContactOptOut(executor: Db | Tx, customerId: number): Promise<boolean> {
+  const [row] = await executor.select({ id: customerContactOptouts.id }).from(customerContactOptouts).where(eq(customerContactOptouts.customerId, customerId)).limit(1);
+  return row != null;
+}
+
 /** Lê os fatos do casal (ficha) no executor dado; `null` se a ficha não existe. Somente SELECT. */
-export async function loadEligibilityFacts(executor: Db | Tx, captureId: number): Promise<EligibilityFacts | null> {
+export async function loadEligibilityFacts(executor: Db | Tx, captureId: number, options: { readOptOut?: boolean } = {}): Promise<EligibilityFacts | null> {
   const [row] = await executor.select({
     customerId: captureRecords.customerId, presentationStatus: captureRecords.presentationStatus, presentationEndedAt: captureRecords.presentationEndedAt,
     ntKind: captureRecords.ntKind, ntMotiveId: captureRecords.ntMotiveId, commercialOutcome: captureRecords.commercialOutcome,
@@ -75,12 +84,12 @@ export async function loadEligibilityFacts(executor: Db | Tx, captureId: number)
   return {
     presentationStatus: row.presentationStatus, presentationEndedAt: row.presentationEndedAt, ntKind: row.ntKind, ntMotiveId: row.ntMotiveId, commercialOutcome: row.commercialOutcome,
     captureAnonymized: row.captureAnonymizedAt != null, customerAnonymized: row.customerAnonymizedAt != null, erasurePending: Number(erasure?.n ?? 0) > 0,
-    optedOut: false, // fatia 2 (customer_contact_optouts)
+    optedOut: options.readOptOut ? await hasContactOptOut(executor, row.customerId) : false,
     contractStatuses: contractRows.map(r => r.status), proposalStatuses: proposalRows.map(r => r.status), opportunityStages: opportunityRows.map(r => r.stage),
   };
 }
 
-export async function evaluateCaptureEligibility(executor: Db | Tx, captureId: number): Promise<Eligibility | null> {
-  const facts = await loadEligibilityFacts(executor, captureId);
+export async function evaluateCaptureEligibility(executor: Db | Tx, captureId: number, options: { readOptOut?: boolean } = {}): Promise<Eligibility | null> {
+  const facts = await loadEligibilityFacts(executor, captureId, options);
   return facts ? evaluateNonBuyerEligibility(facts) : null;
 }
