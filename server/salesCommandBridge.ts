@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { fixContractCommissionRoleMapAtFormalization } from "./commissionRoleMapSnapshot";
 import { eligibilityHook } from "./nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "./installmentScheduledFacts";
 import type { Express, Request, Response } from "express";
@@ -440,6 +441,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   });
 
   // C2/C3: a venda confirmada tira o casal do feed (contrato novo). Último passo da tx de formalização; falha do gancho não derruba a venda. Flag OFF = no-op.
+  await fixContractCommissionRoleMapAtFormalization(tx, contractId); // item 5: mapa de papéis fixado com o contrato (flag OFF = no-op)
   await eligibilityHook(tx, { customerId });
 
   return {
