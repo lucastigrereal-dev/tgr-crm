@@ -540,6 +540,13 @@
       "when": 1792534201492,
       "tag": "0076_commission_policy_versioning",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "5",
+      "when": 1792539734242,
+      "tag": "0077_qualification_policy_versioning",
+      "breakpoints": true
     }
   ]
 }

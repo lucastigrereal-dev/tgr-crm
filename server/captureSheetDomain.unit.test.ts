@@ -113,3 +113,27 @@ describe("casal qualificado: itens de NQ (regra provisória)", () => {
     expect(ageInYears("2030-01-01", today)).toBeNull();
   });
 });
+
+describe("CRM-G1: casal qualificado por versão da política", () => {
+  const base = { maleSpouse: "titular" as const, primaryAge: 41, partnerAge: 28, relationshipStatus: "Casados", relationshipYears: 5, relationshipMonths: 0, vehicleKind: "moto" as const, vehicleYear: 2022, averageIncome: "20000", hasCreditCard: true, ownsHome: false };
+  const legacy = { minManAge: 30, minRelationshipMonths: 24, minVehicleYear: 2015, minIncome: 8000, maxItemsAccepted: 1 };
+
+  it("sem versão informada nada muda: moto não vale, cartão e casa própria entram, resultado sem policyVersion", () => {
+    const result = computeNq(base, legacy);
+    expect(result.criteria.find(c => c.key === "veiculo")?.status).toBe("nq");
+    expect(result.criteria.map(c => c.key)).toContain("casa_propria");
+    expect(result).not.toHaveProperty("policyVersion");
+  });
+
+  it("versão que aceita moto e dispensa casa própria muda o resultado e carrega a versão", () => {
+    const result = computeNq(base, { ...legacy, vehicleKinds: ["carro", "moto"], requireOwnsHome: false, version: "2026-11" });
+    expect(result.criteria.find(c => c.key === "veiculo")?.status).toBe("ok");
+    expect(result.criteria.map(c => c.key)).not.toContain("casa_propria");
+    expect(result).toMatchObject({ nqItems: 0, outcome: "qualificado", policyVersion: "2026-11" });
+  });
+
+  it("versão só com moto recusa carro; limites da versão valem (renda mínima maior)", () => {
+    expect(computeNq({ ...base, vehicleKind: "carro" }, { ...legacy, vehicleKinds: ["moto"], version: "v" }).criteria.find(c => c.key === "veiculo")?.status).toBe("nq");
+    expect(computeNq(base, { ...legacy, minIncome: 30000, version: "v" }).criteria.find(c => c.key === "renda")?.status).toBe("nq");
+  });
+});

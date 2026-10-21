@@ -29,7 +29,13 @@ export function arrivalOrder(target: { id: number; checkedInAt: Date | null }, s
 }
 
 /** Limites provisórios do casal qualificado (decisão do Lucas, 17/10; lidos de capture_sheet_settings, editáveis pela administração). */
-export type NqSettings = { minManAge: number; minRelationshipMonths: number; minVehicleYear: number; minIncome: number; maxItemsAccepted: number };
+export type NqSettings = {
+  minManAge: number; minRelationshipMonths: number; minVehicleYear: number; minIncome: number; maxItemsAccepted: number;
+  /** CRM-G1 (política versionada; padrões = comportamento histórico): cartão e casa própria entram como critério; só carro vale. */
+  requireCreditCard?: boolean; requireOwnsHome?: boolean; vehicleKinds?: Array<"carro" | "moto">;
+  /** Versão da política que produziu o resultado ("legacy" = capture_sheet_settings). */
+  version?: string;
+};
 export const DEFAULT_NQ_SETTINGS: NqSettings = { minManAge: 30, minRelationshipMonths: 12, minVehicleYear: 2018, minIncome: 8000, maxItemsAccepted: 1 };
 export const DEFAULT_MIN_PRESENTATION_MINUTES = 30;
 
@@ -50,7 +56,7 @@ export type NqInput = {
   ownsHome?: boolean | null;
 };
 export type NqCriterion = { key: "idade_homem" | "relacionamento" | "tempo_relacionamento" | "veiculo" | "renda" | "cartao" | "casa_propria"; label: string; status: "ok" | "nq" | "missing"; detail: string };
-export type NqResult = { criteria: NqCriterion[]; nqItems: number; missing: number; outcome: "qualificado" | "nq_aceito" | "nt_perfil"; label: string };
+export type NqResult = { policyVersion?: string; criteria: NqCriterion[]; nqItems: number; missing: number; outcome: "qualificado" | "nq_aceito" | "nt_perfil"; label: string };
 
 /** Idade em anos completos na data de referência; datas ilegíveis ou no futuro dão vazio. */
 export function ageInYears(birthDate: Date | string | null | undefined, today: Date) {
@@ -96,27 +102,28 @@ export function computeNq(input: NqInput, settings: NqSettings = DEFAULT_NQ_SETT
     else add("tempo_relacionamento", relLabel, "missing", `${input.relationshipYears} ano(s) sem os meses: informe os meses para decidir.`);
   }
 
+  const vehicleKinds = settings.vehicleKinds ?? ["carro"];
   const vehicles = [{ kind: input.vehicleKind, year: input.vehicleYear }, { kind: input.secondVehicleKind, year: input.secondVehicleYear }];
   const label = `Carro de ${settings.minVehicleYear} ou mais novo`;
-  if (vehicles.some(v => v.kind === "carro" && v.year != null && v.year >= settings.minVehicleYear)) add("veiculo", label, "ok", "Carro dentro do ano mínimo.");
+  if (vehicles.some(v => (v.kind === "carro" || v.kind === "moto") && vehicleKinds.includes(v.kind) && v.year != null && v.year >= settings.minVehicleYear)) add("veiculo", label, "ok", "Carro dentro do ano mínimo.");
   // Dado parcial (ex.: ano gravado sem o tipo, comum em ficha antiga) pode ainda ser um carro bom: fica "faltando", nunca vira NQ por palpite.
   else if (vehicles.every(v => v.kind == null && v.year == null)) add("veiculo", label, "missing", "Tipo do veículo não informado (carro ou moto).");
   else if (vehicles.some(v => v.kind == null && v.year != null)) add("veiculo", label, "missing", "Veículo com ano mas sem o tipo (carro ou moto).");
-  else if (vehicles.some(v => v.kind === "carro" && v.year == null)) add("veiculo", label, "missing", "Ano do carro não informado.");
+  else if (vehicles.some(v => v.kind != null && vehicleKinds.includes(v.kind as "carro" | "moto") && v.year == null)) add("veiculo", label, "missing", "Ano do carro não informado.");
   else add("veiculo", label, "nq", vehicles.every(v => v.kind !== "carro") ? (vehicles.some(v => v.kind === "moto") ? "Só moto (moto não vale)." : "Sem veículo.") : "Carro mais velho que o ano mínimo.");
 
   const income = input.averageIncome == null || input.averageIncome === "" ? null : Number(input.averageIncome);
   if (income == null || !Number.isFinite(income)) add("renda", `Renda a partir de R$ ${settings.minIncome.toLocaleString("pt-BR")}`, "missing", "Renda não informada.");
   else add("renda", `Renda a partir de R$ ${settings.minIncome.toLocaleString("pt-BR")}`, income >= settings.minIncome ? "ok" : "nq", `R$ ${income.toLocaleString("pt-BR")}`);
 
-  add("cartao", "Trabalha com cartão de crédito", input.hasCreditCard == null ? "missing" : input.hasCreditCard ? "ok" : "nq", input.hasCreditCard == null ? "Não informado." : input.hasCreditCard ? "Sim" : "Não");
-  add("casa_propria", "Tem casa própria", input.ownsHome == null ? "missing" : input.ownsHome ? "ok" : "nq", input.ownsHome == null ? "Não informado." : input.ownsHome ? "Sim" : "Não");
+  if (settings.requireCreditCard !== false) add("cartao", "Trabalha com cartão de crédito", input.hasCreditCard == null ? "missing" : input.hasCreditCard ? "ok" : "nq", input.hasCreditCard == null ? "Não informado." : input.hasCreditCard ? "Sim" : "Não");
+  if (settings.requireOwnsHome !== false) add("casa_propria", "Tem casa própria", input.ownsHome == null ? "missing" : input.ownsHome ? "ok" : "nq", input.ownsHome == null ? "Não informado." : input.ownsHome ? "Sim" : "Não");
 
   const nqItems = criteria.filter(c => c.status === "nq").length;
   const missing = criteria.filter(c => c.status === "missing").length;
   const outcome = nqItems === 0 ? "qualificado" : nqItems <= settings.maxItemsAccepted ? "nq_aceito" : "nt_perfil";
   const text = `NQ: ${nqItems} ${nqItems === 1 ? "item" : "itens"}`;
-  return { criteria, nqItems, missing, outcome, label: missing ? `${text} (faltam ${missing} dados)` : text };
+  return { ...(settings.version ? { policyVersion: settings.version } : {}), criteria, nqItems, missing, outcome, label: missing ? `${text} (faltam ${missing} dados)` : text };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

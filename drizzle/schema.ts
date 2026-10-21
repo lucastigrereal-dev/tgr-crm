@@ -172,6 +172,20 @@ export const commercialProjectSettings = mysqlTable("commercial_project_settings
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+// CRM-G1: política de qualificação (casal qualificado) versionada e GLOBAL, como capture_sheet_settings. Sem retroatividade: a versão vale de effectiveAt em diante.
+export const qualificationPolicyVersions = mysqlTable("qualification_policy_versions", {
+  id: int("id").autoincrement().primaryKey(),
+  version: varchar("version", { length: 80 }).notNull(),
+  paramsJson: text("paramsJson").notNull(),
+  effectiveAt: timestamp("effectiveAt").defaultNow().notNull(),
+  retiredAt: timestamp("retiredAt"),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("qualification_policy_version_unique").on(table.version),
+  index("qualification_policy_effective_idx").on(table.effectiveAt),
+]);
+
 export const commercialPolicyVersions = mysqlTable("commercial_policy_versions", {
   id: int("id").autoincrement().primaryKey(),
   resortId: int("resortId").notNull().references(() => resorts.id),
@@ -291,6 +305,8 @@ export const captureRecords = mysqlTable(
     presentationStatus: mysqlEnum("presentationStatus", ["captured", "scheduled", "checked_in", "presented", "no_tour", "closed"]).default("captured").notNull(),
     qualificationStatus: mysqlEnum("qualificationStatus", ["pending", "qualified", "disqualified"]).default("pending").notNull(),
     qualificationReason: text("qualificationReason"),
+    // CRM-G1: versão da política de qualificação em vigor quando a sala registrou NT ou o resultado comercial ("legacy" = capture_sheet_settings). Nulável: fichas antigas.
+    nqPolicyVersion: varchar("nqPolicyVersion", { length: 80 }),
     noTourReason: text("noTourReason"),
     // ADR-007 (V6): resultado comercial da sala (VENDEU | CAIU EM MESA). Imutável depois de gravado; NÃO é venda validada.
     commercialOutcome: mysqlEnum("commercialOutcome", ["vendeu", "caiu_em_mesa"]),
