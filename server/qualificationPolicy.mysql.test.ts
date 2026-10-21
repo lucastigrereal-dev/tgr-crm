@@ -98,4 +98,49 @@ describe.skipIf(!integrationUrl)("política de qualificação versionada em MySQ
     expect(bad.nq.policyVersion).toBe(`bad-${runId}:invalid`);
     expect(bad.nq.criteria.find(c => c.key === "veiculo")?.status).toBe("nq");
   });
+
+  it("ficha terminal é lida pela versão gravada, mesmo depois de a vigente mudar (sheet e endpoint do Sales)", async () => {
+    process.env.QUALIFICATION_POLICY_VERSIONING_ENABLED = "true";
+    const strict = `strict-${runId}`;
+    const loose = `loose-${runId}`;
+    await caller().captureSheet.settings.policies.create({ version: loose, params });
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    const motive = (await db.select().from(captureMotives).where(and(eq(captureMotives.kind, "nt_perfil"), eq(captureMotives.code, "renda"))).limit(1))[0]!;
+    const terminal = await newCapture();
+    const terminalCode = `NQT-${runId}`;
+    await caller().captureSheet.setCoupleCode({ captureId: terminal, coupleCode: terminalCode });
+    await caller().captureSheet.recordNt({ captureId: terminal, kind: "perfil", motiveId: motive.id });
+    expect((await caller().captureSheet.byCode({ code: terminalCode })).nq).toMatchObject({ policyVersion: loose, outcome: "qualificado" });
+    await caller().captureSheet.settings.policies.create({ version: strict, params: { ...params, vehicleKinds: ["carro"] } });
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    const open = await sheet();
+    expect(open.nq.policyVersion).toBe(strict);
+    const after = await caller().captureSheet.byCode({ code: terminalCode });
+    expect(after.nq).toMatchObject({ policyVersion: loose, outcome: "qualificado" });
+    const { nqByCoupleCode } = await import("./routers/captureSheet");
+    expect((await nqByCoupleCode(terminalCode))?.nq.policyVersion).toBe(loose);
+    expect((await db.select().from(captureRecords).where(eq(captureRecords.id, terminal)))[0]!.nqPolicyVersion).toBe(loose);
+  }, 20_000);
+
+  it("markNoTour (caminho da sala) também grava a versão", async () => {
+    process.env.QUALIFICATION_POLICY_VERSIONING_ENABLED = "true";
+    const motive = (await db.select().from(captureMotives).where(and(eq(captureMotives.kind, "nt_perfil"), eq(captureMotives.code, "renda"))).limit(1))[0]!;
+    const id = await newCapture();
+    await caller().captures.markNoTour({ id, ntKind: "perfil", motiveId: motive.id });
+    const stamped = (await db.select().from(captureRecords).where(eq(captureRecords.id, id)))[0]!;
+    expect(stamped.ntKind).toBe("perfil");
+    expect(stamped.nqPolicyVersion).toBe(`strict-${runId}`);
+  });
+
+  it("versão ilegível com nome de 80 caracteres: o sufixo :invalid cabe em varchar(80)", async () => {
+    process.env.QUALIFICATION_POLICY_VERSIONING_ENABLED = "true";
+    const longName = `L${runId}`.padEnd(80, "x");
+    await db.insert(qualificationPolicyVersions).values({ version: longName, paramsJson: "{nope", effectiveAt: new Date(Date.now() + 3_600_000) });
+    const id = await newCapture({ nqPolicyVersion: longName });
+    const code2 = `NQL-${runId}`;
+    await caller().captureSheet.setCoupleCode({ captureId: id, coupleCode: code2 });
+    const out = (await caller().captureSheet.byCode({ code: code2 })).nq.policyVersion!;
+    expect(out.length).toBeLessThanOrEqual(80);
+    expect(out.endsWith(":invalid")).toBe(true);
+  });
 });

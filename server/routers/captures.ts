@@ -444,7 +444,8 @@ export const capturesRouter = router({
     const complement = nullIfBlank(input.reason);
     const nt = input.motiveId && input.ntKind ? await resolveNtMotive(db, input.ntKind, input.motiveId, complement) : null;
     const finalReason = nt?.reason ?? input.reason!;
-    const ntColumns = nt && input.ntKind ? { ntKind: input.ntKind, ntMotiveId: nt.motive.id, ntComplement: complement, ntCaptorName: await captorNameOf(db, capture.id, capture.promoterId), ntRecordedAt: new Date(), ntRecordedByUserId: ctx.user.id } : {};
+    const ntVersion = nt && input.ntKind ? await qualificationVersionToStamp(db, DEFAULT_NQ_SETTINGS) : null;
+    const ntColumns = nt && input.ntKind ? { ...(ntVersion ? { nqPolicyVersion: ntVersion } : {}), ntKind: input.ntKind, ntMotiveId: nt.motive.id, ntComplement: complement, ntCaptorName: await captorNameOf(db, capture.id, capture.promoterId), ntRecordedAt: new Date(), ntRecordedByUserId: ctx.user.id } : {};
     const endedAt = new Date();
     const updateResult = await db.update(captureRecords).set({ ...ntColumns, presentationStatus: "no_tour", noTourReason: finalReason, presentationEndedAt: endedAt, receptionNotes: nullIfBlank(input.receptionNotes) ?? capture.receptionNotes }).where(and(eq(captureRecords.id, input.id), isNull(captureRecords.anonymizedAt), eq(captureRecords.presentationStatus, capture.presentationStatus)));
     assertCaptureUpdateSucceeded(updateResult);

@@ -12,6 +12,7 @@ type Reader = Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">;
  * Sem retroatividade: o resultado já gravado guarda a versão que o produziu (capture_records.nqPolicyVersion).
  */
 export const LEGACY_QUALIFICATION_VERSION = "legacy";
+const INVALID_SUFFIX = ":invalid";
 export const isQualificationVersioningEnabled = () => process.env.QUALIFICATION_POLICY_VERSIONING_ENABLED === "true";
 
 export const qualificationParamsSchema = z.strictObject({
@@ -27,16 +28,27 @@ export const qualificationParamsSchema = z.strictObject({
 export type QualificationParams = z.infer<typeof qualificationParamsSchema>;
 
 /** Aplica a versão vigente sobre os limites do legado; devolve sempre a versão usada. */
-export async function applyQualificationPolicy(reader: Reader, legacy: NqSettings, at: Date = new Date()): Promise<NqSettings> {
+export async function applyQualificationPolicy(reader: Reader, legacy: NqSettings, at: Date = new Date(), pinnedVersion?: string | null): Promise<NqSettings> {
   if (!isQualificationVersioningEnabled()) return legacy;
+  // Ficha terminal (NT / resultado comercial): vale a versão gravada nela, mesmo que já encerrada ou superada.
+  if (pinnedVersion) {
+    if (pinnedVersion === LEGACY_QUALIFICATION_VERSION || pinnedVersion.endsWith(INVALID_SUFFIX)) return { ...legacy, version: pinnedVersion };
+    const pinned = (await reader.select({ version: qualificationPolicyVersions.version, paramsJson: qualificationPolicyVersions.paramsJson }).from(qualificationPolicyVersions).where(eq(qualificationPolicyVersions.version, pinnedVersion)).limit(1))[0];
+    if (!pinned) return { ...legacy, version: `${pinnedVersion.slice(0, 80 - INVALID_SUFFIX.length)}${INVALID_SUFFIX}` };
+    return resolveRow(legacy, pinned);
+  }
   const row = (await reader.select({ version: qualificationPolicyVersions.version, paramsJson: qualificationPolicyVersions.paramsJson }).from(qualificationPolicyVersions).where(and(
     lte(qualificationPolicyVersions.effectiveAt, at), or(isNull(qualificationPolicyVersions.retiredAt), gt(qualificationPolicyVersions.retiredAt, at)),
   )).orderBy(desc(qualificationPolicyVersions.effectiveAt), desc(qualificationPolicyVersions.id)).limit(1))[0];
   if (!row) return { ...legacy, version: LEGACY_QUALIFICATION_VERSION };
+  return resolveRow(legacy, row);
+}
+
+function resolveRow(legacy: NqSettings, row: { version: string; paramsJson: string }): NqSettings {
   let params: QualificationParams | null = null;
   try { const parsed = qualificationParamsSchema.safeParse(JSON.parse(row.paramsJson)); params = parsed.success ? parsed.data : null; } catch { params = null; }
   // Versão vigente ilegível: volta ao legado (qualificação é apoio ao gerente, não dinheiro) mas deixa a versão marcada para o erro aparecer.
-  if (!params) return { ...legacy, version: `${row.version}:invalid` };
+  if (!params) return { ...legacy, version: `${row.version.slice(0, 80 - INVALID_SUFFIX.length)}${INVALID_SUFFIX}` };
   return { ...legacy, ...params, version: row.version };
 }
 

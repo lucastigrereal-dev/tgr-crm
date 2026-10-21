@@ -69,7 +69,7 @@ async function loadSettings(db: Awaited<ReturnType<typeof requireDb>>) {
   const nqEffective = await applyQualificationPolicy(db, nq);
   const privacy = Object.fromEntries(PRIVACY_TEXT_KEYS.map(key => [key, map.get(key)?.value ?? ""])) as PrivacySettings;
   // LGPD (decisão do Lucas 17/10): 0 dias = ficha de quem não comprou sai da vista da sala depois do dia da visita; papel destruído no mesmo dia.
-  return { nq: nqEffective, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", roomVisibilityDays: num("room_visibility_days", LGPD_DEFAULTS.roomVisibilityDays), paperDestroyDeadlineDays: num("paper_destroy_deadline_days", LGPD_DEFAULTS.paperDestroyDeadlineDays), privacy, rows };
+  return { nq: nqEffective, nqLegacy: nq, minPresentationMinutes: num("min_presentation_minutes", DEFAULT_MIN_PRESENTATION_MINUTES), brandName: map.get("brand_name")?.value ?? "", roomVisibilityDays: num("room_visibility_days", LGPD_DEFAULTS.roomVisibilityDays), paperDestroyDeadlineDays: num("paper_destroy_deadline_days", LGPD_DEFAULTS.paperDestroyDeadlineDays), privacy, rows };
 }
 type SheetSettings = Awaited<ReturnType<typeof loadSettings>>;
 
@@ -116,6 +116,12 @@ export function nqOfSheet(capture: typeof captureRecords.$inferSelect, customer:
   return computeNq({ maleSpouse: capture.maleSpouse, primaryAge, partnerAge: capture.partnerAge, relationshipStatus: capture.relationshipStatus, relationshipYears: capture.relationshipYears, relationshipMonths: capture.relationshipMonths, vehicleKind: capture.vehicleKind, vehicleYear: capture.vehicleYear, secondVehicleKind: capture.secondVehicleKind, secondVehicleYear: capture.secondVehicleYear, averageIncome: capture.averageIncome, hasCreditCard: capture.hasCreditCard, ownsHome: capture.ownsHome }, settings.nq);
 }
 
+/** Ficha com versão gravada (NT / resultado comercial) é avaliada pela versão gravada, não pela vigente agora. */
+async function nqSettingsForCapture(db: Awaited<ReturnType<typeof requireDb>>, settings: SheetSettings, capture: { nqPolicyVersion: string | null }) {
+  if (!capture.nqPolicyVersion) return settings;
+  return { ...settings, nq: await applyQualificationPolicy(db, settings.nqLegacy, new Date(), capture.nqPolicyVersion) };
+}
+
 /** NQ de uma ficha pelo código do casal, para o endpoint server-to-server do Sales. Código inválido ou sem ficha dá nulo. */
 export async function nqByCoupleCode(rawCode: string) {
   const code = normalizeCoupleCode(rawCode);
@@ -123,7 +129,7 @@ export async function nqByCoupleCode(rawCode: string) {
   const db = await requireDb();
   const [row] = await db.select({ capture: captureRecords, customer: customers }).from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId)).where(eq(captureRecords.coupleCode, code)).limit(1);
   if (!row) return null;
-  return { coupleCode: row.capture.coupleCode ?? code, nq: nqOfSheet(row.capture, row.customer, await loadSettings(db)) };
+  return { coupleCode: row.capture.coupleCode ?? code, nq: nqOfSheet(row.capture, row.customer, await nqSettingsForCapture(db, await loadSettings(db), row.capture)) };
 }
 
 async function captureByCode(rawCode: string) {
@@ -213,7 +219,7 @@ export const captureSheetRouter = router({
     const gifts = await db.select({ description: vouchers.description, status: vouchers.status }).from(vouchers).where(and(eq(vouchers.captureId, capture.id), sql`${vouchers.status} <> 'cancelled'`)).orderBy(asc(vouchers.id)).limit(20);
     // Idade no calendário do projeto (não em UTC): na virada do dia o aniversário não chega horas antes.
     const primaryAge = ageInYears(customer.birthDate, new Date(`${localDateInTimezone(new Date(), projectTimezone())}T00:00:00Z`));
-    const nq = nqOfSheet(capture, customer, settings);
+    const nq = nqOfSheet(capture, customer, await nqSettingsForCapture(db, settings, capture));
     // Rótulo do momento do registro (o snapshot em noTourReason), não o texto atual do catálogo: renomear o motivo depois não reescreve o histórico.
     const ntMotiveLabel = capture.ntKind ? (capture.ntComplement && capture.noTourReason?.endsWith(`: ${capture.ntComplement}`) ? capture.noTourReason.slice(0, -(capture.ntComplement.length + 2)) : capture.noTourReason) ?? null : null;
     return {
@@ -371,7 +377,7 @@ export const captureSheetRouter = router({
           const [row] = await tx.select().from(qualificationPolicyVersions).where(eq(qualificationPolicyVersions.version, input.version)).limit(1).for("update");
           if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Versão não encontrada." });
           if (row.retiredAt) return { ok: true as const, alreadyRetired: true as const };
-          await tx.update(qualificationPolicyVersions).set({ retiredAt: new Date() }).where(eq(qualificationPolicyVersions.id, row.id));
+          await tx.update(qualificationPolicyVersions).set({ retiredAt: new Date(Math.floor(Date.now() / 1000) * 1000) }).where(eq(qualificationPolicyVersions.id, row.id));
           await txAudit(tx, { actorUserId: ctx.user.id, entityType: "qualification_policy", entityId: input.version, action: "retired", summary: `Versão "${input.version}" da política de qualificação encerrada.` });
           return { ok: true as const, alreadyRetired: false as const };
         });
