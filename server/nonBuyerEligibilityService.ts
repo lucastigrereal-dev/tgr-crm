@@ -5,7 +5,7 @@ import { getDb } from "./db";
 import { logger } from "./logger";
 import { getFreshReader, withFreshTimeout } from "./nonBuyerFreshReader";
 import { evaluateNonBuyerEligibility, loadEligibilityFacts, mergeBlockingFacts, type IneligibleReason } from "./nonBuyerEligibility";
-import { withDeadlockRetry } from "./mysqlErrors";
+import { isDeadlockError, isLockWaitTimeoutError, withDeadlockRetry } from "./mysqlErrors";
 import { txEvent, type Tx } from "./txOutbox";
 
 /**
@@ -26,8 +26,9 @@ import { txEvent, type Tx } from "./txOutbox";
  *  POOL (Opus): a leitura fresca do gancho NÃO usa o pool principal (limite 10): N ganchos segurando conexão com tx+locks e pedindo uma segunda esgotariam o pool e travariam
  *  sem timeout. Usa o pool dedicado de 3 conexões de nonBuyerFreshReader (autocommit, nunca segura lock) com timeout de 3s; estourou, o gancho falha e a reconciliação cobre.
  *  FALHA DO GANCHO: `eligibilityHook` roda o serviço num SAVEPOINT (`tx.transaction` aninhada); erro comum (tabela ausente, timeout da leitura fresca, falha de SQL) desfaz só o
- *  savepoint, é registrado sem PII e a transação de negócio segue e comita. Exceção honesta: ER_LOCK_DEADLOCK desfaz a transação inteira no MySQL (não há o que engolir);
- *  pela ordem de locks acima o gancho não participa de ciclo, e o resto do CRM já trata deadlock com `withDeadlockRetry`.
+ *  savepoint, é registrado sem PII e a transação de negócio segue e comita. Deadlock (1213) e lock wait timeout (1205) NÃO são engolidos: o InnoDB
+ *  desfaz a transação de NEGÓCIO inteira (o ROLLBACK TO SAVEPOINT falharia), então o gancho RELANÇA e o erro sobe para o `withDeadlockRetry` da rota ou vira 5xx honesto;
+ *  engolir devolveria sucesso sem o contrato/venda gravado (perda silenciosa).
  *  FRESCOR DOS FATOS (Codex P1 do #102): em REPEATABLE READ o snapshot nasce na primeira leitura sem lock, que pode ser ANTES de esperar o lock da linha de estado; o perdedor
  *  da corrida leria a projeção nova (FOR UPDATE) com fatos velhos e poderia emitir a transição inversa (ex.: opt-out concorrente com cancelamento de contrato => "elegível"
  *  depois do opt-out). Locking read nos fatos de negócio criaria ciclo (quem segura estado esperaria linha de negócio de quem espera estado), então:
@@ -38,6 +39,8 @@ import { txEvent, type Tx } from "./txOutbox";
  *      já fez opt-out, comprou ou foi anonimizado. Quem comitar depois reavalia com o mesmo método e enxerga o nosso commit.
  */
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+export type HookTarget = { captureId: number } | { customerId: number } | { customerIds: number[] };
 
 export type RevokedReason = IneligibleReason;
 // Prioridade do motivo único do evento de revogação (o desenho lista opt_out | anonymized | erasure | sale_validated | sale_in_progress | notice_invalid; o mapeamento
@@ -90,26 +93,45 @@ export async function reevaluateCustomer(tx: Tx, customerId: number, options: { 
   return results;
 }
 
+/** Vários clientes (troca de cliente numa oportunidade): junta as fichas e reavalia em ORDEM GLOBAL crescente de captureId (A->B x B->A não formam ciclo). */
+export async function reevaluateCustomers(tx: Tx, customerIds: number[], options: { now?: Date; fresh?: Db } = {}): Promise<ReevaluationResult[]> {
+  const ids = Array.from(new Set(customerIds));
+  if (ids.length === 0) return [];
+  const captures = await tx.select({ id: captureRecords.id }).from(captureRecords).where(inArray(captureRecords.customerId, ids)).orderBy(asc(captureRecords.id));
+  const results: ReevaluationResult[] = [];
+  for (const { id } of captures) { const result = await reevaluateCapture(tx, id, options); if (result) results.push(result); }
+  return results;
+}
+
 /** Porta dos ganchos (fatia 4): com a flag desligada não faz NADA (nem lê a tabela, que pode nem existir). */
-export async function reevaluateIfEnabled(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<ReevaluationResult[]> {
+export async function reevaluateIfEnabled(tx: Tx, target: HookTarget, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<ReevaluationResult[]> {
   if (!enabled) return [];
   // Leitura fresca num pool DEDICADO e pequeno (nonBuyerFreshReader), nunca no pool principal: ver "POOL" abaixo.
   const options = { fresh: fresh ?? (getFreshReader() as unknown as Db | undefined) };
   if (!options.fresh) throw new Error("DATABASE_URL ausente para a leitura fresca");
   if ("captureId" in target) { const result = await reevaluateCapture(tx, target.captureId, options); return result ? [result] : []; }
+  if ("customerIds" in target) return reevaluateCustomers(tx, target.customerIds, options);
   return reevaluateCustomer(tx, target.customerId, options);
 }
 
 /**
- * Gancho transacional (fatia 4): chame como ÚLTIMO passo da transação de negócio, passando o `tx` dela. Com a flag desligada não faz nada. Nunca lança por falha de
- * elegibilidade: a reconciliação converge depois.
+ * Gancho transacional (fatia 4): chame como ÚLTIMO passo da transação de negócio, passando o `tx` dela. Com a flag desligada não faz nada. Falha comum de
+ * elegibilidade não lança (a reconciliação converge depois); deadlock/lock timeout SOBEM (a transação de negócio já foi desfeita pelo MySQL).
  */
-export async function eligibilityHook(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<void> {
+export async function eligibilityHook(tx: Tx, target: HookTarget, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<void> {
   if (!enabled) return;
+  // Erro ORIGINAL do serviço: quando o InnoDB já desfez a tx inteira (deadlock), o ROLLBACK TO SAVEPOINT do drizzle falha e esse erro (1305) MASCARA o deadlock; por isso o
+  // original é guardado aqui dentro e é ele que decide.
+  let original: unknown;
   try {
-    await tx.transaction(async inner => { await reevaluateIfEnabled(inner as unknown as Tx, target, true, fresh); });
+    await tx.transaction(async inner => {
+      try { await reevaluateIfEnabled(inner as unknown as Tx, target, true, fresh); } catch (error) { original = error; throw error; }
+    });
   } catch (error) {
-    logger.warn("Non-buyer eligibility hook failed; reconciliation will cover it", { errorName: error instanceof Error ? error.name : "non-Error", target: "captureId" in target ? `capture:${target.captureId}` : `customer:${target.customerId}` });
+    const fatal = [original, error].find(candidate => candidate !== undefined && (isDeadlockError(candidate) || isLockWaitTimeoutError(candidate)));
+    if (fatal !== undefined) throw fatal;
+    if (original !== undefined && error !== original) throw error; // o próprio ROLLBACK TO SAVEPOINT falhou: a tx de negócio está inutilizável, não há o que engolir
+    logger.warn("Non-buyer eligibility hook failed; reconciliation will cover it", { errorName: error instanceof Error ? error.name : "non-Error", target: "captureId" in target ? `capture:${target.captureId}` : "customerId" in target ? `customer:${target.customerId}` : "customers" });
   }
 }
 
@@ -117,14 +139,14 @@ export async function eligibilityHook(tx: Tx, target: { captureId: number } | { 
  * Para pontos de negócio que NÃO são transacionais (rotas de captação que usam `db.update` direto): roda a reavaliação numa transação PRÓPRIA e curta logo DEPOIS do
  * fato (best-effort; não lança). A janela entre o fato e este gancho é coberta pela reconciliação, como qualquer transição esquecida.
  */
-export async function eligibilityHookAfterCommit(target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled): Promise<void> {
+export async function eligibilityHookAfterCommit(target: HookTarget, enabled: boolean = ENV.recoveryEligibilityEnabled): Promise<void> {
   if (!enabled) return;
   try {
     const db = await getDb();
     if (!db) return;
     await withDeadlockRetry(() => db.transaction(tx => reevaluateIfEnabled(tx, target, true)));
   } catch (error) {
-    logger.warn("Non-buyer eligibility post-commit hook failed; reconciliation will cover it", { errorName: error instanceof Error ? error.name : "non-Error", target: "captureId" in target ? `capture:${target.captureId}` : `customer:${target.customerId}` });
+    logger.warn("Non-buyer eligibility post-commit hook failed; reconciliation will cover it", { errorName: error instanceof Error ? error.name : "non-Error", target: "captureId" in target ? `capture:${target.captureId}` : "customerId" in target ? `customer:${target.customerId}` : "customers" });
   }
 }
 

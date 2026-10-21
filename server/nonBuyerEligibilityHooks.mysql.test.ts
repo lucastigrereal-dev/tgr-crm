@@ -144,6 +144,70 @@ describe.skipIf(!integrationUrl)("elegibilidade de não-comprador: ganchos, AUTO
     expect(await stateOf(c.captureId)).toMatchObject({ eligible: false, seq: 2 }); // a reconciliação cobre
   });
 
+  it("deadlock/lock timeout NÃO são engolidos (errno 1213 e 1205, também embrulhados em cause); erro comum e FreshReadTimeout continuam engolidos", async () => {
+    const wrap = (errno: number, code: string) => Object.assign(new Error("Failed query"), { cause: Object.assign(new Error(code), { errno, code }) });
+    for (const err of [wrap(1213, "ER_LOCK_DEADLOCK"), wrap(1205, "ER_LOCK_WAIT_TIMEOUT")]) {
+      const tx = { transaction: async () => { throw err; } } as never;
+      await expect(svc.eligibilityHook(tx, { customerId: 1 }, true)).rejects.toBe(err);
+      // o erro que chega é o do ROLLBACK TO SAVEPOINT (mascara o deadlock): o original, guardado dentro do savepoint, é que decide
+      const masked = { transaction: async (fn: (t: unknown) => Promise<void>) => { try { await fn({ select: () => { throw err; } }); } finally { /* rollback falha */ } throw new Error("rollback to savepoint failed"); } } as never;
+      await expect(svc.eligibilityHook(masked, { customerId: 1 }, true)).rejects.toBe(err);
+    }
+    for (const err of [new Error("Table doesn't exist"), new fresh.FreshReadTimeout(3000)]) {
+      const tx = { transaction: async () => { throw err; } } as never;
+      await expect(svc.eligibilityHook(tx, { customerId: 1 }, true)).resolves.toBeUndefined();
+    }
+  });
+
+  it("deadlock REAL dentro do gancho: o contrato NÃO fica comitado e o chamador recebe o erro", async () => {
+    const c = await couple();
+    await db.transaction(tx => svc.reevaluateCapture(tx, c.captureId)); // linha de estado existe
+    const a = await pool.getConnection();
+    const b = await pool.getConnection();
+    try {
+      // B segura a linha de OUTRA tabela que o gancho de A vai precisar? Mais simples: B trava o estado e depois pede a linha que A (negócio) já travou.
+      const [{ insertId }] = (await a.query("INSERT INTO opportunities (customerId, title, stage) VALUES (?, 'lock', 'qualified')", [c.customerId]) as unknown as [{ insertId: number }]);
+      await a.query("SET SESSION innodb_lock_wait_timeout = 20");
+      await b.query("SET SESSION innodb_lock_wait_timeout = 20");
+      await a.beginTransaction();
+      await a.query("UPDATE opportunities SET title = 'a' WHERE id = ?", [insertId]); // A: negócio trava a oportunidade
+      await b.beginTransaction();
+      await b.query("SELECT id FROM non_buyer_eligibility_state WHERE captureId = ? FOR UPDATE", [c.captureId]); // B: trava o estado
+      const bWaits = b.query("UPDATE opportunities SET title = 'b' WHERE id = ?", [insertId]).catch(e => e); // B espera A
+      await new Promise(r => setTimeout(r, 300));
+      // A: o "gancho" pede o estado => A espera B, B espera A => deadlock; o InnoDB escolhe uma vítima
+      const aRes = await a.query("SELECT id FROM non_buyer_eligibility_state WHERE captureId = ? FOR UPDATE", [c.captureId]).catch(e => e);
+      const bRes = await bWaits;
+      const victim = aRes instanceof Error ? "a" : "b";
+      const victimErr = aRes instanceof Error ? aRes : bRes;
+      expect(Number((victimErr as { errno?: number }).errno)).toBe(1213);
+      expect(victim).toBeDefined();
+    } finally {
+      await a.rollback().catch(() => undefined); await b.rollback().catch(() => undefined); a.release(); b.release();
+    }
+    // Agora pelo gancho de verdade: tx de negócio + gancho competindo com um segurador do estado; quem perde RELANÇA e o contrato não persiste.
+    const holder = await pool.getConnection();
+    try {
+      const oppId = (await db.select().from(opportunities).where(eq(opportunities.customerId, c.customerId)))[0]!.id;
+      await holder.beginTransaction();
+      await holder.query("SELECT id FROM non_buyer_eligibility_state WHERE captureId = ? FOR UPDATE", [c.captureId]);
+      // peso: o InnoDB sacrifica a transação com MENOS trabalho; o segurador precisa pesar mais que o negócio para o gancho ser a vítima
+      for (let i = 0; i < 30; i++) await holder.query("INSERT INTO customers (fullName, documentNumber, status) VALUES (?, ?, 'active')", [`Peso ${i} ${runId}`, `CPF-PESO-${i}-${runId}-${c.captureId}`]);
+      const business = db.transaction(async tx => {
+        await tx.insert(contracts).values(newContract(c.customerId, "deadlock-real"));
+        await tx.update(opportunities).set({ title: "negocio" }).where(eq(opportunities.id, oppId)); // negócio trava a oportunidade
+        await svc.eligibilityHook(tx, { customerId: c.customerId }, true); // espera o estado do holder
+      }).catch(e => e);
+      await new Promise(r => setTimeout(r, 400));
+      await holder.query("UPDATE opportunities SET title = 'holder' WHERE id = ?", [oppId]).catch(() => undefined); // holder espera o negócio => ciclo
+      const outcome = await business;
+      await holder.rollback().catch(() => undefined);
+      expect(outcome).toBeInstanceOf(Error);
+      expect(Number((outcome as { cause?: { errno?: number }; errno?: number }).cause?.errno ?? (outcome as { errno?: number }).errno)).toBe(1213);
+    } finally { holder.release(); }
+    expect(await db.select().from(contracts).where(eq(contracts.customerId, c.customerId))).toHaveLength(0);
+  });
+
   it("flag desligada: o gancho não escreve nada (nem cria a linha de estado)", async () => {
     const c = await couple();
     await db.transaction(async tx => { await svc.eligibilityHook(tx, { customerId: c.customerId }, false); });
@@ -192,7 +256,7 @@ describe.skipIf(!integrationUrl)("elegibilidade de não-comprador: ganchos, AUTO
       ["routers/contracts.ts", /eligibilityHook\(tx, \{ customerId: contract\.customerId \}\);[^\n]*\n\s*return \{ policyConfigured/],
       ["routers/contracts.ts", /eligibilityHook\(tx, \{ customerId: current\.customerId \}\)/],
       ["routers/sales.ts", /eligibilityHook\(tx, \{ customerId: opportunity\.customerId \}\);[^\n]*\n\s*return proposalId;/],
-      ["routers/sales.ts", /eligibilityHook\(tx, \{ customerId \}\)/],
+      ["routers/sales.ts", /eligibilityHook\(tx, \{ customerIds: \[previous\.customerId/],
       ["routers/captureSheet.ts", /eligibilityHook\(tx, \{ captureId: capture\.id \}\);[^\n]*\n\s*return \{ ok: true as const, alreadyRecorded: false/],
       ["routers/captures.ts", /eligibilityHookAfterCommit\(\{ captureId: input\.id \}\)/],
       ["captureErasure.ts", /eligibilityHook\(tx, \{ customerId: customer\.id \}\)/],
@@ -201,6 +265,6 @@ describe.skipIf(!integrationUrl)("elegibilidade de não-comprador: ganchos, AUTO
     ];
     for (const [file, pattern] of sites) expect(pattern.test(read(file)), `${file} ${pattern}`).toBe(true);
     const service = read("nonBuyerEligibilityService.ts");
-    expect(service).toMatch(/catch \(error\) \{\s*\n\s*logger\.warn\("Non-buyer eligibility hook failed/);
+    expect(service).toMatch(/if \(fatal !== undefined\) throw fatal;[\s\S]*?logger\.warn\("Non-buyer eligibility hook failed/);
   });
 });

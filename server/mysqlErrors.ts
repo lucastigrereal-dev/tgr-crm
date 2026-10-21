@@ -56,3 +56,14 @@ export async function withDeadlockRetry<T>(run: () => Promise<T>, attempts = 3):
     }
   }
 }
+
+// Lock wait timeout (ER_LOCK_WAIT_TIMEOUT, 1205): com innodb_rollback_on_timeout=ON o MySQL também desfaz a transação inteira.
+export function isLockWaitTimeoutError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const candidate = current as { code?: unknown; errno?: unknown; cause?: unknown };
+    if (candidate.code === "ER_LOCK_WAIT_TIMEOUT" || Number(candidate.errno) === 1205) return true;
+    current = candidate.cause;
+  }
+  return false;
+}

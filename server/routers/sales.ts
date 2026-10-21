@@ -190,7 +190,7 @@ export const salesRouter = router({
         closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
       }).where(and(eq(opportunities.id, input.id), eq(opportunities.stage, previous.stage)));
       // C2/C3: mudança de estágio (proposal/negotiation/won bloqueiam; lost devolve) reavalia o cliente atual e o novo. Último passo da tx.
-      if (affectedRows(updated) !== 0) for (const customerId of Array.from(new Set([previous.customerId, input.data.customerId]))) await eligibilityHook(tx, { customerId });
+      if (affectedRows(updated) !== 0) await eligibilityHook(tx, { customerIds: [previous.customerId, input.data.customerId].filter((id): id is number => typeof id === "number") });
       return updated;
     });
     if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
