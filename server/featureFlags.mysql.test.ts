@@ -93,4 +93,39 @@ describe.skipIf(!integrationUrl)("tela de flags em MySQL real (0084 PROPOSTA int
       expect((await api.list()).overridesEnabled).toBe(false);
     } finally { ENV.featureFlagOverridesEnabled = true; }
   });
+
+  it("(P2-1) sets concorrentes na mesma flag: o valor efetivo termina igual ao persistido mais recente que o list mostra", async () => {
+    const api = await caller();
+    for (let round = 0; round < 5; round++) {
+      await Promise.all([true, false, true, false, true, false].map(enabled => api.set({ key: "COMMISSION_ROLE_MAP_ENABLED", enabled })));
+      const listed = (await api.list()).flags.find(f => f.key === "COMMISSION_ROLE_MAP_ENABLED")!;
+      expect(ENV.commissionRoleMapEnabled).toBe(listed.override!.enabled);
+      expect(listed.effective).toBe(listed.override!.enabled);
+    }
+  });
+
+  it("(P2-3) muito histórico de uma flag não esconde as outras (MAX por flag, sem limite combinado)", async () => {
+    const api = await caller();
+    await api.set({ key: "ATTENDANCE_RECEIVER_ENABLED", enabled: true });
+    const rows = Array.from({ length: 6000 }, () => `('COMMISSION_ROLE_MAP_ENABLED', 1, ${adminId})`).join(",");
+    await pool.query(`INSERT INTO feature_flag_overrides (flagKey, enabled, createdByUserId) VALUES ${rows}`);
+    const listed = (await api.list()).flags;
+    expect(listed.find(f => f.key === "ATTENDANCE_RECEIVER_ENABLED")!.override).toMatchObject({ enabled: true });
+    expect(listed.find(f => f.key === "COMMISSION_ROLE_MAP_ENABLED")!.override).toMatchObject({ enabled: true });
+    expect(await applyPersistedFlagOverrides(db as never)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("(P2-2) leitura falhando com a mestre ligada: o list mostra 'unavailable' explícito (sem null silencioso) e o boot só avisa e mantém a ENV", async () => {
+    const api = await caller();
+    await pool.query("RENAME TABLE feature_flag_overrides TO feature_flag_overrides_off");
+    try {
+      const out = await api.list();
+      expect(out).toMatchObject({ overridesEnabled: true, overridesStatus: "unavailable" });
+      expect(out.flags.every(f => f.pendingRestart === null && f.override === null)).toBe(true);
+      const before = ENV.recoveryEligibilityEnabled;
+      expect(await applyPersistedFlagOverrides(db as never)).toBe(0);
+      expect(ENV.recoveryEligibilityEnabled).toBe(before);
+    } finally { await pool.query("RENAME TABLE feature_flag_overrides_off TO feature_flag_overrides"); }
+    expect((await api.list()).overridesStatus).toBe("ok");
+  });
 });

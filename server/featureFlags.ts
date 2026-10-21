@@ -1,4 +1,4 @@
-import { desc } from "drizzle-orm";
+import { inArray, max } from "drizzle-orm";
 import { featureFlagOverrides } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import type { getDb } from "./db";
@@ -36,11 +36,14 @@ export const bootValueOf = (key: FlagKey) => bootValues[key]!;
 export const effectiveValueOf = (key: FlagKey) => Boolean(ENV[FLAG_ALLOWLIST[key].prop]);
 function setEffective(key: FlagKey, enabled: boolean) { (ENV as Record<string, unknown>)[FLAG_ALLOWLIST[key].prop] = enabled; }
 
-/** Sobrescrita vigente por flag = a linha de maior id. */
+/** Sobrescrita vigente por flag = a linha de MAIOR id (MAX por flag: um flag com muito histórico não esconde os outros; nada é truncado). */
 export async function latestOverrides(db: Db): Promise<Map<FlagKey, { enabled: boolean; createdByUserId: number; createdAt: Date }>> {
-  const rows = await db.select().from(featureFlagOverrides).orderBy(desc(featureFlagOverrides.id)).limit(5000);
+  const latest = await db.select({ flagKey: featureFlagOverrides.flagKey, id: max(featureFlagOverrides.id) }).from(featureFlagOverrides).groupBy(featureFlagOverrides.flagKey);
+  const ids = latest.map(row => row.id).filter((id): id is number => id !== null);
   const out = new Map<FlagKey, { enabled: boolean; createdByUserId: number; createdAt: Date }>();
-  for (const row of rows) if (isAllowedFlag(row.flagKey) && !out.has(row.flagKey)) out.set(row.flagKey, { enabled: row.enabled, createdByUserId: row.createdByUserId, createdAt: row.createdAt });
+  if (!ids.length) return out;
+  const rows = await db.select().from(featureFlagOverrides).where(inArray(featureFlagOverrides.id, ids));
+  for (const row of rows) if (isAllowedFlag(row.flagKey)) out.set(row.flagKey, { enabled: row.enabled, createdByUserId: row.createdByUserId, createdAt: row.createdAt });
   return out;
 }
 
@@ -57,8 +60,18 @@ export async function applyPersistedFlagOverrides(db: Db | null | undefined): Pr
   }
 }
 
-/** Liga/desliga NA HORA só as flags lidas a cada chamada; as de boot esperam o reinício. */
-export function applyOverrideLive(key: FlagKey, enabled: boolean) {
-  if (!FLAG_ALLOWLIST[key].restartRequired) setEffective(key, enabled);
+/**
+ * Depois do COMMIT: relê a sobrescrita mais recente DESTA flag (a que o `list` mostra) e só então aplica à ENV, serializado por flag neste processo. Assim dois `set`
+ * concorrentes (ids auto-increment podem comitar fora de ordem) terminam com valor efetivo = valor persistido mais recente. Só as flags lidas a cada chamada; as de boot esperam o reinício.
+ */
+const applyQueues = new Map<FlagKey, Promise<unknown>>();
+export function applyLatestOverrideLive(db: Db, key: FlagKey): Promise<void> {
+  if (FLAG_ALLOWLIST[key].restartRequired) return Promise.resolve();
+  const run = async () => {
+    const latest = (await latestOverrides(db)).get(key);
+    if (latest) setEffective(key, latest.enabled);
+  };
+  const next = (applyQueues.get(key) ?? Promise.resolve()).then(run, run);
+  applyQueues.set(key, next.catch(() => undefined));
+  return next;
 }
-

@@ -5,7 +5,7 @@ import { featureFlagOverrides } from "../../drizzle/schema";
 import { ENV } from "../_core/env";
 import { router } from "../_core/trpc";
 import { getDb } from "../db";
-import { applyOverrideLive, bootValueOf, effectiveValueOf, FLAG_ALLOWLIST, FLAG_KEYS, isAllowedFlag, latestOverrides } from "../featureFlags";
+import { applyLatestOverrideLive, bootValueOf, effectiveValueOf, FLAG_ALLOWLIST, FLAG_KEYS, isAllowedFlag, latestOverrides } from "../featureFlags";
 import { withDeadlockRetry } from "../mysqlErrors";
 import { txAudit } from "../txOutbox";
 import { adminProcedure } from "./access";
@@ -19,14 +19,19 @@ async function requireDb() { const db = await getDb(); if (!db) throw new TRPCEr
 export const featureFlagsRouter = router({
   list: adminProcedure.query(async () => {
     const overridesEnabled = ENV.featureFlagOverridesEnabled;
-    const overrides = overridesEnabled ? await latestOverrides(await requireDb()).catch(() => null) : null;
+    // Mestre ligada e leitura falhando (tabela ausente, MySQL fora): estado EXPLÍCITO "unavailable" (nada de null silencioso que pareça "sem sobrescritas").
+    let overrides: Awaited<ReturnType<typeof latestOverrides>> | null = null;
+    let overridesStatus: "off" | "ok" | "unavailable" = "off";
+    if (overridesEnabled) {
+      try { overrides = await latestOverrides(await requireDb()); overridesStatus = "ok"; } catch { overridesStatus = "unavailable"; }
+    }
     return {
-      overridesEnabled,
+      overridesEnabled, overridesStatus,
       flags: FLAG_KEYS.map(key => {
         const override = overrides?.get(key) ?? null;
         const effective = effectiveValueOf(key);
         const configured = override ? override.enabled : bootValueOf(key);
-        return { key, label: FLAG_ALLOWLIST[key].label, restartRequired: FLAG_ALLOWLIST[key].restartRequired, bootValue: bootValueOf(key), effective, override, pendingRestart: FLAG_ALLOWLIST[key].restartRequired && configured !== effective };
+        return { key, label: FLAG_ALLOWLIST[key].label, restartRequired: FLAG_ALLOWLIST[key].restartRequired, bootValue: bootValueOf(key), effective, override, pendingRestart: overridesStatus === "unavailable" ? null : FLAG_ALLOWLIST[key].restartRequired && configured !== effective };
       }),
     };
   }),
@@ -44,7 +49,7 @@ export const featureFlagsRouter = router({
       await tx.insert(featureFlagOverrides).values({ flagKey: key, enabled: input.enabled, createdByUserId: ctx.user.id });
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "feature_flag", entityId: key, action: input.enabled ? "flag_enabled" : "flag_disabled", summary: `Flag ${key} ${input.enabled ? "LIGADA" : "DESLIGADA"} pela tela${FLAG_ALLOWLIST[key].restartRequired ? " (vale após reiniciar o serviço)" : ""}.` });
     }));
-    applyOverrideLive(key, input.enabled);
+    await applyLatestOverrideLive(db, key);
     return { key, enabled: input.enabled, restartRequired: FLAG_ALLOWLIST[key].restartRequired };
   }),
 });
