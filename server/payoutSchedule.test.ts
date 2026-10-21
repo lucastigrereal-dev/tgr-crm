@@ -35,7 +35,9 @@ describe("CRM-F2: parcela da entrada", () => {
 });
 
 import { entryInstallmentIds, isEntryFullyPaid, paidEntryAmount } from "./commissionAutomation";
-import { withVersionedPayoutDefaults } from "./commissionPolicyVersion";
+import { DEFAULT_RELEASE_ON } from "../shared/projectPolicySchemas";
+import { parseCompleteCommissionPolicy } from "./projectPolicy";
+import { materializeReleaseOn } from "./routers/commercialPolicies";
 describe("CRM-F2 correção: composição da entrada", () => {
   it("canceladas ficam fora do acumulado", () => {
     const schedule = [{ id: 1, sequence: 1, amount: "500.00", status: "cancelled" }, { id: 2, sequence: 2, amount: "1000.00", status: "open" }, { id: 3, sequence: 3, amount: "3000.00", status: "open" }];
@@ -90,12 +92,20 @@ describe("CRM-F2 correção: composição da entrada", () => {
     expect(isEntryFullyPaid([{ ...base, id: 1, status: "cancelled", amount: "500.00", paidAmount: "500.00" }, { ...base, id: 2, sequence: 2, amount: "500.00", paidAmount: "500.00" }], 1000)).toBe(false);
     expect(isEntryFullyPaid([{ ...base, id: 1, status: "open", amount: "500.00", paidAmount: "0.00" }, { ...base, id: 2, sequence: 2, amount: "500.00", paidAmount: "500.00" }], 1000)).toBe(false);
   });
-  it("política versionada: releaseOn ausente vira entry_total; explícito e per_installment ficam como estão", () => {
-    const policy = { linerRate: 0, closerRate: 0, ftbRate: 0, cancellationDeadlineDay: 5, expectedPaymentDay: 10, eligiblePaymentMethods: ["pix"], basis: "eligible_receipt" } as never;
-    expect((withVersionedPayoutDefaults(policy) as any).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
-    expect((withVersionedPayoutDefaults({ ...(policy as object), payoutSchedule: { mode: "full_upfront" } } as never) as any).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
-    expect((withVersionedPayoutDefaults({ ...(policy as object), payoutSchedule: { mode: "full_upfront", releaseOn: "first_entry_installment" } } as never) as any).payoutSchedule.releaseOn).toBe("first_entry_installment");
-    expect((withVersionedPayoutDefaults({ ...(policy as object), payoutSchedule: { mode: "per_installment" } } as never) as any).payoutSchedule).toEqual({ mode: "per_installment" });
+  it("um default só: DEFAULT_RELEASE_ON = entry_total, igual para legado sem versão e para versão sem releaseOn", () => {
+    expect(DEFAULT_RELEASE_ON).toBe("entry_total");
+    const raw = JSON.stringify({ linerRate: 0, closerRate: 0, ftbRate: 0, cancellationDeadlineDay: 5, expectedPaymentDay: 10, eligiblePaymentMethods: ["pix"], basis: "eligible_receipt" });
+    const legacy = parseCompleteCommissionPolicy(raw); // legado (commercial_project_settings) e legacy-1 copiado pela 0076 não trazem releaseOn
+    const versioned = parseCompleteCommissionPolicy(raw);
+    expect(legacy?.payoutSchedule?.releaseOn ?? DEFAULT_RELEASE_ON).toBe("entry_total");
+    expect(versioned?.payoutSchedule?.releaseOn ?? DEFAULT_RELEASE_ON).toBe(legacy?.payoutSchedule?.releaseOn ?? DEFAULT_RELEASE_ON);
+  });
+  it("commercialPolicies.create materializa releaseOn em full_upfront (inclusive sem payoutSchedule); per_installment e explícito ficam como estão", () => {
+    const base = { eligiblePaymentMethods: ["pix"] };
+    expect(materializeReleaseOn(base).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
+    expect(materializeReleaseOn({ ...base, payoutSchedule: { mode: "full_upfront" } }).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
+    expect(materializeReleaseOn({ ...base, payoutSchedule: { mode: "full_upfront", releaseOn: "first_entry_installment" } }).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "first_entry_installment" });
+    expect(materializeReleaseOn({ ...base, payoutSchedule: { mode: "per_installment" } }).payoutSchedule).toEqual({ mode: "per_installment" });
   });
   it("releaseOn: aceita as duas opções com full_upfront e recusa com per_installment", () => {
     expect(payoutScheduleSchema.safeParse({ mode: "full_upfront", releaseOn: "entry_total" }).success).toBe(true);

@@ -7,11 +7,20 @@ import { router } from "../_core/trpc";
 import { adminProcedure, financeProcedure } from "./access";
 import { monetaryAdjustmentPolicySchema } from "../monetaryAdjustment";
 import { parseCompleteCommissionPolicy } from "../projectPolicy";
+import { DEFAULT_PAYOUT_MODE, DEFAULT_RELEASE_ON } from "../../shared/projectPolicySchemas";
 import { stockHoldPolicySchema } from "../formalizationInventory";
 import { saleTermsPolicySchema } from "../saleTermsPolicy";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 
 const policyType = z.enum(["commission", "cancellation", "revenue_quality", "monetary_adjustment", "sale_terms", "stock_hold"]);
+
+/** Versão aprovada carrega o próprio significado: em full_upfront (inclusive o padrão, sem payoutSchedule) sem releaseOn, grava o default explícito. per_installment fica como está. */
+export function materializeReleaseOn(policy: Record<string, unknown>): Record<string, unknown> {
+  const schedule = (policy.payoutSchedule ?? {}) as { mode?: string; releaseOn?: string };
+  const mode = schedule.mode ?? DEFAULT_PAYOUT_MODE;
+  if (mode !== "full_upfront" || schedule.releaseOn) return policy;
+  return { ...policy, payoutSchedule: { ...schedule, mode, releaseOn: DEFAULT_RELEASE_ON } };
+}
 
 export const commercialPoliciesRouter = router({
   list: financeProcedure.input(z.object({ resortId: z.number().int().positive(), policyType: policyType.optional(), includeRetired: z.boolean().optional(), limit: z.number().int().min(1).max(500).default(100) })).query(async ({ input }) => {
@@ -49,7 +58,7 @@ export const commercialPoliciesRouter = router({
     if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma versão com esse código para o empreendimento e tipo de política." });
     let created;
     try {
-      created = await db.insert(commercialPolicyVersions).values({ resortId: input.resortId, policyType: input.policyType, version: input.version, policyJson: JSON.stringify(input.policy), effectiveAt: input.effectiveAt ?? new Date(), approvedByUserId: ctx.user.id }).$returningId();
+      created = await db.insert(commercialPolicyVersions).values({ resortId: input.resortId, policyType: input.policyType, version: input.version, policyJson: JSON.stringify(input.policyType === "commission" ? materializeReleaseOn(input.policy) : input.policy), effectiveAt: input.effectiveAt ?? new Date(), approvedByUserId: ctx.user.id }).$returningId();
     } catch (error) {
       if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "A versão da política foi criada por outra operação." });
       throw error;

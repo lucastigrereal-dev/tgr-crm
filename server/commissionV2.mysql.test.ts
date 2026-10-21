@@ -43,6 +43,9 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
 
   const v1AndV2Policy = JSON.stringify({ linerRate: 0.1, closerRate: 0.1, ftbRate: 0, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt", rulesV2: FIVE_COMMISSION_DRAFT_V2 });
 
+  /** Política explícita no calendário antigo (libera na 1ª baixa elegível da entrada): `first_entry_installment` só vale quando dito. */
+  const firstEntryPolicy = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront", releaseOn: "first_entry_installment" } });
+
   const perInstallmentPolicy = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "per_installment" } });
 
   /** Venda validada e ativa: entrada de R$ 1.000 dividida em parcelas, 2 frações vendidas (2 cotas), captador, consultor (liner) e fechador (closer) distintos. */
@@ -168,14 +171,16 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     const total = (role: string) => all.filter(row => row.commissionRole === role).reduce((sum, row) => sum + Number(row.amount), 0);
     expect([total("promoter"), total("liner"), total("closer")]).toEqual([800, 100, 100]);
   });
-  it("F2: payoutSchedule ausente = full_upfront — a 1ª parcela elegível paga libera o total de cada papel e as seguintes nada (V2 liberado)", async () => {
+  it("F2: payoutSchedule ausente = full_upfront + entry_total (default único) — a 1ª parcela da entrada retém, a que completa a entrada libera o total e as seguintes nada (V2 liberado)", async () => {
     process.env.COMMISSION_V2_RELEASED = "true";
-    const { contractId, installmentIds } = await seedSale("upfront", ["500.00", "500.00"]);
+    const { contractId, installmentIds } = await seedSale("upfront", ["500.00", "500.00", "3000.00"]);
     const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
     await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(0);
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
     const first = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
     expect(first.map(row => [row.commissionRole, row.amount]).sort()).toEqual([["closer", "100.00"], ["liner", "100.00"], ["promoter", "800.00"]]);
-    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    await caller.markInstallmentPaid({ id: installmentIds[2]!, paymentMethod: "pix" });
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
   });
   it("F2 Codex P1: baixar o SALDO primeiro não libera nada; método inelegível não libera; a baixa elegível da ENTRADA libera (V2 liberado)", async () => {
@@ -185,7 +190,7 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     const rows = () => db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
     await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" }); // saldo primeiro
     expect(await rows()).toHaveLength(0);
-    const { contractId: other, installmentIds: otherIds } = await seedSale("inelegivel", ["1000.00", "3000.00"]);
+    const { contractId: other, installmentIds: otherIds } = await seedSale("inelegivel", ["1000.00", "3000.00"], firstEntryPolicy);
     await caller.markInstallmentPaid({ id: otherIds[0]!, paymentMethod: "cash" }); // entrada, mas método fora de eligiblePaymentMethods
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, other))).toHaveLength(0);
     await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" }); // entrada elegível
@@ -194,7 +199,7 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
   const heldReasons = async (installmentId: number) => (await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "installment"), eq(auditLogs.entityId, String(installmentId)), eq(auditLogs.action, "commission_v2_held")))).map(row => row.entityId && row.summary);
   it("F2 correção: retenção deixa auditoria commission_v2_held (saldo e método inelegível), sem evento novo", async () => {
     process.env.COMMISSION_V2_RELEASED = "true";
-    const { installmentIds } = await seedSale("held", ["1000.00", "3000.00"]);
+    const { installmentIds } = await seedSale("held", ["1000.00", "3000.00"], firstEntryPolicy);
     const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
     await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
     expect((await heldReasons(installmentIds[1]!)).join(" ")).toContain("não faz parte da entrada");
@@ -213,7 +218,7 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
   });
   it("F2 correção: a parcela criada por acordo de uma parcela de ENTRADA conta como entrada; a renegociada não soma", async () => {
     process.env.COMMISSION_V2_RELEASED = "true";
-    const { contractId, installmentIds } = await seedSale("acordo", ["1000.00", "3000.00"]);
+    const { contractId, installmentIds } = await seedSale("acordo", ["1000.00", "3000.00"], firstEntryPolicy);
     await db.update(installments).set({ status: "renegotiated" }).where(eq(installments.id, installmentIds[0]!));
     const [created] = await db.insert(installments).values({ contractId, sequence: 3, dueDate: new Date("2026-12-01T12:00:00Z"), amount: "900.00", status: "open", paidAmount: "0.00" }).$returningId();
     await db.insert(installmentRenegotiations).values({ contractId, originalInstallmentId: installmentIds[0]!, originalAmount: "1000.00", proposedAmount: "900.00", proposedDueDate: "2026-12-01" as never, status: "applied" });
@@ -312,7 +317,7 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
 
   it("V2 fixado e travado de novo: o travamento vence e nenhuma parcela nova gera comissão", async () => {
     process.env.COMMISSION_V2_RELEASED = "true";
-    const { contractId, installmentIds } = await seedSale("retrava", ["500.00", "500.00"]);
+    const { contractId, installmentIds } = await seedSale("retrava", ["500.00", "500.00"], firstEntryPolicy);
     const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
     await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" });
     expect((await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).every(row => row.ruleVersion === "v2")).toBe(true);
