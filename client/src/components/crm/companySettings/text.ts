@@ -76,3 +76,15 @@ export function permissionHistory(rows: Array<Who & { id: number; roles: string 
     return { key: String(r.id), who: whoName(r.createdByUserId, names), when: formatWhen(r.createdAt), what: Array.isArray(roles) ? `passou a valer para: ${roles.map(role => roleLabel(String(role))).join(", ")}` : "valor ilegível" };
   });
 }
+
+/** Mensagem de erro de SALVAR para o toast: nunca o texto cru do servidor (pode trazer nome de variável, papel ou chave). Códigos conhecidos têm texto próprio; o resto é genérico. */
+export function describeMutationError(error: unknown): string {
+  const code = error && typeof error === "object" && "data" in error ? (error as { data?: { code?: string } }).data?.code ?? null : null;
+  if (code === "BAD_REQUEST") return "Os dados informados não são válidos. Confira e tente de novo.";
+  if (code === "FORBIDDEN" && error && typeof error === "object" && "message" in error && /piso fixo|fora da allow-list|n[aã]o pode ser alterad/i.test(String((error as { message?: unknown }).message))) return "Este item é fixo e não pode ser alterado por aqui.";
+  if (code === "FORBIDDEN" || code === "PRECONDITION_FAILED" || code === "UNAUTHORIZED") {
+    const state = describeBackendState({ errorCode: code });
+    return state.kind === "ok" ? "Não foi possível salvar agora. Tente de novo." : state.text;
+  }
+  return "Não foi possível salvar agora. Tente de novo; se continuar, avise a equipe técnica.";
+}

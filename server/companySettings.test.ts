@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BlockedItems, FlagsPanel, HistoryList, IndicatorsPanel, PermissionsPanel, RoleMapPanel, StateNotice } from "../client/src/components/crm/companySettings/panels";
-import { BLOCKED_ITEMS, describeBackendState, flagHistory, indicatorHistory, permissionHistory, roleMapHistory } from "../client/src/components/crm/companySettings/text";
+import { BLOCKED_ITEMS, describeBackendState, describeMutationError, flagHistory, indicatorHistory, permissionHistory, roleMapHistory } from "../client/src/components/crm/companySettings/text";
 import { canOpenMenuPath, menuPathRoles } from "../shared/permissions";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
@@ -116,5 +116,68 @@ describe("Configurações da empresa: rota e menu só do admin, sem segredo na p
     const page = read("client/src/pages/CompanySettings.tsx") + read("client/src/components/crm/companySettings/panels.tsx");
     expect(page).not.toMatch(/COMMISSION_V2_RELEASED|process\.env|ENV\.|SECRET|INTEGRATION_KEY|JWT/);
     for (const route of ["featureFlags.list", "featureFlags.set", "permissionOverrides.set", "commissionRoleMap.save", "officialIndicators.saveCatalogEntry"]) expect(page).toContain(route);
+  });
+});
+
+describe("Configurações da empresa: erros de histórico, acessibilidade e avisos de salvar", () => {
+  const flag = { key: "X", label: "Receptor do registro de atendimento (C1)", restartRequired: true, effective: false, override: { enabled: true, createdByUserId: 7, createdAt: new Date("2026-10-21T15:00:00Z") }, pendingRestart: true };
+  const base = { pending: false, onToggle: noop, historyOf: () => undefined, onOpenHistory: noop, openKey: null as string | null, unavailable: false };
+
+  it("(P2-1) histórico com erro mostra aviso claro (nunca 'Carregando' eterno) e, com status indisponível, o botão de histórico fica desabilitado", () => {
+    const failed = html(createElement(HistoryList, { entries: "error" }));
+    expect(failed).toContain("Não foi possível ler o histórico");
+    expect(failed).toContain('role="alert"');
+    expect(failed).not.toContain("Carregando");
+    const open = html(createElement(FlagsPanel, { ...base, flags: [flag], openKey: "X", historyOf: () => "error" }));
+    expect(open).toContain("Não foi possível ler o histórico");
+    expect(open).not.toContain("Carregando");
+    const down = html(createElement(FlagsPanel, { ...base, flags: [flag], unavailable: true }));
+    expect(down).toContain("Não foi possível ler o histórico");
+    const historyButtons = down.match(/<button[^>]*>(Ver|Ocultar) histórico<\/button>/g) ?? [];
+    expect(historyButtons).toHaveLength(1);
+    expect(historyButtons[0]).toContain("disabled");
+    for (const panel of [
+      html(createElement(RoleMapPanel, { roleMap: { captador: "promoter", consultor: "liner", fechador: "closer" }, version: 1, isDefault: false, ruleRoles: ["captador", "consultor", "fechador"], storedRoles: ["promoter", "liner", "closer"], pending: false, onSave: noop, history: "error" })),
+      html(createElement(PermissionsPanel, { items: [{ key: "export.pii", defaultRoles: ["admin"], roles: ["admin"], overridden: false }], roles: ["admin", "seller"], pending: false, onSave: noop, onOpenHistory: noop, openKey: "export.pii", historyOf: () => "error" })),
+      html(createElement(IndicatorsPanel, { items: [{ code: "utilization", version: 1, label: "Aproveitamento", description: "", active: true, isDefault: false }], pending: false, onSave: noop, onOpenHistory: noop, openKey: "utilization", historyOf: () => "error" })),
+    ]) expect(panel).toContain("Não foi possível ler o histórico");
+  });
+
+  it("(P2-2) o nome acessível do botão sai do MESMO valor do texto visível e do clique (escolha salva ou, sem ela, o valor atual)", () => {
+    const labelsOf = (f: typeof flag) => { const out = html(createElement(FlagsPanel, { ...base, flags: [f] })); return { aria: /aria-label="(Ligar|Desligar): /.exec(out)?.[1], visible: />(Ligar|Desligar)<\/button>/.exec(out)?.[1] }; };
+    expect(labelsOf(flag)).toEqual({ aria: "Desligar", visible: "Desligar" }); // salvo ligado, efetivo desligado: o texto e o clique já usam o salvo
+    expect(labelsOf({ ...flag, override: null })).toEqual({ aria: "Ligar", visible: "Ligar" });
+    expect(labelsOf({ ...flag, override: null, effective: true })).toEqual({ aria: "Desligar", visible: "Desligar" });
+    expect(labelsOf({ ...flag, override: { ...flag.override!, enabled: false }, effective: true })).toEqual({ aria: "Ligar", visible: "Ligar" });
+    const source = read("client/src/components/crm/companySettings/panels.tsx");
+    expect(source).toContain("onToggle(flag.key, !configured)");
+    expect(source).toContain('aria-label={`${configured ? "Desligar" : "Ligar"}: ${flag.label}`}');
+  });
+
+  it("(P2-3) o aviso de salvar nunca mostra o texto cru do servidor: códigos conhecidos têm texto próprio e o resto é genérico, sem nome de recurso, variável ou papel", () => {
+    const raw = (code: string, message: string) => Object.assign(new Error(message), { data: { code } });
+    const cases = [
+      raw("FORBIDDEN", "Esta flag não pode ser alterada pela tela (fora da allow-list). RECOVERY_ELIGIBILITY_ENABLED"),
+      raw("FORBIDDEN", "Apenas a administração pode executar esta ação."),
+      raw("PRECONDITION_FAILED", "Tela de flags desligada (FEATURE_FLAG_OVERRIDES_ENABLED)."),
+      raw("BAD_REQUEST", "Mapa inválido: informe captador, consultor e fechador (promoter, liner ou closer)."),
+      raw("UNAUTHORIZED", "Please login (10001)"),
+      raw("INTERNAL_SERVER_ERROR", "Failed query: insert into feature_flag_overrides ... COMMISSION_V2_RELEASED"),
+      new Error("Failed to fetch"),
+      "texto solto",
+      null,
+    ];
+    for (const error of cases) {
+      const text = describeMutationError(error);
+      expect(text).not.toMatch(TECHNICAL);
+      expect(text).not.toMatch(/promoter|liner|closer|allow-list|insert|query|10001|ELIGIBILITY|feature_flag/i);
+      expect(text.length).toBeGreaterThan(20);
+    }
+    expect(describeMutationError(raw("BAD_REQUEST", "x"))).toContain("não são válidos");
+    expect(describeMutationError(raw("FORBIDDEN", "Esta permissão faz parte do piso fixo e não pode ser alterada pela tela."))).toContain("fixo");
+    expect(describeMutationError(raw("PRECONDITION_FAILED", "x"))).toContain("desligado");
+    const page = read("client/src/pages/CompanySettings.tsx");
+    expect(page).not.toMatch(/toast\.error\((?!describeMutationError)/);
+    expect(page).not.toContain("error.message");
   });
 });
