@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { eligibilityHook } from "../nonBuyerEligibilityService";
 import { assertCustomerNotAnonymized } from "../customerAnonymization";
 import { and, desc, eq, inArray, like, or } from "drizzle-orm";
 import { z } from "zod";
@@ -153,6 +154,7 @@ export const salesRouter = router({
         reminderAt: followUpAt,
         createdByUserId: ctx.user.id,
       });
+      await eligibilityHook(tx, { customerId: input.customerId }); // C2/C3: oportunidade criada já em proposal+ bloqueia (new/qualified não). Último passo da tx.
       return opportunityId;
     });
     await recordAudit(ctx.user.id, "opportunity", id, "created", `Oportunidade ${input.title} criada.`);
@@ -179,7 +181,7 @@ export const salesRouter = router({
     const updateResult = await db.transaction(async tx => {
       // Cliente anonimizado (o atual da oportunidade ou o novo) não recebe mais texto livre.
       for (const customerId of Array.from(new Set([previous.customerId, input.data.customerId]))) await assertCustomerNotAnonymized(tx, customerId, { lock: true });
-      return tx.update(opportunities).set({
+      const updated = await tx.update(opportunities).set({
         ...input.data,
         expectedAmount: input.data.expectedAmount.toFixed(2),
         source: input.data.source?.trim() || null,
@@ -187,6 +189,9 @@ export const salesRouter = router({
         lossReason: input.data.lossReason?.trim() || null,
         closedAt: input.data.stage === "won" || input.data.stage === "lost" ? new Date() : null,
       }).where(and(eq(opportunities.id, input.id), eq(opportunities.stage, previous.stage)));
+      // C2/C3: mudança de estágio (proposal/negotiation/won bloqueiam; lost devolve) reavalia o cliente atual e o novo. Último passo da tx.
+      if (affectedRows(updated) !== 0) for (const customerId of Array.from(new Set([previous.customerId, input.data.customerId]))) await eligibilityHook(tx, { customerId });
+      return updated;
     });
     if (affectedRows(updateResult) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
     await recordAudit(ctx.user.id, "opportunity", input.id, "updated", `Oportunidade atualizada para ${input.data.stage}.`);
@@ -210,7 +215,7 @@ export const salesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const id = await db.transaction(async tx => {
-      const opportunity = (await tx.select({ id: opportunities.id, stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1).for("update"))[0];
+      const opportunity = (await tx.select({ id: opportunities.id, stage: opportunities.stage, customerId: opportunities.customerId }).from(opportunities).where(eq(opportunities.id, input.opportunityId)).limit(1).for("update"))[0];
       if (!opportunity) throw new TRPCError({ code: "NOT_FOUND", message: "Oportunidade da proposta não encontrada." });
       if (!canTransitionOpportunityStage(opportunity.stage, "proposal")) throw new TRPCError({ code: "CONFLICT", message: `Não é possível criar proposta para oportunidade em estágio ${opportunity.stage}.` });
       const duplicate = (await tx.select({ id: proposals.id }).from(proposals).where(eq(proposals.reference, input.reference)).limit(1))[0];
@@ -225,6 +230,7 @@ export const salesRouter = router({
       if (!proposalId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a proposta." });
       const stageUpdate = await tx.update(opportunities).set({ stage: "proposal", updatedAt: new Date() }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.stage, opportunity.stage)));
       if (affectedRows(stageUpdate) === 0) throw new TRPCError({ code: "CONFLICT", message: "A oportunidade foi alterada por outra operação. Recarregue e tente novamente." });
+      await eligibilityHook(tx, { customerId: opportunity.customerId }); // C2/C3: proposta draft/sent/approved bloqueia. Último passo da tx.
       return proposalId;
     });
     await recordAudit(ctx.user.id, "proposal", id, "created", `Proposta ${input.reference} criada.`);

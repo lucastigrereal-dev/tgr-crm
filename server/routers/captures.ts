@@ -1,4 +1,5 @@
 import { qualificationVersionToStamp } from "../qualificationPolicy";
+import { eligibilityHookAfterCommit } from "../nonBuyerEligibilityService";
 import { DEFAULT_NQ_SETTINGS } from "../captureSheetDomain";
 import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
@@ -374,6 +375,7 @@ export const capturesRouter = router({
     await recordAudit(ctx.user.id, "capture", input.id, "presentation_ended", `Apresentação concluída e encerrada após ${durationMinutes} minutos.`);
     await recordDomainEvent({ eventName: "capture.presentation.ended", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, salesTable: capture.salesTable, durationMinutes } });
     publishSalesRoomEvent({ type: "capture.presentation.ended", captureId: input.id, salesRoom: capture.salesRoom });
+    await eligibilityHookAfterCommit({ captureId: input.id }); // C2/C3: atendimento encerrado (ramo A). Pós-commit, best-effort; flag OFF = no-op.
     return { success: true, presentationEndedAt, durationMinutes };
   }),
 
@@ -431,6 +433,7 @@ export const capturesRouter = router({
     const label = input.outcome === "vendeu" ? "VENDEU" : "CAIU EM MESA";
     await recordAudit(ctx.user.id, "capture", input.id, "commercial_outcome_recorded", `Resultado comercial ${label} registrado.`);
     await recordDomainEvent({ eventName: "capture.commercial_outcome.recorded", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { outcome: input.outcome } });
+    if (input.outcome === "vendeu") await eligibilityHookAfterCommit({ captureId: input.id }); // C2/C3: VENDEU bloqueia (sale_in_progress). Pós-commit, best-effort.
     return { success: true as const, alreadyRecorded: false as const, outcome: input.outcome, recordedAt };
   }),
 
@@ -452,6 +455,7 @@ export const capturesRouter = router({
     await recordAudit(ctx.user.id, "capture", input.id, "no_tour", "Captação encerrada sem tour com motivo registrado.");
     await recordDomainEvent({ eventName: "capture.no_tour", aggregateType: "capture", aggregateId: input.id, actorUserId: ctx.user.id, payload: { salesRoom: capture.salesRoom, reason: finalReason } });
     publishSalesRoomEvent({ type: "capture.no_tour", captureId: input.id, salesRoom: capture.salesRoom });
+    await eligibilityHookAfterCommit({ captureId: input.id }); // C2/C3: não-tour (ramo B). Pós-commit, best-effort; flag OFF = no-op.
     return { success: true, endedAt };
   }),
 });

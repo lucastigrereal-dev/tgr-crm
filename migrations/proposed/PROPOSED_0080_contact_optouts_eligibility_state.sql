@@ -20,10 +20,10 @@ CREATE TABLE IF NOT EXISTS `customer_contact_optouts` (
 	INDEX `customer_contact_optouts_customer_idx` (`customerId`,`optedOutAt`)
 );
 --> statement-breakpoint
--- non_buyer_eligibility_state: uma linha por ficha (a linha travada com SELECT ... FOR UPDATE por gancho e reconciliacao). `customerId` e existe para a
+-- non_buyer_eligibility_state (id bigint: a reconciliacao periodica nao pode estourar o AUTO_INCREMENT): uma linha por ficha (a linha travada com SELECT ... FOR UPDATE por gancho e reconciliacao). `customerId` e existe para a
 -- reavaliacao poder ser disparada tambem por mudanca de CONTRATO, PROPOSTA ou OPORTUNIDADE (que conhecem o cliente, nao a ficha): cliente -> fichas -> reavaliar.
 CREATE TABLE IF NOT EXISTS `non_buyer_eligibility_state` (
-	`id` int AUTO_INCREMENT NOT NULL,
+	`id` bigint AUTO_INCREMENT NOT NULL,
 	`captureId` int NOT NULL,
 	`customerId` int NOT NULL,
 	`eligible` boolean NOT NULL DEFAULT false,

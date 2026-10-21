@@ -2,6 +2,8 @@ import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { captureRecords, nonBuyerEligibilityState } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { getDb } from "./db";
+import { logger } from "./logger";
+import { getFreshReader, withFreshTimeout } from "./nonBuyerFreshReader";
 import { evaluateNonBuyerEligibility, loadEligibilityFacts, mergeBlockingFacts, type IneligibleReason } from "./nonBuyerEligibility";
 import { withDeadlockRetry } from "./mysqlErrors";
 import { txEvent, type Tx } from "./txOutbox";
@@ -16,11 +18,16 @@ import { txEvent, type Tx } from "./txOutbox";
  *  1. O gancho roda DEPOIS da escrita de negócio, na MESMA transação, como seu ÚLTIMO passo; ela já segura os locks das suas linhas de negócio (contrato, proposta,
  *     oportunidade, ficha). O serviço nunca pede lock de linha de negócio: lê os fatos SEM lock (SELECT consistente).
  *  2. Único lock que o serviço adquire: a linha de `non_buyer_eligibility_state` da ficha (SELECT ... FOR UPDATE; criada ANTES, se faltar, por INSERT ... ON DUPLICATE KEY no-op
- *     e então lida com FOR UPDATE; a ordem inversa dá deadlock por lock de gap). Vários casais do mesmo cliente (reavaliação por contrato/proposta/oportunidade): sempre em ORDEM CRESCENTE de captureId.
+ *     SÓ SE a linha não existir (um SELECT simples antes evita queimar AUTO_INCREMENT) e então lida com FOR UPDATE; a ordem inversa dá deadlock por lock de gap). Vários casais do mesmo cliente (reavaliação por contrato/proposta/oportunidade): sempre em ORDEM CRESCENTE de captureId.
  *  3. Nada espera linha de negócio enquanto segura linha de estado (leituras sem lock não esperam). Logo não há ciclo: quem segura estado nunca espera negócio, e quem espera
  *     estado (gancho, já segurando negócio) só espera alguém que termina sem esperar negócio. Reconciliação = uma transação curta POR FICHA (nunca segura mais de uma linha de estado).
  *  4. O serviço não abre transação própria quando recebe `tx` (usa a do chamador); o job abre uma por ficha, com `withDeadlockRetry`. Um gancho que levar deadlock repete a
  *     transação de negócio inteira (mesmo contrato dos demais ganchos do CRM).
+ *  POOL (Opus): a leitura fresca do gancho NÃO usa o pool principal (limite 10): N ganchos segurando conexão com tx+locks e pedindo uma segunda esgotariam o pool e travariam
+ *  sem timeout. Usa o pool dedicado de 3 conexões de nonBuyerFreshReader (autocommit, nunca segura lock) com timeout de 3s; estourou, o gancho falha e a reconciliação cobre.
+ *  FALHA DO GANCHO: `eligibilityHook` roda o serviço num SAVEPOINT (`tx.transaction` aninhada); erro comum (tabela ausente, timeout da leitura fresca, falha de SQL) desfaz só o
+ *  savepoint, é registrado sem PII e a transação de negócio segue e comita. Exceção honesta: ER_LOCK_DEADLOCK desfaz a transação inteira no MySQL (não há o que engolir);
+ *  pela ordem de locks acima o gancho não participa de ciclo, e o resto do CRM já trata deadlock com `withDeadlockRetry`.
  *  FRESCOR DOS FATOS (Codex P1 do #102): em REPEATABLE READ o snapshot nasce na primeira leitura sem lock, que pode ser ANTES de esperar o lock da linha de estado; o perdedor
  *  da corrida leria a projeção nova (FOR UPDATE) com fatos velhos e poderia emitir a transição inversa (ex.: opt-out concorrente com cancelamento de contrato => "elegível"
  *  depois do opt-out). Locking read nos fatos de negócio criaria ciclo (quem segura estado esperaria linha de negócio de quem espera estado), então:
@@ -42,9 +49,11 @@ export type ReevaluationResult = { captureId: number; changed: boolean; eligible
 
 /** Garante e TRAVA a linha de estado da ficha (única aquisição de lock do serviço). */
 async function lockState(tx: Tx, captureId: number, customerId: number) {
-  // INSERT ... ON DUPLICATE KEY (no-op) ANTES do SELECT ... FOR UPDATE: o SELECT FOR UPDATE numa linha que ainda não existe pega lock de GAP nas duas transações e o INSERT
-  // seguinte de ambas dá deadlock (reproduzido em teste). Com o INSERT primeiro, quem chega depois espera o lock exclusivo da linha, sem ciclo.
-  await tx.insert(nonBuyerEligibilityState).values({ captureId, customerId }).onDuplicateKeyUpdate({ set: { captureId: sql`captureId` } });
+  // 1) SELECT simples SEM lock: se a linha existe, não há INSERT (INSERT ... ON DUPLICATE KEY consome AUTO_INCREMENT mesmo quando a linha já existe; a reconciliação de 10 min
+  //    sobre todas as fichas estouraria o int). 2) Só se faltar: INSERT ... ON DUPLICATE KEY (no-op) ANTES do SELECT ... FOR UPDATE: o FOR UPDATE numa linha inexistente pega
+  //    lock de GAP nas duas transações e o INSERT seguinte de ambas dá deadlock (reproduzido em teste). 3) SELECT ... FOR UPDATE: o único lock.
+  const [present] = await tx.select({ id: nonBuyerEligibilityState.id }).from(nonBuyerEligibilityState).where(eq(nonBuyerEligibilityState.captureId, captureId)).limit(1);
+  if (!present) await tx.insert(nonBuyerEligibilityState).values({ captureId, customerId }).onDuplicateKeyUpdate({ set: { captureId: sql`captureId` } });
   const [row] = await tx.select().from(nonBuyerEligibilityState).where(eq(nonBuyerEligibilityState.captureId, captureId)).limit(1).for("update");
   return row!;
 }
@@ -57,7 +66,7 @@ export async function reevaluateCapture(tx: Tx, captureId: number, options: { no
   const state = await lockState(tx, captureId, capture.customerId);
   // Só DEPOIS do lock do estado. `fresh` (hooks) = leitura sem lock em outra conexão com o último commit; ver "FRESCOR DOS FATOS".
   const own = (await loadEligibilityFacts(tx, captureId, { readOptOut: true }))!;
-  const fresh = options.fresh ? await loadEligibilityFacts(options.fresh, captureId, { readOptOut: true }) : null;
+  const fresh = options.fresh ? await withFreshTimeout(loadEligibilityFacts(options.fresh, captureId, { readOptOut: true })) : null;
   const verdict = evaluateNonBuyerEligibility(fresh ? mergeBlockingFacts(own, fresh) : own);
   if (verdict.eligible === state.eligible) return { captureId, changed: false, eligible: state.eligible, seq: state.seq, eventId: null };
   const seq = state.seq + 1;
@@ -84,9 +93,39 @@ export async function reevaluateCustomer(tx: Tx, customerId: number, options: { 
 /** Porta dos ganchos (fatia 4): com a flag desligada não faz NADA (nem lê a tabela, que pode nem existir). */
 export async function reevaluateIfEnabled(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<ReevaluationResult[]> {
   if (!enabled) return [];
-  const options = { fresh: fresh ?? (await getDb()) ?? undefined }; // conexão separada do pool para a leitura fresca do gancho
+  // Leitura fresca num pool DEDICADO e pequeno (nonBuyerFreshReader), nunca no pool principal: ver "POOL" abaixo.
+  const options = { fresh: fresh ?? (getFreshReader() as unknown as Db | undefined) };
+  if (!options.fresh) throw new Error("DATABASE_URL ausente para a leitura fresca");
   if ("captureId" in target) { const result = await reevaluateCapture(tx, target.captureId, options); return result ? [result] : []; }
   return reevaluateCustomer(tx, target.customerId, options);
+}
+
+/**
+ * Gancho transacional (fatia 4): chame como ÚLTIMO passo da transação de negócio, passando o `tx` dela. Com a flag desligada não faz nada. Nunca lança por falha de
+ * elegibilidade: a reconciliação converge depois.
+ */
+export async function eligibilityHook(tx: Tx, target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled, fresh?: Db): Promise<void> {
+  if (!enabled) return;
+  try {
+    await tx.transaction(async inner => { await reevaluateIfEnabled(inner as unknown as Tx, target, true, fresh); });
+  } catch (error) {
+    logger.warn("Non-buyer eligibility hook failed; reconciliation will cover it", { errorName: error instanceof Error ? error.name : "non-Error", target: "captureId" in target ? `capture:${target.captureId}` : `customer:${target.customerId}` });
+  }
+}
+
+/**
+ * Para pontos de negócio que NÃO são transacionais (rotas de captação que usam `db.update` direto): roda a reavaliação numa transação PRÓPRIA e curta logo DEPOIS do
+ * fato (best-effort; não lança). A janela entre o fato e este gancho é coberta pela reconciliação, como qualquer transição esquecida.
+ */
+export async function eligibilityHookAfterCommit(target: { captureId: number } | { customerId: number }, enabled: boolean = ENV.recoveryEligibilityEnabled): Promise<void> {
+  if (!enabled) return;
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await withDeadlockRetry(() => db.transaction(tx => reevaluateIfEnabled(tx, target, true)));
+  } catch (error) {
+    logger.warn("Non-buyer eligibility post-commit hook failed; reconciliation will cover it", { errorName: error instanceof Error ? error.name : "non-Error", target: "captureId" in target ? `capture:${target.captureId}` : `customer:${target.customerId}` });
+  }
 }
 
 export type ReconciliationOutcome = { scanned: number; changed: number; eligible: number; revoked: number; nextCursor: number | null };
