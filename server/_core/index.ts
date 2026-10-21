@@ -15,6 +15,7 @@ import { processAsaasWebhook } from "../paymentGatewayWebhook";
 import { registerHealthRoutes } from "../health";
 import { logger } from "../logger";
 import { registerSalesCommandBridge } from "../salesCommandBridge";
+import { registerAttendanceReceiver } from "../attendanceReceiver";
 import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
 import { registerNqReadEndpoint } from "../nqReadEndpoint";
 import { ENV } from "./env";
@@ -78,6 +79,7 @@ async function startServer() {
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
   registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey, ENV.encounterTimesReceiverEnabled);
+  registerAttendanceReceiver(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
   registerNqReadEndpoint(app, ENV.salesCommandIntegrationKey, ENV.nqReadEndpointEnabled);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
