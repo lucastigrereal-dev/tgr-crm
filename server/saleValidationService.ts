@@ -389,8 +389,11 @@ export async function validateSale(actorUserId: number, input: { contractId: num
       await txAudit(tx, { actorUserId, entityType: "sale_validation", entityId: input.contractId, action: "validated", summary: `Venda do contrato ${input.contractId} validada (pagamento, contrato assinado e documento armazenado conferidos).`, idempotencyKey: `sale-validated:${input.contractId}` });
       // Mesmo evento da ativação de sempre: Relationship (crm.contract.activated.v1) e Financial (status) continuam dependendo dele.
       await txEvent(tx, { eventName: "contract.status.updated", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: { status: "active", cancellationReason: null } });
+      // CRM-C4: cotas oficiais da venda = frações ligadas ao contrato; contrato sem fração (ex.: importado) não afirma nada (campo ausente).
+      const [quotaRow] = await tx.select({ n: sql<number>`COUNT(*)` }).from(commercialFractions).where(eq(commercialFractions.currentContractId, input.contractId));
+      const quotasCount = Number(quotaRow?.n ?? 0);
       await txEvent(tx, { eventName: "sale.validated", aggregateType: "contract", aggregateId: input.contractId, actorUserId, payload: {
-        contractId: input.contractId, saleId,
+        contractId: input.contractId, saleId, ...(quotasCount >= 1 && quotasCount <= 100_000 ? { quotasCount } : {}),
         validatedAt: validatedAt.toISOString(), validatedByUserId: actorUserId, validatedBy: String(actorUserId),
         paymentConfirmedAt: paymentConfirmedAt.toISOString(), paymentConfirmedByUserId, paymentConfirmedBy: String(paymentConfirmedByUserId),
         contractGeneratedAt: stamps.contractGeneratedAt.toISOString(), contractSignedAt: stamps.contractSignedAt.toISOString(),
