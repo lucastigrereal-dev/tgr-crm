@@ -100,6 +100,10 @@ const dayOf = (value: string | Date | null | undefined) => value == null ? "" : 
  * e sequência posterior) NÃO soma de novo: ela herda a condição de entrada da original. Renegociada sem parcela de acordo localizável fica fora.
  */
 export function entryInstallmentIds(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []): Set<number> {
+  return resolveEntry(schedule, entryTotal, renegotiations).ids;
+}
+
+function resolveEntry(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[]): { ids: Set<number>; ancestors: Map<number, number[]> } {
   const rows = [...schedule].sort((a, b) => a.sequence - b.sequence);
   const byId = new Map(rows.map(row => [row.id, row]));
   const successorOf = new Map<number, number>();
@@ -117,17 +121,18 @@ export function entryInstallmentIds(schedule: EntryScheduleRow[], entryTotal: nu
     if (row.status === "cancelled" || claimed.has(row.id)) continue;
     if (row.status === "renegotiated" && !successorOf.has(row.id)) continue;
     cumulative += cents(row.amount);
-    if (cumulative <= limit + 1) inEntry.push(row.id);
+    if (cumulative <= limit) inEntry.push(row.id);
   }
   const result = new Set<number>();
+  const ancestors = new Map<number, number[]>();
   for (const id of inEntry) {
     let current = id;
     const seen = new Set<number>();
     while (byId.get(current)?.status === "renegotiated" && successorOf.has(current) && !seen.has(current)) { seen.add(current); current = successorOf.get(current)!; }
     const final = byId.get(current);
-    if (final && final.status !== "renegotiated" && final.status !== "cancelled") result.add(current);
+    if (final && final.status !== "renegotiated" && final.status !== "cancelled") { result.add(current); ancestors.set(current, Array.from(seen)); }
   }
-  return result;
+  return { ids: result, ancestors };
 }
 
 export function isEntryInstallment(schedule: EntryScheduleRow[], installmentId: number, entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
@@ -136,8 +141,12 @@ export function isEntryInstallment(schedule: EntryScheduleRow[], installmentId: 
 
 /** Acumulado PAGO da entrada (parcelas da entrada com status paid), em reais. */
 export function paidEntryAmount(schedule: EntryScheduleRow[], entryTotal: number, renegotiations: AppliedRenegotiation[] = []) {
-  const ids = entryInstallmentIds(schedule, entryTotal, renegotiations);
-  return schedule.filter(row => ids.has(row.id) && row.status === "paid").reduce((sum, row) => sum + cents(row.paidAmount ?? row.amount), 0) / 100;
+  const { ids, ancestors } = resolveEntry(schedule, entryTotal, renegotiations);
+  const byId = new Map(schedule.map(row => [row.id, row]));
+  let total = schedule.filter(row => ids.has(row.id) && row.status === "paid").reduce((sum, row) => sum + cents(row.paidAmount ?? row.amount), 0);
+  // Pagamento parcial retido nas parcelas renegociadas (ancestrais) continua sendo dinheiro recebido da entrada.
+  ancestors.forEach(chain => { for (const ancestorId of chain) total += cents(byId.get(ancestorId)?.paidAmount ?? 0); });
+  return total / 100;
 }
 
 export function canCommissionBecomeDue(contractStatus: string | null | undefined, completePolicy: unknown, saleValidated: boolean): boolean {

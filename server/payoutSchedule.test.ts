@@ -59,6 +59,29 @@ describe("CRM-F2 correção: composição da entrada", () => {
     const schedule = [{ id: 1, sequence: 1, amount: "500.00", status: "paid", paidAmount: "500.00" }, { id: 2, sequence: 2, amount: "500.00", status: "open", paidAmount: "0.00" }, { id: 3, sequence: 3, amount: "3000.00", status: "paid", paidAmount: "3000.00" }];
     expect(paidEntryAmount(schedule, 1000)).toBe(500);
   });
+  it("P1: entrada parcial (R$100 pagos) renegociada: R$100 do ancestral + R$900 do sucessor pago libera o total", () => {
+    const schedule = [
+      { id: 1, sequence: 1, amount: "1000.00", status: "renegotiated", paidAmount: "100.00", dueDate: "2026-10-10" },
+      { id: 2, sequence: 2, amount: "3000.00", status: "open", dueDate: "2026-11-10" },
+      { id: 3, sequence: 3, amount: "900.00", status: "paid", paidAmount: "900.00", dueDate: "2026-12-01" },
+    ];
+    const reneg = [{ originalInstallmentId: 1, proposedAmount: "900.00", proposedDueDate: "2026-12-01" }];
+    expect(paidEntryAmount(schedule, 1000, reneg)).toBe(1000);
+  });
+  it("P1: sucessor ainda aberto não libera (só o parcial do ancestral conta)", () => {
+    const schedule = [
+      { id: 1, sequence: 1, amount: "1000.00", status: "renegotiated", paidAmount: "100.00", dueDate: "2026-10-10" },
+      { id: 3, sequence: 2, amount: "900.00", status: "open", paidAmount: "0.00", dueDate: "2026-12-01" },
+    ];
+    const reneg = [{ originalInstallmentId: 1, proposedAmount: "900.00", proposedDueDate: "2026-12-01" }];
+    expect(paidEntryAmount(schedule, 1000, reneg)).toBe(100);
+  });
+  it("P2: 1 centavo acima da entrada fica fora (sem folga)", () => {
+    const schedule = [{ id: 1, sequence: 1, amount: "500.00", status: "open" }, { id: 2, sequence: 2, amount: "500.01", status: "open" }];
+    expect([...entryInstallmentIds(schedule, 1000)]).toEqual([1]);
+    const exact = [{ id: 1, sequence: 1, amount: "500.00", status: "open" }, { id: 2, sequence: 2, amount: "500.00", status: "open" }];
+    expect([...entryInstallmentIds(exact, 1000)]).toEqual([1, 2]);
+  });
   it("releaseOn: aceita as duas opções com full_upfront e recusa com per_installment", () => {
     expect(payoutScheduleSchema.safeParse({ mode: "full_upfront", releaseOn: "entry_total" }).success).toBe(true);
     expect(payoutScheduleSchema.safeParse({ mode: "full_upfront", releaseOn: "first_entry_installment" }).success).toBe(true);
