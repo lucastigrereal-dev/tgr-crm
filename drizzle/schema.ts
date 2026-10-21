@@ -565,15 +565,14 @@ export const featureFlagOverrides = mysqlTable("feature_flag_overrides", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("feature_flag_overrides_key_idx").on(table.flagKey, table.id)]);
 
-/** Item 4: sobrescritas de permissão por papel (capacidade ou tela), append-only; vigente = maior id por (scope, permKey). `roles` é JSON. PROPOSTA 0085. */
+/** Item 4: sobrescritas de permissão por papel (capacidade/ação), append-only; vigente = maior id por permKey. `roles` é JSON. PROPOSTA 0085. Telas ficam fixas por enquanto. */
 export const rolePermissionOverrides = mysqlTable("role_permission_overrides", {
   id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
-  scope: mysqlEnum("scope", ["capability", "menu"]).notNull(),
   permKey: varchar("permKey", { length: 80 }).notNull(),
   roles: varchar("roles", { length: 120 }).notNull(),
   createdByUserId: int("createdByUserId").notNull().references(() => users.id),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("role_permission_overrides_key_idx").on(table.scope, table.permKey, table.id)]);
+}, table => [index("role_permission_overrides_key_idx").on(table.permKey, table.id)]);
 
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */

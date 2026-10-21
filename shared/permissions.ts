@@ -60,19 +60,23 @@ export function canCapability(role: InternalPermissionRole | "user", capability:
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Item 4 (admin): permissão por papel EDITÁVEL por tela, sobre estes padrões (fallback = os valores acima, sempre). Atrás de PERMISSION_OVERRIDES_ENABLED (desligada: nada é
+// Item 4 (admin): permissão por papel EDITÁVEL por AÇÃO (capacidade), sobre estes padrões (fallback = os valores acima, sempre). Atrás de PERMISSION_OVERRIDES_ENABLED (desligada: nada é
 // carregado e tudo vale como antes). Regras fixas (piso), aplicadas por `sanitizePermissionOverrides` no servidor E no navegador, nunca confiando no que veio da tela:
-//  1. SÓ as capacidades de EDITABLE_CAPABILITIES e as telas fora de FIXED_ADMIN_PATHS são editáveis; o resto (validar venda, pagar, distrato, financeiro, assinar...) é piso fixo.
-//  2. O admin sempre está em toda lista editável (admin nunca se tranca) e as telas administrativas continuam só do admin.
-//  3. Tela só pode ser ESTREITADA em relação ao padrão (o servidor continua com a própria barreira por procedimento; liberar tela maior só mostraria 403).
-//  4. Papel desconhecido é descartado; lista vazia vira apenas ["admin"].
+//  1. SÓ as capacidades de EDITABLE_CAPABILITIES são editáveis, e cada uma está LIGADA de verdade na autorização do servidor (ver comentário de cada uma). O resto (validar venda,
+//     pagar, distrato, financeiro, assinar...) é piso fixo.
+//  2. O admin sempre está em toda lista editável (admin nunca se tranca).
+//  3. Papel desconhecido é descartado; lista vazia vira apenas ["admin"].
+// TELAS (menuPathRoles) ficam FIXAS por enquanto: esconder item do menu não fecha a rota digitada nem a API; fechar rota + procedures por tela é um PR próprio.
 // ---------------------------------------------------------------------------------------------------------------------
 export const INTERNAL_ROLES = ["admin", "seller", "finance", "service"] as const satisfies readonly InternalPermissionRole[];
+/**
+ * Ligadas ao servidor: `export.pii` (captureSheet.export, assertCapability), `sheet.archived.open` (canOpenArchivedSheet), `document.read` (storageAccess.authorizeStorageRead:
+ * leitura de documento de cliente/contrato) e `commission.view` (commissionsProcedure: scorecards e overview; conceder a um papel sem escopo próprio mostra TODAS, como o finance).
+ */
 export const EDITABLE_CAPABILITIES = ["export.pii", "sheet.archived.open", "document.read", "commission.view"] as const satisfies readonly Capability[];
-export const FIXED_ADMIN_PATHS = ["/equipe", "/importar", "/configuracoes-projeto", "/dicionarios", "/integracoes", "/auditoria"] as const;
 
-export type PermissionOverrides = { capabilities: Partial<Record<Capability, readonly InternalPermissionRole[]>>; menu: Record<string, readonly InternalPermissionRole[]> };
-let overrides: PermissionOverrides = { capabilities: {}, menu: {} };
+export type PermissionOverrides = { capabilities: Partial<Record<Capability, readonly InternalPermissionRole[]>> };
+let overrides: PermissionOverrides = { capabilities: {} };
 
 const cleanRoles = (value: unknown): InternalPermissionRole[] => {
   const given = Array.isArray(value) ? value.filter((role): role is InternalPermissionRole => typeof role === "string" && (INTERNAL_ROLES as readonly string[]).includes(role)) : [];
@@ -80,15 +84,10 @@ const cleanRoles = (value: unknown): InternalPermissionRole[] => {
 };
 
 export function sanitizePermissionOverrides(raw: unknown): PermissionOverrides {
-  const out: PermissionOverrides = { capabilities: {}, menu: {} };
-  const input = (raw && typeof raw === "object" ? raw : {}) as { capabilities?: Record<string, unknown>; menu?: Record<string, unknown> };
+  const out: PermissionOverrides = { capabilities: {} };
+  const input = (raw && typeof raw === "object" ? raw : {}) as { capabilities?: Record<string, unknown> };
   for (const capability of EDITABLE_CAPABILITIES) {
     if (input.capabilities && Object.prototype.hasOwnProperty.call(input.capabilities, capability)) out.capabilities[capability] = cleanRoles(input.capabilities[capability]);
-  }
-  for (const path of Object.keys(menuPathRoles)) {
-    if ((FIXED_ADMIN_PATHS as readonly string[]).includes(path) || !input.menu || !Object.prototype.hasOwnProperty.call(input.menu, path)) continue;
-    const allowed = menuPathRoles[path]!;
-    out.menu[path] = cleanRoles(input.menu[path]).filter(role => role === "admin" || allowed.includes(role));
   }
   return out;
 }
@@ -122,5 +121,5 @@ export const menuPathRoles: Record<string, readonly InternalPermissionRole[]> = 
 export function canOpenMenuPath(role: InternalPermissionRole | "user" | null | undefined, path: string) {
   if (!role || role === "user") return false;
   const base = Object.keys(menuPathRoles).find(prefix => path === prefix || path.startsWith(prefix + "/"));
-  return base ? (overrides.menu[base] ?? menuPathRoles[base]).includes(role) : true;
+  return base ? menuPathRoles[base].includes(role) : true;
 }
