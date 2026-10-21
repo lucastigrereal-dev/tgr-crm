@@ -23,6 +23,8 @@ function writeTargets(file: string) {
 const ALLOWED: Record<string, string[]> = {
   "encounterTimesReceiver.ts": ["auditLogs", "encounterTimeRecords"],
   "nonBuyerEligibility.ts": [],
+  "nonBuyerEligibilityService.ts": ["nonBuyerEligibilityState"],
+  "nonBuyerReconciliationJob.ts": [],
   "recoveryOptOutReceiver.ts": ["auditLogs", "customerContactOptouts"],
   "attendanceReceiver.ts": ["attendanceRecords", "auditLogs", "coupleRegistry"],
   "nqReadEndpoint.ts": [],

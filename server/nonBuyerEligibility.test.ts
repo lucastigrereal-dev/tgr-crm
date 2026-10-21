@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateNonBuyerEligibility, saleInProgress, type EligibilityFacts } from "./nonBuyerEligibility";
+import { evaluateNonBuyerEligibility, mergeBlockingFacts, saleInProgress, type EligibilityFacts } from "./nonBuyerEligibility";
 
 const closed = (over: Partial<EligibilityFacts> = {}): EligibilityFacts => ({
   presentationStatus: "closed", presentationEndedAt: new Date("2026-10-21T15:00:00Z"), ntKind: null, ntMotiveId: null, commercialOutcome: null,
@@ -60,5 +60,17 @@ describe("elegibilidade de não-comprador (C2/C3 fatia 1): função pura", () =>
     expect(readFileSync(path.join(root, ".env.example"), "utf8")).toMatch(/^RECOVERY_ELIGIBILITY_ENABLED=false/m);
     expect(readFileSync(path.join(root, "infra/pilot/docker-compose.yml"), "utf8")).toContain('RECOVERY_ELIGIBILITY_ENABLED: "${RECOVERY_ELIGIBILITY_ENABLED:-false}"');
     expect(readFileSync(path.join(root, "server/_core/env.ts"), "utf8")).toContain('recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true"');
+  });
+
+  it("mergeBlockingFacts: união dos fatos que bloqueiam (snapshot velho + leitura fresca); o atendimento vem da transação do gancho", () => {
+    const own = closed({ contractStatuses: ["cancelled"] }); // gancho acabou de cancelar o contrato (snapshot velho não vê o opt-out)
+    const fresh = closed({ contractStatuses: ["active"], optedOut: true, presentationStatus: "presented", presentationEndedAt: null });
+    expect(evaluateNonBuyerEligibility(own).eligible).toBe(true); // só o snapshot velho: veria elegível
+    const merged = mergeBlockingFacts(own, fresh);
+    expect(merged.presentationStatus).toBe("closed"); // atendimento do gancho, não da leitura fresca
+    expect(evaluateNonBuyerEligibility(merged).reasons).toEqual(["opt_out", "sale_in_progress"]);
+    expect(mergeBlockingFacts(closed({ commercialOutcome: null }), closed({ commercialOutcome: "vendeu" })).commercialOutcome).toBe("vendeu");
+    expect(mergeBlockingFacts(closed(), closed({ customerAnonymized: true, erasurePending: true })).customerAnonymized).toBe(true);
+    expect(evaluateNonBuyerEligibility(mergeBlockingFacts(closed(), closed())).eligible).toBe(true);
   });
 });

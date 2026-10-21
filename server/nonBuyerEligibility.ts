@@ -55,6 +55,22 @@ export function evaluateNonBuyerEligibility(facts: EligibilityFacts): Eligibilit
   return { eligible: true, branch: closed ? "closed" : "no_tour", reasons: [] };
 }
 
+/**
+ * Funde os fatos lidos na transação do chamador (`own`: enxerga as ESCRITAS dele, mas em REPEATABLE READ pode ser um snapshot anterior a commits concorrentes) com os lidos
+ * numa conexão separada em autocommit (`fresh`: enxerga o último commit, não as escritas ainda não comitadas do chamador). Fatos que BLOQUEIAM a elegibilidade valem se
+ * QUALQUER um dos lados os vê (união: o erro possível é adiar uma elegibilidade para a reconciliação, nunca emitir elegível para quem fez opt-out/comprou/foi anonimizado).
+ * O atendimento (status, tipo e motivo do não-tour) vem do `own`: é o que o gancho acabou de escrever e não pode ser sobrescrito por um commit anterior.
+ */
+export function mergeBlockingFacts(own: EligibilityFacts, fresh: EligibilityFacts): EligibilityFacts {
+  return {
+    ...own,
+    commercialOutcome: own.commercialOutcome === "vendeu" || fresh.commercialOutcome === "vendeu" ? "vendeu" : own.commercialOutcome ?? fresh.commercialOutcome,
+    captureAnonymized: own.captureAnonymized || fresh.captureAnonymized, customerAnonymized: own.customerAnonymized || fresh.customerAnonymized,
+    erasurePending: own.erasurePending || fresh.erasurePending, optedOut: own.optedOut || fresh.optedOut,
+    contractStatuses: [...own.contractStatuses, ...fresh.contractStatuses], proposalStatuses: [...own.proposalStatuses, ...fresh.proposalStatuses], opportunityStages: [...own.opportunityStages, ...fresh.opportunityStages],
+  };
+}
+
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 

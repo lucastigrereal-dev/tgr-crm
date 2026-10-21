@@ -27,6 +27,8 @@ export const domainEventCatalog = {
   "capture.presentation.started": { aggregateType: "capture", description: "Apresentação comercial iniciada." },
   "capture.presentation.ended": { aggregateType: "capture", description: "Apresentação comercial encerrada." },
   "capture.commercial_outcome.recorded": { aggregateType: "capture", description: "Resultado comercial da sala registrado pelo closer (VENDEU ou CAIU EM MESA); não é venda validada." },
+  "non_buyer.eligible": { aggregateType: "capture", description: "INTERNO (C2/C3): o casal passou a ser elegível como não-comprador para o Recovery. Sem PII; ainda não há entrega externa (fatia 5)." },
+  "non_buyer.eligibility_revoked": { aggregateType: "capture", description: "INTERNO (C2/C3): o casal deixou de ser elegível como não-comprador (opt-out, anonimização, exclusão, venda em andamento ou atendimento não encerrado). Sem PII; ainda não há entrega externa (fatia 5)." },
   "capture.no_tour": { aggregateType: "capture", description: "Captação encerrada sem apresentação." },
   "proposal.created": { aggregateType: "proposal", description: "Proposta comercial criada." },
   "proposal.accepted": { aggregateType: "proposal", description: "Proposta comercial aceita, ainda sem validação de venda." },
