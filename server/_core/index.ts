@@ -30,6 +30,7 @@ import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
 import { getDb } from "../db";
 import { applyPersistedFlagOverrides } from "../featureFlags";
+import { applyPersistedPermissionOverrides } from "../permissionOverrides";
 import { getAsaasConfig } from "../paymentGateway";
 import { startOrphanBlobSweepJob, type OrphanBlobSweepJob } from "../orphanBlobSweep";
 
@@ -66,6 +67,7 @@ async function startServer() {
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   // Item 6: sobrescritas persistidas das flags da allow-list valem ANTES de registrar rotas e jobs (mestre FEATURE_FLAG_OVERRIDES_ENABLED desligado = nada acontece).
   await applyPersistedFlagOverrides(await getDb());
+  await applyPersistedPermissionOverrides(await getDb()); // item 4: flag PERMISSION_OVERRIDES_ENABLED desligada = nada acontece
   const app = express();
   const server = createServer(app);
   app.disable("x-powered-by");

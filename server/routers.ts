@@ -15,6 +15,7 @@ import { customersRouter } from "./routers/customers";
 import { dashboardRouter } from "./routers/dashboard";
 import { financeRouter } from "./routers/finance";
 import { addendaRouter } from "./routers/addenda";
+import { permissionOverridesRouter } from "./routers/permissionOverrides";
 import { featureFlagsRouter } from "./routers/featureFlags";
 import { commissionRoleMapRouter } from "./routers/commissionRoleMap";
 import { officialIndicatorsRouter } from "./routers/officialIndicators";
@@ -95,6 +96,7 @@ export const appRouter = router({
   officialIndicators: officialIndicatorsRouter,
   commissionRoleMap: commissionRoleMapRouter,
   featureFlags: featureFlagsRouter,
+  permissionOverrides: permissionOverridesRouter,
   financialProjectMap: financialProjectMapRouter,
   dashboard: dashboardRouter,
   imports: importsRouter,
