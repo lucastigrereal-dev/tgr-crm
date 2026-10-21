@@ -34,7 +34,8 @@ describe("CRM-F2: parcela da entrada", () => {
   });
 });
 
-import { entryInstallmentIds, paidEntryAmount } from "./commissionAutomation";
+import { entryInstallmentIds, isEntryFullyPaid, paidEntryAmount } from "./commissionAutomation";
+import { withVersionedPayoutDefaults } from "./commissionPolicyVersion";
 describe("CRM-F2 correção: composição da entrada", () => {
   it("canceladas ficam fora do acumulado", () => {
     const schedule = [{ id: 1, sequence: 1, amount: "500.00", status: "cancelled" }, { id: 2, sequence: 2, amount: "1000.00", status: "open" }, { id: 3, sequence: 3, amount: "3000.00", status: "open" }];
@@ -81,6 +82,20 @@ describe("CRM-F2 correção: composição da entrada", () => {
     expect([...entryInstallmentIds(schedule, 1000)]).toEqual([1]);
     const exact = [{ id: 1, sequence: 1, amount: "500.00", status: "open" }, { id: 2, sequence: 2, amount: "500.00", status: "open" }];
     expect([...entryInstallmentIds(exact, 1000)]).toEqual([1, 2]);
+  });
+  it("entrada inteira: centavos inteiros, sem folga; cancelada fora; renegociada na posição da original", () => {
+    const base = { sequence: 1, status: "paid", dueDate: "2026-10-10" };
+    expect(isEntryFullyPaid([{ ...base, id: 1, amount: "500.00", paidAmount: "500.00" }, { ...base, id: 2, sequence: 2, amount: "500.00", paidAmount: "499.99" }], 1000)).toBe(false);
+    expect(isEntryFullyPaid([{ ...base, id: 1, amount: "500.00", paidAmount: "500.00" }, { ...base, id: 2, sequence: 2, amount: "500.00", paidAmount: "500.00" }], 1000)).toBe(true);
+    expect(isEntryFullyPaid([{ ...base, id: 1, status: "cancelled", amount: "500.00", paidAmount: "500.00" }, { ...base, id: 2, sequence: 2, amount: "500.00", paidAmount: "500.00" }], 1000)).toBe(false);
+    expect(isEntryFullyPaid([{ ...base, id: 1, status: "open", amount: "500.00", paidAmount: "0.00" }, { ...base, id: 2, sequence: 2, amount: "500.00", paidAmount: "500.00" }], 1000)).toBe(false);
+  });
+  it("política versionada: releaseOn ausente vira entry_total; explícito e per_installment ficam como estão", () => {
+    const policy = { linerRate: 0, closerRate: 0, ftbRate: 0, cancellationDeadlineDay: 5, expectedPaymentDay: 10, eligiblePaymentMethods: ["pix"], basis: "eligible_receipt" } as never;
+    expect((withVersionedPayoutDefaults(policy) as any).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
+    expect((withVersionedPayoutDefaults({ ...(policy as object), payoutSchedule: { mode: "full_upfront" } } as never) as any).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
+    expect((withVersionedPayoutDefaults({ ...(policy as object), payoutSchedule: { mode: "full_upfront", releaseOn: "first_entry_installment" } } as never) as any).payoutSchedule.releaseOn).toBe("first_entry_installment");
+    expect((withVersionedPayoutDefaults({ ...(policy as object), payoutSchedule: { mode: "per_installment" } } as never) as any).payoutSchedule).toEqual({ mode: "per_installment" });
   });
   it("releaseOn: aceita as duas opções com full_upfront e recusa com per_installment", () => {
     expect(payoutScheduleSchema.safeParse({ mode: "full_upfront", releaseOn: "entry_total" }).success).toBe(true);

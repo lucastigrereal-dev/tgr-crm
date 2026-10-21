@@ -26,7 +26,10 @@ export const payoutScheduleSchema = z.strictObject({
   releaseOn: z.enum(["first_entry_installment", "entry_total"]).optional(),
 }).refine(value => value.releaseOn === undefined || value.mode === "full_upfront", { message: "releaseOn só vale com mode full_upfront.", path: ["releaseOn"] });
 export const DEFAULT_PAYOUT_MODE = "full_upfront" as const;
+/** Legado (sem versão de política): mantém o comportamento anterior. */
 export const DEFAULT_RELEASE_ON = "first_entry_installment" as const;
+/** Decisão do titular 21/10/2026: em versões NOVAS de política a comissão se paga sobre a entrada inteira efetivamente recebida (qualquer forma, 1ª ou 2ª parcela). */
+export const DEFAULT_RELEASE_ON_VERSIONED = "entry_total" as const;
 
 export const commissionPolicySchema = z
   .object({

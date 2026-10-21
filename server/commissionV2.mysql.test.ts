@@ -237,6 +237,21 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     await caller.markInstallmentPaid({ id: first.installmentIds[0]!, paymentMethod: "pix" });
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, first.contractId))).toHaveLength(3);
   });
+  it("Decisão 21/10: entry_total libera ao completar a entrada por QUALQUER forma, inclusive método fora de eligiblePaymentMethods (não retém para sempre)", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const total = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront", releaseOn: "entry_total" } });
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    const a = await seedSale("etcash-last", ["500.00", "500.00", "3000.00"], total);
+    await caller.markInstallmentPaid({ id: a.installmentIds[0]!, paymentMethod: "pix" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, a.contractId))).toHaveLength(0);
+    await caller.markInstallmentPaid({ id: a.installmentIds[1]!, paymentMethod: "cash" }); // inelegível, mas completa a entrada
+    expect((await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, a.contractId))).map(row => [row.commissionRole, row.amount]).sort()).toEqual([["closer", "100.00"], ["liner", "100.00"], ["promoter", "800.00"]]);
+    const b = await seedSale("etcash-first", ["500.00", "500.00", "3000.00"], total);
+    await caller.markInstallmentPaid({ id: b.installmentIds[0]!, paymentMethod: "cash" }); // inelegível e não completa: retida
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, b.contractId))).toHaveLength(0);
+    await caller.markInstallmentPaid({ id: b.installmentIds[1]!, paymentMethod: "debit" });
+    expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, b.contractId))).toHaveLength(3);
+  });
   it("F2: DORMENTE — com o V2 travado, full_upfront não gera nada (o travamento vence)", async () => {
     delete process.env.COMMISSION_V2_RELEASED;
     const upfront = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "full_upfront" } });

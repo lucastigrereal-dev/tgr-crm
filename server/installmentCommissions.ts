@@ -6,7 +6,7 @@ import { txAudit, txEvent } from "./txOutbox";
 import { commercialFractions, installmentRenegotiations, installments, salesCommissions } from "../drizzle/schema";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
 import { DEFAULT_PAYOUT_MODE, DEFAULT_RELEASE_ON } from "../shared/projectPolicySchemas";
-import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, entryInstallmentIds, paidEntryAmount, type CommissionRoleV2Mapped } from "./commissionAutomation";
+import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, entryInstallmentIds, isEntryFullyPaid, type CommissionRoleV2Mapped } from "./commissionAutomation";
 import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
 import type { getDb } from "./db";
 import type { parseCompleteCommissionPolicy } from "./projectPolicy";
@@ -107,12 +107,15 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
     // CRM-F2 (Codex P1): o V2 só dispara numa baixa ELEGÍVEL da ENTRADA — método dentro de eligiblePaymentMethods e parcela do cronograma de entrada. Saldo ou método inelegível seguram a comissão.
     // Retenção SEM silêncio: cada `return []` abaixo deixa auditoria idempotente (commission_v2_held), sem evento novo.
     const hold = async (reason: string, summary: string) => { await txAudit(tx as never, { actorUserId: null, entityType: "installment", entityId: installment.id, action: "commission_v2_held", summary, idempotencyKey: `commission-v2-held:${installment.id}:${reason}` }); return [] as never[]; };
-    if (!policy.eligiblePaymentMethods.includes(input.paymentMethod as never)) return hold("payment_method_not_eligible", `Comissão V2 retida: o método "${input.paymentMethod}" não está entre os elegíveis da política.`);
+    const schedulePolicy = policy.payoutSchedule;
+    const releaseOnEntryTotal = (schedulePolicy?.mode ?? DEFAULT_PAYOUT_MODE) === "full_upfront" && (schedulePolicy?.releaseOn ?? DEFAULT_RELEASE_ON) === "entry_total";
+    // Com entry_total (decisão 21/10/2026: entrada inteira recebida, QUALQUER forma de pagamento) o método da baixa que completa a entrada não retém: o que importa é o total pago.
+    // Fora disso, método inelegível segue retido.
+    if (!releaseOnEntryTotal && !policy.eligiblePaymentMethods.includes(input.paymentMethod as never)) return hold("payment_method_not_eligible", `Comissão V2 retida: o método "${input.paymentMethod}" não está entre os elegíveis da política.`);
     const schedule = await tx.select({ id: installments.id, sequence: installments.sequence, amount: installments.amount, status: installments.status, dueDate: installments.dueDate, paidAmount: installments.paidAmount }).from(installments).where(eq(installments.contractId, installment.contractId));
     const applied = await tx.select({ originalInstallmentId: installmentRenegotiations.originalInstallmentId, proposedAmount: installmentRenegotiations.proposedAmount, proposedDueDate: installmentRenegotiations.proposedDueDate }).from(installmentRenegotiations).where(and(eq(installmentRenegotiations.contractId, installment.contractId), eq(installmentRenegotiations.status, "applied"))).orderBy(asc(installmentRenegotiations.id));
     if (!entryInstallmentIds(schedule, entryTotal, applied).has(installment.id)) return hold("not_entry_installment", "Comissão V2 retida: a parcela baixada não faz parte da entrada (saldo não dispara comissão).");
-    const schedulePolicy = policy.payoutSchedule;
-    if ((schedulePolicy?.mode ?? DEFAULT_PAYOUT_MODE) === "full_upfront" && (schedulePolicy?.releaseOn ?? DEFAULT_RELEASE_ON) === "entry_total" && paidEntryAmount(schedule, entryTotal, applied) + 0.005 < entryTotal) {
+    if (releaseOnEntryTotal && !isEntryFullyPaid(schedule, entryTotal, applied)) {
       return hold("entry_total_not_reached", `Comissão V2 retida: a entrada só libera quando o acumulado pago atinge ${entryTotal.toFixed(2)} (releaseOn = entry_total).`);
     }
     // Cotas da venda = frações vendidas ao contrato (mínimo 1: contrato sem fração ligada, ex. importado por CSV, conta uma cota).

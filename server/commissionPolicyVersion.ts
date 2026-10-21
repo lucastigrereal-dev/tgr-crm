@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, isNull, lte, or } from "drizzle-orm";
 import { commercialPolicyVersions, commercialProjectSettings } from "../drizzle/schema";
 import type { getDb } from "./db";
+import { DEFAULT_PAYOUT_MODE, DEFAULT_RELEASE_ON_VERSIONED } from "../shared/projectPolicySchemas";
 import { parseCompleteCommissionPolicy } from "./projectPolicy";
 
 type Reader = Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">;
@@ -19,6 +20,17 @@ const versionOfPolicy = new WeakMap<object, string>();
 /** Código da versão que originou esta política (gravado em sales_commissions.policyVersion). */
 export const commissionPolicyVersionOf = (policy: object | null | undefined) => (policy ? versionOfPolicy.get(policy) ?? null : null);
 
+/**
+ * Decisão do titular (21/10/2026): versões de política (commercial_policy_versions) pagam a comissão sobre a ENTRADA INTEIRA recebida quando `releaseOn` não
+ * foi dito. O legado (commercial_project_settings, versão "legacy") NÃO passa por aqui e segue em `first_entry_installment`. Só vale com `full_upfront`.
+ */
+export function withVersionedPayoutDefaults(policy: Policy): Policy {
+  const schedule = policy.payoutSchedule;
+  const mode = schedule?.mode ?? DEFAULT_PAYOUT_MODE;
+  if (mode !== "full_upfront" || schedule?.releaseOn) return policy;
+  return { ...policy, payoutSchedule: { mode, releaseOn: DEFAULT_RELEASE_ON_VERSIONED } };
+}
+
 export async function resolveCommissionPolicy(tx: Reader, resortId: number | null | undefined, at: Date): Promise<{ policy: Policy | null; version: string | null; source: "versioned" | "legacy" | "none" }> {
   if (!resortId) return { policy: null, version: null, source: "none" };
   if (isCommissionPolicyVersioningEnabled()) {
@@ -28,7 +40,8 @@ export async function resolveCommissionPolicy(tx: Reader, resortId: number | nul
     )).orderBy(desc(commercialPolicyVersions.effectiveAt), desc(commercialPolicyVersions.id)).limit(1))[0];
     if (row) {
       // Versão vigente ilegível = sem política (fecha, não cai no legado em silêncio): o motor bloqueia como "política ausente".
-      const policy = parseCompleteCommissionPolicy(row.policyJson);
+      const parsed = parseCompleteCommissionPolicy(row.policyJson);
+      const policy = parsed ? withVersionedPayoutDefaults(parsed) : null;
       if (policy) versionOfPolicy.set(policy, row.version);
       return { policy, version: row.version, source: "versioned" };
     }
