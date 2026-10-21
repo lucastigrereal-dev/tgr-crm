@@ -142,6 +142,33 @@ describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do
     expect(await registry()).toHaveLength(1);
   });
 
+  it("mesmo segundo, fora de ordem: a fração de segundo conta (timestamp(3)) e o empate exato desempata por encounterId, em qualquer ordem de chegada", async () => {
+    const at = (couple: string, encounterId: string, closedAt: string) => post(body({ coupleId: couple, coupleCode: `CP-S-${runId}`, encounterId, closedAt }));
+    const stateOf = async (couple: string) => (await db.select().from(coupleRegistry).where(eq(coupleRegistry.salesCoupleId, couple)))[0]!;
+    const [low, high] = [randomUUID(), randomUUID()].sort();
+    const fresh = () => ({ early: randomUUID(), late: randomUUID() });
+    const { early, late } = fresh();
+    // chega primeiro o mais tarde (.900), depois o mais cedo (.500) do mesmo segundo: o estado fica no .900
+    const c1 = randomUUID();
+    expect((await at(c1, late, "2026-10-21T14:00:00.900Z")).status).toBe(201);
+    expect((await at(c1, early, "2026-10-21T14:00:00.500Z")).status).toBe(201);
+    expect(await stateOf(c1)).toMatchObject({ lastEncounterId: late, encountersCount: 2 });
+    expect((await stateOf(c1)).lastClosedAt.toISOString()).toBe("2026-10-21T14:00:00.900Z");
+    // ordem inversa chega ao mesmo estado
+    const c2 = randomUUID();
+    const { early: early2, late: late2 } = fresh();
+    expect((await at(c2, early2, "2026-10-21T14:00:00.500Z")).status).toBe(201);
+    expect((await at(c2, late2, "2026-10-21T14:00:00.900Z")).status).toBe(201);
+    expect(await stateOf(c2)).toMatchObject({ lastEncounterId: late2 });
+    // empate exato de closedAt: vence o maior encounterId, nas duas ordens
+    const c3 = randomUUID(), c4 = randomUUID();
+    const [low4, high4] = [randomUUID(), randomUUID()].sort();
+    for (const enc of [low, high]) expect((await at(c3, enc, "2026-10-21T14:00:00.250Z")).status).toBe(201);
+    for (const enc of [high4, low4]) expect((await at(c4, enc, "2026-10-21T14:00:00.250Z")).status).toBe(201);
+    expect(await stateOf(c3)).toMatchObject({ lastEncounterId: high });
+    expect(await stateOf(c4)).toMatchObject({ lastEncounterId: high4 });
+  });
+
   it("FKs da 0079 existem de verdade: filho sem pai é recusado pelo banco", async () => {
     const [fks] = await pool.query("SELECT CONSTRAINT_NAME AS n FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() ORDER BY 1") as [Array<{ n: string }>, unknown];
     expect(fks.map(f => f.n)).toEqual(["attendance_records_coupleRegistryId_fk", "couple_registry_resortId_fk"]);

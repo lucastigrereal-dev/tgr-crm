@@ -98,7 +98,9 @@ export async function recordAttendance(db: Db, event: AttendanceEvent, retried =
         registryId = current.id;
         const [sameEncounter] = await tx.select({ id: attendanceRecords.id }).from(attendanceRecords).where(and(eq(attendanceRecords.coupleRegistryId, current.id), eq(attendanceRecords.encounterId, event.encounterId))).limit(1);
         // O estado "último" é do atendimento mais recente por encerramento; dentro do mesmo atendimento vale a maior revisão (correção).
-        const newer = event.encounterId === current.lastEncounterId ? event.revision > current.lastRevision : closedAt.getTime() > current.lastClosedAt.getTime();
+        // closedAt tem precisão de milissegundo (timestamp(3)); empate exato entre atendimentos distintos desempata pelo maior encounterId, igual em qualquer ordem de chegada.
+        const newer = event.encounterId === current.lastEncounterId ? event.revision > current.lastRevision
+          : closedAt.getTime() !== current.lastClosedAt.getTime() ? closedAt.getTime() > current.lastClosedAt.getTime() : event.encounterId > current.lastEncounterId;
         await tx.update(coupleRegistry).set({
           encountersCount: sameEncounter ? current.encountersCount : current.encountersCount + 1,
           ...(newer ? {

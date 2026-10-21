@@ -1,5 +1,6 @@
 -- PROPOSTA (NAO APLICADA, nao esta no journal do drizzle). Precisa de GO do Opus antes de virar migration real.
 -- C1: registro canonico do casal + historico de atendimentos recebidos de `encounter.attendance_recorded.v1` (Sales -> CRM).
+-- closedAt/occurredAt em timestamp(3): o contrato aceita ISO com fracao e o desempate do "ultimo atendimento" depende dela.
 -- Aditiva (so CREATE TABLE IF NOT EXISTS), sem backfill, sem tocar tabela existente. Receptor desligado por ATTENDANCE_RECEIVER_ENABLED=false.
 -- Rollback: DROP TABLE attendance_records; DROP TABLE couple_registry; (nessa ordem).
 CREATE TABLE IF NOT EXISTS `couple_registry` (
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS `couple_registry` (
 	`lastRevision` int NOT NULL,
 	`lastOutcome` enum('SALE_CONFIRMED','NO_SALE','CAIU_EM_MESA','NT') NOT NULL,
 	`lastReasonCode` varchar(100),
-	`lastClosedAt` timestamp NOT NULL,
+	`lastClosedAt` timestamp(3) NOT NULL,
 	`encountersCount` int NOT NULL DEFAULT 1,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
@@ -33,8 +34,8 @@ CREATE TABLE IF NOT EXISTS `attendance_records` (
 	`revision` int NOT NULL,
 	`outcome` enum('SALE_CONFIRMED','NO_SALE','CAIU_EM_MESA','NT') NOT NULL,
 	`reasonCode` varchar(100),
-	`closedAt` timestamp NOT NULL,
-	`occurredAt` timestamp NOT NULL,
+	`closedAt` timestamp(3) NOT NULL,
+	`occurredAt` timestamp(3) NOT NULL,
 	`correlationId` varchar(128) NOT NULL,
 	`payloadHash` varchar(64) NOT NULL,
 	`receivedAt` timestamp NOT NULL DEFAULT (now()),
