@@ -19,6 +19,7 @@ import { isSaleValidated, saleValidationError } from "../saleValidationService";
 import { assertCapability, contractsProcedure, salesProcedure } from "./access";
 import { affectedRows, withDeadlockRetry } from "../mysqlErrors";
 import { txAudit, txEvent } from "../txOutbox";
+import { fixContractCommissionRoleMapAtFormalization } from "../commissionRoleMapSnapshot";
 import { eligibilityHook } from "../nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
 import { assertContractGenerationAllowed } from "../saleOrderGate";
@@ -164,6 +165,7 @@ export const contractsRouter = router({
         await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: lockedFraction.id, actorUserId: ctx.user.id, payload: { fractionId: lockedFraction.id, status: "sold", proposalId: input.proposalId ?? null, contractId, reason: "Contrato criado" } });
       }
       // C2/C3: contrato novo tira o casal do feed (venda em andamento). Último passo da tx; falha do gancho não derruba a venda (reconciliação cobre). Flag OFF = no-op.
+      await fixContractCommissionRoleMapAtFormalization(tx, contractId); // item 5: mapa de papéis fixado com o contrato (flag OFF = no-op)
       await eligibilityHook(tx, { customerId: input.customerId });
       return contractId;
     });

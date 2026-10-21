@@ -1,11 +1,12 @@
 // Comissão automática de parcela paga: UM só construtor/portão para baixa manual, webhook do gateway e validação final da
 // venda (ADR-007). Parcela paga ANTES da validação fica bloqueada; ao validar, as parcelas já pagas são reavaliadas aqui.
-import { and, asc, desc, eq, ne, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, ne, isNotNull, sql } from "drizzle-orm";
 import { commissionPolicyVersionOf } from "./commissionPolicyVersion";
 import { txAudit, txEvent } from "./txOutbox";
-import { commercialFractions, commissionRoleMapVersions, contractCommissionRoleMaps, installmentRenegotiations, installments, salesCommissions } from "../drizzle/schema";
+import { commercialFractions, installmentRenegotiations, installments, salesCommissions } from "../drizzle/schema";
 import { ENV } from "./_core/env";
-import { parseCommissionRoleMap, type CommissionRoleMap } from "./commissionRoleMap";
+import { type CommissionRoleMap } from "./commissionRoleMap";
+import { resolveContractCommissionRoleMap } from "./commissionRoleMapSnapshot";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
 import { DEFAULT_PAYOUT_MODE, DEFAULT_RELEASE_ON } from "../shared/projectPolicySchemas";
 import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, entryInstallmentIds, isEntryFullyPaid, type CommissionRoleV2Mapped } from "./commissionAutomation";
@@ -54,21 +55,7 @@ export const commissionV2Active = (policy: { rulesV2?: CommissionRulesV2 } | nul
 /** Papéis V2 -> papéis gravados (padrão da política: captador=promoter, consultor=liner, fechador=closer) e de quem vem o pagamento na ficha. */
 export const COMMISSION_V2_ROLE_MAP: CommissionRoleMap = { captador: "promoter", consultor: "liner", fechador: "closer" };
 
-/**
- * Mapa de papéis deste contrato. Flag OFF: a constante, sem ler banco. Flag ON: snapshot do contrato; sem snapshot, fixa o mapa vigente (ou a constante se nunca houve
- * versão) com INSERT ... ON DUPLICATE no-op (corrida entre duas parcelas é inofensiva). Snapshot ilegível cai na constante (nunca paga com mapa inválido).
- */
-export async function commissionRoleMapForContract(tx: CommissionWriter, contractId: number): Promise<CommissionRoleMap> {
-  if (!ENV.commissionRoleMapEnabled) return COMMISSION_V2_ROLE_MAP;
-  const [snapshot] = await tx.select().from(contractCommissionRoleMaps).where(eq(contractCommissionRoleMaps.contractId, contractId)).limit(1);
-  if (snapshot) return parseCommissionRoleMap(safeJson(snapshot.roleMap)) ?? COMMISSION_V2_ROLE_MAP;
-  const [current] = await tx.select().from(commissionRoleMapVersions).orderBy(desc(commissionRoleMapVersions.version)).limit(1);
-  const map = (current && parseCommissionRoleMap(safeJson(current.roleMap))) || COMMISSION_V2_ROLE_MAP;
-  await tx.insert(contractCommissionRoleMaps).values({ contractId, mapVersion: current?.version ?? 0, roleMap: JSON.stringify(map) }).onDuplicateKeyUpdate({ set: { contractId: sql`contractId` } });
-  const [fixed] = await tx.select().from(contractCommissionRoleMaps).where(eq(contractCommissionRoleMaps.contractId, contractId)).limit(1);
-  return (fixed && parseCommissionRoleMap(safeJson(fixed.roleMap))) || map;
-}
-function safeJson(text: string): unknown { try { return JSON.parse(text); } catch { return null; } }
+export { resolveContractCommissionRoleMap as commissionRoleMapForContract } from "./commissionRoleMapSnapshot";
 const V2_PAYEE: Record<CommissionRoleV2Mapped, "promoterId" | "linerId" | "closerId"> = { promoter: "promoterId", liner: "linerId", closer: "closerId" };
 
 export function zeroRateSkippedRoles(capture: { linerId: number | null; closerId: number | null } | null | undefined, policy: Pick<CompleteCommissionPolicy, "linerRate" | "closerRate" | "ftbRate"> & { rulesV2?: CommissionRulesV2 }): string[] | null {
@@ -146,7 +133,10 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
     const [quotaRow] = await tx.select({ n: sql<number>`COUNT(*)` }).from(commercialFractions).where(eq(commercialFractions.currentContractId, installment.contractId));
     const result = computeCommissionV2(policy.rulesV2, { quotas: Math.max(1, Number(quotaRow?.n ?? 0)), entryCents: Math.round(entryTotal * 100), saleTotalCents: Math.round(Number(context.contract.totalAmount) * 100) });
     const capture = context.capture!;
-    const roleMap = await commissionRoleMapForContract(tx, installment.contractId);
+    const resolution = await resolveContractCommissionRoleMap(tx, installment.contractId);
+    // Mapa ilegível/inválido NÃO cai na constante (mudaria QUEM recebe): retém a comissão com rastro, como as demais retenções V2 (revisão manual).
+    if ("blocked" in resolution) return hold("role_map_invalid", `Comissão V2 retida: o mapa de papéis do contrato está ${resolution.blocked === "snapshot_invalid" ? "ilegível (snapshot)" : "inválido (versão vigente)"}; revise o mapa e reprocesse.`);
+    const roleMap = resolution.map;
     const lines = result.lines.flatMap(line => {
       const role = roleMap[line.role];
       const userId = capture[V2_PAYEE[role]];
