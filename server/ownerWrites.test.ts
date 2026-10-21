@@ -22,6 +22,7 @@ function writeTargets(file: string) {
 /** O que cada módulo de integração pode gravar. `[]` = somente leitura. Tudo aqui é dado do CRM (recebido de outro sistema, mas guardado no CRM). */
 const ALLOWED: Record<string, string[]> = {
   "encounterTimesReceiver.ts": ["auditLogs", "encounterTimeRecords"],
+  "nonBuyerEligibility.ts": [],
   "attendanceReceiver.ts": ["attendanceRecords", "auditLogs", "coupleRegistry"],
   "nqReadEndpoint.ts": [],
   "financialBridge.ts": [],

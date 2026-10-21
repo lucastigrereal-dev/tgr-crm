@@ -11,6 +11,8 @@ export const ENV = {
   // Endpoint de leitura do NQ para o Sales Command: DESLIGADO por padrão; só liga depois do aceite do Lucas.
   nqReadEndpointEnabled: process.env.NQ_READ_ENDPOINT_ENABLED === "true",
   encounterTimesReceiverEnabled: process.env.ENCOUNTER_TIMES_RECEIVER_ENABLED === "true",
+  // C2/C3: elegibilidade de não-comprador para o Recovery. DESLIGADA por padrão (a fatia 1 só tem a função pura; a flag vale nas próximas fatias).
+  recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",
   // CRM-A07: varredura de blob órfão no armazenamento local. DESLIGADA por padrão; ligada sem DELETE só relata (ensaio).
