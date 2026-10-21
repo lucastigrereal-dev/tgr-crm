@@ -4,7 +4,7 @@ import { ENV } from "./_core/env";
 import { DEFAULT_COMMISSION_V2_ROLE_MAP, parseCommissionRoleMap, type CommissionRoleMap } from "./commissionRoleMap";
 import type { getDb } from "./db";
 import { logger } from "./logger";
-import { isDeadlockError, isLockWaitTimeoutError } from "./mysqlErrors";
+import { isDeadlockError, isLockWaitTimeoutError, isMissingTableError } from "./mysqlErrors";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -17,17 +17,25 @@ const safeJson = (text: string): unknown => { try { return JSON.parse(text); } c
 
 /**
  * Resolve e, se faltar, FIXA o mapa do contrato (insert-if-absent, no-op em corrida) e relê o snapshot com FOR UPDATE: em REPEATABLE READ o SELECT simples não enxerga o
- * commit concorrente de quem inseriu primeiro. Flag OFF: a constante, sem tocar o banco. Mapa inválido NUNCA vira constante (bloqueia) e nunca é gravado.
+ * commit concorrente de quem inseriu primeiro. Flag OFF: snapshot existente vale; sem snapshot, a constante (sem criar nada). Mapa inválido NUNCA vira constante (bloqueia) e nunca é gravado.
  * Quem chama de dentro do fluxo de comissão já está serializado por parcela (finance.ts trava a linha da PARCELA com FOR UPDATE; o contrato não é travado ali), por isso
  * o insert-if-absent + FOR UPDATE aqui é o que garante um snapshot único por contrato.
  */
 export async function resolveContractCommissionRoleMap(tx: Writer, contractId: number): Promise<RoleMapResolution> {
-  if (!ENV.commissionRoleMapEnabled) return { map: DEFAULT_COMMISSION_V2_ROLE_MAP };
-  const [existing] = await tx.select().from(contractCommissionRoleMaps).where(eq(contractCommissionRoleMaps.contractId, contractId)).limit(1);
+  // Snapshot EXISTENTE vale SEMPRE, com a flag ligada ou desligada (desligar a flag não pode trocar QUEM recebe num contrato que já fixou o mapa). A flag controla só a
+  // CRIAÇÃO de snapshot novo e o uso da configuração vigente. Com a flag OFF e a migration 0083 ainda não aplicada (tabela ausente), cai na constante como hoje.
+  let existing: typeof contractCommissionRoleMaps.$inferSelect | undefined;
+  try {
+    [existing] = await tx.select().from(contractCommissionRoleMaps).where(eq(contractCommissionRoleMaps.contractId, contractId)).limit(1);
+  } catch (error) {
+    if (!ENV.commissionRoleMapEnabled && isMissingTableError(error)) return { map: DEFAULT_COMMISSION_V2_ROLE_MAP };
+    throw error;
+  }
   if (existing) {
     const parsed = parseCommissionRoleMap(safeJson(existing.roleMap));
     return parsed ? { map: parsed } : { blocked: "snapshot_invalid" };
   }
+  if (!ENV.commissionRoleMapEnabled) return { map: DEFAULT_COMMISSION_V2_ROLE_MAP };
   const [current] = await tx.select().from(commissionRoleMapVersions).orderBy(desc(commissionRoleMapVersions.version)).limit(1);
   const map = current ? parseCommissionRoleMap(safeJson(current.roleMap)) : DEFAULT_COMMISSION_V2_ROLE_MAP;
   if (!map) return { blocked: "current_invalid" };
