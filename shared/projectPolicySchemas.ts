@@ -35,6 +35,8 @@ export const commissionPolicySchema = z
     /** Regras V2 (CRM-A13): dado configurável; só valem quando a política V2 for LIBERADA (COMMISSION_V2_RELEASED). Travado por padrão. */
     rulesV2: commissionRulesV2Schema.optional(),
     payoutSchedule: payoutScheduleSchema.optional(),
+    /** CRM-F3: comissão já paga em contrato distratado. Nunca estorna sozinho: `manual_review` abre a fila manual (ADR-010), `none` só audita. Só vale com COMMISSION_CANCEL_POLICY_ENABLED. */
+    onPaidCommissionCancellation: z.enum(["none", "manual_review"]).optional(),
   })
   .strict();
 

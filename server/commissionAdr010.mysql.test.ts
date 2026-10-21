@@ -145,6 +145,36 @@ describe.skipIf(!integrationUrl)("ADR-010 comissão 0% e fila de estorno em MySQ
     return { ...sale, requestId: request.id, commissionIds: created.map(row => row.id) };
   }
 
+  it("F3: com a política ligada, onPaidCommissionCancellation=none (padrão) não abre fila nem estorna; só audita", async () => {
+    process.env.COMMISSION_CANCEL_POLICY_ENABLED = "true";
+    try {
+      const sale = await seedPaidCommissionContract("f3none");
+      await db.update(contracts).set({ resortId: sale.resortId }).where(eq(contracts.id, sale.contractId));
+      await contractsRouter.createCaller({ user: { id: adminId, role: "admin" } } as never).executeCancellation({ requestId: sale.requestId });
+      for (const id of sale.commissionIds) {
+        expect(await eventsFor("commission.reversal_review.requested", id)).toHaveLength(0);
+        expect(await auditsFor("sales_commission", id, "paid_commission_cancellation_noted")).toHaveLength(1);
+      }
+      const rows = await commissionsOf(sale.contractId);
+      expect(rows.every(row => row.status === "paid" && row.reversalReviewStatus === null)).toBe(true); // nunca estorno automático
+    } finally { delete process.env.COMMISSION_CANCEL_POLICY_ENABLED; }
+  });
+
+  it("F3: onPaidCommissionCancellation=manual_review na política preserva a fila manual", async () => {
+    process.env.COMMISSION_CANCEL_POLICY_ENABLED = "true";
+    try {
+      const sale = await seedSale("f3manual", { policy: JSON.stringify({ ...JSON.parse(rated), onPaidCommissionCancellation: "manual_review" }) });
+      await validate(sale.contractId);
+      await db.update(salesCommissions).set({ status: "paid", lifecycleStatus: "paid", paidAt: new Date() }).where(eq(salesCommissions.contractId, sale.contractId));
+      await db.update(contracts).set({ resortId: sale.resortId }).where(eq(contracts.id, sale.contractId));
+      const [request] = await db.insert(contractCancellationRequests).values({ contractId: sale.contractId, status: "approved", reason: "Cliente desistiu", simulationSnapshot: JSON.stringify({ paidAmount: 1000, policyConfigured: false }), requestedByUserId: adminId, decidedByUserId: adminId }).$returningId();
+      await contractsRouter.createCaller({ user: { id: adminId, role: "admin" } } as never).executeCancellation({ requestId: request.id });
+      const rows = await commissionsOf(sale.contractId);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(await eventsFor("commission.reversal_review.requested", row.id)).toHaveLength(1);
+    } finally { delete process.env.COMMISSION_CANCEL_POLICY_ENABLED; }
+  });
+
   it("distrato: comissão paga entra na fila (evento requested uma vez); resolver exige decisão, grava, audita e emite resolved", async () => {
     const sale = await seedPaidCommissionContract("rev");
     const admin = contractsRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);

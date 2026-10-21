@@ -1,3 +1,4 @@
+import { paidCommissionCancellationMode } from "../commissionPolicyVersion";
 import { holdFractionForFormalization, isInventoryHoldAtFormalizationEnabled } from "../formalizationInventory";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
@@ -260,12 +261,16 @@ export const contractsRouter = router({
       const moneyFromPolicy = simulation.policyConfigured === true;
       const currentPaidAmount = schedule.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
       if (simulation.paidAmount !== undefined && Math.abs(currentPaidAmount - Number(simulation.paidAmount)) > 0.005) throw new TRPCError({ code: "CONFLICT", message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar." });
+      // CRM-F3: o que fazer com comissão JÁ PAGA no distrato é política (onPaidCommissionCancellation), nunca estorno automático. Desligado (padrão) = fila manual, como no ADR-010.
+      const paidMode = await paidCommissionCancellationMode(tx, contract.resortId);
+      const reviewIds = paidMode === "manual_review" ? impact.manualReviewCommissionIds : [];
+      const notedIds = paidMode === "none" ? impact.manualReviewCommissionIds : [];
       const settlementDate = new Date();
       await tx.update(contracts).set({ status: "cancelled", cancelledAt: new Date(), cancellationReason: request.reason }).where(eq(contracts.id, contract.id));
       const cancelledInstallments = impact.cancelInstallmentIds.length ? await tx.update(installments).set({ status: "cancelled" }).where(inArray(installments.id, impact.cancelInstallmentIds)) : [{ affectedRows: 0 }];
       const cancelledCommissions = impact.cancelCommissionIds.length ? await tx.update(salesCommissions).set({ status: "cancelled", lifecycleStatus: "cancelled", cancelledAt: new Date(), notes: input.executionNotes?.trim() || "Cancelada por distrato aprovado" }).where(inArray(salesCommissions.id, impact.cancelCommissionIds)) : [{ affectedRows: 0 }];
       // ADR-010: comissão já paga NÃO é estornada; entra na fila de revisão manual (gerente/financeiro).
-      if (impact.manualReviewCommissionIds.length) await tx.update(salesCommissions).set({ reversalReviewStatus: "pending", reversalReviewRequestedAt: new Date(), reversalReviewReason: `Contrato distratado (distrato #${request.id}) com comissão já paga: estorno/compensação exige decisão manual.` }).where(inArray(salesCommissions.id, impact.manualReviewCommissionIds));
+      if (reviewIds.length) await tx.update(salesCommissions).set({ reversalReviewStatus: "pending", reversalReviewRequestedAt: new Date(), reversalReviewReason: `Contrato distratado (distrato #${request.id}) com comissão já paga: estorno/compensação exige decisão manual.` }).where(inArray(salesCommissions.id, reviewIds));
       await tx.update(financialTransactions).set({ status: "cancelled" }).where(and(eq(financialTransactions.contractId, contract.id), eq(financialTransactions.status, "open")));
       await tx.update(financialTransfers).set({ status: "cancelled" }).where(and(eq(financialTransfers.contractId, contract.id), eq(financialTransfers.status, "pending")));
       await tx.update(ownershipEntitlements).set({ status: "cancelled" }).where(and(eq(ownershipEntitlements.contractId, contract.id), ne(ownershipEntitlements.status, "cancelled")));
@@ -304,7 +309,10 @@ export const contractsRouter = router({
         await txAudit(tx, { actorUserId: actor, entityType: "sales_commission", entityId: commissionId, action: "cancelled", summary: `Comissão cancelada pelo distrato do contrato ${contract.id}.` });
         await txEvent(tx, { eventName: "commission.status.updated", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: actor, payload: { status: "cancelled", contractId: contract.id }, idempotencyKey: `commission-cancelled:${commissionId}` });
       }
-      for (const commissionId of impact.manualReviewCommissionIds) {
+      for (const commissionId of notedIds) {
+        await txAudit(tx, { actorUserId: actor, entityType: "sales_commission", entityId: commissionId, action: "paid_commission_cancellation_noted", summary: `Contrato ${contract.id} distratado com comissão já paga; a política (onPaidCommissionCancellation=none) não abre revisão nem estorna.`, idempotencyKey: `paid-commission-cancellation-noted:${commissionId}` });
+      }
+      for (const commissionId of reviewIds) {
         await txAudit(tx, { actorUserId: actor, entityType: "sales_commission", entityId: commissionId, action: "reversal_review_pending", summary: `Comissão já paga NÃO estornada automaticamente; enviada à fila manual (distrato do contrato ${contract.id}).` });
         await txEvent(tx, { eventName: "commission.reversal_review.requested", aggregateType: "sales_commission", aggregateId: commissionId, actorUserId: actor, payload: { contractId: contract.id, commissionId, distratoRequestId: request.id }, idempotencyKey: `commission-reversal-review-requested:${commissionId}` });
       }
@@ -316,7 +324,7 @@ export const contractsRouter = router({
         await txAudit(tx, { actorUserId: actor, entityType: "commercial_fraction", entityId: fractionId, action: "returned_to_inventory", summary: `Cota retornou ao estoque após distrato do contrato ${contract.id}.` });
         await txEvent(tx, { eventName: "commercial.fraction.status.changed", aggregateType: "commercial_fraction", aggregateId: fractionId, actorUserId: actor, payload: { fractionId, status: "available", contractId: contract.id, reason: "Distrato executado" }, idempotencyKey: `fraction-returned:${fractionId}:${contract.id}` });
       }
-      return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, manualReviewCommissionIds: impact.manualReviewCommissionIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
+      return { policyConfigured: moneyFromPolicy, contractId: contract.id, cancelledInstallmentIds: impact.cancelInstallmentIds, cancelledCommissionIds: impact.cancelCommissionIds, manualReviewCommissionIds: reviewIds, cancelledInstallments: Number(cancelledInstallments[0]?.affectedRows ?? 0), cancelledCommissions: Number(cancelledCommissions[0]?.affectedRows ?? 0), financialEntries: financialImpact.length, returnedFractionIds };
     }));
     await syncRevenueQualityForContract({ contractId: outcome.contractId, actorUserId: ctx.user.id, trigger: "execução de distrato" });
     return { success: true, ...outcome };
