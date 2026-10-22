@@ -37,12 +37,17 @@ Princípio: o distrato automático **reutiliza a mesma execução**. Nenhuma reg
                      v
               [due_for_cancellation]  --(distrato AUTOMÁTICO ligado)--> pedido de distrato (seção 3.2)
                      |                --(desligado)------------------> só alerta ao admin: decidir à mão
-                     v
-            [cancelled]  (contrato distratado, por qualquer via; fim)
+                     |  \--(erro de domínio, ou fora de um teto da seção 10)--> [manual_review]
+                     v                                                         |  (admin decide à mão:
+            [cancelled]  (contrato distratado, por qualquer via; fim)           |   distrato manual -> cancelled;
+                                                                                |   "tentar de novo" -> due_for_cancellation;
+                                                                                |   encerrar -> dismissed)
 ```
 
-- Um único caso ABERTO por contrato (`activeKey = rescue:<contractId>` único; nulo ao fechar).
+- Um único caso ABERTO por contrato (`activeKey = rescue:<contractId>` único; nulo ao fechar). `open`, `in_contact`, `due_for_cancellation` e `manual_review` são estados abertos e mantêm o `activeKey`.
+- `manual_review` é estado PERSISTIDO de saída do automático: guarda `manualReviewReason` (`domain_error`, `over_cap`, `paid_commission`, `open_renegotiation`, `recent_promise`) e `manualReviewAt`. O job de distrato automático só seleciona `status = 'due_for_cancellation'`; um caso em `manual_review` nunca é reexecutado até um humano agir ("tentar de novo" devolve a `due_for_cancellation`, com auditoria).
 - `rescued` é automático quando as parcelas vencidas do contrato ficam todas pagas/renegociadas (verificado no job e no pagamento); `dismissed` e `cancelled` fecham o caso.
+- **Supressão após `dismissed`** (impede o sweep de recriar o caso e reiniciar a janela de resgate com a mesma parcela vencida): ao encerrar, grava-se `suppressUntil = closedAt + rescueReopenAfterDays` (configuração, padrão 90 dias). O sweep só abre caso novo para o contrato se **não houver caso aberto** E **não houver caso `dismissed` do contrato com `suppressUntil` no futuro**, a menos que exista parcela **nova**: não paga, vencida, com `dueDate` posterior ao `closedAt` desse caso (fato novo). Passado o `suppressUntil`, reabre normalmente, com `rescueDueAt` novo e `contract.rescue.opened` de chave nova (a `firstOverdueDate` entra na chave).
 - Cada tentativa vai para `contract_rescue_attempts` (canal, resultado, nota, autor, hora). Tentativa move `open -> in_contact` e atualiza `lastAttemptAt`.
 
 ### 3.2 Distrato automático
@@ -66,6 +71,7 @@ Tabela versionada append-only `retention_settings_versions` (a vigente é a de m
 |---|---|---|
 | `rescueWindowMonths` | 3 | Prazo do resgate, contado da primeira parcela vencida não paga **[CONFIRMAR]**. 1 a 24. |
 | `rescueAlertLeadDays` | 15 | Quantos dias antes do fim do prazo o pós-vendas recebe o alerta de "vai vencer". |
+| `rescueReopenAfterDays` | 90 | Quanto tempo um caso `dismissed` suprime a reabertura pelo sweep (salvo parcela nova vencida). 1 a 730. |
 | `autoCancelEnabled` | **false** | Liga/desliga o distrato automático. |
 | `autoCancelPromiseDays` | 15 | Teto: sem distrato automático se houve tentativa `promised_payment`/`renegotiating` nos últimos N dias (ou renegociação aberta). |
 | `autoCancelMaxPaidPercent` | 30 | Teto: sem distrato automático se o valor já pago passa de X% do contrato. |
@@ -103,21 +109,21 @@ Cobrança judicial e negativação **não têm flag porque não têm execução*
 
 ## 8. Idempotência e concorrência
 
-- Job de varredura periódico (intervalo configurável, uma instância por vez via lock de aplicação): seleciona contratos com parcela vencida e sem caso aberto. Reexecutar não duplica: `activeKey` único + `idempotencyKey` dos eventos.
+- Job de varredura periódico (intervalo configurável, uma instância por vez via lock de aplicação): seleciona contratos com parcela vencida, sem caso aberto e sem supressão vigente (seção 3.1: `dismissed` com `suppressUntil` no futuro e nenhuma parcela nova vencida). Reexecutar não duplica: `activeKey` único + `idempotencyKey` dos eventos.
 - Ordem de locks (a mesma do restante do CRM): **contrato -> parcelas -> caso de resgate -> pedido de distrato**. O job abre uma transação por contrato com `withDeadlockRetry`.
 - Distrato automático: antes de criar o pedido, relê o caso e o contrato `FOR UPDATE`; se o contrato já estiver `cancelled`, ou já existir pedido em `requested|approved` (regra atual do `requestCancellation`), não faz nada. Chave `auto-cancel:<caseId>` impede segundo pedido.
 - Pagamento que chega durante a execução: o `FOR UPDATE` das parcelas decide; se a parcela foi paga antes do lock, o caso vira `rescued` e nada é cancelado.
-- Falha transitória (deadlock/lock timeout) sobe e é repetida; erro de domínio é registrado e o caso fica para revisão manual, nunca reexecutado em laço.
+- Falha transitória (deadlock/lock timeout) sobe e é repetida; erro de domínio é registrado e o caso passa a `manual_review` (`manualReviewReason = domain_error`), estado que o job exclui do predicado de seleção; só a ação humana o reabre. É isso que torna "nunca reexecutado em laço" implementável.
 
 ## 9. Migration proposta (`PROPOSED_0086`)
 
-Aditiva, sem backfill, sem tocar linha existente: 4 `CREATE TABLE IF NOT EXISTS` (`retention_settings_versions`, `contract_rescue_cases`, `contract_rescue_attempts`, `legal_action_alerts`) e 1 `ALTER TABLE contract_cancellation_requests ADD COLUMN origin ... DEFAULT 'manual'`. Rollback no cabeçalho do arquivo. Como nas demais propostas, `drizzle/schema.ts` só ganha as tabelas depois da migration aplicada (o teste de drift compara schema x banco).
+Aditiva, sem backfill, sem tocar linha existente. Escrita no formato das migrations Drizzle, com `--> statement-breakpoint` entre as instruções (necessário quando virar migration real): 4 `CREATE TABLE IF NOT EXISTS` (`retention_settings_versions`, `contract_rescue_cases`, `contract_rescue_attempts`, `legal_action_alerts`) e 1 `ALTER TABLE contract_cancellation_requests ADD COLUMN origin ... DEFAULT 'manual'`. Rollback no cabeçalho do arquivo. Como nas demais propostas, `drizzle/schema.ts` só ganha as tabelas depois da migration aplicada (o teste de drift compara schema x banco).
 
 ## 10. Decisões (respostas do Opus) e o que continua com o Lucas
 
 Respondidas (valem para o PR de código; o Lucas confirma o que está marcado):
 1. **Ator do distrato automático**: usuário de sistema DEDICADO, sem login e sem senha, criado por seed no PR de código, que aparece na auditoria como "sistema". Nenhuma coluna NOT NULL existente muda (`requestedByUserId` e `decidedByUserId` continuam obrigatórias e recebem o id desse usuário).
-2. **Tetos de segurança, OBRIGATÓRIOS antes de qualquer distrato automático real**, todos configuráveis na mesma tela do admin (colunas na tabela versionada `retention_settings_versions`, com histórico). Fora de qualquer teto, o caso NÃO é distratado sozinho: vai para decisão manual do admin.
+2. **Tetos de segurança, OBRIGATÓRIOS antes de qualquer distrato automático real**, todos configuráveis na mesma tela do admin (colunas na tabela versionada `retention_settings_versions`, com histórico). Fora de qualquer teto, o caso NÃO é distratado sozinho: vai para o estado `manual_review` (decisão manual do admin).
    - Nunca automático com comissão já paga (cai na revisão manual da ADR-010, como hoje).
    - Nunca com renegociação aberta, nem com tentativa de resgate `promised_payment` ou `renegotiating` nos últimos N dias (padrão 15, configurável).
    - Nunca quando o valor já pago passar de X% do contrato (padrão 30%, configurável).
@@ -126,4 +132,4 @@ Respondidas (valem para o PR de código; o Lucas confirma o que está marcado):
 
 Continuam com o Lucas: o **modelo da reserva vencida** (seção 6) e **quem recebe o alerta jurídico** (e o texto dele).
 
-Impacto na migration proposta: `retention_settings_versions` ganha as colunas dos tetos (`autoCancelPromiseDays` padrão 15, `autoCancelMaxPaidPercent` padrão 30); o arquivo `PROPOSED_0086` já foi atualizado. O rollback da proposta só vale em banco de teste ou sintético, nunca com dado real.
+Impacto na migration proposta: `retention_settings_versions` ganha as colunas dos tetos (`autoCancelPromiseDays` padrão 15, `autoCancelMaxPaidPercent` padrão 30) e `rescueReopenAfterDays` (padrão 90); `contract_rescue_cases` ganha o status `manual_review`, `manualReviewReason`, `manualReviewAt` e `suppressUntil`; o arquivo `PROPOSED_0086` já foi atualizado. O rollback da proposta só vale em banco de teste ou sintético, nunca com dado real.
