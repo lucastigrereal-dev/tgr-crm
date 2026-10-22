@@ -6,6 +6,7 @@ import { FINANCIAL_EVENT_NAMES, financialBridgeEnvelope } from "./financialBridg
 import { buildContractStateBody, buildSaleValidatedBody, CONTRACT_STATE_TARGETS, type ContractLineage } from "./relationshipBridge";
 import { mapSalesIngestError, SALES_INGEST_REJECTION_CODES, SalesIngestRejection, salesIngestFailureBody } from "./salesCommandBridge";
 import { ATTENDANCE_CONTRACT_SECTION } from "../shared/contracts/attendanceSection";
+import { RECOVERY_CONTRACT_SECTION } from "../shared/contracts/recoverySection";
 import { allowedPayloadFields, integrationContractVersion } from "../shared/integrationContract";
 
 const SYN_PROJECT = { externalKey: "SYN-PONTA-NEGRA", name: "SYN Ponta Negra", timezone: "America/Recife" };
@@ -59,5 +60,7 @@ export function exportEventContract() {
     },
     // S4/C1: contrato Sales -> CRM (dono: Suite). O CRM só o publica; o receptor está em attendanceReceiver.ts, atrás de ATTENDANCE_RECEIVER_ENABLED (desligada).
     attendance: ATTENDANCE_CONTRACT_SECTION,
+    // Recovery <-> CRM (dono: Suite). SÓ contrato: o receptor de opt-out existe atrás de RECOVERY_ELIGIBILITY_ENABLED (false); não há emissor nem entrega ao Recovery.
+    recovery: RECOVERY_CONTRACT_SECTION,
   };
 }
