@@ -3,7 +3,7 @@ import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { BlockedItems, FlagsPanel, HistoryList, IndicatorsPanel, PermissionsPanel, RoleMapPanel, StateNotice } from "../client/src/components/crm/companySettings/panels";
+import { BlockedItems, FlagsPanel, HistoryList, IndicatorsPanel, PermissionsPanel, RoleMapPanel, SaleValidatorsPanel, StateNotice } from "../client/src/components/crm/companySettings/panels";
 import { BLOCKED_ITEMS, describeBackendState, describeMutationError, flagHistory, indicatorHistory, permissionHistory, roleMapHistory } from "../client/src/components/crm/companySettings/text";
 import { canOpenMenuPath, menuPathRoles } from "../shared/permissions";
 
@@ -179,5 +179,50 @@ describe("Configurações da empresa: erros de histórico, acessibilidade e avis
     const page = read("client/src/pages/CompanySettings.tsx");
     expect(page).not.toMatch(/toast\.error\((?!describeMutationError)/);
     expect(page).not.toContain("error.message");
+  });
+});
+
+describe("Configurações da empresa: administrativo autorizado", () => {
+  const now = new Date("2026-10-22T12:00:00Z");
+  const grants = [
+    { id: 1, userId: 5, userName: "Bia Financeiro", note: "cobertura de férias", validUntil: new Date("2026-12-01T00:00:00Z"), createdAt: new Date("2026-10-20T10:00:00Z"), revokedAt: null },
+    { id: 2, userId: 6, userName: "Caio Financeiro", note: null, validUntil: new Date("2026-10-01T00:00:00Z"), createdAt: new Date("2026-09-20T10:00:00Z"), revokedAt: null },
+    { id: 3, userId: 8, userName: "Duda Financeiro", note: null, validUntil: null, createdAt: new Date("2026-09-01T10:00:00Z"), revokedAt: new Date("2026-09-10T10:00:00Z") },
+  ];
+  const render = (extra: Partial<Parameters<typeof SaleValidatorsPanel>[0]> = {}) => html(createElement(SaleValidatorsPanel, { grants, candidates: [{ id: 9, name: "Eva Financeiro" }], segregationEnabled: false, pending: false, now, onGrant: noop, onRevoke: noop, onSetSegregation: noop, ...extra }));
+
+  it("lista ativa, vencida e revogada; só a não revogada tem botão de revogar", () => {
+    const out = render();
+    expect(out).toContain("Bia Financeiro"); expect(out).toContain("Ativa"); expect(out).toContain("Vencida"); expect(out).toContain("Revogada");
+    expect(out).toContain("Revogar a autorização de Bia Financeiro"); expect(out).toContain("Revogar a autorização de Caio Financeiro");
+    expect(out).not.toContain("Revogar a autorização de Duda Financeiro");
+    expect(out).toContain("Sem prazo"); expect(out).toContain("cobertura de férias");
+  });
+  it("tem o formulário (pessoa, validade, observação) e o interruptor de segregação com o estado atual", () => {
+    const out = render();
+    expect(out).toContain("Eva Financeiro"); expect(out).toContain('aria-label="Válida até"'); expect(out).toContain('aria-label="Observação"');
+    expect(out).toContain("Ligar: separar quem confere de quem valida");
+    expect(render({ segregationEnabled: true })).toContain("Desligar: separar quem confere de quem valida");
+  });
+  it("sem candidatos e sem autorizações mostra avisos claros; tudo desabilita enquanto salva", () => {
+    const out = render({ grants: [], candidates: [] });
+    expect(out).toContain("Nenhuma autorização registrada"); expect(out).toContain("Não há ninguém do financeiro");
+    expect(render({ pending: true })).toMatch(/disabled=""[^>]*aria-label="Revogar/);
+  });
+  it("sem termo técnico na tela; a aba existe só na tela do admin e usa as rotas de admin existentes", () => {
+    expect(render()).not.toMatch(TECHNICAL);
+    const page = read("client/src/pages/CompanySettings.tsx");
+    expect(page).toContain('value="administrativo">Administrativo autorizado');
+    for (const route of ["saleValidation.grants.list", "saleValidation.grants.grant", "saleValidation.grants.revoke", "saleValidation.segregation.get", "saleValidation.segregation.set"]) expect(page).toContain(`trpc.${route}`);
+    const router = read("server/routers/saleValidation.ts");
+    expect(router.match(/(?:list|grant|revoke|get|set): adminProcedure/g)?.length).toBe(5);
+    expect(canOpenMenuPath("admin", "/configuracoes-empresa")).toBe(true);
+    expect(canOpenMenuPath("finance", "/configuracoes-empresa")).toBe(false);
+  });
+  it("erros de concessão têm texto próprio, sem texto cru do servidor", () => {
+    const raw = (code: string) => Object.assign(new Error("Failed query insert sale_validator_grants"), { data: { code } });
+    expect(describeMutationError(raw("CONFLICT"))).toContain("já tem uma autorização ativa");
+    expect(describeMutationError(raw("NOT_FOUND"))).toContain("revogado");
+    for (const code of ["CONFLICT", "NOT_FOUND"]) expect(describeMutationError(raw(code))).not.toMatch(/insert|query|sale_validator/i);
   });
 });

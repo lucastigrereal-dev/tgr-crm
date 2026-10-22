@@ -82,6 +82,8 @@ export function describeMutationError(error: unknown): string {
   const code = error && typeof error === "object" && "data" in error ? (error as { data?: { code?: string } }).data?.code ?? null : null;
   if (code === "BAD_REQUEST") return "Os dados informados não são válidos. Confira e tente de novo.";
   if (code === "FORBIDDEN" && error && typeof error === "object" && "message" in error && /piso fixo|fora da allow-list|n[aã]o pode ser alterad/i.test(String((error as { message?: unknown }).message))) return "Este item é fixo e não pode ser alterado por aqui.";
+  if (code === "CONFLICT") return "Este usuário já tem uma autorização ativa. Atualize a lista; para trocar a validade, revogue antes.";
+  if (code === "NOT_FOUND") return "O registro não foi encontrado ou já foi revogado. Atualize a lista.";
   if (code === "FORBIDDEN" || code === "PRECONDITION_FAILED" || code === "UNAUTHORIZED") {
     const state = describeBackendState({ errorCode: code });
     return state.kind === "ok" ? "Não foi possível salvar agora. Tente de novo." : state.text;
