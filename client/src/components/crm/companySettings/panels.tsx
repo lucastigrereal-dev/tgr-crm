@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { BLOCKED_ITEMS, CAPABILITY_LABELS, formatWhen, INDICATOR_LABELS, RULE_ROLE_LABELS, roleLabel, STORED_ROLE_LABELS, type BackendState, type HistoryEntry } from "./text";
+import { BLOCKED_ITEMS, CAPABILITY_LABELS, endOfDayRecifeIso, formatWhen, INDICATOR_LABELS, RULE_ROLE_LABELS, roleLabel, STORED_ROLE_LABELS, type BackendState, type HistoryEntry } from "./text";
 
 // Painéis só de apresentação: recebem os dados e os botões por props (a página liga ao servidor), para testar sem navegador e sem rede.
 
@@ -98,6 +98,46 @@ export function PermissionsPanel({ items, roles, pending, onSave, historyOf, onO
       <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => onOpenHistory(openKey === item.key ? null : item.key)}>{openKey === item.key ? "Ocultar histórico" : "Ver histórico"}</Button></div>
       {openKey === item.key ? <HistoryList entries={historyOf(item.key)} /> : null}
     </li>)}</ul></div>;
+}
+
+// ---- Administrativo autorizado (quem pode conferir e validar vendas)
+export type GrantRow = { id: number; userId: number; userName: string | null; note: string | null; validUntil: unknown; createdAt: unknown; revokedAt: unknown };
+export type GrantCandidate = { id: number; name: string };
+export const isGrantActive = (grant: Pick<GrantRow, "validUntil" | "revokedAt">, now: Date) => !grant.revokedAt && (!grant.validUntil || new Date(String(grant.validUntil)).getTime() > now.getTime());
+export function SaleValidatorsPanel({ grants, candidates, segregationEnabled, pending, now, onGrant, onRevoke, onSetSegregation }: { grants: GrantRow[]; candidates: GrantCandidate[]; segregationEnabled: boolean; pending: boolean; now: Date; onGrant: (input: { userId: number; validUntil?: string; note?: string }) => void; onRevoke: (grantId: number) => void; onSetSegregation: (enabled: boolean) => void }) {
+  const [userId, setUserId] = useState("");
+  const [validUntil, setValidUntil] = useState("");
+  const [note, setNote] = useState("");
+  const submit = () => { if (!userId) return; onGrant({ userId: Number(userId), validUntil: validUntil ? endOfDayRecifeIso(validUntil) : undefined, note: note.trim() || undefined }); };
+  return <div className="space-y-6">
+    <p className="text-sm text-muted-foreground">A administração sempre pode conferir e validar vendas. Aqui você autoriza também pessoas do financeiro, com prazo opcional. A autorização vale só para conferir o comprovante e a documentação e para validar a venda.</p>
+    <section aria-label="Separar quem confere de quem valida" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e9e4da] bg-white p-4">
+      <div className="min-w-0"><p className="font-medium text-[#1d2b2a]">Separar quem confere de quem valida</p><p className="mt-1 text-xs text-muted-foreground">Agora: <strong>{segregationEnabled ? "ligado" : "desligado"}</strong>. Ligado, quem conferiu o comprovante não pode validar a mesma venda.</p></div>
+      <Button size="sm" variant="outline" disabled={pending} aria-label={`${segregationEnabled ? "Desligar" : "Ligar"}: separar quem confere de quem valida`} onClick={() => onSetSegregation(!segregationEnabled)}>{segregationEnabled ? "Desligar" : "Ligar"}</Button>
+    </section>
+    <section aria-label="Autorizar uma pessoa" className="rounded-xl border border-[#e9e4da] bg-white p-4">
+      <p className="font-medium text-[#1d2b2a]">Autorizar uma pessoa do financeiro</p>
+      {candidates.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">Não há ninguém do financeiro sem autorização ativa.</p> : <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <label className="grid gap-1 text-sm">Pessoa<select aria-label="Pessoa" className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={userId} onChange={event => setUserId(event.target.value)}><option value="">Escolha</option>{candidates.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>
+        <label className="grid gap-1 text-sm">Válida até (opcional)<Input aria-label="Válida até" type="date" value={validUntil} onChange={event => setValidUntil(event.target.value)} /></label>
+        <label className="grid gap-1 text-sm">Observação (opcional)<Input aria-label="Observação" maxLength={500} value={note} onChange={event => setNote(event.target.value)} /></label>
+        <div className="md:col-span-3"><Button size="sm" disabled={pending || !userId} onClick={submit}>Autorizar</Button></div>
+      </div>}
+    </section>
+    <section aria-label="Autorizações">
+      <p className="text-xs font-bold uppercase tracking-[.12em] text-[#52615c]">Autorizações</p>
+      {grants.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">Nenhuma autorização registrada.</p> : <ul className="mt-2 space-y-2">{grants.map(grant => { const active = isGrantActive(grant, now); const status = grant.revokedAt ? "Revogada" : active ? "Ativa" : "Vencida"; return <li key={grant.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#ece6da] bg-white p-3 text-sm">
+        <div className="min-w-0"><p className="font-medium">{grant.userName ?? `Usuário nº ${grant.userId}`} <Badge variant="outline">{status}</Badge></p>
+          <p className="mt-1 text-xs text-muted-foreground">{grant.validUntil ? `Válida até ${formatWhen(grant.validUntil)}` : "Sem prazo"} · concedida em {formatWhen(grant.createdAt)}{grant.revokedAt ? ` · revogada em ${formatWhen(grant.revokedAt)}` : ""}{grant.note ? ` · ${grant.note}` : ""}</p></div>
+        {!grant.revokedAt ? <Button size="sm" variant="outline" disabled={pending} aria-label={`Revogar a autorização de ${grant.userName ?? `usuário nº ${grant.userId}`}`} onClick={() => onRevoke(grant.id)}>Revogar</Button> : null}
+      </li>; })}</ul>}
+    </section>
+  </div>;
+}
+
+/** Falha ao carregar uma lista de apoio: aviso claro e botão para tentar de novo (nunca vira lista vazia). */
+export function LoadFailure({ state, onRetry }: { state: Exclude<BackendState, { kind: "ok" }>; onRetry: () => void }) {
+  return <div className="space-y-3"><StateNotice state={state} /><Button size="sm" variant="outline" onClick={onRetry}>Recarregar</Button></div>;
 }
 
 export function Panel({ children }: { children: React.ReactNode }) { return <Card className="border-[#e8e1d4]"><CardContent className="p-5">{children}</CardContent></Card>; }
