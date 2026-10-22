@@ -45,12 +45,14 @@ export async function holdFractionForFormalization(tx: Tx, fraction: Fraction, i
   return { expiresAt };
 }
 
-/** Marca o contrato como "reserva perdida" e abre a tarefa do administrativo (idempotente). Só contratos ainda em formalização. */
+/** Marca o contrato como "reserva perdida", emite o evento interno `contract.inventory_lost` e abre a tarefa do administrativo (idempotente). Só contratos ainda em formalização. */
 export async function markContractInventoryLost(tx: Tx, contractId: number, actorUserId: number | null, now = new Date()) {
   const contract = (await tx.select({ id: contracts.id, number: contracts.number, status: contracts.status, customerId: contracts.customerId, inventoryLostAt: contracts.inventoryLostAt }).from(contracts).where(eq(contracts.id, contractId)).limit(1).for("update"))[0];
   if (!contract || contract.inventoryLostAt || !["draft", "pending_signature"].includes(contract.status)) return false;
   await tx.update(contracts).set({ inventoryLostAt: now }).where(eq(contracts.id, contractId));
   await txAudit(tx, { actorUserId, entityType: "contract", entityId: contractId, action: "inventory_lost", summary: `Reserva da cota do contrato ${contract.number} venceu antes da conferência; a cota voltou ao estoque. Refazer a venda.`, idempotencyKey: `inventory-lost:${contractId}` });
+  // Evento INTERNO (outbox, sem entrega externa): Sales/Financial ainda não o consomem. Idempotente pela chave, uma vez por contrato.
+  await txEvent(tx, { eventName: "contract.inventory_lost", aggregateType: "contract", aggregateId: contractId, actorUserId, payload: { contractId, contractNumber: contract.number, customerId: contract.customerId, lostAt: now.toISOString() }, idempotencyKey: `inventory-lost:${contractId}` });
   await tx.insert(tasks).values({ title: `Reserva vencida: contrato ${contract.number}`, description: "A reserva da cota venceu antes da conferência de comprovante e documentação. A cota voltou ao estoque; refazer a venda.", type: "internal", priority: "high", customerId: contract.customerId, contractId, automationKey: `inventory-lost:${contractId}`, createdByUserId: actorUserId }).onDuplicateKeyUpdate({ set: { contractId } });
   return true;
 }

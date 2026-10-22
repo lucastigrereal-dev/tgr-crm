@@ -13,6 +13,8 @@ export const allowedPayloadFields: Record<DomainEventName, readonly string[]> = 
   "commercial.inventory.bootstrapped": ["resortId", "units", "fractionsPerUnit", "createdFractions"],
   // C2/C3 (INTERNOS, sem entrega externa nesta fatia): só ids, sequência, ramo e motivo; nunca nome nem telefone.
   "non_buyer.eligible": ["eventId", "captureId", "customerId", "seq", "branch"], "non_buyer.eligibility_revoked": ["eventId", "captureId", "customerId", "seq", "reason"],
+  // CRM-INV (INTERNO, sem entrega externa): só ids e instante, nunca nome nem telefone.
+  "contract.inventory_lost": ["contractId", "customerId", "lostAt"],
   "commercial.fraction.status.changed": ["fractionId", "status", "proposalId", "contractId", "holdId", "expiresAt", "reason"],
 };
 
