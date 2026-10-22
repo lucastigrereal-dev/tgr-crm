@@ -10,5 +10,5 @@ Aditivo e opcional, no TOPO do corpo (não em `gates`): inteiro 1..100000 = cota
 ## O que a Suite precisa fazer depois (NÃO feito aqui)
 1. `node scripts/sync-crm-contract-fixtures.mjs <snapshot do CRM> <sha>` para sincronizar as fixtures.
 2. Atualizar a seção `sales` em `scripts/crm-contract.lock.json` com o mesmo hash de `shared/contracts/consumers.lock.json`.
-3. Re-pin de `crm-pair.sha` para o SHA do CRM com este PR. Bloqueado enquanto o CI da Suite estiver parado por cobrança do Actions.
+3. Re-pin de `crm-pair.sha` para o SHA do CRM com este PR (depois que ele estiver na main do CRM).
 4. PR-S5 da Suite (`sale_validations.quotas_count`, migration 0030 aditiva, não aplicar) passa a poder consumir o campo.
