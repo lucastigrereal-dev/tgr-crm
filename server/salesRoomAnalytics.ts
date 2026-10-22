@@ -32,8 +32,9 @@ function ratio(numerator: number, denominator: number) {
   return denominator ? Math.round((numerator / denominator) * 10_000) / 100 : 0;
 }
 
+/** "Agendada" = veio com data/hora de visita marcada. Passante (ficha sem data), mesmo que faça check-in na hora, NÃO entra no denominador de chegada nem de sem-tour. */
 function hasScheduledActivity(capture: ConversionCapture) {
-  return capture.presentationStatus !== "captured" || Boolean(capture.scheduledAt);
+  return Boolean(capture.scheduledAt);
 }
 
 export function calculateConversionMetrics(captures: ConversionCapture[]): ConversionMetrics {
@@ -51,10 +52,11 @@ export function calculateConversionMetrics(captures: ConversionCapture[]): Conve
     completed: completed.length,
     noTours: noTours.length,
     wins: wins.length,
-    arrivalRate: ratio(arrivals.length, scheduled.length),
+    // Numerador e denominador da MESMA população (agendadas): a chegada de um passante conta em `arrivals` (funil), mas não infla a taxa.
+    arrivalRate: ratio(scheduled.filter(capture => Boolean(capture.checkedInAt)).length, scheduled.length),
     tourRate: ratio(presentations.length, arrivals.length),
     closeRate: ratio(wins.length, presentations.length),
-    noTourRate: ratio(noTours.length, scheduled.length),
+    noTourRate: ratio(scheduled.filter(capture => capture.presentationStatus === "no_tour").length, scheduled.length),
   };
 }
 
