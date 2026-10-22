@@ -90,3 +90,10 @@ export function describeMutationError(error: unknown): string {
   }
   return "Não foi possível salvar agora. Tente de novo; se continuar, avise a equipe técnica.";
 }
+
+/** Validade escolhida na tela (AAAA-MM-DD) -> fim do dia (23:59:59) no fuso do projeto, America/Recife (UTC-3, sem horário de verão), em UTC. Independe do fuso do navegador. */
+export function endOfDayRecifeIso(day: string): string | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return undefined;
+  const date = new Date(`${day}T23:59:59-03:00`);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}

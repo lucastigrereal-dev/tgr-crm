@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { BLOCKED_ITEMS, CAPABILITY_LABELS, formatWhen, INDICATOR_LABELS, RULE_ROLE_LABELS, roleLabel, STORED_ROLE_LABELS, type BackendState, type HistoryEntry } from "./text";
+import { BLOCKED_ITEMS, CAPABILITY_LABELS, endOfDayRecifeIso, formatWhen, INDICATOR_LABELS, RULE_ROLE_LABELS, roleLabel, STORED_ROLE_LABELS, type BackendState, type HistoryEntry } from "./text";
 
 // Painéis só de apresentação: recebem os dados e os botões por props (a página liga ao servidor), para testar sem navegador e sem rede.
 
@@ -108,7 +108,7 @@ export function SaleValidatorsPanel({ grants, candidates, segregationEnabled, pe
   const [userId, setUserId] = useState("");
   const [validUntil, setValidUntil] = useState("");
   const [note, setNote] = useState("");
-  const submit = () => { if (!userId) return; onGrant({ userId: Number(userId), validUntil: validUntil ? new Date(`${validUntil}T23:59:59`).toISOString() : undefined, note: note.trim() || undefined }); };
+  const submit = () => { if (!userId) return; onGrant({ userId: Number(userId), validUntil: validUntil ? endOfDayRecifeIso(validUntil) : undefined, note: note.trim() || undefined }); };
   return <div className="space-y-6">
     <p className="text-sm text-muted-foreground">A administração sempre pode conferir e validar vendas. Aqui você autoriza também pessoas do financeiro, com prazo opcional. A autorização vale só para conferir o comprovante e a documentação e para validar a venda.</p>
     <section aria-label="Separar quem confere de quem valida" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e9e4da] bg-white p-4">
@@ -133,6 +133,11 @@ export function SaleValidatorsPanel({ grants, candidates, segregationEnabled, pe
       </li>; })}</ul>}
     </section>
   </div>;
+}
+
+/** Falha ao carregar uma lista de apoio: aviso claro e botão para tentar de novo (nunca vira lista vazia). */
+export function LoadFailure({ state, onRetry }: { state: Exclude<BackendState, { kind: "ok" }>; onRetry: () => void }) {
+  return <div className="space-y-3"><StateNotice state={state} /><Button size="sm" variant="outline" onClick={onRetry}>Recarregar</Button></div>;
 }
 
 export function Panel({ children }: { children: React.ReactNode }) { return <Card className="border-[#e8e1d4]"><CardContent className="p-5">{children}</CardContent></Card>; }

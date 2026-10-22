@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/crm/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BlockedItems, FlagsPanel, IndicatorsPanel, isGrantActive, Panel, PermissionsPanel, RoleMapPanel, SaleValidatorsPanel, StateNotice } from "@/components/crm/companySettings/panels";
+import { BlockedItems, FlagsPanel, IndicatorsPanel, isGrantActive, LoadFailure, Panel, PermissionsPanel, RoleMapPanel, SaleValidatorsPanel, StateNotice } from "@/components/crm/companySettings/panels";
 import { describeBackendState, describeMutationError, flagHistory, indicatorHistory, permissionHistory, roleMapHistory, type BackendState } from "@/components/crm/companySettings/text";
 import { trpc } from "@/lib/trpc";
 
@@ -90,8 +90,9 @@ function SaleValidatorsTab({ active }: { active: boolean }) {
   if (grants.isLoading || segregation.isLoading || team.isLoading) return <Panel><p className="text-sm text-muted-foreground">Carregando...</p></Panel>;
   if (grants.error || !grants.data) return <Panel>{notice(describeBackendState({ errorCode: errorCode(grants.error) ?? "ERROR" }))}</Panel>;
   if (segregation.error || !segregation.data) return <Panel>{notice(describeBackendState({ errorCode: errorCode(segregation.error) ?? "ERROR" }))}</Panel>;
+  if (team.error || !team.data) { const state = describeBackendState({ errorCode: errorCode(team.error) ?? "ERROR" }); return <Panel>{state.kind === "ok" ? null : <LoadFailure state={state} onRetry={() => void team.refetch()} />}</Panel>; }
   const now = new Date();
   const withActiveGrant = new Set(grants.data.rows.filter(row => isGrantActive(row, now)).map(row => row.userId));
-  const candidates = (team.data?.rows ?? []).filter(row => row.role === "finance" && !withActiveGrant.has(row.id)).map(row => ({ id: row.id, name: row.name ?? `Usuário nº ${row.id}` }));
+  const candidates = team.data.rows.filter(row => row.role === "finance" && !withActiveGrant.has(row.id)).map(row => ({ id: row.id, name: row.name ?? `Usuário nº ${row.id}` }));
   return <Panel><SaleValidatorsPanel grants={grants.data.rows} candidates={candidates} segregationEnabled={segregation.data.enabled} pending={grant.isPending || revoke.isPending || setSegregation.isPending} now={now} onGrant={input => grant.mutate({ userId: input.userId, validUntil: input.validUntil, note: input.note })} onRevoke={grantId => revoke.mutate({ grantId })} onSetSegregation={enabled => setSegregation.mutate({ enabled })} /></Panel>;
 }

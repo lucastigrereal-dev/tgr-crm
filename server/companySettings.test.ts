@@ -3,8 +3,8 @@ import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { BlockedItems, FlagsPanel, HistoryList, IndicatorsPanel, PermissionsPanel, RoleMapPanel, SaleValidatorsPanel, StateNotice } from "../client/src/components/crm/companySettings/panels";
-import { BLOCKED_ITEMS, describeBackendState, describeMutationError, flagHistory, indicatorHistory, permissionHistory, roleMapHistory } from "../client/src/components/crm/companySettings/text";
+import { BlockedItems, FlagsPanel, HistoryList, IndicatorsPanel, PermissionsPanel, LoadFailure, RoleMapPanel, SaleValidatorsPanel, StateNotice } from "../client/src/components/crm/companySettings/panels";
+import { BLOCKED_ITEMS, describeBackendState, endOfDayRecifeIso, describeMutationError, flagHistory, indicatorHistory, permissionHistory, roleMapHistory } from "../client/src/components/crm/companySettings/text";
 import { canOpenMenuPath, menuPathRoles } from "../shared/permissions";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
@@ -224,5 +224,25 @@ describe("Configurações da empresa: administrativo autorizado", () => {
     expect(describeMutationError(raw("CONFLICT"))).toContain("já tem uma autorização ativa");
     expect(describeMutationError(raw("NOT_FOUND"))).toContain("revogado");
     for (const code of ["CONFLICT", "NOT_FOUND"]) expect(describeMutationError(raw(code))).not.toMatch(/insert|query|sale_validator/i);
+  });
+});
+
+describe("Administrativo autorizado: validade no fuso do projeto e falha da equipe", () => {
+  it("a validade é o fim do dia em Recife (23:59:59 UTC-3) convertido para UTC, qualquer que seja o fuso do navegador", () => {
+    expect(endOfDayRecifeIso("2026-12-01")).toBe("2026-12-02T02:59:59.000Z");
+    expect(endOfDayRecifeIso("2026-02-28")).toBe("2026-03-01T02:59:59.000Z");
+    expect(endOfDayRecifeIso("")).toBeUndefined();
+    expect(endOfDayRecifeIso("01/12/2026")).toBeUndefined();
+    expect(read("client/src/components/crm/companySettings/panels.tsx")).not.toMatch(/new Date\(`\$\{validUntil\}/);
+  });
+  it("falha ao carregar a equipe mostra aviso com Recarregar, não uma lista vazia de candidatos", () => {
+    const state = describeBackendState({ errorCode: "INTERNAL_SERVER_ERROR" });
+    if (state.kind === "ok") throw new Error("estado inesperado");
+    const out = html(createElement(LoadFailure, { state, onRetry: noop }));
+    expect(out).toContain("Recarregar"); expect(out).not.toMatch(TECHNICAL);
+    const page = read("client/src/pages/CompanySettings.tsx");
+    expect(page).toMatch(/team\.error \|\| !team\.data/);
+    expect(page).toContain("team.refetch()");
+    expect(page).not.toContain("(team.data?.rows ?? []).filter(row => row.role");
   });
 });
