@@ -32,4 +32,18 @@ describe("sales room reception rules", () => {
     expect(filterReceptionQueue(rows, { date: "2026-08-20", salesRoom: "Ouro" }).map(row => row.id)).toEqual([3, 1]);
     expect(filterReceptionQueue(rows, { date: "2026-08-20", salesRoom: "Ouro", includeCompleted: true }).map(row => row.id)).toEqual([2, 3, 1]);
   });
+
+  it("fila: sem data de visita vale o dia da criação; 'captured' sem data aguarda atendimento; com data o comportamento é o de antes", () => {
+    const at = (iso: string) => new Date(iso);
+    const row = (id: number, capture: { presentationStatus: "captured" | "scheduled" | "closed"; scheduledAt: Date | null; createdAt?: Date; salesRoom?: string | null }) => ({ id, capture: { salesRoom: "Sala A", ...capture } });
+    const rows = [
+      row(1, { presentationStatus: "captured", scheduledAt: null, createdAt: at("2026-10-21T15:00:00Z") }),
+      row(2, { presentationStatus: "captured", scheduledAt: null, createdAt: at("2026-10-18T15:00:00Z") }),
+      row(3, { presentationStatus: "closed", scheduledAt: null, createdAt: at("2026-10-21T15:00:00Z") }),
+      row(4, { presentationStatus: "scheduled", scheduledAt: at("2026-10-21T13:00:00Z") }),
+      row(5, { presentationStatus: "captured", scheduledAt: at("2026-10-21T14:00:00Z") }),
+    ];
+    expect(filterReceptionQueue(rows, { date: "2026-10-21" }).map(r => r.id)).toEqual([4, 1]);
+    expect(filterReceptionQueue(rows, { date: "2026-10-21", includeCompleted: true }).map(r => r.id)).toEqual([4, 5, 1, 3]);
+  });
 });

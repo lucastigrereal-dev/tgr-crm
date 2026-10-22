@@ -28,6 +28,8 @@ export function canTransitionPresentationStatus(current: PresentationStatus, nex
 type QueueCapture = {
   presentationStatus: PresentationStatus;
   scheduledAt: Date | null;
+  /** Sem data de visita, vale o dia da criação da ficha. */
+  createdAt?: Date | null;
   salesRoom: string | null;
 };
 
@@ -35,12 +37,15 @@ export function filterReceptionQueue<T extends { capture: QueueCapture }>(rows: 
   const start = new Date(`${input.date}T00:00:00-03:00`);
   const end = new Date(`${input.date}T23:59:59.999-03:00`);
   const salesRoom = input.salesRoom?.trim();
+  const when = (capture: QueueCapture) => capture.scheduledAt ?? capture.createdAt ?? null;
   return rows.filter(row => {
-    const scheduledAt = row.capture.scheduledAt;
-    if (!scheduledAt || scheduledAt < start || scheduledAt >= end) return false;
+    const at = when(row.capture);
+    if (!at || at < start || at >= end) return false;
     if (salesRoom && row.capture.salesRoom !== salesRoom) return false;
-    return input.includeCompleted || activeRoomStatuses.includes(row.capture.presentationStatus);
-  }).sort((left, right) => left.capture.scheduledAt!.getTime() - right.capture.scheduledAt!.getTime());
+    // Ficha sem data ainda "captured" aguarda atendimento no dia da criação.
+    const awaiting = !row.capture.scheduledAt && row.capture.presentationStatus === "captured";
+    return input.includeCompleted || awaiting || activeRoomStatuses.includes(row.capture.presentationStatus);
+  }).sort((left, right) => when(left.capture)!.getTime() - when(right.capture)!.getTime());
 }
 
 export function assertReceptionAction(state: CaptureRoomState, action: ReceptionAction) {
