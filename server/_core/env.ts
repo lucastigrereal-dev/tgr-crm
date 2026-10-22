@@ -22,6 +22,7 @@ export const ENV = {
   featureFlagOverridesEnabled: process.env.FEATURE_FLAG_OVERRIDES_ENABLED === "true",
   // Item 4 (admin): permissão por papel editável. DESLIGADO por padrão e fora da tela de flags (segurança). Tabela é PROPOSTA 0085.
   permissionOverridesEnabled: process.env.PERMISSION_OVERRIDES_ENABLED === "true",
+  // C2/C3: ligada, só grava eventos INTERNOS (non_buyer.*) e o estado local de elegibilidade; nada é entregue ao Recovery (a fatia 5, entrega externa, não existe). Tabelas são PROPOSTA 0080.
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",
