@@ -1,7 +1,7 @@
 import { qualificationVersionToStamp } from "../qualificationPolicy";
 import { eligibilityHookAfterCommit } from "../nonBuyerEligibilityService";
 import { DEFAULT_NQ_SETTINGS } from "../captureSheetDomain";
-import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { captureMotives, captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
@@ -271,9 +271,12 @@ export const capturesRouter = router({
         opportunityId = opportunity[0]?.id ?? null;
         if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a oportunidade da captação." });
       }
-      const appointmentPlan = getCaptureAppointmentPlan({ customerName, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, salesRoom: input.salesRoom });
+      // Ficha sem data de visita (passante, cadastro rápido) entra na fila da sala do dia: a data vira "agora" (sem tarefa de agenda, que só existe para visita marcada).
+      // O campo continua opcional na entrada; ficha antiga com data nula é coberta pelo fallback por createdAt na fila.
+      const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : new Date();
+      const appointmentPlan = input.scheduledAt ? getCaptureAppointmentPlan({ customerName, scheduledAt, salesRoom: input.salesRoom }) : { presentationStatus: "scheduled" as const, task: null };
       const inserted = await tx.insert(captureRecords).values({
-        customerId, resortId: clean(input.resortId), opportunityId, campaignId: clean(input.campaignId), promoterId: clean(input.promoterId), qualifierId: clean(input.qualifierId), linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), salesRoom: nullIfBlank(input.salesRoom), captureLocation: nullIfBlank(input.captureLocation), lodgingLocation: nullIfBlank(input.lodgingLocation), transportation: nullIfBlank(input.transportation), isPasserby: input.isPasserby, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, presentationStatus: appointmentPlan.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), partnerName: nullIfBlank(input.partnerName), partnerAge: clean(input.partnerAge), partnerProfession: nullIfBlank(input.partnerProfession), partnerProfessionNotes: nullIfBlank(input.partnerProfessionNotes), relationshipStatus: nullIfBlank(input.relationshipStatus), relationshipYears: clean(input.relationshipYears), relationshipMonths: clean(input.relationshipMonths), childrenCount: input.childrenCount, childrenNames: nullIfBlank(input.childrenNames), primaryProfessionNotes: nullIfBlank(input.primaryProfessionNotes), averageIncome: input.averageIncome?.toFixed(2) ?? null, vehicleBrand: nullIfBlank(input.vehicleBrand), vehicleModel: nullIfBlank(input.vehicleModel), vehicleYear: clean(input.vehicleYear), hasCreditCard: clean(input.hasCreditCard), creditCardBrands: nullIfBlank(input.creditCardBrands), acceptsCheque: clean(input.acceptsCheque), ownsHome: clean(input.ownsHome), ownsPropertyInCity: clean(input.ownsPropertyInCity), travelWeeksPerYear: input.travelWeeksPerYear?.toFixed(1) ?? null, usualTravelSeason: nullIfBlank(input.usualTravelSeason), dreamTrips: nullIfBlank(input.dreamTrips), lastTrip: nullIfBlank(input.lastTrip), averageHotelSpend: input.averageHotelSpend?.toFixed(2) ?? null, nextFamilyTrip: nullIfBlank(input.nextFamilyTrip), socialNetworks: nullIfBlank(input.socialNetworks), giftDescription: nullIfBlank(input.giftDescription), notes: nullIfBlank(input.notes) }).$returningId();
+        customerId, resortId: clean(input.resortId), opportunityId, campaignId: clean(input.campaignId), promoterId: clean(input.promoterId), qualifierId: clean(input.qualifierId), linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), salesRoom: nullIfBlank(input.salesRoom), captureLocation: nullIfBlank(input.captureLocation), lodgingLocation: nullIfBlank(input.lodgingLocation), transportation: nullIfBlank(input.transportation), isPasserby: input.isPasserby, scheduledAt, presentationStatus: appointmentPlan.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), partnerName: nullIfBlank(input.partnerName), partnerAge: clean(input.partnerAge), partnerProfession: nullIfBlank(input.partnerProfession), partnerProfessionNotes: nullIfBlank(input.partnerProfessionNotes), relationshipStatus: nullIfBlank(input.relationshipStatus), relationshipYears: clean(input.relationshipYears), relationshipMonths: clean(input.relationshipMonths), childrenCount: input.childrenCount, childrenNames: nullIfBlank(input.childrenNames), primaryProfessionNotes: nullIfBlank(input.primaryProfessionNotes), averageIncome: input.averageIncome?.toFixed(2) ?? null, vehicleBrand: nullIfBlank(input.vehicleBrand), vehicleModel: nullIfBlank(input.vehicleModel), vehicleYear: clean(input.vehicleYear), hasCreditCard: clean(input.hasCreditCard), creditCardBrands: nullIfBlank(input.creditCardBrands), acceptsCheque: clean(input.acceptsCheque), ownsHome: clean(input.ownsHome), ownsPropertyInCity: clean(input.ownsPropertyInCity), travelWeeksPerYear: input.travelWeeksPerYear?.toFixed(1) ?? null, usualTravelSeason: nullIfBlank(input.usualTravelSeason), dreamTrips: nullIfBlank(input.dreamTrips), lastTrip: nullIfBlank(input.lastTrip), averageHotelSpend: input.averageHotelSpend?.toFixed(2) ?? null, nextFamilyTrip: nullIfBlank(input.nextFamilyTrip), socialNetworks: nullIfBlank(input.socialNetworks), giftDescription: nullIfBlank(input.giftDescription), notes: nullIfBlank(input.notes) }).$returningId();
       const captureId = inserted[0]?.id;
       if (!captureId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a ficha de captação." });
       let taskId: number | null = null;
@@ -311,15 +314,17 @@ export const capturesRouter = router({
     const date = input?.date ?? new Date().toISOString().slice(0, 10);
     const start = new Date(`${date}T00:00:00-03:00`);
     const end = new Date(`${date}T23:59:59.999-03:00`);
-    const filters = [gte(captureRecords.scheduledAt, start), lt(captureRecords.scheduledAt, end)];
+    // Sem data de visita (ficha antiga ou cadastro rápido), vale o dia em que a ficha foi criada, como em captureSheet.
+    const filters = [or(and(gte(captureRecords.scheduledAt, start), lt(captureRecords.scheduledAt, end)), and(isNull(captureRecords.scheduledAt), gte(captureRecords.createdAt, start), lt(captureRecords.createdAt, end)))!];
     if (input?.salesRoom?.trim()) filters.push(eq(captureRecords.salesRoom, input.salesRoom.trim()));
     // LGPD: data passada não abre a ficha de quem não comprou para a sala; admin e finance seguem vendo.
     if (!canOpenArchivedSheet(ctx.user.role)) filters.push(roomVisibleCondition(await roomVisibilityCutoff())!);
-    if (!input?.includeCompleted) filters.push(inArray(captureRecords.presentationStatus, activeRoomStatuses));
+    // "captured" sem data é ficha que ainda não foi marcada: aguarda atendimento no dia em que foi criada.
+    if (!input?.includeCompleted) filters.push(or(inArray(captureRecords.presentationStatus, activeRoomStatuses), and(isNull(captureRecords.scheduledAt), eq(captureRecords.presentationStatus, "captured")))!);
     const rows = await db.select({ capture: captureRecords, customer: customers, campaign: salesCampaigns }).from(captureRecords)
       .innerJoin(customers, eq(captureRecords.customerId, customers.id))
       .leftJoin(salesCampaigns, eq(captureRecords.campaignId, salesCampaigns.id))
-      .where(and(...filters)).orderBy(captureRecords.scheduledAt);
+      .where(and(...filters)).orderBy(sql`COALESCE(${captureRecords.scheduledAt}, ${captureRecords.createdAt})`);
     return filterReceptionQueue(rows, { date, salesRoom: input?.salesRoom, includeCompleted: input?.includeCompleted }).map(row => ({ ...row, durationMinutes: tourDurationMinutes(row.capture.presentationStartedAt, row.capture.presentationEndedAt) }));
   }),
 
