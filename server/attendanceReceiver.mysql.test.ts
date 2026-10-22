@@ -93,6 +93,38 @@ describe.skipIf(!integrationUrl)("receptor de atendimento (registro canônico do
     expect(await registry()).toHaveLength(0);
   });
 
+  it("(a) resort sem chave e com o mesmo nome: 201 e a chave do projeto é gravada (mesma regra da venda)", async () => {
+    const key = randomUUID();
+    const name = `Resort sem chave ${runId}`;
+    const [{ id }] = await db.insert(resorts).values({ name, externalKey: null, city: "Natal", state: "RN", status: "active" } as never).$returningId();
+    const response = await post(body({ project: { externalKey: key, name, timezone: "America/Recife" }, coupleId: randomUUID(), encounterId: randomUUID() }));
+    expect(response.status).toBe(201);
+    expect((await db.select().from(resorts).where(eq(resorts.id, id)))[0]!.externalKey).toBe(key);
+    expect(await db.select().from(coupleRegistry).where(eq(coupleRegistry.resortId, id))).toHaveLength(1);
+    // a partir daí o mapeamento por chave basta, mesmo com outro nome (projeto renomeado no Sales)
+    const again = await post(body({ project: { externalKey: key, name: `${name} renomeado`, timezone: "America/Recife" }, coupleId: randomUUID(), encounterId: randomUUID() }));
+    expect(again.status).toBe(201);
+  });
+
+  it("(b) resort com o mesmo nome mas OUTRA chave: 422 UNKNOWN_PROJECT (único código do contrato; não retentável) com o motivo no texto, sem trocar a chave nem gravar casal", async () => {
+    const existingKey = randomUUID();
+    const name = `Resort com chave ${runId}`;
+    const [{ id }] = await db.insert(resorts).values({ name, externalKey: existingKey, city: "Natal", state: "RN", status: "active" } as never).$returningId();
+    const response = await post(body({ project: { externalKey: randomUUID(), name, timezone: "America/Recife" }, coupleId: randomUUID(), encounterId: randomUUID() }));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ accepted: false, code: "UNKNOWN_PROJECT", error: expect.stringContaining("já está mapeado para outro projeto") });
+    expect((await db.select().from(resorts).where(eq(resorts.id, id)))[0]!.externalKey).toBe(existingKey);
+    expect(await db.select().from(coupleRegistry).where(eq(coupleRegistry.resortId, id))).toHaveLength(0);
+  });
+
+  it("(c) nenhum resort (nem chave nem nome): 422 UNKNOWN_PROJECT e nenhum resort é criado", async () => {
+    const before = (await db.select().from(resorts)).length;
+    const response = await post(body({ project: { externalKey: randomUUID(), name: `Inexistente ${runId}`, timezone: "America/Recife" }, coupleId: randomUUID(), encounterId: randomUUID() }));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ accepted: false, code: "UNKNOWN_PROJECT" });
+    expect((await db.select().from(resorts)).length).toBe(before);
+  });
+
   it("evento novo: 201, casal canônico com PII mínima (telefone só dígitos), histórico e auditoria sem nome nem telefone; resposta sem PII", async () => {
     const customersBefore = (await db.select().from(customers)).length;
     const response = await post(body());
