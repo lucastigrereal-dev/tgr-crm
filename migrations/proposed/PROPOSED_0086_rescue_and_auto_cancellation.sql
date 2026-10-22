@@ -1,8 +1,8 @@
 -- PROPOSTA (NAO APLICADA, nao esta no journal do drizzle). Precisa de GO do Opus antes de virar migration real.
 -- Desenho: docs/design/DISTRATO_E_RESGATE.md. Resgate pelo pos-vendas, distrato automatico configuravel (padrao desligado) e alertas juridicos (so alerta, nunca execucao).
 -- Aditiva: 4 CREATE TABLE IF NOT EXISTS + 1 ALTER ADD COLUMN com DEFAULT. Sem backfill, sem alterar linha existente. Atras de RESCUE_QUEUE_ENABLED / AUTO_CANCELLATION_ENABLED = false.
--- NOTA: ao virar migration Drizzle, as 5 instrucoes precisam do separador `--> statement-breakpoint` (ja presente abaixo); sem ele o 2o CREATE TABLE falha.
--- Para testar fora do drizzle com o cliente mysql, remova as linhas `--> statement-breakpoint` antes (o cliente mysql nao as aceita como comentario).
+-- NOTA: ao virar migration Drizzle, as 5 instrucoes precisam do separador de statements do drizzle (o marcador statement-breakpoint, ja presente entre elas abaixo); sem ele o 2o CREATE TABLE falha.
+-- Para testar fora do drizzle com o cliente mysql, remova antes as linhas do marcador (o cliente mysql nao as aceita como comentario).
 -- drizzle/schema.ts so ganha estas tabelas depois da migration aplicada (teste de drift).
 -- ATENCAO: o rollback so pode ser usado em banco de TESTE ou SINTETICO, NUNCA com dado real (dado de casal/contrato nao se apaga).
 -- Rollback (nesta ordem; a coluna e as tabelas novas nao tem dados de outros modulos):
