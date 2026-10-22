@@ -6,13 +6,14 @@ import { attendanceRecords, auditLogs, coupleRegistry, resorts } from "../drizzl
 import { getDb } from "./db";
 import { isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { logger } from "./logger";
+import { resolveResortForProject, ResortResolutionError } from "./resortResolution";
 
 /**
  * C1: receptor de `encounter.attendance_recorded.v1` (Sales Command -> CRM): um evento por atendimento encerrado, qualquer desfecho.
  * O CRM mantém o registro canônico do casal (couple_registry) e o histórico (attendance_records). Contrato dono: tgr-commercial-suite (seção `attendance`
  * de shared/contracts/consumers.lock.json). DESLIGADO por padrão (ATTENDANCE_RECEIVER_ENABLED): 404 mesmo com a chave certa.
  * - eventId determinístico de (encounterId, revisão): o receptor recusa (400) qualquer outro. Mesmo eventId + mesmo corpo = 200 replay; corpo diferente = 409.
- * - projeto desconhecido (nenhum resort com esse externalKey): 422 UNKNOWN_PROJECT. O receptor NÃO cria resort nem toca ficha/cliente/contrato.
+ * - projeto sem resort (nem por externalKey nem por nome): 422 UNKNOWN_PROJECT; resort com o mesmo nome mas OUTRA chave: 422 PROJECT_MAPPING_CONFLICT (não retentável); resort do mesmo nome sem chave recebe a chave. O receptor NÃO cria resort nem toca ficha/cliente/contrato.
  * - PII mínima: nomes e telefone só em dígitos, só em couple_registry. Resposta, log e auditoria não carregam nome nem telefone.
  */
 export const ATTENDANCE_TOPIC = "encounter.attendance_recorded.v1";
@@ -53,7 +54,7 @@ export const attendanceSchema = z.strictObject({
 export type AttendanceEvent = z.infer<typeof attendanceSchema>;
 
 export class AttendanceRejection extends Error {
-  constructor(readonly code: "UNKNOWN_PROJECT" | "EVENT_ID_CONFLICT", message: string) { super(message); this.name = "AttendanceRejection"; }
+  constructor(readonly code: "UNKNOWN_PROJECT" | "PROJECT_MAPPING_CONFLICT" | "EVENT_ID_CONFLICT", message: string) { super(message); this.name = "AttendanceRejection"; }
 }
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest();
@@ -83,8 +84,12 @@ export async function recordAttendance(db: Db, event: AttendanceEvent, retried =
   if (seen) return settle(seen);
   try {
     return await withDeadlockRetry(() => db.transaction(async tx => {
-      const [resort] = await tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.externalKey, event.project.externalKey)).limit(1);
-      if (!resort) throw new AttendanceRejection("UNKNOWN_PROJECT", "Projeto desconhecido.");
+      // Mesma regra de mapeamento da venda (resortResolution.ts): chave; senão nome (grava a chave se o resort não tem); outra chave => conflito.
+      let resort: { id: number };
+      try { resort = await resolveResortForProject(tx, event.project, { strictNameOnKeyMatch: false }); } catch (error) {
+        if (error instanceof ResortResolutionError) throw new AttendanceRejection(error.code === "PROJECT_NOT_MAPPED" ? "UNKNOWN_PROJECT" : "PROJECT_MAPPING_CONFLICT", error.code === "PROJECT_NOT_MAPPED" ? "Projeto desconhecido." : "O resort do CRM já está mapeado para outro projeto.");
+        throw error;
+      }
       const closedAt = new Date(event.closedAt);
       const names = { primaryName: event.couple.primaryName ?? null, secondaryName: event.couple.secondaryName ?? null, phoneDigits: digitsOf(event.couple.phone) };
       const [current] = await tx.select().from(coupleRegistry).where(and(eq(coupleRegistry.resortId, resort.id), eq(coupleRegistry.salesCoupleId, event.coupleId))).limit(1).for("update");

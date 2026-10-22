@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { fixContractCommissionRoleMapAtFormalization } from "./commissionRoleMapSnapshot";
+import { resolveResortForProject, ResortResolutionError } from "./resortResolution";
 import { eligibilityHook } from "./nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "./installmentScheduledFacts";
 import type { Express, Request, Response } from "express";
@@ -179,19 +180,12 @@ async function findFormalization(db: any, saleId: string) {
   };
 }
 
+// A regra de mapeamento vive em resortResolution.ts (compartilhada com o receptor de atendimento); aqui só traduz a falha para a rejeição da venda, com os mesmos códigos e textos.
 async function resolveResort(tx: any, project: SalesCommandSale["project"]) {
-  const byKey = (await tx.select().from(resorts).where(eq(resorts.externalKey, project.externalKey)).limit(1).for("update"))[0];
-  if (byKey) {
-    if (byKey.name !== project.name) throw new SalesIngestRejection("PROJECT_MAPPING_CONFLICT", "Project external key is mapped to another resort name");
-    return byKey;
+  try { return await resolveResortForProject(tx, project); } catch (error) {
+    if (error instanceof ResortResolutionError) throw new SalesIngestRejection(error.code, error.message);
+    throw error;
   }
-  const byName = (await tx.select().from(resorts).where(eq(resorts.name, project.name)).limit(1).for("update"))[0];
-  if (!byName) throw new SalesIngestRejection("PROJECT_NOT_MAPPED", "Sales Command project is not mapped to a CRM resort");
-  if (byName.externalKey && byName.externalKey !== project.externalKey) throw new SalesIngestRejection("PROJECT_MAPPING_CONFLICT", "CRM resort is already mapped to another Sales Command project");
-  if (!byName.externalKey) {
-    await tx.update(resorts).set({ externalKey: project.externalKey }).where(and(eq(resorts.id, byName.id), isNull(resorts.externalKey)));
-  }
-  return { ...byName, externalKey: project.externalKey };
 }
 
 async function resolveSaleTerms(tx: any, resortId: number, occurredAt: Date) {
