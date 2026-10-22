@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { commercialFractionHistory, commercialFractionHolds, commercialFractions, contractCancellationRequests, commercialPolicyVersions, contracts, customers, resorts, tasks, units, users } from "../drizzle/schema";
+import { commercialFractionHistory, commercialFractionHolds, commercialFractions, contractCancellationRequests, commercialPolicyVersions, contracts, customers, domainEvents, resorts, tasks, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { materializeSalesCommandSale, registerSalesCommandBridge, type SalesCommandSale } from "./salesCommandBridge";
 import { sweepExpiredHolds } from "./holdSweep";
@@ -39,6 +39,7 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
   const holds = (fractionId: number) => db.select().from(commercialFractionHolds).where(eq(commercialFractionHolds.fractionId, fractionId));
   const contractRow = async (id: number) => (await db.select().from(contracts).where(eq(contracts.id, id)))[0]!;
   const createContract = async (label: string, fractionId: number) => (await (await contractsApi()).create({ number: `E1-${label}-${runId}`, customerId, fractionId, usageModel: "fixed_week", status: "pending_signature", totalAmount: 1000, firstDueDate: "2027-01-10", installmentCount: 2 })).id;
+  const lostEvents = (id: number) => db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "contract.inventory_lost"), eq(domainEvents.aggregateId, String(id))));
   const expireHolds = async (fractionId: number) => db.update(commercialFractionHolds).set({ expiresAt: new Date(Date.now() - 60_000) }).where(eq(commercialFractionHolds.fractionId, fractionId));
 
   it("desligado por padrão: contrato vende a cota na criação", async () => {
@@ -97,9 +98,25 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
       // a conferência ficou registrada e a venda não valida
       expect((await api.getValidationStatus({ contractId: id })).documentsConferredAt).toBeTruthy();
       await expect(api.validateSale({ contractId: id })).rejects.toThrow();
+      // evento interno contract.inventory_lost: exatamente um, mesmo repetindo a conferência
+      expect(await lostEvents(id)).toHaveLength(1);
+      await expect(api.confirmDocuments({ contractId: id, note: "documentação conferida" })).rejects.toThrow();
+      expect(await lostEvents(id)).toHaveLength(1);
       // a cota livre pode ser vendida a outro contrato
       await createContract("again", f);
       expect((await fraction(f)).status).toBe("held");
+    });
+
+    it("reserva vencida varrida pelo sweep: 1 domain_event contract.inventory_lost; repetir o sweep continua 1", async () => {
+      const f = await newFraction(); const id = await createContract("evt", f);
+      await expireHolds(f);
+      await sweepExpiredHolds(db as never, { actorUserId: adminId, fractionIds: [f] });
+      const events = await lostEvents(id);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ aggregateType: "contract", idempotencyKey: `inventory-lost:${id}` });
+      expect(JSON.parse(events[0]!.payload)).toMatchObject({ contractId: id });
+      await sweepExpiredHolds(db as never, { actorUserId: adminId, fractionIds: [f] });
+      expect(await lostEvents(id)).toHaveLength(1);
     });
 
     it("conferência final concorrente com o sweep: nunca vende cota vencida e nunca dá deadlock", async () => {

@@ -56,6 +56,7 @@ export const domainEventCatalog = {
   "ai.assistance.requested": { aggregateType: "customer", description: "Assistência de IA consultada com contexto permissionado." },
   "sales.command.sale.ingested": { aggregateType: "contract", description: "Venda confirmada no Sales Command formalizada em oportunidade, proposta, contrato, parcelas e estoque no CRM." },
   "commercial.inventory.bootstrapped": { aggregateType: "resort", description: "Estoque comercial de cotas materializado para o empreendimento." },
+  "contract.inventory_lost": { aggregateType: "contract", description: "INTERNO (CRM-INV): a reserva da cota venceu antes da conferência de comprovante e documentação; a cota voltou ao estoque. Sem entrega externa (Sales/Financial ainda não consomem)." },
   "commercial.fraction.status.changed": { aggregateType: "commercial_fraction", description: "Status comercial da cota alterado com trilha auditável." },
 } as const;
 

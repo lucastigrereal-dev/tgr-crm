@@ -35,3 +35,11 @@ describe("ADR-010: eventos internos de comissão (não retransmitidos)", () => {
     expect(event.payload).toEqual({ contractId: 9, commissionId: 7, decision: "offset", financialTransactionId: 3 });
   });
 });
+
+describe("CRM-INV: contract.inventory_lost é interno", () => {
+  it("está no catálogo e fora da lista que a ponte financeira retransmite", async () => {
+    expect(domainEventDefinition("contract.inventory_lost")).toMatchObject({ aggregateType: "contract" });
+    const { FINANCIAL_EVENT_NAMES } = await import("./financialBridge");
+    expect((FINANCIAL_EVENT_NAMES as readonly string[]).includes("contract.inventory_lost")).toBe(false);
+  });
+});
