@@ -10,7 +10,7 @@ Estado: **SÓ DESENHO**. A migration proposta foi aplicada e desfeita (rollback)
 4. Cobrança judicial e negativação **nunca são automáticas**: só alerta para decisão humana.
 5. O pós-vendas tenta resgatar **antes** do distrato.
 
-Suposições a confirmar (marcadas **[CONFIRMAR]**): (a) "pós-vendas" = papel `service` (Atendimento) mais `admin`; (b) o prazo de 3 meses conta a partir da primeira parcela vencida e não paga do contrato.
+Suposições a confirmar (marcadas **[CONFIRMAR]**): (a) "pós-vendas" = papel `service` (Atendimento) mais `admin`, via capacidade `rescue.work`; (b) o prazo de 3 meses conta a partir da primeira parcela vencida e não paga do contrato. Ambas respondidas pelo Opus na seção 10, com confirmação final do Lucas.
 
 ## 2. O que já existe e não muda
 
@@ -67,6 +67,8 @@ Tabela versionada append-only `retention_settings_versions` (a vigente é a de m
 | `rescueWindowMonths` | 3 | Prazo do resgate, contado da primeira parcela vencida não paga **[CONFIRMAR]**. 1 a 24. |
 | `rescueAlertLeadDays` | 15 | Quantos dias antes do fim do prazo o pós-vendas recebe o alerta de "vai vencer". |
 | `autoCancelEnabled` | **false** | Liga/desliga o distrato automático. |
+| `autoCancelPromiseDays` | 15 | Teto: sem distrato automático se houve tentativa `promised_payment`/`renegotiating` nos últimos N dias (ou renegociação aberta). |
+| `autoCancelMaxPaidPercent` | 30 | Teto: sem distrato automático se o valor já pago passa de X% do contrato. |
 | `createdByUserId`, `createdAt`, `note` | | Quem mudou, quando, por quê. |
 
 Sem linha na tabela (ou flag mestra OFF): valem os padrões acima e o distrato automático fica desligado. A tela segue o padrão das abas de "Configurações da empresa" (uma aba nova, só admin, histórico visível). Trocar o prazo vale para casos **abertos depois**; casos abertos guardam `settingsVersionId` e o `rescueDueAt` calculado (mudança de configuração não move prazo de caso em andamento sem ação explícita do admin).
@@ -111,11 +113,17 @@ Cobrança judicial e negativação **não têm flag porque não têm execução*
 
 Aditiva, sem backfill, sem tocar linha existente: 4 `CREATE TABLE IF NOT EXISTS` (`retention_settings_versions`, `contract_rescue_cases`, `contract_rescue_attempts`, `legal_action_alerts`) e 1 `ALTER TABLE contract_cancellation_requests ADD COLUMN origin ... DEFAULT 'manual'`. Rollback no cabeçalho do arquivo. Como nas demais propostas, `drizzle/schema.ts` só ganha as tabelas depois da migration aplicada (o teste de drift compara schema x banco).
 
-## 10. Decisões que faltam (Lucas / Opus)
+## 10. Decisões (respostas do Opus) e o que continua com o Lucas
 
-1. Modelo de reserva vencida (seção 6).
-2. Papel do pós-vendas e **[CONFIRMAR]** a contagem do prazo de 3 meses.
-3. Usuário de sistema para o ator do distrato automático (ou colunas anuláveis).
-4. Tetos de segurança para distrato automático: por exemplo, nunca automático quando o já pago passar de um valor ou percentual, ou quando houver comissão paga (hoje cai na revisão manual da ADR-010).
-5. Quem recebe o alerta jurídico além do admin, e o texto do alerta.
-6. Aprovar o modo ensaio como etapa obrigatória antes do primeiro distrato automático real.
+Respondidas (valem para o PR de código; o Lucas confirma o que está marcado):
+1. **Ator do distrato automático**: usuário de sistema DEDICADO, sem login e sem senha, criado por seed no PR de código, que aparece na auditoria como "sistema". Nenhuma coluna NOT NULL existente muda (`requestedByUserId` e `decidedByUserId` continuam obrigatórias e recebem o id desse usuário).
+2. **Tetos de segurança, OBRIGATÓRIOS antes de qualquer distrato automático real**, todos configuráveis na mesma tela do admin (colunas na tabela versionada `retention_settings_versions`, com histórico). Fora de qualquer teto, o caso NÃO é distratado sozinho: vai para decisão manual do admin.
+   - Nunca automático com comissão já paga (cai na revisão manual da ADR-010, como hoje).
+   - Nunca com renegociação aberta, nem com tentativa de resgate `promised_payment` ou `renegotiating` nos últimos N dias (padrão 15, configurável).
+   - Nunca quando o valor já pago passar de X% do contrato (padrão 30%, configurável).
+3. **Ensaio**: `AUTO_CANCELLATION_DRY_RUN` nasce `true`; sair do ensaio é decisão do Lucas.
+4. **Pós-vendas**: papel `service` + `admin`, por meio da capacidade `rescue.work` atribuível (tela de permissões). O prazo de 3 meses conta da PRIMEIRA parcela vencida e não paga; confirmação final do Lucas.
+
+Continuam com o Lucas: o **modelo da reserva vencida** (seção 6) e **quem recebe o alerta jurídico** (e o texto dele).
+
+Impacto na migration proposta: `retention_settings_versions` ganha as colunas dos tetos (`autoCancelPromiseDays` padrão 15, `autoCancelMaxPaidPercent` padrão 30); o arquivo `PROPOSED_0086` já foi atualizado. O rollback da proposta só vale em banco de teste ou sintético, nunca com dado real.

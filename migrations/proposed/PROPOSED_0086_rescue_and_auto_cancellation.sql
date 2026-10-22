@@ -2,6 +2,7 @@
 -- Desenho: docs/design/DISTRATO_E_RESGATE.md. Resgate pelo pos-vendas, distrato automatico configuravel (padrao desligado) e alertas juridicos (so alerta, nunca execucao).
 -- Aditiva: 4 CREATE TABLE IF NOT EXISTS + 1 ALTER ADD COLUMN com DEFAULT. Sem backfill, sem alterar linha existente. Atras de RESCUE_QUEUE_ENABLED / AUTO_CANCELLATION_ENABLED = false.
 -- drizzle/schema.ts so ganha estas tabelas depois da migration aplicada (teste de drift).
+-- ATENCAO: o rollback so pode ser usado em banco de TESTE ou SINTETICO, NUNCA com dado real (dado de casal/contrato nao se apaga).
 -- Rollback (nesta ordem; a coluna e as tabelas novas nao tem dados de outros modulos):
 --   ALTER TABLE contract_cancellation_requests DROP COLUMN origin;
 --   DROP TABLE legal_action_alerts; DROP TABLE contract_rescue_attempts; DROP TABLE contract_rescue_cases; DROP TABLE retention_settings_versions;
@@ -12,13 +13,17 @@ CREATE TABLE IF NOT EXISTS `retention_settings_versions` (
 	`rescueWindowMonths` int NOT NULL DEFAULT 3,
 	`rescueAlertLeadDays` int NOT NULL DEFAULT 15,
 	`autoCancelEnabled` boolean NOT NULL DEFAULT false,
+	`autoCancelPromiseDays` int NOT NULL DEFAULT 15,
+	`autoCancelMaxPaidPercent` int NOT NULL DEFAULT 30,
 	`note` varchar(500),
 	`createdByUserId` int NOT NULL,
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	CONSTRAINT `retention_settings_versions_id` PRIMARY KEY(`id`),
 	CONSTRAINT `retention_settings_versions_createdByUserId_fk` FOREIGN KEY (`createdByUserId`) REFERENCES `users`(`id`),
 	CONSTRAINT `retention_settings_window_check` CHECK (`rescueWindowMonths` BETWEEN 1 AND 24),
-	CONSTRAINT `retention_settings_lead_check` CHECK (`rescueAlertLeadDays` BETWEEN 0 AND 365)
+	CONSTRAINT `retention_settings_lead_check` CHECK (`rescueAlertLeadDays` BETWEEN 0 AND 365),
+	CONSTRAINT `retention_settings_promise_check` CHECK (`autoCancelPromiseDays` BETWEEN 0 AND 365),
+	CONSTRAINT `retention_settings_paidpct_check` CHECK (`autoCancelMaxPaidPercent` BETWEEN 0 AND 100)
 );
 
 -- Caso de resgate: no maximo UM aberto por contrato (activeKey unico; NULL quando fechado).
