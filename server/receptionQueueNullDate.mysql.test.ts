@@ -28,12 +28,12 @@ describe.skipIf(!integrationUrl)("fila da recepção com ficha sem data de visit
   });
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
-  it("(a) ficha criada pela rota SEM data de visita já nasce com scheduledAt e aparece na fila de hoje; campo segue opcional", async () => {
+  it("(a) ficha criada pela rota SEM data de visita grava captured/scheduledAt nulo (passante) e aparece na fila de hoje; campo segue opcional", async () => {
     const created = await caller("admin").captures.create({ customerId, salesRoom: room, createOpportunity: false } as never);
     const id = (created as { captureId?: number; id?: number }).captureId ?? (created as { id: number }).id;
     const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, id));
-    expect(row!.scheduledAt).toBeInstanceOf(Date);
-    expect(row!.presentationStatus).toBe("scheduled");
+    expect(row!.scheduledAt).toBeNull();
+    expect(row!.presentationStatus).toBe("captured");
     expect(await queueIds()).toContain(id);
   });
 
