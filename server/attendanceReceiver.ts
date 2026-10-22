@@ -13,7 +13,7 @@ import { resolveResortForProject, ResortResolutionError } from "./resortResoluti
  * O CRM mantém o registro canônico do casal (couple_registry) e o histórico (attendance_records). Contrato dono: tgr-commercial-suite (seção `attendance`
  * de shared/contracts/consumers.lock.json). DESLIGADO por padrão (ATTENDANCE_RECEIVER_ENABLED): 404 mesmo com a chave certa.
  * - eventId determinístico de (encounterId, revisão): o receptor recusa (400) qualquer outro. Mesmo eventId + mesmo corpo = 200 replay; corpo diferente = 409.
- * - projeto sem resort (nem por externalKey nem por nome): 422 UNKNOWN_PROJECT; resort com o mesmo nome mas OUTRA chave: 422 PROJECT_MAPPING_CONFLICT (não retentável); resort do mesmo nome sem chave recebe a chave. O receptor NÃO cria resort nem toca ficha/cliente/contrato.
+ * - projeto sem resort (nem por externalKey nem por nome): 422 UNKNOWN_PROJECT; resort com o mesmo nome mas OUTRA chave: também 422 UNKNOWN_PROJECT (o contrato não tem código de conflito; não retentável), com o motivo só no texto e no log; resort do mesmo nome sem chave recebe a chave. O receptor NÃO cria resort nem toca ficha/cliente/contrato.
  * - PII mínima: nomes e telefone só em dígitos, só em couple_registry. Resposta, log e auditoria não carregam nome nem telefone.
  */
 export const ATTENDANCE_TOPIC = "encounter.attendance_recorded.v1";
@@ -54,7 +54,7 @@ export const attendanceSchema = z.strictObject({
 export type AttendanceEvent = z.infer<typeof attendanceSchema>;
 
 export class AttendanceRejection extends Error {
-  constructor(readonly code: "UNKNOWN_PROJECT" | "PROJECT_MAPPING_CONFLICT" | "EVENT_ID_CONFLICT", message: string) { super(message); this.name = "AttendanceRejection"; }
+  constructor(readonly code: "UNKNOWN_PROJECT" | "EVENT_ID_CONFLICT", message: string, readonly detail?: "project_mapping_conflict") { super(message); this.name = "AttendanceRejection"; }
 }
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest();
@@ -87,7 +87,8 @@ export async function recordAttendance(db: Db, event: AttendanceEvent, retried =
       // Mesma regra de mapeamento da venda (resortResolution.ts): chave; senão nome (grava a chave se o resort não tem); outra chave => conflito.
       let resort: { id: number };
       try { resort = await resolveResortForProject(tx, event.project, { strictNameOnKeyMatch: false }); } catch (error) {
-        if (error instanceof ResortResolutionError) throw new AttendanceRejection(error.code === "PROJECT_NOT_MAPPED" ? "UNKNOWN_PROJECT" : "PROJECT_MAPPING_CONFLICT", error.code === "PROJECT_NOT_MAPPED" ? "Projeto desconhecido." : "O resort do CRM já está mapeado para outro projeto.");
+        // O contrato (Suite) só define 422 UNKNOWN_PROJECT: o conflito de mapeamento sai com o MESMO código (não retentável; vai a DEAD no Sales), distinguido só no texto e no log interno.
+        if (error instanceof ResortResolutionError) throw error.code === "PROJECT_NOT_MAPPED" ? new AttendanceRejection("UNKNOWN_PROJECT", "Projeto desconhecido.") : new AttendanceRejection("UNKNOWN_PROJECT", "Projeto desconhecido: o resort do CRM com este nome já está mapeado para outro projeto.", "project_mapping_conflict");
         throw error;
       }
       const closedAt = new Date(event.closedAt);
@@ -148,7 +149,7 @@ async function handle(request: Request, response: Response, integrationKey: stri
     response.status(result.replay ? 200 : 201).json({ accepted: true, replay: result.replay, eventId: parsed.data.eventId });
   } catch (error) {
     if (error instanceof AttendanceRejection) {
-      logger.warn("Attendance rejected by a domain rule", { code: error.code, eventId: parsed.data.eventId });
+      logger.warn("Attendance rejected by a domain rule", { code: error.code, eventId: parsed.data.eventId, ...(error.detail ? { detail: error.detail } : {}) });
       response.status(error.code === "EVENT_ID_CONFLICT" ? 409 : 422).json({ accepted: false, code: error.code, error: error.message });
       return;
     }
