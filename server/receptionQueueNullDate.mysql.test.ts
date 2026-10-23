@@ -55,3 +55,55 @@ describe.skipIf(!integrationUrl)("fila da recepção com ficha sem data de visit
     expect(await queueIds()).not.toContain(id);
   });
 });
+
+// F1.6: a lacuna que o #117 (indicadores) deixou na ENTRADA da ficha. Com CAPTURE_REQUIRE_VISIT_DATE_OR_PASSERBY ligada, a recepção informa a data OU marca passante.
+describe.skipIf(!integrationUrl)("F1.6: data da visita ou passante explícito na criação da ficha (MySQL real)", () => {
+  let pool: mysql.Pool; let db: ReturnType<typeof drizzle>; let appRouter: typeof import("./routers")["appRouter"]; let userId = 0;
+  const room = `Sala Passante ${runId}`;
+  const previousEnv = { ...process.env };
+  const caller = () => appRouter.createCaller({ user: { id: userId, role: "admin", name: "Teste Passante" } } as never);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const person = (label: string) => ({ fullName: `Casal ${label} ${runId}`, phone: `1196${Math.floor(Math.random() * 1e7).toString().padStart(7, "0")}` });
+
+  beforeAll(async () => {
+    validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
+    process.env.DATABASE_URL = integrationUrl;
+    ({ appRouter } = await import("./routers"));
+    pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 }); db = drizzle({ client: pool });
+    [{ id: userId }] = await db.insert(users).values({ openId: `passante-${runId}`, name: "Teste Passante", role: "admin" }).$returningId();
+  });
+  afterAll(async () => { process.env = previousEnv; await pool?.end(); });
+
+  it("regra LIGADA: sem data e sem passante é recusada, e nada é gravado", async () => {
+    process.env.CAPTURE_REQUIRE_VISIT_DATE_OR_PASSERBY = "true";
+    const customer = person("Recusa");
+    await expect(caller().captures.create({ customer, salesRoom: room, createOpportunity: false } as never)).rejects.toThrow(/data da visita|passante/i);
+    expect(await db.select().from(customers).where(eq(customers.phone, customer.phone))).toHaveLength(0);
+    expect(await caller().captures.visitRule()).toEqual({ requireDateOrPasserby: true });
+  });
+
+  it("regra LIGADA: passante explícito entra na fila de hoje, guardado como passante e sem horário de agendamento", async () => {
+    process.env.CAPTURE_REQUIRE_VISIT_DATE_OR_PASSERBY = "true";
+    const created = await caller().captures.create({ customer: person("Passante"), salesRoom: room, isPasserby: true, createOpportunity: false } as never);
+    const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, created.captureId));
+    expect(row!.isPasserby).toBe(true);
+    expect(row!.scheduledAt).toBeNull();
+    const queue = await caller().captures.receptionQueue({ date: today, salesRoom: room });
+    expect(queue.map(item => item.capture.id)).toContain(created.captureId);
+  });
+
+  it("regra LIGADA: com data de visita passa sem precisar de passante", async () => {
+    process.env.CAPTURE_REQUIRE_VISIT_DATE_OR_PASSERBY = "true";
+    const created = await caller().captures.create({ customer: person("Agendado"), salesRoom: room, scheduledAt: new Date(Date.now() + 86_400_000).toISOString(), createOpportunity: false } as never);
+    const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, created.captureId));
+    expect(row!.isPasserby).toBe(false);
+    expect(row!.scheduledAt).not.toBeNull();
+  });
+
+  it("regra DESLIGADA (padrão): o comportamento anterior continua, ficha sem data é aceita", async () => {
+    delete process.env.CAPTURE_REQUIRE_VISIT_DATE_OR_PASSERBY;
+    const created = await caller().captures.create({ customer: person("Livre"), salesRoom: room, createOpportunity: false } as never);
+    expect(created.captureId).toBeGreaterThan(0);
+    expect(await caller().captures.visitRule()).toEqual({ requireDateOrPasserby: false });
+  });
+});

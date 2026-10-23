@@ -17,6 +17,7 @@ import type { CaptureExportSource } from "../../shared/captureSheetExport";
 import { buildAverageTimeByConsultant, buildSalesByOrigin } from "../../shared/captureSheetReports";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
+import { listUnlinkedCouples } from "../unlinkedCouples";
 
 /**
  * Ficha impressa com QR (TSE x CRM, pacotes 2, 3 e 5): a ficha abre pelo código do casal do Sales Command; o QR de bip é o da recepção (token secreto só na Suite), a folha só tem o espaço dele, equipe por papel, PEP e campos novos.
@@ -167,6 +168,14 @@ export const captureSheetRouter = router({
       await txAudit(tx, { actorUserId: ctx.user.id, entityType: "capture", entityId: input.captureId, action: "couple_code_set", summary: capture.coupleCode ? `Ficha ${input.captureId}: código do casal trocado de ${capture.coupleCode} para ${code}.` : `Ficha ${input.captureId}: código do casal ${code} ligado.` });
     });
     return { code };
+  }),
+
+  /** F1.4: casais sem vínculo (código do Sales sem ficha / ficha com chegada e sem código). Alimenta o alerta do painel da sala; nada aqui escreve. */
+  unlinked: receptionProcedure.query(async ({ ctx }) => {
+    const db = await requireDb();
+    // Mesmo recorte da lista da ficha: quem não abre ficha arquivada só vê as fichas ainda visíveis para a sala.
+    const roomVisible = canOpenArchivedSheet(ctx.user.role) ? undefined : roomVisibleCondition(await roomVisibilityCutoff());
+    return listUnlinkedCouples(db, new Date(), undefined, roomVisible);
   }),
 
   /** Código da ficha pelo id, para a lista abrir a impressão. */
