@@ -83,7 +83,7 @@ Sem linha na tabela (ou flag mestra OFF): valem os padrões acima e o distrato a
 
 | Evento | Quando | idempotencyKey |
 |---|---|---|
-| `contract.rescue.opened` | caso aberto | `rescue-open:<contractId>:<firstOverdueDate>` |
+| `contract.rescue.opened` | caso aberto | `rescue-open:<caseId>` |
 | `contract.rescue.attempted` | tentativa registrada | `rescue-attempt:<attemptId>` |
 | `contract.rescue.due_soon` | entrou na janela de alerta | `rescue-due-soon:<caseId>` |
 | `contract.rescue.resolved` | `rescued`, `dismissed` ou `cancelled` | `rescue-resolved:<caseId>` |

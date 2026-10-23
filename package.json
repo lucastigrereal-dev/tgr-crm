@@ -17,6 +17,7 @@
     "seed:e2e:isolation": "node scripts/seed-e2e-isolated.mjs",
     "clean:e2e:isolation": "node scripts/cleanup-e2e-isolated.mjs",
     "config:doctor": "node scripts/config-doctor.mjs",
+    "policy:readiness": "tsx scripts/project-policy-readiness.ts",
     "config:doctor:strict": "node scripts/config-doctor.mjs --strict",
     "config:doctor:e2e": "node scripts/config-doctor.mjs --e2e --strict",
     "test:ci": "pnpm check && pnpm test && pnpm build && node scripts/check-bundle-budget.mjs",

@@ -222,12 +222,12 @@ function MotivosAdmin() {
   </CardContent></Card>;
 }
 
-function LigarCodigo({ captureId }: { captureId: number }) {
+function LigarCodigo({ captureId, suggestedCode }: { captureId: number; suggestedCode?: string }) {
   const { user } = useAuth();
   const canLink = user?.role === "admin" || user?.role === "seller";
   const utils = trpc.useUtils();
   const current = trpc.captureSheet.codeOf.useQuery({ captureId });
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(suggestedCode ?? "");
   const link = trpc.captureSheet.setCoupleCode.useMutation({ onSuccess: () => { toast.success("Código ligado à ficha."); void utils.captureSheet.codeOf.invalidate({ captureId }); }, onError: error => toast.error(error.message) });
   if (current.isLoading) return <p className="text-sm text-muted-foreground">Carregando...</p>;
   if (current.data?.coupleCode) return <FichaImpressa code={current.data.coupleCode} />;
@@ -244,7 +244,7 @@ export default function FichaSala() {
   const captureId = Number(params.get("captura"));
   return <div className="space-y-6">
     <PageHeader eyebrow="Controle de sala" title="Ficha impressa" description="Ficha A4 do casal com o código do casal e espaço para o QR da recepção, equipe por papel e campos da sala. A impressão e a reimpressão ficam registradas." />
-    {code ? <FichaImpressa code={code} /> : Number.isInteger(captureId) && captureId > 0 ? <LigarCodigo captureId={captureId} /> : <PainelPapel />}
+    {code && !(Number.isInteger(captureId) && captureId > 0) ? <FichaImpressa code={code} /> : Number.isInteger(captureId) && captureId > 0 ? <LigarCodigo captureId={captureId} suggestedCode={code ?? undefined} /> : <PainelPapel />}
   </div>;
 }
 

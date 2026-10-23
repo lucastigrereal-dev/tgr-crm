@@ -31,6 +31,10 @@ export const ENV = {
   privacyErasureEndpoint: process.env.GUESTPASS_PRIVACY_BRIDGE_ENDPOINT ?? "",
   privacyErasureKey: process.env.GUESTPASS_PRIVACY_BRIDGE_KEY ?? "",
   privacyErasureHmacSecret: process.env.GUESTPASS_PRIVACY_BRIDGE_HMAC_SECRET ?? "",
+  // F3.1 (MODO SOMBRA): fila de resgate do pós-vendas e registro do que o distrato automático FARIA. DESLIGADA por padrão. Tabelas são PROPOSTA 0086. Nunca cancela contrato.
+  rescueQueueEnabled: process.env.RESCUE_QUEUE_ENABLED === "true",
+  // F3.1: RESERVADA para o distrato automático real (F4). Nesta fatia NENHUM código a lê para agir: o caminho automático não existe. Nasce false.
+  autoCancellationEnabled: process.env.AUTO_CANCELLATION_ENABLED === "true",
   // CRM-A07: varredura de blob órfão no armazenamento local. DESLIGADA por padrão; ligada sem DELETE só relata (ensaio).
   gatewayRecoveryEnabled: process.env.GATEWAY_RECOVERY_ENABLED !== "false",
   gatewayRecoveryIntervalMinutes: Math.max(1, Math.min(24 * 60, Math.trunc(Number(process.env.GATEWAY_RECOVERY_INTERVAL_MINUTES ?? 5)) || 5)),

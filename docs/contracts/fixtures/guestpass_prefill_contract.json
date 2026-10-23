@@ -1,0 +1,105 @@
+{
+  "_source": "tgr-guestpass main (2c2fc184589494a5a38ca1682ee5ce4509fe2331, branch kan-32/v5-consent-shown): tests/fixtures/guestpass_prefill_contract.json (cópia fiel; regenerar copiando de lá e rodar node scripts/verify-guestpass-fixture.mjs --guestpass <dir>). Dados SINTÉTICOS.",
+  "contract": "guestpass.prefill.v1",
+  "contractVersion": 1,
+  "source": "docs/integration/GUESTPASS_PREFILL_CONTRACT.md (fatia 1 do desenho GuestPass -> CRM, 21/10/2026). Dono do contrato: tgr-guestpass.",
+  "note": "Fixture sintética e versionada, para a Suite copiar e travar por hash antes do CRM implementar. Nenhum dado de casal real. Campo novo opcional = mesma versão; remover ou renomear = v2.",
+  "method": "GET",
+  "route": "/api/integrations/crm/prefill/{guestPassId}",
+  "guestPassIdPattern": "^GP-([0-9A-F]{8}|[0-9A-F]{10})$",
+  "flag": {
+    "env": "GUESTPASS_CRM_PREFILL_ENABLED",
+    "default": false,
+    "disabledStatus": 404
+  },
+  "auth": {
+    "scheme": "Bearer",
+    "env": "GUESTPASS_CRM_READ_KEY",
+    "comparison": "constant-time"
+  },
+  "acceptedStatuses": [
+    "confirmed",
+    "show_qualified"
+  ],
+  "responseKeys": [
+    "contractVersion",
+    "guestPassId",
+    "status",
+    "visitDate",
+    "origin",
+    "couple",
+    "guestPassConsentVersion"
+  ],
+  "originKeys": [
+    "captorId",
+    "pointId",
+    "channel"
+  ],
+  "coupleKeys": [
+    "primaryName",
+    "secondaryName",
+    "phone",
+    "cityUf",
+    "lodging"
+  ],
+  "coupleRequiredKeys": [
+    "primaryName",
+    "phone"
+  ],
+  "forbiddenKeys": [
+    "cpf",
+    "monthlyIncome",
+    "carModel",
+    "carYear",
+    "trips",
+    "notes",
+    "familyComposition",
+    "courtesy",
+    "time"
+  ],
+  "errors": [
+    {
+      "status": 401,
+      "code": "UNAUTHORIZED",
+      "when": "chave ausente ou errada"
+    },
+    {
+      "status": 404,
+      "code": null,
+      "when": "flag desligada, rota desconhecida, passe inexistente, fora dos status aceitos, anonimizado, sem consentimento registrado ou com versão de consentimento fora de GUESTPASS_CRM_ACCEPTED_CONSENT_VERSIONS; mesmo corpo para todos, não diz qual"
+    },
+    {
+      "status": 429,
+      "code": "RATE_LIMITED",
+      "when": "passou do limite de chamadas por minuto da chave (GUESTPASS_CRM_PREFILL_RATE_PER_MIN, padrão 60); contado antes de olhar o passe, igual para Nº que existe ou não",
+      "headers": {
+        "Retry-After": "segundos inteiros até poder tentar de novo (1 a 60)",
+        "Cache-Control": "no-store"
+      }
+    },
+    {
+      "status": 503,
+      "code": "PREFILL_UNAVAILABLE",
+      "when": "flag ligada mas GUESTPASS_CRM_READ_KEY não configurada"
+    }
+  ],
+  "example": {
+    "contractVersion": 1,
+    "guestPassId": "GP-0A1B2C3D4E",
+    "status": "confirmed",
+    "visitDate": "2026-10-02",
+    "origin": {
+      "captorId": "cap-exemplo",
+      "pointId": "PONTA-NEGRA",
+      "channel": "rua"
+    },
+    "couple": {
+      "primaryName": "EXEMPLO Titular",
+      "secondaryName": "EXEMPLO Acompanhante",
+      "phone": "8400000000",
+      "cityUf": "Cidade Exemplo/UF",
+      "lodging": "Hospedagem Exemplo"
+    },
+    "guestPassConsentVersion": "4-AGUARDA_APROVACAO_DONO_PRODUTO_2026-10-19"
+  }
+}
