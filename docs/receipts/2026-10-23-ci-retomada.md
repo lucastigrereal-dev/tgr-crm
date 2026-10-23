@@ -7,3 +7,5 @@ este commit reabre a prova no head exato; so com CI verde nele o PR pode ser mer
 Flags seguem desligadas; nenhum banco real foi tocado.
 
 Atualizacao 11:23Z: a trava era fatura/pagamento da conta; o Lucas regularizou as 11:12Z. Novo disparo unico apos a propagacao.
+
+Atualizacao 11:40Z: novo disparo unico apos o "vai" do Lucas; se vier "account is locked" de novo, o motivo segue sendo a conta e nao o codigo.
