@@ -1,5 +1,5 @@
 import type { Express, NextFunction, Request, Response } from "express";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { auditLogs, captureRecords, customers } from "../drizzle/schema";
 import { encounterTimesSchema, ENCOUNTER_TIMES_PATH } from "./encounterTimesReceiver";
 import { getDb } from "./db";
@@ -64,7 +64,8 @@ export type UnlinkedCouples = {
   total: number;
 };
 
-export async function listUnlinkedCouples(db: Db, now: Date = new Date(), windowHours = UNLINKED_WINDOW_HOURS): Promise<UnlinkedCouples> {
+/** `roomVisible`: recorte de visibilidade da sala (roomVisibleCondition) para quem não abre fichas arquivadas; sem ele a lista é completa (administração e financeiro). */
+export async function listUnlinkedCouples(db: Db, now: Date = new Date(), windowHours = UNLINKED_WINDOW_HOURS, roomVisible?: SQL): Promise<UnlinkedCouples> {
   const since = new Date(now.getTime() - windowHours * 3_600_000);
   const refusals = await db.select({ coupleCode: auditLogs.entityId, attempts: sql<number>`COUNT(*)`, firstSeenAt: sql<Date>`MIN(${auditLogs.createdAt})`, lastSeenAt: sql<Date>`MAX(${auditLogs.createdAt})` })
     .from(auditLogs).where(and(eq(auditLogs.entityType, UNKNOWN_COUPLE_ENTITY), eq(auditLogs.action, UNKNOWN_COUPLE_ACTION), gte(auditLogs.createdAt, since)))
@@ -74,7 +75,7 @@ export async function listUnlinkedCouples(db: Db, now: Date = new Date(), window
   const codesWithoutCapture = refusals.filter(row => !linkedCodes.has(row.coupleCode)).map(row => ({ coupleCode: row.coupleCode, attempts: Number(row.attempts), firstSeenAt: new Date(row.firstSeenAt), lastSeenAt: new Date(row.lastSeenAt) }));
   const capturesWithoutCode = await db.select({ captureId: captureRecords.id, customerName: customers.fullName, salesRoom: captureRecords.salesRoom, checkedInAt: captureRecords.checkedInAt })
     .from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId))
-    .where(and(isNull(captureRecords.coupleCode), isNull(captureRecords.anonymizedAt), isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, since)))
+    .where(and(isNull(captureRecords.coupleCode), isNull(captureRecords.anonymizedAt), isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, since), roomVisible))
     .orderBy(desc(captureRecords.checkedInAt)).limit(LIST_LIMIT);
   return { windowHours, codesWithoutCapture, capturesWithoutCode, total: codesWithoutCapture.length + capturesWithoutCode.length };
 }

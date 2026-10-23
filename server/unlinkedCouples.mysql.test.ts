@@ -92,4 +92,19 @@ describe.skipIf(!integrationUrl)("reprocesso dos tempos: casal chega sem ficha, 
     const ids = (await caller().captureSheet.unlinked()).capturesWithoutCode.map(c => c.captureId);
     expect(ids).not.toContain(oldId); expect(ids).not.toContain(anonId); expect(ids).not.toContain(codedId);
   });
+
+  it("recorte da sala: quem não abre ficha arquivada não vê, na lista sem código, ficha fora da vista da sala (salvo VENDEU)", async () => {
+    const { listUnlinkedCouples } = await import("./unlinkedCouples");
+    const { roomVisibleCondition } = await import("./routers/captureSheet");
+    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal Vista ${runId}`, documentNumber: `DOC-VISTA-${runId}`, phone: "11977772222", status: "active" } as never).$returningId();
+    const [{ id: hiddenId }] = await db.insert(captureRecords).values({ customerId, presentationStatus: "checked_in", checkedInAt: new Date() } as never).$returningId();
+    const [{ id: soldId }] = await db.insert(captureRecords).values({ customerId, presentationStatus: "checked_in", checkedInAt: new Date(), commercialOutcome: "vendeu" } as never).$returningId();
+    const dbc = (await import("./db")).getDb;
+    const handle = (await dbc())!;
+    // Corte no futuro: nada é "recente" para a sala; só VENDEU continua visível.
+    const restricted = (await listUnlinkedCouples(handle, new Date(), undefined, roomVisibleCondition(new Date(Date.now() + 3_600_000)))).capturesWithoutCode.map(c => c.captureId);
+    expect(restricted).not.toContain(hiddenId); expect(restricted).toContain(soldId);
+    const full = (await listUnlinkedCouples(handle)).capturesWithoutCode.map(c => c.captureId);
+    expect(full).toContain(hiddenId);
+  });
 });

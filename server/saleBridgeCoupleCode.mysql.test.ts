@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, captureRecords, commercialFractions, commercialPolicyVersions, customers, opportunities, resorts, units } from "../drizzle/schema";
+import { auditLogs, captureRecords, commercialFractions, commercialPolicyVersions, contracts, customers, opportunities, proposals, resorts, units } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 import { withDeadlockRetry } from "./mysqlErrors";
 import { materializeSalesCommandSale, salesCommandSaleSchema, type SalesCommandSale } from "./salesCommandBridge";
@@ -80,6 +80,84 @@ describe.skipIf(!integrationUrl)("ponte de venda grava o coupleCode e não dupli
     expect(rows[0]!.opportunityId).toBe(result.opportunityId);
     expect(rows[0]!.presentationStatus).toBe("presented");
     expect(rows[0]!.captureLocation).toBe("Recepção");
+  });
+
+  // Mesmo join do revenueQualitySync/contracts: contrato -> proposta -> oportunidade -> ficha (captureRecords.opportunityId).
+  async function captureOfContract(contractId: number) {
+    const rows = await db.select({ captureId: captureRecords.id, resortId: captureRecords.resortId }).from(contracts)
+      .innerJoin(proposals, eq(proposals.id, contracts.proposalId))
+      .innerJoin(opportunities, eq(opportunities.id, proposals.opportunityId))
+      .innerJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id))
+      .where(eq(contracts.id, contractId));
+    return rows;
+  }
+  const contractOf = async (result: { contractId: number }) => (await captureOfContract(result.contractId));
+
+  it("ficha da recepção criada pelo caminho padrão (oportunidade 'new', resort NULL): a venda reaproveita a oportunidade e o contrato acha a ficha pelo join", async () => {
+    const { project, resortId } = await seedProject("i");
+    const customer = await receptionCustomer("I");
+    const code = `CP-F110${runId.toUpperCase()}I`;
+    const [{ id: receptionOppId }] = await db.insert(opportunities).values({ customerId: customer.id, title: "Recepção", stage: "new", source: "Recepção" } as never).$returningId();
+    const [{ id: captureId }] = await db.insert(captureRecords).values({ customerId: customer.id, resortId: null, opportunityId: receptionOppId, coupleCode: code, presentationStatus: "presented", checkedInAt: new Date(), captureLocation: "Recepção" } as never).$returningId();
+    const result = await ingest(saleEvent(project, { name: `Outra Grafia ${runId}`, phone: phone() }, { coupleCode: code }));
+    expect(result.opportunityId).toBe(receptionOppId);
+    const opps = await db.select().from(opportunities).where(eq(opportunities.customerId, customer.id));
+    expect(opps).toHaveLength(1);
+    expect(opps[0]!.stage).toBe("won");
+    const found = await contractOf(result);
+    expect(found).toEqual([{ captureId, resortId }]);
+    const rows = await capturesOf(customer.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.presentationStatus).toBe("presented");
+    expect(rows[0]!.captureLocation).toBe("Recepção");
+  });
+
+  it("ficha da recepção com oportunidade já perdida: a ficha passa a apontar para a oportunidade da venda", async () => {
+    const { project, resortId } = await seedProject("j");
+    const customer = await receptionCustomer("J");
+    const code = `CP-F110${runId.toUpperCase()}J`;
+    const [{ id: lostOppId }] = await db.insert(opportunities).values({ customerId: customer.id, title: "Perdida", stage: "lost", lossReason: "teste" } as never).$returningId();
+    const [{ id: captureId }] = await db.insert(captureRecords).values({ customerId: customer.id, resortId, opportunityId: lostOppId, coupleCode: code, checkedInAt: new Date() } as never).$returningId();
+    const result = await ingest(saleEvent(project, customer, { coupleCode: code }));
+    expect(result.opportunityId).not.toBe(lostOppId);
+    expect(await contractOf(result)).toEqual([{ captureId, resortId }]);
+  });
+
+  it("ficha da recepção com resort de OUTRO projeto: o resort da ficha é mantido (a venda não o sobrescreve)", async () => {
+    const { project } = await seedProject("k");
+    const other = await seedProject("k2");
+    const customer = await receptionCustomer("K");
+    const code = `CP-F110${runId.toUpperCase()}K`;
+    const [{ id: captureId }] = await db.insert(captureRecords).values({ customerId: customer.id, resortId: other.resortId, coupleCode: code, checkedInAt: new Date() } as never).$returningId();
+    await ingest(saleEvent(project, customer, { coupleCode: code }));
+    const [row] = await db.select().from(captureRecords).where(eq(captureRecords.id, captureId));
+    expect(row!.resortId).toBe(other.resortId);
+  });
+
+  it("flag LIGADA: ficha da recepção SEM local de captação e com oportunidade aberta (caminho padrão) é reaproveitada", async () => {
+    process.env.SALE_BRIDGE_REUSE_CAPTURE_ENABLED = "true";
+    const { project, resortId } = await seedProject("l");
+    const customer = await receptionCustomer("L");
+    const code = `CP-F110${runId.toUpperCase()}L`;
+    const [{ id: oppId }] = await db.insert(opportunities).values({ customerId: customer.id, title: "Recepção", stage: "new" } as never).$returningId();
+    const [{ id: captureId }] = await db.insert(captureRecords).values({ customerId: customer.id, resortId: null, opportunityId: oppId, presentationStatus: "checked_in", checkedInAt: new Date(), captureLocation: null } as never).$returningId();
+    const result = await ingest(saleEvent(project, customer, { coupleCode: code }));
+    const rows = await capturesOf(customer.id);
+    expect(rows.map(row => row.id)).toEqual([captureId]);
+    expect(rows[0]!.coupleCode).toBe(code);
+    expect(rows[0]!.resortId).toBe(resortId);
+    expect(result.opportunityId).toBe(oppId);
+    expect(await contractOf(result)).toEqual([{ captureId, resortId }]);
+  });
+
+  it("flag LIGADA: ficha da recepção cuja oportunidade já foi ganha não é reaproveitada", async () => {
+    process.env.SALE_BRIDGE_REUSE_CAPTURE_ENABLED = "true";
+    const { project, resortId } = await seedProject("m");
+    const customer = await receptionCustomer("M");
+    const [{ id: oppId }] = await db.insert(opportunities).values({ customerId: customer.id, title: "Ganha", stage: "won" } as never).$returningId();
+    await db.insert(captureRecords).values({ customerId: customer.id, resortId, opportunityId: oppId, checkedInAt: new Date(), captureLocation: "Recepção" } as never);
+    await ingest(saleEvent(project, customer));
+    expect(await capturesOf(customer.id)).toHaveLength(2);
   });
 
   it("código já ligado a uma ficha de OUTRO cliente anonimizado não derruba a venda (sem reaproveitar)", async () => {

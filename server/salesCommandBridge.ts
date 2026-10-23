@@ -241,9 +241,10 @@ function usableCoupleCode(raw: string | undefined, saleId: string): string | nul
   return null;
 }
 
-type CaptureForLink = { id: number; customerId: number; coupleCode: string | null; opportunityId: number | null; anonymizedAt: Date | null };
+type CaptureForLink = { id: number; customerId: number; resortId: number | null; coupleCode: string | null; opportunityId: number | null; anonymizedAt: Date | null };
+const CLOSED_OPPORTUNITY_STAGES = ["won", "lost"];
 
-/** Ficha existente ligada ao casal da venda: 1) pelo coupleCode (único); 2) com a flag, pela visita recente do mesmo cliente. Nunca devolve ficha anonimizada. */
+/** Ficha existente ligada ao casal da venda: 1) pelo coupleCode (único); 2) com a flag, pela visita recente do mesmo cliente (sem oportunidade ou com oportunidade ainda aberta, que é o que a recepção cria por padrão). Nunca devolve ficha anonimizada. */
 async function findCaptureForSale(tx: any, input: { coupleCode: string | null; customerId: number | null; occurredAt: Date }): Promise<{ link: { capture: CaptureForLink; by: "couple_code" | "reception_visit" } | null; codeFree: boolean }> {
   if (input.coupleCode) {
     const [byCode] = await tx.select().from(captureRecords).where(eq(captureRecords.coupleCode, input.coupleCode)).limit(1).for("update");
@@ -253,15 +254,22 @@ async function findCaptureForSale(tx: any, input: { coupleCode: string | null; c
   const none = { link: null, codeFree: true };
   if (!isSaleBridgeReuseCaptureEnabled() || !input.customerId) return none;
   const since = new Date(input.occurredAt.getTime() - RECEPTION_CAPTURE_WINDOW_MS);
-  const candidates = await tx.select().from(captureRecords).where(and(
+  const found = await tx.select().from(captureRecords).where(and(
     eq(captureRecords.customerId, input.customerId),
     isNull(captureRecords.anonymizedAt),
-    isNull(captureRecords.opportunityId),
-    ne(captureRecords.captureLocation, SALE_BRIDGE_CAPTURE_LOCATION),
+    // Ficha sem local de captação (campo opcional na recepção) também vale: em SQL, NULL <> x não é verdadeiro.
+    or(isNull(captureRecords.captureLocation), ne(captureRecords.captureLocation, SALE_BRIDGE_CAPTURE_LOCATION)),
     or(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, since)), and(isNull(captureRecords.checkedInAt), gte(captureRecords.createdAt, since))),
-  )).orderBy(desc(captureRecords.id)).limit(2).for("update");
+  )).orderBy(desc(captureRecords.id)).limit(10).for("update");
+  // A recepção cria a ficha com uma oportunidade "new" por padrão: serve a ficha sem oportunidade ou cuja oportunidade ainda está aberta (a venda a reaproveita). Oportunidade já fechada = ficha de outra negociação.
+  const candidates: CaptureForLink[] = [];
+  for (const row of found) {
+    if (!row.opportunityId) { candidates.push(row); continue; }
+    const [opp] = await tx.select({ stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, row.opportunityId)).limit(1);
+    if (opp && !CLOSED_OPPORTUNITY_STAGES.includes(opp.stage)) candidates.push(row);
+  }
   // Dois candidatos = ambíguo: não adivinha (criar a ficha da venda é o comportamento de sempre; a recepção resolve pelo alerta de ficha sem vínculo).
-  return candidates.length === 1 ? { link: { capture: candidates[0], by: "reception_visit" }, codeFree: true } : none;
+  return candidates.length === 1 ? { link: { capture: candidates[0]!, by: "reception_visit" }, codeFree: true } : none;
 }
 
 export async function materializeSalesCommandSale(tx: any, event: SalesCommandSale) {
@@ -295,31 +303,56 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   }
   if (!customerId) throw new Error("Customer formalization failed");
 
-  const opportunityRow = await tx.insert(opportunities).values({
-    customerId,
-    title: "Venda Sales Command " + event.saleId.slice(0, 12),
-    stage: "won",
-    source: "Sales Command",
-    expectedAmount: money(event.sale.vgvCents),
-    probability: 100,
-    closedAt: occurredAt,
-  }).$returningId();
-  const opportunityId = opportunityRow[0]?.id;
+  // A oportunidade que a recepção abriu para a ficha (stage "new") vira a venda ganha: reaproveitá-la mantém uma só oportunidade por casal e a ficha continua achando o contrato por captureRecords.opportunityId (revenueQualitySync, contratos, financeiro).
+  let priorOpportunity: { id: number; customerId: number; stage: string } | null = null;
+  if (linked?.capture.opportunityId) {
+    const [prior] = await tx.select({ id: opportunities.id, customerId: opportunities.customerId, stage: opportunities.stage }).from(opportunities).where(eq(opportunities.id, linked.capture.opportunityId)).limit(1).for("update");
+    priorOpportunity = prior ?? null;
+  }
+  const reusable = priorOpportunity && priorOpportunity.customerId === customerId && !CLOSED_OPPORTUNITY_STAGES.includes(priorOpportunity.stage) ? priorOpportunity : null;
+  let opportunityId: number | undefined;
+  if (reusable) {
+    await tx.update(opportunities).set({
+      title: "Venda Sales Command " + event.saleId.slice(0, 12),
+      stage: "won",
+      expectedAmount: money(event.sale.vgvCents),
+      probability: 100,
+      nextFollowUpAt: null,
+      closedAt: occurredAt,
+    }).where(eq(opportunities.id, reusable.id));
+    opportunityId = reusable.id;
+  } else {
+    const opportunityRow = await tx.insert(opportunities).values({
+      customerId,
+      title: "Venda Sales Command " + event.saleId.slice(0, 12),
+      stage: "won",
+      source: "Sales Command",
+      expectedAmount: money(event.sale.vgvCents),
+      probability: 100,
+      closedAt: occurredAt,
+    }).$returningId();
+    opportunityId = opportunityRow[0]?.id;
+  }
   if (!opportunityId) throw new Error("Opportunity formalization failed");
 
   let captureLink: { captureId: number; by: "couple_code" | "reception_visit" | "created"; codeWritten: boolean } | null = null;
   if (linked) {
-    // Ficha da recepção: só ganha a oportunidade (se ainda não tinha) e, se faltava, o código do casal. Estado da sala (check-in, tour, resultado) NÃO é tocado.
-    const patch: { opportunityId?: number; coupleCode?: string } = {};
-    if (!linked.capture.opportunityId) patch.opportunityId = opportunityId;
+    // Ficha da recepção: aponta para a oportunidade da venda e, se faltava, ganha o código do casal e o resort. Estado da sala (check-in, tour, resultado) NÃO é tocado.
+    const patch: { opportunityId?: number; coupleCode?: string; resortId?: number } = {};
+    // Oportunidade anterior ganha (de outra venda) não é roubada: fica o ponteiro e o alerta abaixo.
+    if (priorOpportunity?.stage === "won" && priorOpportunity.id !== opportunityId) {
+      logger.warn("Sales Command sale linked to a capture whose opportunity is already won; capture opportunity kept", { saleId: event.saleId, captureId: linked.capture.id });
+    } else if (linked.capture.opportunityId !== opportunityId) patch.opportunityId = opportunityId;
     if (!linked.capture.coupleCode && coupleCode) patch.coupleCode = coupleCode;
+    if (linked.capture.resortId == null) patch.resortId = resort.id;
+    else if (linked.capture.resortId !== resort.id) logger.warn("Sales Command sale resort differs from the linked capture resort; capture resort kept", { saleId: event.saleId, captureId: linked.capture.id });
     if (Object.keys(patch).length) {
       try { await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, linked.capture.id)); }
       catch (error) {
         // Corrida: outro processo ligou este código a outra ficha entre a leitura e a escrita. Sem o código, a venda segue (o alerta de ficha sem vínculo cobre).
         if (!(isDuplicateKeyError(error) && patch.coupleCode)) throw error;
         delete patch.coupleCode;
-        if (patch.opportunityId) await tx.update(captureRecords).set({ opportunityId: patch.opportunityId }).where(eq(captureRecords.id, linked.capture.id));
+        if (Object.keys(patch).length) await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, linked.capture.id));
       }
     }
     captureLink = { captureId: linked.capture.id, by: linked.by, codeWritten: Boolean(patch.coupleCode) };

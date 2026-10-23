@@ -171,7 +171,12 @@ export const captureSheetRouter = router({
   }),
 
   /** F1.4: casais sem vínculo (código do Sales sem ficha / ficha com chegada e sem código). Alimenta o alerta do painel da sala; nada aqui escreve. */
-  unlinked: receptionProcedure.query(async () => listUnlinkedCouples(await requireDb())),
+  unlinked: receptionProcedure.query(async ({ ctx }) => {
+    const db = await requireDb();
+    // Mesmo recorte da lista da ficha: quem não abre ficha arquivada só vê as fichas ainda visíveis para a sala.
+    const roomVisible = canOpenArchivedSheet(ctx.user.role) ? undefined : roomVisibleCondition(await roomVisibilityCutoff());
+    return listUnlinkedCouples(db, new Date(), undefined, roomVisible);
+  }),
 
   /** Código da ficha pelo id, para a lista abrir a impressão. */
   /** Dia de hoje no calendário do projeto (fuso configurado no servidor): o painel e a exportação do navegador partem daqui. */
