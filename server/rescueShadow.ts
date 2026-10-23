@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { contractRescueAttempts, contractRescueCases, contracts, domainEvents, installmentRenegotiations, installments, retentionSettingsVersions, salesCommissions } from "../drizzle/schema";
 import type { getDb } from "./db";
@@ -109,6 +109,21 @@ async function closeCase(tx: Tx, row: { id: number; contractId: number }, status
   await txEvent(tx, { eventName: "contract.rescue.resolved", aggregateType: "contract_rescue_case", aggregateId: row.id, actorUserId: extra.closedByUserId ?? null, idempotencyKey: `rescue-resolved:${row.id}`, payload: { caseId: row.id, contractId: row.contractId, resolution: status } });
 }
 
+/** Ensaio do distrato automático para UM caso vencido: aplica os tetos e REGISTRA (revisão manual ou "teria rodado"). Nunca cancela nada. */
+async function shadowDecide(tx: Tx, caseId: number, contractId: number, settings: CurrentRetentionSettings, now: Date, out: SweepOutcome) {
+  const facts = await ceilingFacts(tx, contractId, caseId, settings, now);
+  const blocked = evaluateCeilings(facts, settings);
+  if (blocked) {
+    await tx.update(contractRescueCases).set({ status: "manual_review", manualReviewReason: blocked, manualReviewAt: now }).where(eq(contractRescueCases.id, caseId));
+    await txAudit(tx, { actorUserId: null, entityType: "contract_rescue_case", entityId: caseId, action: "shadow_manual_review", summary: `Modo sombra: o distrato automático NÃO seria feito (${blocked}); decisão humana.`, idempotencyKey: `audit:rescue-shadow-review:${caseId}` });
+    out.manualReview++;
+  } else {
+    await txEvent(tx, { eventName: "contract.auto_cancellation.would_run", aggregateType: "contract_rescue_case", aggregateId: caseId, actorUserId: null, idempotencyKey: `auto-cancel-dry:${caseId}`, payload: { caseId, contractId, settingsVersionId: settings.versionId, paidPercent: facts.paidPercent } });
+    await txAudit(tx, { actorUserId: null, entityType: "contract_rescue_case", entityId: caseId, action: "shadow_would_cancel", summary: "Modo sombra: o distrato automático TERIA sido pedido. Nada foi cancelado.", idempotencyKey: `audit:rescue-shadow-would:${caseId}` });
+    out.wouldRun++;
+  }
+}
+
 /** Um contrato por transação, travando na ordem do restante do CRM: contrato -> parcelas -> caso de resgate. Só escreve nas tabelas do resgate, em eventos e em auditoria. */
 async function sweepContract(db: Db, contractId: number, settings: CurrentRetentionSettings, now: Date, out: SweepOutcome) {
   await withDeadlockRetry(() => db.transaction(async tx => {
@@ -130,7 +145,7 @@ async function sweepContract(db: Db, contractId: number, settings: CurrentRetent
       }
       const dueAt = rescueDueAtFor(firstOverdue, settings.rescueWindowMonths);
       const [{ id }] = await tx.insert(contractRescueCases).values({ contractId, reason: "overdue", status: "open", activeKey: `rescue:${contractId}`, firstOverdueDate: firstOverdue as unknown as Date, rescueDueAt: dueAt, settingsVersionId: settings.versionId }).$returningId();
-      await txEvent(tx, { eventName: "contract.rescue.opened", aggregateType: "contract_rescue_case", aggregateId: id, actorUserId: null, idempotencyKey: `rescue-open:${contractId}:${firstOverdue}`, payload: { caseId: Number(id), contractId, firstOverdueDate: firstOverdue, rescueDueAt: dueAt.toISOString() } });
+      await txEvent(tx, { eventName: "contract.rescue.opened", aggregateType: "contract_rescue_case", aggregateId: id, actorUserId: null, idempotencyKey: `rescue-open:${id}`, payload: { caseId: Number(id), contractId, firstOverdueDate: firstOverdue, rescueDueAt: dueAt.toISOString() } });
       out.opened++;
       return;
     }
@@ -150,20 +165,13 @@ async function sweepContract(db: Db, contractId: number, settings: CurrentRetent
         await tx.update(contractRescueCases).set({ status: "due_for_cancellation" }).where(eq(contractRescueCases.id, caseId));
         out.due++;
         // Ensaio: só decide e REGISTRA o que o distrato automático faria (config vigente com liga/desliga LIGADO). Desligado: o caso fica "vencido" e o admin decide à mão.
-        if (settings.autoCancelEnabled) {
-          const facts = await ceilingFacts(tx, contractId, caseId, settings, now);
-          const blocked = evaluateCeilings(facts, settings);
-          if (blocked) {
-            await tx.update(contractRescueCases).set({ status: "manual_review", manualReviewReason: blocked, manualReviewAt: now }).where(eq(contractRescueCases.id, caseId));
-            await txAudit(tx, { actorUserId: null, entityType: "contract_rescue_case", entityId: caseId, action: "shadow_manual_review", summary: `Modo sombra: o distrato automático NÃO seria feito (${blocked}); decisão humana.`, idempotencyKey: `audit:rescue-shadow-review:${caseId}` });
-            out.manualReview++;
-          } else {
-            await txEvent(tx, { eventName: "contract.auto_cancellation.would_run", aggregateType: "contract_rescue_case", aggregateId: caseId, actorUserId: null, idempotencyKey: `auto-cancel-dry:${caseId}`, payload: { caseId, contractId, settingsVersionId: settings.versionId, paidPercent: facts.paidPercent } });
-            await txAudit(tx, { actorUserId: null, entityType: "contract_rescue_case", entityId: caseId, action: "shadow_would_cancel", summary: "Modo sombra: o distrato automático TERIA sido pedido. Nada foi cancelado.", idempotencyKey: `audit:rescue-shadow-would:${caseId}` });
-            out.wouldRun++;
-          }
-        }
+        if (settings.autoCancelEnabled) await shadowDecide(tx, caseId, contractId, settings, now, out);
       }
+    }
+    // Caso que já estava vencido quando o admin ligou o ensaio: avalia agora (uma vez; o evento 'would_run' marca que já foi decidido).
+    if (open.status === "due_for_cancellation" && settings.autoCancelEnabled && now >= dueAt) {
+      const [decided] = await tx.select({ id: domainEvents.id }).from(domainEvents).where(eq(domainEvents.idempotencyKey, `auto-cancel-dry:${caseId}`)).limit(1);
+      if (!decided) await shadowDecide(tx, caseId, contractId, settings, now, out);
     }
   }));
 }
@@ -174,8 +182,18 @@ export async function runRescueSweep(db: Db, options: { now?: Date; limit?: numb
   const out = emptyOutcome();
   const settings = await currentRetentionSettings(db);
   const today = startOfUtcDay(now);
-  const candidates = await db.selectDistinct({ id: installments.contractId }).from(installments).innerJoin(contracts, eq(contracts.id, installments.contractId))
-    .where(and(inArray(installments.status, [...OVERDUE_STATUSES]), lt(installments.dueDate, today), inArray(contracts.status, ["active", "overdue"]))).limit(options.limit ?? 1000);
+  // Contratos com caso ativo já entram por `openCases` (abaixo); aqui só os candidatos a abrir caso. Paginação por cursor (contractId crescente): nenhum contrato fica de fora por causa do teto da página.
+  const pageSize = options.limit ?? 1000;
+  const candidates: Array<{ id: number }> = [];
+  for (let cursor = 0; ;) {
+    const page = await db.selectDistinct({ id: installments.contractId }).from(installments).innerJoin(contracts, eq(contracts.id, installments.contractId))
+      .where(and(inArray(installments.status, [...OVERDUE_STATUSES]), lt(installments.dueDate, today), inArray(contracts.status, ["active", "overdue"]), gt(installments.contractId, cursor),
+        sql`NOT EXISTS (SELECT 1 FROM ${contractRescueCases} WHERE ${contractRescueCases.contractId} = ${installments.contractId} AND ${contractRescueCases.activeKey} IS NOT NULL)`))
+      .orderBy(asc(installments.contractId)).limit(pageSize);
+    candidates.push(...page);
+    if (page.length < pageSize) break;
+    cursor = page[page.length - 1]!.id;
+  }
   const openCases = await db.select({ contractId: contractRescueCases.contractId }).from(contractRescueCases).where(inArray(contractRescueCases.status, [...OPEN_STATUSES]));
   const ids = Array.from(new Set([...candidates.map(row => row.id), ...openCases.map(row => row.contractId)])).sort((a, b) => a - b);
   for (const contractId of ids) {

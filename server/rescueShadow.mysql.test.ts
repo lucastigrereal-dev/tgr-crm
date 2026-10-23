@@ -144,6 +144,27 @@ describe.skipIf(!integrationUrl)("resgate/distrato em modo sombra (0086 PROPOSTA
       expect((await casesOf(heavy))[0]).toMatchObject({ status: "manual_review", manualReviewReason: "over_cap" });
     });
 
+    it("caso que JÁ estava 'due_for_cancellation' quando o ensaio foi ligado é avaliado (uma vez) e entra nas decisões de sombra", async () => {
+      const base = await currentRetentionSettings(db);
+      await saveRetentionSettings(db, adminId, { ...base, autoCancelEnabled: false, note: "ensaio desligado" });
+      const id = await contract({ overdueDaysAgo: [120] });
+      await runRescueSweep(db, { now: T0 }); await runRescueSweep(db, { now: day(1) });
+      const [row] = await casesOf(id);
+      expect(row!.status).toBe("due_for_cancellation");
+      expect(await eventsOf("contract.auto_cancellation.would_run", row!.id)).toHaveLength(0);
+      await saveRetentionSettings(db, adminId, { ...base, autoCancelEnabled: true, note: "ensaio ligado" });
+      const first = await runRescueSweep(db, { now: day(2) });
+      await runRescueSweep(db, { now: day(3) });
+      expect(first.wouldRun).toBeGreaterThanOrEqual(1);
+      expect(await eventsOf("contract.auto_cancellation.would_run", row!.id)).toHaveLength(1);
+    });
+
+    it("com mais contratos vencidos que o teto da página, nenhum fica de fora da fila (paginação por contractId)", async () => {
+      const ids = [await contract({ overdueDaysAgo: [10] }), await contract({ overdueDaysAgo: [10] }), await contract({ overdueDaysAgo: [10] }), await contract({ overdueDaysAgo: [10] }), await contract({ overdueDaysAgo: [10] })];
+      await runRescueSweep(db, { now: T0, limit: 2 });
+      for (const id of ids) expect(await casesOf(id)).toHaveLength(1);
+    });
+
     it("o caso em revisão manual nunca é reavaliado pela varredura (estado persistido)", async () => {
       const id = await contract({ overdueDaysAgo: [120] });
       await db.insert(salesCommissions).values({ sellerId: adminId, contractId: id, baseAmount: "100.00", rate: "5.00", amount: "5.00", status: "paid" } as never);
@@ -183,6 +204,13 @@ describe.skipIf(!integrationUrl)("resgate/distrato em modo sombra (0086 PROPOSTA
     const afterNew = await casesOf(id);
     expect(afterNew).toHaveLength(2);
     expect(afterNew.filter(c => c.activeKey)).toHaveLength(1);
+    // cada caso (inclusive o reaberto depois de dismissed, com a mesma parcela mais antiga) emite o SEU evento 'opened', apontando para o próprio caseId
+    const [reopened] = afterNew.filter(c => c.activeKey);
+    expect(Number(reopened!.id)).not.toBe(Number(first!.id));
+    expect(await eventsOf("contract.rescue.opened", first!.id)).toHaveLength(1);
+    const reopenedEvents = await eventsOf("contract.rescue.opened", reopened!.id);
+    expect(reopenedEvents).toHaveLength(1);
+    expect(JSON.parse(reopenedEvents[0]!.payload!)).toMatchObject({ caseId: Number(reopened!.id), contractId: id });
 
     const later = await contract({ overdueDaysAgo: [30] });
     await runRescueSweep(db, { now: T0 });
