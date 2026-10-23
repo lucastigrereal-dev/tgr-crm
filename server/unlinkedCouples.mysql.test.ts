@@ -74,6 +74,17 @@ describe.skipIf(!integrationUrl)("reprocesso dos tempos: casal chega sem ficha, 
     expect(after.capturesWithoutCode.map(c => c.captureId)).not.toContain(created.captureId);
   });
 
+  it("código recusado em minúsculas e ficha ligada em MAIÚSCULAS (MySQL ignora caixa): o alerta some", async () => {
+    const upper = `CP-REPROC${runId}4`; const lower = upper.toLowerCase(); const eventId = `evt-reproc-${runId}-4`;
+    expect((await post(timesEvent(lower, eventId))).status).toBe(422);
+    const waiting = await settle(() => caller().captureSheet.unlinked(), r => r.codesWithoutCapture.some(c => c.coupleCode.toUpperCase() === upper));
+    expect(waiting.codesWithoutCapture.some(c => c.coupleCode.toUpperCase() === upper)).toBe(true);
+    const [{ id: customerId }] = await db.insert(customers).values({ fullName: `Casal Caixa ${runId}`, documentNumber: `DOC-CAIXA-${runId}`, phone: "11977773333", status: "active" } as never).$returningId();
+    await db.insert(captureRecords).values({ customerId, presentationStatus: "checked_in", checkedInAt: new Date(), coupleCode: upper } as never);
+    const after = await caller().captureSheet.unlinked();
+    expect(after.codesWithoutCapture.some(c => c.coupleCode.toUpperCase() === upper)).toBe(false);
+  });
+
   it("a trilha do alerta não guarda corpo do evento nem horários, só código e eventId", async () => {
     const code = `CP-REPROC${runId}2`; const eventId = `evt-reproc-${runId}-2`;
     expect((await post(timesEvent(code, eventId))).status).toBe(422);

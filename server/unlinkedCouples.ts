@@ -71,8 +71,9 @@ export async function listUnlinkedCouples(db: Db, now: Date = new Date(), window
     .from(auditLogs).where(and(eq(auditLogs.entityType, UNKNOWN_COUPLE_ENTITY), eq(auditLogs.action, UNKNOWN_COUPLE_ACTION), gte(auditLogs.createdAt, since)))
     .groupBy(auditLogs.entityId).orderBy(desc(sql`MAX(${auditLogs.createdAt})`)).limit(LIST_LIMIT);
   const linked = refusals.length ? await db.select({ coupleCode: captureRecords.coupleCode }).from(captureRecords).where(inArray(captureRecords.coupleCode, refusals.map(row => row.coupleCode))) : [];
-  const linkedCodes = new Set(linked.map(row => row.coupleCode));
-  const codesWithoutCapture = refusals.filter(row => !linkedCodes.has(row.coupleCode)).map(row => ({ coupleCode: row.coupleCode, attempts: Number(row.attempts), firstSeenAt: new Date(row.firstSeenAt), lastSeenAt: new Date(row.lastSeenAt) }));
+  // O MySQL compara o código sem diferenciar maiúsculas (cp-1234 = CP-1234): o Set precisa fazer o mesmo.
+  const linkedCodes = new Set(linked.map(row => (row.coupleCode ?? "").toUpperCase()));
+  const codesWithoutCapture = refusals.filter(row => !linkedCodes.has(row.coupleCode.toUpperCase())).map(row => ({ coupleCode: row.coupleCode, attempts: Number(row.attempts), firstSeenAt: new Date(row.firstSeenAt), lastSeenAt: new Date(row.lastSeenAt) }));
   const capturesWithoutCode = await db.select({ captureId: captureRecords.id, customerName: customers.fullName, salesRoom: captureRecords.salesRoom, checkedInAt: captureRecords.checkedInAt })
     .from(captureRecords).innerJoin(customers, eq(customers.id, captureRecords.customerId))
     .where(and(isNull(captureRecords.coupleCode), isNull(captureRecords.anonymizedAt), isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, since), roomVisible))

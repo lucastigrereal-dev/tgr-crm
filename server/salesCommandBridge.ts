@@ -245,11 +245,16 @@ type CaptureForLink = { id: number; customerId: number; resortId: number | null;
 const CLOSED_OPPORTUNITY_STAGES = ["won", "lost"];
 
 /** Ficha existente ligada ao casal da venda: 1) pelo coupleCode (único); 2) com a flag, pela visita recente do mesmo cliente (sem oportunidade ou com oportunidade ainda aberta, que é o que a recepção cria por padrão). Nunca devolve ficha anonimizada. */
-async function findCaptureForSale(tx: any, input: { coupleCode: string | null; customerId: number | null; occurredAt: Date }): Promise<{ link: { capture: CaptureForLink; by: "couple_code" | "reception_visit" } | null; codeFree: boolean }> {
+async function findCaptureForSale(tx: any, input: { coupleCode: string | null; customerId: number | null; occurredAt: Date; resortId: number }): Promise<{ link: { capture: CaptureForLink; by: "couple_code" | "reception_visit" } | null; codeFree: boolean }> {
   if (input.coupleCode) {
     const [byCode] = await tx.select().from(captureRecords).where(eq(captureRecords.coupleCode, input.coupleCode)).limit(1).for("update");
     // Código preso a uma ficha anonimizada: não reaproveita (dados apagados a pedido do titular) e também não pode ser gravado de novo (chave única): a ficha da venda nasce sem ele.
-    if (byCode) return { link: byCode.anonymizedAt ? null : { capture: byCode, by: "couple_code" }, codeFree: false };
+    // Ficha de OUTRO resort (mesmo código) também não é reaproveitada: o contrato e a política da venda são do resort resolvido; a ficha da venda nasce sem o código (chave única já ocupada).
+    if (byCode) {
+      const otherResort = byCode.resortId != null && byCode.resortId !== input.resortId;
+      if (otherResort) logger.warn("Sales Command sale coupleCode belongs to a capture of another resort; capture not reused", { captureId: byCode.id });
+      return { link: byCode.anonymizedAt || otherResort ? null : { capture: byCode, by: "couple_code" }, codeFree: false };
+    }
   }
   const none = { link: null, codeFree: true };
   if (!isSaleBridgeReuseCaptureEnabled() || !input.customerId) return none;
@@ -257,6 +262,8 @@ async function findCaptureForSale(tx: any, input: { coupleCode: string | null; c
   const found = await tx.select().from(captureRecords).where(and(
     eq(captureRecords.customerId, input.customerId),
     isNull(captureRecords.anonymizedAt),
+    // Só o resort da venda (ou ficha ainda sem resort, que a venda preenche): ficha de outro resort nunca é candidata.
+    or(isNull(captureRecords.resortId), eq(captureRecords.resortId, input.resortId)),
     // Ficha sem local de captação (campo opcional na recepção) também vale: em SQL, NULL <> x não é verdadeiro.
     or(isNull(captureRecords.captureLocation), ne(captureRecords.captureLocation, SALE_BRIDGE_CAPTURE_LOCATION)),
     or(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, since)), and(isNull(captureRecords.checkedInAt), gte(captureRecords.createdAt, since))),
@@ -289,7 +296,7 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     customerId = matched?.id;
   }
   // F1.10: a ficha do casal (quando existe) manda no cliente: a venda se junta a ela em vez de abrir um segundo cadastro.
-  const { link: linked, codeFree } = await findCaptureForSale(tx, { coupleCode, customerId: customerId ?? null, occurredAt });
+  const { link: linked, codeFree } = await findCaptureForSale(tx, { coupleCode, customerId: customerId ?? null, occurredAt, resortId: resort.id });
   if (linked) customerId = linked.capture.customerId;
   if (!customerId) {
     const createdCustomer = await tx.insert(customers).values({
@@ -345,7 +352,6 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     } else if (linked.capture.opportunityId !== opportunityId) patch.opportunityId = opportunityId;
     if (!linked.capture.coupleCode && coupleCode) patch.coupleCode = coupleCode;
     if (linked.capture.resortId == null) patch.resortId = resort.id;
-    else if (linked.capture.resortId !== resort.id) logger.warn("Sales Command sale resort differs from the linked capture resort; capture resort kept", { saleId: event.saleId, captureId: linked.capture.id });
     if (Object.keys(patch).length) {
       try { await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, linked.capture.id)); }
       catch (error) {
