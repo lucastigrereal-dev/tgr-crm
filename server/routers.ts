@@ -18,6 +18,7 @@ import { addendaRouter } from "./routers/addenda";
 import { permissionOverridesRouter } from "./routers/permissionOverrides";
 import { featureFlagsRouter } from "./routers/featureFlags";
 import { commissionRoleMapRouter } from "./routers/commissionRoleMap";
+import { rescueRouter } from "./routers/rescue";
 import { officialIndicatorsRouter } from "./routers/officialIndicators";
 import { financialProjectMapRouter } from "./routers/financialProjectMap";
 import { importsRouter } from "./routers/imports";
@@ -96,6 +97,7 @@ export const appRouter = router({
   addenda: addendaRouter,
   officialIndicators: officialIndicatorsRouter,
   commissionRoleMap: commissionRoleMapRouter,
+  rescue: rescueRouter,
   featureFlags: featureFlagsRouter,
   permissionOverrides: permissionOverridesRouter,
   financialProjectMap: financialProjectMapRouter,

@@ -591,6 +591,57 @@ export const rolePermissionOverrides = mysqlTable("role_permission_overrides", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("role_permission_overrides_key_idx").on(table.permKey, table.id)]);
 
+/** F3.1 (distrato/resgate, MODO SOMBRA): configuração versionada e append-only (vigente = maior id). Valores provisórios até o modelo de contrato do Lucas. PROPOSTA 0086. */
+export const retentionSettingsVersions = mysqlTable("retention_settings_versions", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  rescueWindowMonths: int("rescueWindowMonths").default(3).notNull(),
+  rescueAlertLeadDays: int("rescueAlertLeadDays").default(15).notNull(),
+  autoCancelEnabled: boolean("autoCancelEnabled").default(false).notNull(),
+  rescueReopenAfterDays: int("rescueReopenAfterDays").default(90).notNull(),
+  autoCancelPromiseDays: int("autoCancelPromiseDays").default(15).notNull(),
+  autoCancelMaxPaidPercent: int("autoCancelMaxPaidPercent").default(30).notNull(),
+  note: varchar("note", { length: 500 }),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+/** F3.1: caso de resgate (no máximo UM aberto por contrato: activeKey único, nulo ao fechar). Em modo sombra o caso só REGISTRA; nada cancela contrato. PROPOSTA 0086. */
+export const contractRescueCases = mysqlTable("contract_rescue_cases", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  reason: mysqlEnum("reason", ["overdue", "reservation_expired"]).default("overdue").notNull(),
+  status: mysqlEnum("status", ["open", "in_contact", "due_for_cancellation", "manual_review", "rescued", "dismissed", "cancelled"]).default("open").notNull(),
+  activeKey: varchar("activeKey", { length: 40 }),
+  firstOverdueDate: date("firstOverdueDate"),
+  openedAt: timestamp("openedAt").defaultNow().notNull(),
+  rescueDueAt: timestamp("rescueDueAt").notNull(),
+  settingsVersionId: bigint("settingsVersionId", { mode: "number" }),
+  assignedToUserId: int("assignedToUserId"),
+  lastAttemptAt: timestamp("lastAttemptAt"),
+  closedAt: timestamp("closedAt"),
+  closedByUserId: int("closedByUserId"),
+  closeNote: varchar("closeNote", { length: 500 }),
+  manualReviewReason: mysqlEnum("manualReviewReason", ["domain_error", "over_cap", "paid_commission", "open_renegotiation", "recent_promise"]),
+  manualReviewAt: timestamp("manualReviewAt"),
+  suppressUntil: timestamp("suppressUntil"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("contract_rescue_cases_active_unique").on(table.activeKey),
+  index("contract_rescue_cases_status_due_idx").on(table.status, table.rescueDueAt),
+  index("contract_rescue_cases_contract_idx").on(table.contractId, table.id),
+]);
+
+/** F3.1: tentativas de resgate do pós-vendas (append-only). PROPOSTA 0086. */
+export const contractRescueAttempts = mysqlTable("contract_rescue_attempts", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  caseId: bigint("caseId", { mode: "number" }).notNull(),
+  channel: mysqlEnum("channel", ["phone", "message", "email", "visit", "other"]).notNull(),
+  outcome: mysqlEnum("outcome", ["no_answer", "promised_payment", "renegotiating", "refused", "other"]).notNull(),
+  note: varchar("note", { length: 500 }),
+  createdByUserId: int("createdByUserId").notNull().references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("contract_rescue_attempts_case_idx").on(table.caseId, table.id)]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {
