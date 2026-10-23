@@ -6,6 +6,7 @@ import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { adminProcedure } from "./access";
 import { affectedRows } from "../mysqlErrors";
+import { loadProjectReadiness } from "../projectPolicyReadiness";
 
 const jsonText = z.string().max(20_000).nullable().optional().superRefine((value, context) => {
   if (!value?.trim()) return;
@@ -46,6 +47,12 @@ export const projectSettingsRouter = router({
     const rawRows = await db.select({ resort: resorts, settings: commercialProjectSettings }).from(resorts).leftJoin(commercialProjectSettings, eq(commercialProjectSettings.resortId, resorts.id)).orderBy(asc(resorts.name)).limit(limit + 1);
     const truncated = rawRows.length > limit;
     return { rows: rawRows.slice(0, limit), truncated, truncatedSources: truncated ? ["configurações por empreendimento"] : [] };
+  }),
+  /** F1.12: checklist de política do projeto antes do 1º dia (comissão V1, condições da venda, distrato, documentos, estoque, chave do projeto). Somente leitura. */
+  readiness: adminProcedure.input(z.object({ resortId: z.number().int().positive().optional() }).optional()).query(async ({ input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    return loadProjectReadiness(db, { resortId: input?.resortId });
   }),
   history: adminProcedure.input(z.object({ resortId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb();
