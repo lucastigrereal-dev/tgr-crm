@@ -1,7 +1,7 @@
 // F1.8 / CRM-a e CRM-b: consumo do prefill do GuestPass (contrato guestpass.prefill.v1, dono: tgr-guestpass; fixture em docs/contracts/fixtures)
 // e vínculo único passe <-> ficha. PULL sob demanda, sem fila, sem cache. A resposta tem lista fechada de campos: qualquer campo proibido
 // (cpf, renda, veículo...) faz a resposta inteira ser descartada. NADA do corpo (nome, telefone) vai para log nem auditoria: só o Nº do passe e ids.
-import { and, eq, isNull, like } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { MySqlDatabase } from "drizzle-orm/mysql-core";
 import type { MySql2PreparedQueryHKT, MySql2QueryResultHKT } from "drizzle-orm/mysql2";
 import { z } from "zod";
@@ -92,6 +92,14 @@ export class GuestpassLinkConflict extends Error {
   constructor(readonly reason: "pass_taken" | "capture_has_pass", readonly otherCaptureId?: number) { super(reason); }
 }
 
+/** Hora da busca informada pela tela: só vale se for recente (até 24 h) e não estiver no futuro; fora disso, ignora (a coluna fica NULL em vez de guardar lixo). */
+export function sanitizeFetchedAt(raw: string | null | undefined, now = new Date()): Date | null {
+  if (!raw) return null;
+  const at = new Date(raw);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.getTime() > now.getTime() + 5 * 60_000 || at.getTime() < now.getTime() - 24 * 3_600_000 ? null : at;
+}
+
 /** Vincula o passe à ficha (1 passe : 1 ficha). Repetir o mesmo par é no-op; passe de outra ficha ou ficha com outro passe = GuestpassLinkConflict. */
 export async function linkGuestpassToCapture(tx: Tx, input: { captureId: number; passRef: string; actorUserId: number | null; fetchedAt?: Date | null }) {
   const [byPass] = await tx.select().from(captureGuestpassLinks).where(eq(captureGuestpassLinks.guestpassPassRef, input.passRef)).limit(1);
@@ -127,8 +135,10 @@ export async function findPhoneCandidates(tx: Executor, phone: string, limit = 5
     .from(captureRecords)
     .innerJoin(customers, eq(customers.id, captureRecords.customerId))
     .leftJoin(captureGuestpassLinks, eq(captureGuestpassLinks.captureId, captureRecords.id))
-    .where(and(like(customers.phone, `%${tail.slice(-4)}%`), isNull(customers.anonymizedAt)))
-    .limit(200);
+    // Telefone comparado só pelos dígitos (a ficha guarda com máscara) e pelos 8 últimos, já no SQL; mais recente primeiro, para o corte do limit nunca esconder a ficha certa.
+    .where(and(sql`RIGHT(REGEXP_REPLACE(${customers.phone}, '[^0-9]', ''), 8) = ${tail}`, isNull(customers.anonymizedAt)))
+    .orderBy(desc(captureRecords.id))
+    .limit(Math.max(limit * 4, 20));
   return rows
     .filter(row => !!row.phone && digitsOnly(row.phone).endsWith(tail))
     .sort((a, b) => b.captureId - a.captureId)

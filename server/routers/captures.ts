@@ -19,7 +19,7 @@ import { publishSalesRoomEvent } from "../realtime";
 import { affectedRows } from "../mysqlErrors";
 import { canonicalizeMasterData } from "../masterData";
 import { isGuestpassPrefillEnabled, normalizePassRef } from "../guestpassConfig";
-import { GuestpassLinkConflict, linkGuestpassToCapture } from "../guestpassPrefill";
+import { GuestpassLinkConflict, linkGuestpassToCapture, sanitizeFetchedAt } from "../guestpassPrefill";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
 const optionalShort = z.string().trim().max(255).optional().nullable();
@@ -50,6 +50,8 @@ const captureInput = z.object({
   isPasserby: z.boolean().default(false),
   // F1.8: Nº do passe do GuestPass de onde a ficha foi preenchida (vínculo 1:1; só com CRM_GUESTPASS_PREFILL_ENABLED).
   guestpassPassRef: z.string().trim().max(32).optional().nullable(),
+  /** Hora (ISO) em que a tela buscou o passe; vira prefillFetchedAt do vínculo. */
+  guestpassFetchedAt: z.string().datetime().optional().nullable(),
   scheduledAt: z.string().datetime().optional().nullable(),
   qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).default("pending"),
   qualificationReason: optionalText,
@@ -284,7 +286,7 @@ export const capturesRouter = router({
         if (!isGuestpassPrefillEnabled()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Busca de passe desligada." });
         const passRef = normalizePassRef(input.guestpassPassRef);
         if (!passRef) throw new TRPCError({ code: "BAD_REQUEST", message: "Nº do passe inválido. Use o formato GP-XXXXXXXX." });
-        try { await linkGuestpassToCapture(tx, { captureId, passRef, actorUserId: ctx.user.id }); }
+        try { await linkGuestpassToCapture(tx, { captureId, passRef, actorUserId: ctx.user.id, fetchedAt: sanitizeFetchedAt(input.guestpassFetchedAt) }); }
         catch (error) {
           if (error instanceof GuestpassLinkConflict) throw new TRPCError({ code: "CONFLICT", message: "Este passe já está vinculado a outra ficha." });
           throw error;

@@ -27,5 +27,7 @@ Estado: **atrás de `CRM_GUESTPASS_PREFILL_ENABLED=false`**. A migration é **PR
 - O contrato NÃO entrou em `tgr-events.snapshot.json`/`consumers.lock.json` de propósito: não mexe no pin Suite<->CRM. Se a Suite quiser fixar a seção, é Suite primeiro, depois CRM, depois re-pin.
 - Não coberto: modo nuvem do GuestPass (a rota só existe no servidor local dele), navegador real (Playwright), GuestPass real.
 
+- Candidatos por telefone: comparação no SQL pelos 8 últimos dígitos (máscara removida), mais recentes primeiro. `prefillFetchedAt` grava a hora da busca (a tela devolve a hora do `lookup`; fora das últimas 24 h ou no futuro é ignorada). `guestpass.link` valida que a ficha existe, não está anonimizada e está na vista da sala do papel (NOT_FOUND/FORBIDDEN). Passe já ligado a outra ficha: a tela preenche para conferência mas não amarra o passe. A tela mostra o selo "do GuestPass" na ficha preenchida pelo passe (o selo na ficha já gravada/lista não foi feito).
+
 ## Para ligar (depois do GO)
 1. Aplicar a 0087 (GO do dono do banco). 2. Configurar base e chave no ambiente. 3. Ligar a flag. 4. Conferir com um passe de teste do GuestPass local.

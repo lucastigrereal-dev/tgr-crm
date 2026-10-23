@@ -42,7 +42,7 @@ describe.skipIf(!integrationUrl)("vínculo passe-ficha e busca de passe do Guest
     scratch = `${database.replace(/_test$/i, "")}_gp${runId}_test`;
     admin = mysql.createPool({ uri: integrationUrl, connectionLimit: 1 });
     await admin.query(`CREATE DATABASE \`${scratch}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    for (const table of ["users", "customers", "capture_records", "opportunities", "tasks", "audit_logs", "domain_events", "master_data_options", "resorts", "sales_campaigns", "commercial_project_settings"]) {
+    for (const table of ["users", "customers", "capture_records", "opportunities", "tasks", "audit_logs", "domain_events", "master_data_options", "resorts", "sales_campaigns", "commercial_project_settings", "capture_sheet_settings"]) {
       await admin.query(`CREATE TABLE \`${scratch}\`.\`${table}\` LIKE \`${database}\`.\`${table}\``);
     }
     const url = new URL(integrationUrl!); url.pathname = `/${scratch}`;
@@ -157,5 +157,44 @@ describe.skipIf(!integrationUrl)("vínculo passe-ficha e busca de passe do Guest
     expect((await db.select().from(captureRecords)).length).toBe(before);
     await api.captures.create(captureInput() as never);
     expect((await db.select().from(captureRecords)).length).toBe(before + 1);
+  });
+
+  it("guestpass.link: ficha inexistente é NOT_FOUND (não 500 de FK); ficha anonimizada também", async () => {
+    const api = await caller(); const gone = await newCapture();
+    await db.update(captureRecords).set({ anonymizedAt: new Date() }).where(eq(captureRecords.id, gone.id));
+    await expect(api.guestpass.link({ captureId: 999_999_998, passRef: newPass() })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(api.guestpass.link({ captureId: gone.id, passRef: newPass() })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("guestpass.link: ficha fora da vista da sala não é ligada por quem não é administrativo", async () => {
+    const api = await caller("seller"); const old = new Date(Date.now() - 400 * 86_400_000);
+    const { id } = await newCapture();
+    await db.update(captureRecords).set({ createdAt: old, checkedInAt: old, scheduledAt: null, commercialOutcome: null }).where(eq(captureRecords.id, id));
+    await expect(api.guestpass.link({ captureId: id, passRef: newPass() })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await (await caller("admin")).guestpass.link({ captureId: id, passRef: newPass() })).toMatchObject({ created: true });
+  });
+
+  it("prefillFetchedAt é gravado a partir da hora da busca (lookup -> create e lookup -> link); hora absurda é ignorada", async () => {
+    const api = await caller(); phone = "84900000042";
+    const passA = newPass(); const looked = await api.guestpass.lookup({ passRef: passA });
+    expect(Date.now() - new Date(looked.fetchedAt).getTime()).toBeLessThan(60_000);
+    await api.captures.create(captureInput({ guestpassPassRef: passA, guestpassFetchedAt: looked.fetchedAt }) as never);
+    const [linkA] = await db.select().from(captureGuestpassLinks).where(eq(captureGuestpassLinks.guestpassPassRef, passA));
+    expect(linkA!.prefillFetchedAt).not.toBeNull();
+    const target = await newCapture(); const passB = newPass();
+    await api.guestpass.link({ captureId: target.id, passRef: passB, fetchedAt: looked.fetchedAt });
+    expect((await db.select().from(captureGuestpassLinks).where(eq(captureGuestpassLinks.guestpassPassRef, passB)))[0]!.prefillFetchedAt).not.toBeNull();
+    const passC = newPass();
+    await api.captures.create(captureInput({ guestpassPassRef: passC, guestpassFetchedAt: "2001-01-01T00:00:00.000Z" }) as never);
+    expect((await db.select().from(captureGuestpassLinks).where(eq(captureGuestpassLinks.guestpassPassRef, passC)))[0]!.prefillFetchedAt).toBeNull();
+  });
+
+  it("candidatos por telefone: acha a ficha certa mesmo com muitas fichas de final de telefone parecido e telefone com máscara", async () => {
+    const api = await caller(); phone = "(84) 98765-4321";
+    // 30 fichas mais NOVAS com os mesmos 4 últimos dígitos mas outro prefixo + a ficha certa (mais antiga, com máscara).
+    const right = await newCapture(`SYN Certa ${runId}`, "(84) 98765-4321");
+    for (let i = 0; i < 30; i++) await newCapture(`SYN Parecida ${runId}-${i}`, `849111${String(10 + i)}4321`.slice(0, 11));
+    const result = await api.guestpass.lookup({ passRef: newPass() });
+    expect(result.candidates.map(item => item.captureId)).toContain(right.id);
   });
 });
