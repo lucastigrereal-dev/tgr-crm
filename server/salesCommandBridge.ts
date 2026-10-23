@@ -4,7 +4,7 @@ import { resolveResortForProject, ResortResolutionError } from "./resortResoluti
 import { eligibilityHook } from "./nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "./installmentScheduledFacts";
 import type { Express, Request, Response } from "express";
-import { and, asc, desc, eq, gt, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lte, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import {
   auditLogs,
@@ -32,6 +32,7 @@ import { holdFractionForFormalization, isInventoryHoldAtFormalizationEnabled } f
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { affectedRows, isDuplicateKeyError, withDeadlockRetry } from "./mysqlErrors";
 import { logger } from "./logger";
+import { isCoupleCode, normalizeCoupleCode } from "./captureSheetDomain";
 
 // PIL-008: recusa de DOMÍNIO (não vale a pena o Sales reenviar) vs falha de INFRAESTRUTURA (transitória, 503).
 // O Sales lê o código, para de tentar e deixa a venda visível para revisão (PRD v4, resposta 7: REJECTED_BY_CRM com motivo).
@@ -77,6 +78,8 @@ export const salesCommandSaleSchema = z.strictObject({
   }),
   saleId: z.string().trim().min(1).max(120),
   encounterId: z.string().trim().min(1).max(120),
+  // F1.10: código público do casal no Sales (CP-…). OPCIONAL: enquanto o Sales não o emitir, o corpo é o de sempre. Quando vier, a ficha nasce (ou é reaproveitada) com ele.
+  coupleCode: z.string().trim().min(1).max(64).optional(),
   customer: z.strictObject({
     name: z.string().trim().min(2).max(255),
     phone: z.string().trim().max(32).optional(),
@@ -220,6 +223,47 @@ function allocateReceived(entrySchedule: SalesCommandSale["sale"]["entrySchedule
   });
 }
 
+/**
+ * F1.10: reaproveitar a ficha que a recepção já abriu para o MESMO casal (mesmo cliente, visita recente, sem oportunidade) em vez de criar uma segunda ficha "Sales Command".
+ * DESLIGADO por padrão (SALE_BRIDGE_REUSE_CAPTURE_ENABLED): lido a cada chamada. O reaproveitamento por coupleCode (chave única) não depende da flag: sem ele a criação bateria na chave única.
+ */
+export const isSaleBridgeReuseCaptureEnabled = () => process.env.SALE_BRIDGE_REUSE_CAPTURE_ENABLED === "true";
+const SALE_BRIDGE_CAPTURE_LOCATION = "Sales Command";
+/** Janela da visita: a ficha da recepção e a venda do mesmo casal acontecem no mesmo dia (folga para virada de dia e fuso). */
+const RECEPTION_CAPTURE_WINDOW_MS = 36 * 3_600_000;
+
+function usableCoupleCode(raw: string | undefined, saleId: string): string | null {
+  if (!raw) return null;
+  const code = normalizeCoupleCode(raw);
+  if (isCoupleCode(code)) return code;
+  // Código fora do formato da ficha (ex.: só dígitos, parece telefone): a venda segue sem ligar, e o motivo fica no log (sem o valor).
+  logger.warn("Sales Command sale carried an unusable coupleCode; capture not linked by code", { saleId });
+  return null;
+}
+
+type CaptureForLink = { id: number; customerId: number; coupleCode: string | null; opportunityId: number | null; anonymizedAt: Date | null };
+
+/** Ficha existente ligada ao casal da venda: 1) pelo coupleCode (único); 2) com a flag, pela visita recente do mesmo cliente. Nunca devolve ficha anonimizada. */
+async function findCaptureForSale(tx: any, input: { coupleCode: string | null; customerId: number | null; occurredAt: Date }): Promise<{ link: { capture: CaptureForLink; by: "couple_code" | "reception_visit" } | null; codeFree: boolean }> {
+  if (input.coupleCode) {
+    const [byCode] = await tx.select().from(captureRecords).where(eq(captureRecords.coupleCode, input.coupleCode)).limit(1).for("update");
+    // Código preso a uma ficha anonimizada: não reaproveita (dados apagados a pedido do titular) e também não pode ser gravado de novo (chave única): a ficha da venda nasce sem ele.
+    if (byCode) return { link: byCode.anonymizedAt ? null : { capture: byCode, by: "couple_code" }, codeFree: false };
+  }
+  const none = { link: null, codeFree: true };
+  if (!isSaleBridgeReuseCaptureEnabled() || !input.customerId) return none;
+  const since = new Date(input.occurredAt.getTime() - RECEPTION_CAPTURE_WINDOW_MS);
+  const candidates = await tx.select().from(captureRecords).where(and(
+    eq(captureRecords.customerId, input.customerId),
+    isNull(captureRecords.anonymizedAt),
+    isNull(captureRecords.opportunityId),
+    ne(captureRecords.captureLocation, SALE_BRIDGE_CAPTURE_LOCATION),
+    or(and(isNotNull(captureRecords.checkedInAt), gte(captureRecords.checkedInAt, since)), and(isNull(captureRecords.checkedInAt), gte(captureRecords.createdAt, since))),
+  )).orderBy(desc(captureRecords.id)).limit(2).for("update");
+  // Dois candidatos = ambíguo: não adivinha (criar a ficha da venda é o comportamento de sempre; a recepção resolve pelo alerta de ficha sem vínculo).
+  return candidates.length === 1 ? { link: { capture: candidates[0], by: "reception_visit" }, codeFree: true } : none;
+}
+
 export async function materializeSalesCommandSale(tx: any, event: SalesCommandSale) {
   const existing = await findFormalization(tx, event.saleId);
   if (existing) return { ...existing, replay: true as const };
@@ -229,12 +273,16 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   const resort = await resolveResort(tx, event.project);
   const { row: termsRow, terms } = await resolveSaleTerms(tx, resort.id, occurredAt);
 
+  const coupleCode = usableCoupleCode(event.coupleCode, event.saleId);
   let customerId: number | undefined;
   if (event.customer.phone) {
     const [matched] = await tx.select({ id: customers.id }).from(customers)
       .where(and(eq(customers.phone, event.customer.phone), eq(customers.fullName, event.customer.name))).limit(1);
     customerId = matched?.id;
   }
+  // F1.10: a ficha do casal (quando existe) manda no cliente: a venda se junta a ela em vez de abrir um segundo cadastro.
+  const { link: linked, codeFree } = await findCaptureForSale(tx, { coupleCode, customerId: customerId ?? null, occurredAt });
+  if (linked) customerId = linked.capture.customerId;
   if (!customerId) {
     const createdCustomer = await tx.insert(customers).values({
       fullName: event.customer.name,
@@ -259,15 +307,35 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   const opportunityId = opportunityRow[0]?.id;
   if (!opportunityId) throw new Error("Opportunity formalization failed");
 
-  await tx.insert(captureRecords).values({
-    customerId,
-    resortId: resort.id,
-    opportunityId,
-    captureLocation: "Sales Command",
-    presentationStatus: "closed",
-    qualificationStatus: "qualified",
-    notes: `Formalização automática da venda ${event.saleId}.`,
-  });
+  let captureLink: { captureId: number; by: "couple_code" | "reception_visit" | "created"; codeWritten: boolean } | null = null;
+  if (linked) {
+    // Ficha da recepção: só ganha a oportunidade (se ainda não tinha) e, se faltava, o código do casal. Estado da sala (check-in, tour, resultado) NÃO é tocado.
+    const patch: { opportunityId?: number; coupleCode?: string } = {};
+    if (!linked.capture.opportunityId) patch.opportunityId = opportunityId;
+    if (!linked.capture.coupleCode && coupleCode) patch.coupleCode = coupleCode;
+    if (Object.keys(patch).length) {
+      try { await tx.update(captureRecords).set(patch).where(eq(captureRecords.id, linked.capture.id)); }
+      catch (error) {
+        // Corrida: outro processo ligou este código a outra ficha entre a leitura e a escrita. Sem o código, a venda segue (o alerta de ficha sem vínculo cobre).
+        if (!(isDuplicateKeyError(error) && patch.coupleCode)) throw error;
+        delete patch.coupleCode;
+        if (patch.opportunityId) await tx.update(captureRecords).set({ opportunityId: patch.opportunityId }).where(eq(captureRecords.id, linked.capture.id));
+      }
+    }
+    captureLink = { captureId: linked.capture.id, by: linked.by, codeWritten: Boolean(patch.coupleCode) };
+  } else {
+    const [createdCapture] = await tx.insert(captureRecords).values({
+      customerId,
+      resortId: resort.id,
+      opportunityId,
+      coupleCode: codeFree ? coupleCode : null,
+      captureLocation: SALE_BRIDGE_CAPTURE_LOCATION,
+      presentationStatus: "closed",
+      qualificationStatus: "qualified",
+      notes: `Formalização automática da venda ${event.saleId}.`,
+    }).$returningId();
+    captureLink = { captureId: createdCapture!.id, by: "created", codeWritten: codeFree && Boolean(coupleCode) };
+  }
 
   const balanceCents = event.sale.vgvCents - event.sale.entryContractedCents;
   const balanceCount = balanceCents > 0 ? terms.balanceInstallmentCount : 0;
@@ -433,6 +501,17 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
     summary: `Venda ${event.saleId} formalizada em cliente, oportunidade, proposta, contrato e ${installmentValues.length} parcelas.`,
     idempotencyKey: "audit:" + idempotencyKey,
   });
+  if (captureLink) {
+    // Sem PII: ids, o jeito do vínculo e se o código do casal foi gravado (o código em si não entra na trilha).
+    await tx.insert(auditLogs).values({
+      actorUserId: null,
+      entityType: "capture",
+      entityId: String(captureLink.captureId),
+      action: captureLink.by === "created" ? "sale_bridge_capture_created" : "sale_bridge_capture_linked",
+      summary: `Venda ${event.saleId}: ficha ${captureLink.captureId} ${captureLink.by === "created" ? "criada" : "reaproveitada"} (${captureLink.by}); código do casal ${captureLink.codeWritten ? "gravado" : "não gravado"}.`,
+      idempotencyKey: "audit:sale-bridge-capture:" + event.saleId,
+    });
+  }
 
   await fixContractCommissionRoleMapAtFormalization(tx, contractId); // item 5: mapa de papéis fixado com o contrato (flag OFF = no-op)
   // C2/C3: a venda confirmada tira o casal do feed (contrato novo). Último passo da tx de formalização; falha do gancho não derruba a venda. Flag OFF = no-op.

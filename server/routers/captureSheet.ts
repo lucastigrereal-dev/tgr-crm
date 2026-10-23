@@ -17,6 +17,7 @@ import type { CaptureExportSource } from "../../shared/captureSheetExport";
 import { buildAverageTimeByConsultant, buildSalesByOrigin } from "../../shared/captureSheetReports";
 import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 import { localDateInTimezone } from "../saleTermsPolicy";
+import { listUnlinkedCouples } from "../unlinkedCouples";
 
 /**
  * Ficha impressa com QR (TSE x CRM, pacotes 2, 3 e 5): a ficha abre pelo código do casal do Sales Command; o QR de bip é o da recepção (token secreto só na Suite), a folha só tem o espaço dele, equipe por papel, PEP e campos novos.
@@ -168,6 +169,9 @@ export const captureSheetRouter = router({
     });
     return { code };
   }),
+
+  /** F1.4: casais sem vínculo (código do Sales sem ficha / ficha com chegada e sem código). Alimenta o alerta do painel da sala; nada aqui escreve. */
+  unlinked: receptionProcedure.query(async () => listUnlinkedCouples(await requireDb())),
 
   /** Código da ficha pelo id, para a lista abrir a impressão. */
   /** Dia de hoje no calendário do projeto (fuso configurado no servidor): o painel e a exportação do navegador partem daqui. */

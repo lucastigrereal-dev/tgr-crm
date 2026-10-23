@@ -39,6 +39,7 @@ export default function Capture() {
   const [offlineItems, setOfflineItems] = useState<CaptureOfflineItem[]>([]);
   const [reviewingOfflineId, setReviewingOfflineId] = useState<string | null>(null);
   const refreshOfflineQueue = async () => setOfflineItems(await listOfflineCaptures());
+  const visitRule = trpc.captures.visitRule.useQuery(undefined, { staleTime: 5 * 60_000, retry: false });
   const create = trpc.captures.create.useMutation({
     onSuccess: result => { toast.success(`Ficha criada. Associado #${result.customerId} e oportunidade ${result.opportunityId ? "aberta" : "não criada"}.`); setForm(blank()); utils.captures.list.invalidate(); },
     onError: error => toast.error(error.message),
@@ -69,6 +70,8 @@ export default function Capture() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const currentPayload = payload();
+    // F1.6: com a regra ligada no servidor, ficha sem data de visita precisa estar marcada como passante (o servidor também confere).
+    if (visitRule.data?.requireDateOrPasserby && !form.scheduledAt && !form.isPasserby) { toast.error("Informe a data da visita ou marque \"É passante\"."); return; }
     if (!navigator.onLine) { if (reviewingOfflineId) await updateOfflineCapture(reviewingOfflineId, currentPayload); else await enqueueOfflineCapture(currentPayload); await refreshOfflineQueue(); setReviewingOfflineId(null); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
     if (reviewingOfflineId) { try { await create.mutateAsync(currentPayload as never); await removeOfflineCapture(reviewingOfflineId); await refreshOfflineQueue(); setReviewingOfflineId(null); } catch (error) { await markOfflineCaptureFailed(reviewingOfflineId, error instanceof Error ? error.message : "Falha ao reenviar ficha revisada"); await refreshOfflineQueue(); } return; }
     create.mutate(currentPayload as never);

@@ -9,6 +9,7 @@ import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { anonymizedCustomerError } from "../customerAnonymization";
 import { router } from "../_core/trpc";
 import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
+import { isCaptureVisitRuleEnabled, visitRuleViolation } from "../captureVisitRule";
 import { assertCaptureInRoomView, captorNameOf, resolveNtMotive, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
 import { canOpenArchivedSheet } from "../captureSheetDomain";
 import { getCaptureAppointmentPlan, getCaptureReadiness } from "../captureDomain";
@@ -219,7 +220,14 @@ export const capturesRouter = router({
     return { summary: buildCaptureProfileAnalytics(filtered), rows: filtered.slice(0, input.limit).map(profile => ({ ...profile, readiness: getProfileCompleteness(profile) })), totalMatches: filtered.length, truncated: rows.length >= profileDatasetLimit || filtered.length > input.limit, filters: { cities: unique(profiles.map(profile => profile.city)), states: unique(profiles.map(profile => profile.state)), salesRooms: unique(profiles.map(profile => profile.salesRoom)), vehicleBrands: unique(profiles.map(profile => profile.vehicleBrand)), vehicleModels: unique(profiles.map(profile => profile.vehicleModel)), travelSeasons: unique(profiles.map(profile => profile.usualTravelSeason)), relationshipStatuses: unique(profiles.map(profile => profile.relationshipStatus)) } };
   }),
 
+  /** F1.6: a tela da recepção consulta a regra para avisar antes de enviar (a regra de verdade é a do servidor, em `create`). */
+  visitRule: internalProcedure.query(() => ({ requireDateOrPasserby: isCaptureVisitRuleEnabled() })),
+
   create: salesProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
+    if (isCaptureVisitRuleEnabled()) {
+      const violation = visitRuleViolation(input);
+      if (violation) throw new TRPCError({ code: "BAD_REQUEST", message: violation });
+    }
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const result = await db.transaction(async tx => {
