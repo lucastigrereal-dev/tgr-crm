@@ -165,6 +165,52 @@ describe.skipIf(!integrationUrl)("resgate/distrato em modo sombra (0086 PROPOSTA
       for (const id of ids) expect(await casesOf(id)).toHaveLength(1);
     });
 
+    // F3.3 (plano 22/10): ensaio obrigatório em escala sintética antes de qualquer dia real, com 50 contratos e 10 vencidos.
+    it("ensaio F3.3: 50 contratos sintéticos (10 vencidos): tetos barram o que devem, o resto só 'teria rodado', NADA é cancelado e a repetição não muda nada", async () => {
+      const base = await currentRetentionSettings(db);
+      await saveRetentionSettings(db, adminId, { ...base, autoCancelEnabled: true, note: "ensaio F3.3" });
+      const healthy = [] as number[];
+      for (let i = 0; i < 40; i += 1) healthy.push(await contract({ paidAmounts: [1000] }));
+      const clean = [await contract({ overdueDaysAgo: [120], paidAmounts: [1000] }), await contract({ overdueDaysAgo: [130], paidAmounts: [1000] }), await contract({ overdueDaysAgo: [140], paidAmounts: [500] }), await contract({ overdueDaysAgo: [150] })];
+      const overCap = [await contract({ overdueDaysAgo: [120], paidAmounts: [4000] }), await contract({ overdueDaysAgo: [125], paidAmounts: [5000] })];
+      const paidCommission = [await contract({ overdueDaysAgo: [120] }), await contract({ overdueDaysAgo: [121] })];
+      for (const id of paidCommission) await db.insert(salesCommissions).values({ sellerId: adminId, contractId: id, baseAmount: "100.00", rate: "5.00", amount: "5.00", status: "paid" } as never);
+      const openReneg = await contract({ overdueDaysAgo: [120] });
+      await db.insert(installmentRenegotiations).values({ contractId: openReneg, originalInstallmentId: 1, originalAmount: "1000.00", proposedAmount: "900.00", proposedDueDate: "2026-11-01" as never, status: "draft" });
+      const promised = await contract({ overdueDaysAgo: [120] });
+      const all = [...healthy, ...clean, ...overCap, ...paidCommission, openReneg, promised];
+      expect(all).toHaveLength(50);
+
+      await runRescueSweep(db, { now: T0 });
+      const [promisedCase] = await casesOf(promised);
+      await recordRescueAttempt(db, serviceId, { caseId: Number(promisedCase!.id), channel: "phone", outcome: "promised_payment" }, day(0));
+      const first = await runRescueSweep(db, { now: day(1) });
+      const snapshot = async () => (await Promise.all(all.map(async id => { const [c] = await casesOf(id); return [id, c?.status ?? "none", c?.manualReviewReason ?? null] as const; })));
+      const afterFirst = await snapshot();
+
+      // contratos saudaveis nunca abrem caso
+      for (const id of healthy) expect(await casesOf(id)).toHaveLength(0);
+      for (const id of clean) expect((await casesOf(id))[0]!.status).toBe("due_for_cancellation");
+      for (const id of overCap) expect((await casesOf(id))[0]).toMatchObject({ status: "manual_review", manualReviewReason: "over_cap" });
+      for (const id of paidCommission) expect((await casesOf(id))[0]).toMatchObject({ status: "manual_review", manualReviewReason: "paid_commission" });
+      expect((await casesOf(openReneg))[0]).toMatchObject({ status: "manual_review", manualReviewReason: "open_renegotiation" });
+      expect((await casesOf(promised))[0]).toMatchObject({ status: "manual_review", manualReviewReason: "recent_promise" });
+      expect(first.wouldRun).toBeGreaterThanOrEqual(clean.length);
+      let wouldRunEvents = 0;
+      for (const id of clean) { const [row] = await casesOf(id); wouldRunEvents += (await eventsOf("contract.auto_cancellation.would_run", row!.id)).length; }
+      expect(wouldRunEvents).toBe(clean.length);
+      for (const id of [...overCap, ...paidCommission, openReneg, promised]) { const [row] = await casesOf(id); expect(await eventsOf("contract.auto_cancellation.would_run", row!.id)).toHaveLength(0); }
+
+      // modo sombra: nenhum dos 50 contratos mudou de status, nenhuma parcela foi cancelada, nenhum pedido de distrato foi criado
+      for (const id of all) await noSideEffects(id, { status: "active", installments: 0 });
+      // repetir (e rodar em paralelo) nao muda nada nem duplica evento
+      await Promise.all([runRescueSweep(db, { now: day(2) }), runRescueSweep(db, { now: day(2) })]);
+      expect(await snapshot()).toEqual(afterFirst);
+      wouldRunEvents = 0;
+      for (const id of clean) { const [row] = await casesOf(id); wouldRunEvents += (await eventsOf("contract.auto_cancellation.would_run", row!.id)).length; }
+      expect(wouldRunEvents).toBe(clean.length);
+    }, 60_000);
+
     it("o caso em revisão manual nunca é reavaliado pela varredura (estado persistido)", async () => {
       const id = await contract({ overdueDaysAgo: [120] });
       await db.insert(salesCommissions).values({ sellerId: adminId, contractId: id, baseAmount: "100.00", rate: "5.00", amount: "5.00", status: "paid" } as never);
