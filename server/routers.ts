@@ -29,6 +29,7 @@ import { integrationsRouter } from "./routers/integrations";
 import { auditTrailRouter } from "./routers/auditTrail";
 import { aiRouter } from "./routers/ai";
 import { capturesRouter } from "./routers/captures";
+import { guestpassRouter } from "./routers/guestpass";
 import { captureSheetRouter } from "./routers/captureSheet";
 import { projectSettingsRouter } from "./routers/projectSettings";
 import { commercialPoliciesRouter } from "./routers/commercialPolicies";
@@ -107,6 +108,7 @@ export const appRouter = router({
   ai: aiRouter,
   captures: capturesRouter,
   captureSheet: captureSheetRouter,
+  guestpass: guestpassRouter,
   projectSettings: projectSettingsRouter,
   commercialPolicies: commercialPoliciesRouter,
   policyRegistry: policyRegistryRouter,

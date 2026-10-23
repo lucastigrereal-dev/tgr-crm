@@ -18,6 +18,7 @@ import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { registerRecoveryOptOutGate, registerRecoveryOptOutReceiver } from "../recoveryOptOutReceiver";
 import { registerAttendanceGate, registerAttendanceReceiver } from "../attendanceReceiver";
 import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
+import { registerUnknownCoupleWatch } from "../unlinkedCouples";
 import { registerNqReadEndpoint } from "../nqReadEndpoint";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
@@ -91,6 +92,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
+  registerUnknownCoupleWatch(app, ENV.encounterTimesReceiverEnabled); // F1.4: 422 por casal sem ficha vira alerta no painel (antes do receptor; não o altera)
   registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey, ENV.encounterTimesReceiverEnabled);
   registerAttendanceReceiver(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
   registerRecoveryOptOutReceiver(app, ENV.recoveryIntegrationKey, ENV.recoveryEligibilityEnabled);
