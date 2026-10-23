@@ -159,8 +159,8 @@ jobs:
         env:
           DATABASE_URL: ${{ env.TGR_MYSQL_INTEGRATION_URL }}
 
-      - name: MySQL integration tests (forks padrão, sem singleFork)
-        run: pnpm exec vitest run --reporter=dot --pool=forks .mysql.test.ts
+      - name: MySQL integration tests (forks, arquivos em sequência: banco compartilhado e estado global)
+        run: pnpm exec vitest run --reporter=dot --pool=forks --no-file-parallelism .mysql.test.ts
 
   e2e:
     name: E2E autenticado em MySQL descartável

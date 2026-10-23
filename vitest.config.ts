@@ -19,6 +19,9 @@ export default defineConfig({
     // Cold imports (playwright, mysql2, tsx) exceed 5s on slower Windows
     // hosts during the parallel suite; real failures still fail on assertions.
     testTimeout: 30_000,
+    // Suítes *.mysql.test.ts compartilham UM banco e algumas alternam estado global (ex.: sale_validation_segregation em saleValidatorGrants).
+    // Em forks paralelos isso gera falha intermitente (SALE_SEGREGATION, deadlock em commercial_fractions); com o banco de integração configurado, os arquivos rodam em sequência.
+    fileParallelism: !process.env.TGR_MYSQL_INTEGRATION_URL,
     include: ["server/**/*.test.ts", "server/**/*.spec.ts", "shared/**/*.test.ts", "shared/**/*.spec.ts"],
   },
 });
