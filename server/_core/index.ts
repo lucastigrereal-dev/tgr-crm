@@ -26,6 +26,7 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startRescueQueueJob, type RescueQueueJob } from "../rescueQueueJob";
 import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "../nonBuyerReconciliationJob";
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
 import { getDb } from "../db";
@@ -63,6 +64,7 @@ async function startServer() {
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
   let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
+  let rescueQueueJob: RescueQueueJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   // Item 6: sobrescritas persistidas das flags da allow-list valem ANTES de registrar rotas e jobs (mestre FEATURE_FLAG_OVERRIDES_ENABLED desligado = nada acontece).
@@ -178,6 +180,7 @@ async function startServer() {
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
     nonBuyerReconciliationJob?.stop();
+    rescueQueueJob?.stop();
     orphanBlobSweepJob?.stop();
     gatewayRecoveryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
@@ -222,6 +225,13 @@ async function startServer() {
       nonBuyerReconciliationJob = startNonBuyerReconciliationJob({
         onError: error => logger.error("Non-buyer eligibility reconciliation failed", { error: error instanceof Error ? error.message : "unknown_error" }),
         onRun: result => { if (result.changed > 0) logger.info("Non-buyer eligibility reconciled", { ...result }); },
+      });
+    }
+    // F3.1: DESLIGADA por padrão. MODO SOMBRA do resgate/distrato: só registra casos e eventos internos (precisa da migration PROPOSED_0086); nunca cancela contrato.
+    if (ENV.rescueQueueEnabled) {
+      rescueQueueJob = startRescueQueueJob({
+        onError: error => logger.error("Rescue queue sweep failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+        onRun: result => { if (result.opened + result.rescued + result.cancelled + result.due + result.wouldRun + result.manualReview + result.errors > 0) logger.info("Rescue queue sweep", { ...result }); },
       });
     }
     // CRM-A10: só lê o Asaas e reconcilia intenções de emissão pendentes; sem Asaas configurado não faz nada.

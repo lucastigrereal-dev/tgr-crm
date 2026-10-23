@@ -3,7 +3,8 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/crm/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BlockedItems, FlagsPanel, IndicatorsPanel, isGrantActive, LoadFailure, Panel, PermissionsPanel, RoleMapPanel, SaleValidatorsPanel, StateNotice } from "@/components/crm/companySettings/panels";
-import { describeBackendState, describeMutationError, flagHistory, indicatorHistory, permissionHistory, roleMapHistory, type BackendState } from "@/components/crm/companySettings/text";
+import { describeBackendState, describeMutationError, flagHistory, indicatorHistory, permissionHistory, retentionHistory, roleMapHistory, type BackendState } from "@/components/crm/companySettings/text";
+import { RescuePanel } from "@/components/crm/companySettings/RescuePanel";
 import { trpc } from "@/lib/trpc";
 
 // "Configurações da empresa": só a administração (a rota e o menu são só do admin). Cada aba usa o que o servidor já oferece; desligado ou indisponível vira aviso claro.
@@ -17,12 +18,13 @@ export default function CompanySettings() {
   return <div className="space-y-6">
     <PageHeader eyebrow="Admin" title="Configurações da empresa" description="Ajustes que a administração pode fazer sem chamar a equipe técnica. Cada mudança guarda quem fez e quando." />
     <Tabs value={tab} onValueChange={setTab}>
-      <TabsList className="flex-wrap"><TabsTrigger value="recursos">Recursos do sistema</TabsTrigger><TabsTrigger value="permissoes">Permissões</TabsTrigger><TabsTrigger value="comissao">Papéis da comissão</TabsTrigger><TabsTrigger value="indicadores">Indicadores</TabsTrigger><TabsTrigger value="administrativo">Administrativo autorizado</TabsTrigger></TabsList>
+      <TabsList className="flex-wrap"><TabsTrigger value="recursos">Recursos do sistema</TabsTrigger><TabsTrigger value="permissoes">Permissões</TabsTrigger><TabsTrigger value="comissao">Papéis da comissão</TabsTrigger><TabsTrigger value="indicadores">Indicadores</TabsTrigger><TabsTrigger value="administrativo">Administrativo autorizado</TabsTrigger><TabsTrigger value="resgate">Resgate e distrato</TabsTrigger></TabsList>
       <TabsContent value="recursos"><FlagsTab names={names} active={tab === "recursos"} /></TabsContent>
       <TabsContent value="permissoes"><PermissionsTab names={names} active={tab === "permissoes"} /></TabsContent>
       <TabsContent value="comissao"><RoleMapTab names={names} active={tab === "comissao"} /></TabsContent>
       <TabsContent value="indicadores"><IndicatorsTab names={names} active={tab === "indicadores"} /></TabsContent>
       <TabsContent value="administrativo"><SaleValidatorsTab active={tab === "administrativo"} /></TabsContent>
+      <TabsContent value="resgate"><RescueTab names={names} active={tab === "resgate"} /></TabsContent>
     </Tabs>
   </div>;
 }
@@ -76,6 +78,18 @@ function IndicatorsTab({ names, active }: TabProps) {
   if (catalog.isLoading) return <Panel><p className="text-sm text-muted-foreground">Carregando...</p></Panel>;
   if (catalog.error || !catalog.data) return <Panel>{notice(describeBackendState({ errorCode: errorCode(catalog.error) ?? "ERROR" }))}</Panel>;
   return <Panel><IndicatorsPanel items={catalog.data} pending={save.isPending} onSave={value => save.mutate(value as never)} openKey={openKey} onOpenHistory={setOpenKey} historyOf={code => (code === openKey ? (history.isError ? "error" : history.data ? indicatorHistory(history.data, names) : undefined) : undefined)} /></Panel>;
+}
+
+function RescueTab({ names, active }: TabProps) {
+  const utils = trpc.useUtils();
+  const settings = trpc.rescue.settings.useQuery(undefined, { enabled: active, retry: false });
+  const history = trpc.rescue.settingsHistory.useQuery(undefined, { enabled: active && Boolean(settings.data), retry: false });
+  const shadow = trpc.rescue.shadow.useQuery(undefined, { enabled: active && Boolean(settings.data), retry: false });
+  const save = trpc.rescue.saveSettings.useMutation({ onSuccess: () => { toast.success("Nova versão salva. Vale para casos abertos depois."); void utils.rescue.settings.invalidate(); void utils.rescue.settingsHistory.invalidate(); }, onError: error => toast.error(describeMutationError(error)) });
+  if (settings.isLoading) return <Panel><p className="text-sm text-muted-foreground">Carregando...</p></Panel>;
+  if (settings.error || !settings.data) return <Panel>{notice(describeBackendState({ errorCode: errorCode(settings.error) ?? "ERROR" }))}</Panel>;
+  const current = settings.data.current;
+  return <Panel><RescuePanel key={current.versionId ?? "default"} settings={current} isDefault={current.isDefault} provisional={current.provisional} pending={save.isPending} onSave={values => save.mutate(values)} history={history.isError ? "error" : history.data ? retentionHistory(history.data, names) : undefined} shadow={shadow.isError ? "error" : shadow.data} /></Panel>;
 }
 
 function SaleValidatorsTab({ active }: { active: boolean }) {

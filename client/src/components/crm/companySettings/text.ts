@@ -70,6 +70,9 @@ export function roleMapHistory(rows: Array<Who & { id: number; version: number; 
     return { key: String(r.id), who: whoName(r.createdByUserId, names), when: formatWhen(r.createdAt), what: `versão ${r.version}: ${text}` };
   });
 }
+export function retentionHistory(rows: Array<Who & { id: number; rescueWindowMonths: number; rescueAlertLeadDays: number; rescueReopenAfterDays: number; autoCancelPromiseDays: number; autoCancelMaxPaidPercent: number; autoCancelEnabled: boolean; note: string | null }>, names: Map<number, string>): HistoryEntry[] {
+  return rows.map(r => ({ key: String(r.id), who: whoName(r.createdByUserId, names), when: formatWhen(r.createdAt), what: `prazo ${r.rescueWindowMonths} mês(es), aviso ${r.rescueAlertLeadDays} dia(s) antes, teto de promessa ${r.autoCancelPromiseDays} dia(s), teto de valor pago ${r.autoCancelMaxPaidPercent}%, ensaio do distrato automático ${r.autoCancelEnabled ? "ligado" : "desligado"}${r.note ? ` (${r.note})` : ""}` }));
+}
 export function permissionHistory(rows: Array<Who & { id: number; roles: string }>, names: Map<number, string>): HistoryEntry[] {
   return rows.map(r => {
     const roles = parseJson(r.roles);

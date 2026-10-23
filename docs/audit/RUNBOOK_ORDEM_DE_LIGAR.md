@@ -24,6 +24,8 @@ Estado: NADA aqui foi ligado e nenhuma migration PROPOSTA foi aplicada. Todas as
 | `FEATURE_FLAG_OVERRIDES_ENABLED` | 0084 | nenhum | admin técnico (fora da tela) |
 | `PERMISSION_OVERRIDES_ENABLED` | 0085 | nenhum | admin técnico (fora da tela) |
 | `SALE_VALIDATED_QUOTAS_COUNT_ENABLED` | nenhuma | Sales precisa aceitar `quotasCount` (Suite faz o re-pin do contrato) | Lucas, depois da Suite |
+| `RESCUE_QUEUE_ENABLED` | 0086 | nenhum: MODO SOMBRA, só registra casos e eventos internos; nunca cancela contrato | Lucas (GO), fora da tela de flags |
+| `AUTO_CANCELLATION_ENABLED` | (F4) | RESERVADA: o distrato automático real não existe; nenhum código age com ela | ninguém, por ora |
 | `INVENTORY_HOLD_AT_FORMALIZATION` | nenhuma | Só depois de existir entrega de `contract.inventory_lost` ao Sales/Financial OU distrato automático | Lucas |
 
 `COMMISSION_V2_RELEASED` continua travada e não passa por tela nenhuma.
