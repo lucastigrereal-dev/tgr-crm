@@ -26,6 +26,8 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startNonBuyerDeliveryJob, type NonBuyerDeliveryJob } from "../nonBuyerDeliveryJob";
+import { isAllowedDeliveryEndpoint } from "../nonBuyerDelivery";
 import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "../nonBuyerReconciliationJob";
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
 import { getDb } from "../db";
@@ -63,6 +65,7 @@ async function startServer() {
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
   let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
+  let nonBuyerDeliveryJob: NonBuyerDeliveryJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   // Item 6: sobrescritas persistidas das flags da allow-list valem ANTES de registrar rotas e jobs (mestre FEATURE_FLAG_OVERRIDES_ENABLED desligado = nada acontece).
@@ -178,6 +181,7 @@ async function startServer() {
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
     nonBuyerReconciliationJob?.stop();
+    nonBuyerDeliveryJob?.stop();
     orphanBlobSweepJob?.stop();
     gatewayRecoveryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
@@ -223,6 +227,15 @@ async function startServer() {
         onError: error => logger.error("Non-buyer eligibility reconciliation failed", { error: error instanceof Error ? error.message : "unknown_error" }),
         onRun: result => { if (result.changed > 0) logger.info("Non-buyer eligibility reconciled", { ...result }); },
       });
+    }
+    // F2.1: DESLIGADA por padrão. Entrega non_buyer.* ao Recovery; precisa da migration PROPOSED_0089, da elegibilidade ligada, de endpoint https e de chave. Sem configuração completa não inicia.
+    if (ENV.nonBuyerDeliveryEnabled) {
+      if (ENV.recoveryEligibilityEnabled && isAllowedDeliveryEndpoint(ENV.nonBuyerDeliveryEndpoint) && ENV.nonBuyerDeliveryKey) {
+        nonBuyerDeliveryJob = startNonBuyerDeliveryJob({ endpoint: ENV.nonBuyerDeliveryEndpoint, key: ENV.nonBuyerDeliveryKey }, {
+          onError: error => logger.error("Non-buyer delivery failed", { error: error instanceof Error ? error.name : "unknown_error" }),
+          onRun: result => { if (result.delivered + result.rejected + result.retried > 0) logger.info("Non-buyer delivery", { ...result }); },
+        });
+      } else logger.warn("NON_BUYER_DELIVERY_ENABLED is on but RECOVERY_ELIGIBILITY_ENABLED, endpoint or key is missing or invalid; job not started");
     }
     // CRM-A10: só lê o Asaas e reconcilia intenções de emissão pendentes; sem Asaas configurado não faz nada.
     if (ENV.gatewayRecoveryEnabled) {

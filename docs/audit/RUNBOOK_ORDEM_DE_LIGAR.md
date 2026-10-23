@@ -24,6 +24,7 @@ Estado: NADA aqui foi ligado e nenhuma migration PROPOSTA foi aplicada. Todas as
 | `FEATURE_FLAG_OVERRIDES_ENABLED` | 0084 | nenhum | admin técnico (fora da tela) |
 | `PERMISSION_OVERRIDES_ENABLED` | 0085 | nenhum | admin técnico (fora da tela) |
 | `SALE_VALIDATED_QUOTAS_COUNT_ENABLED` | nenhuma | Sales precisa aceitar `quotasCount` (Suite faz o re-pin do contrato) | Lucas, depois da Suite |
+| `NON_BUYER_DELIVERY_ENABLED` | 0089 (depois da 0080) | `RECOVERY_ELIGIBILITY_ENABLED` ligada; Suite publica o contrato `crm.non_buyer.*.v1` e o Recovery o receptor (Suite->CRM->re-pin) | Lucas (GO), fora da tela de flags |
 | `INVENTORY_HOLD_AT_FORMALIZATION` | nenhuma | Só depois de existir entrega de `contract.inventory_lost` ao Sales/Financial OU distrato automático | Lucas |
 
 `COMMISSION_V2_RELEASED` continua travada e não passa por tela nenhuma.
