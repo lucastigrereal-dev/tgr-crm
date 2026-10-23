@@ -15,6 +15,11 @@ describe("flags da rodada 4 no compose do piloto", () => {
     expect(compose).toContain(`${name}: "\${${name}:-false}"`);
     expect(example).toMatch(new RegExp(`^${name}=false`, "m"));
   });
+  it("GuestPass: base e chave passam ao app vazias por padrão e a chave nunca tem valor no .env.example", () => {
+    expect(compose).toContain('GUESTPASS_CRM_BASE_URL: "${GUESTPASS_CRM_BASE_URL:-}"');
+    expect(compose).toContain('GUESTPASS_CRM_READ_KEY: "${GUESTPASS_CRM_READ_KEY:-}"');
+    expect(example).toMatch(/^GUESTPASS_CRM_READ_KEY=\s*#/m);
+  });
   it("CSRF_ALLOWED_ORIGINS passa ao app com padrão vazio", () => {
     expect(compose).toContain('CSRF_ALLOWED_ORIGINS: "${CSRF_ALLOWED_ORIGINS:-}"');
     expect(example).toMatch(/^CSRF_ALLOWED_ORIGINS=/m);

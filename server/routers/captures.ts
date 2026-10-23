@@ -19,6 +19,8 @@ import { activeRoomStatuses, assertReceptionAction, canTransitionPresentationSta
 import { publishSalesRoomEvent } from "../realtime";
 import { affectedRows } from "../mysqlErrors";
 import { canonicalizeMasterData } from "../masterData";
+import { isGuestpassPrefillEnabled, normalizePassRef } from "../guestpassConfig";
+import { GuestpassLinkConflict, linkGuestpassToCapture, sanitizeFetchedAt } from "../guestpassPrefill";
 
 const optionalText = z.string().trim().max(5000).optional().nullable();
 const optionalShort = z.string().trim().max(255).optional().nullable();
@@ -47,6 +49,10 @@ const captureInput = z.object({
   lodgingLocation: optionalShort,
   transportation: z.string().trim().max(100).optional().nullable(),
   isPasserby: z.boolean().default(false),
+  // F1.8: Nº do passe do GuestPass de onde a ficha foi preenchida (vínculo 1:1; só com CRM_GUESTPASS_PREFILL_ENABLED).
+  guestpassPassRef: z.string().trim().max(32).optional().nullable(),
+  /** Hora (ISO) em que a tela buscou o passe; vira prefillFetchedAt do vínculo. */
+  guestpassFetchedAt: z.string().datetime().optional().nullable(),
   scheduledAt: z.string().datetime().optional().nullable(),
   qualificationStatus: z.enum(["pending", "qualified", "disqualified"]).default("pending"),
   qualificationReason: optionalText,
@@ -284,6 +290,16 @@ export const capturesRouter = router({
         customerId, resortId: clean(input.resortId), opportunityId, campaignId: clean(input.campaignId), promoterId: clean(input.promoterId), qualifierId: clean(input.qualifierId), linerId: clean(input.linerId), closerId: clean(input.closerId), roomManagerId: clean(input.roomManagerId), salesRoom: nullIfBlank(input.salesRoom), captureLocation: nullIfBlank(input.captureLocation), lodgingLocation: nullIfBlank(input.lodgingLocation), transportation: nullIfBlank(input.transportation), isPasserby: input.isPasserby, scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null, presentationStatus: appointmentPlan.presentationStatus, qualificationStatus: input.qualificationStatus, qualificationReason: nullIfBlank(input.qualificationReason), partnerName: nullIfBlank(input.partnerName), partnerAge: clean(input.partnerAge), partnerProfession: nullIfBlank(input.partnerProfession), partnerProfessionNotes: nullIfBlank(input.partnerProfessionNotes), relationshipStatus: nullIfBlank(input.relationshipStatus), relationshipYears: clean(input.relationshipYears), relationshipMonths: clean(input.relationshipMonths), childrenCount: input.childrenCount, childrenNames: nullIfBlank(input.childrenNames), primaryProfessionNotes: nullIfBlank(input.primaryProfessionNotes), averageIncome: input.averageIncome?.toFixed(2) ?? null, vehicleBrand: nullIfBlank(input.vehicleBrand), vehicleModel: nullIfBlank(input.vehicleModel), vehicleYear: clean(input.vehicleYear), hasCreditCard: clean(input.hasCreditCard), creditCardBrands: nullIfBlank(input.creditCardBrands), acceptsCheque: clean(input.acceptsCheque), ownsHome: clean(input.ownsHome), ownsPropertyInCity: clean(input.ownsPropertyInCity), travelWeeksPerYear: input.travelWeeksPerYear?.toFixed(1) ?? null, usualTravelSeason: nullIfBlank(input.usualTravelSeason), dreamTrips: nullIfBlank(input.dreamTrips), lastTrip: nullIfBlank(input.lastTrip), averageHotelSpend: input.averageHotelSpend?.toFixed(2) ?? null, nextFamilyTrip: nullIfBlank(input.nextFamilyTrip), socialNetworks: nullIfBlank(input.socialNetworks), giftDescription: nullIfBlank(input.giftDescription), notes: nullIfBlank(input.notes) }).$returningId();
       const captureId = inserted[0]?.id;
       if (!captureId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível registrar a ficha de captação." });
+      if (input.guestpassPassRef) {
+        if (!isGuestpassPrefillEnabled()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Busca de passe desligada." });
+        const passRef = normalizePassRef(input.guestpassPassRef);
+        if (!passRef) throw new TRPCError({ code: "BAD_REQUEST", message: "Nº do passe inválido. Use o formato GP-XXXXXXXX." });
+        try { await linkGuestpassToCapture(tx, { captureId, passRef, actorUserId: ctx.user.id, fetchedAt: sanitizeFetchedAt(input.guestpassFetchedAt) }); }
+        catch (error) {
+          if (error instanceof GuestpassLinkConflict) throw new TRPCError({ code: "CONFLICT", message: "Este passe já está vinculado a outra ficha." });
+          throw error;
+        }
+      }
       let taskId: number | null = null;
       if (appointmentPlan.task) {
         const scheduledTask = await tx.insert(tasks).values({ title: appointmentPlan.task.title, description: appointmentPlan.task.description, type: "follow_up", priority: input.qualificationStatus === "qualified" ? "high" : "normal", customerId, assignedToUserId: clean(input.linerId) ?? clean(input.closerId) ?? ctx.user.id, dueAt: appointmentPlan.task.dueAt, reminderAt: appointmentPlan.task.reminderAt, createdByUserId: ctx.user.id }).$returningId();

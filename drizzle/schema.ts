@@ -473,6 +473,23 @@ export const coupleRegistry = mysqlTable("couple_registry", {
   index("couple_registry_phone_idx").on(table.phoneDigits),
 ]);
 
+/**
+ * F1.8 / CRM-a: vínculo único entre o Nº do passe do GuestPass (GP- + 8 ou 10 hexadecimais) e a ficha. Só ids: nenhum dado do casal vem do GuestPass para cá antes da assinatura da ficha.
+ * PROPOSTA de migration: migrations/proposed/PROPOSED_0087_capture_guestpass_links.sql (a tabela só existe depois do GO; o uso fica atrás de CRM_GUESTPASS_PREFILL_ENABLED, desligada).
+ */
+export const captureGuestpassLinks = mysqlTable("capture_guestpass_links", {
+  id: int("id").autoincrement().primaryKey(),
+  captureId: int("captureId").notNull().references(() => captureRecords.id),
+  guestpassPassRef: varchar("guestpassPassRef", { length: 13 }).notNull(),
+  contractVersion: int("contractVersion").default(1).notNull(),
+  prefillFetchedAt: timestamp("prefillFetchedAt"),
+  createdByUserId: int("createdByUserId").references(() => users.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("capture_guestpass_links_capture_unique").on(table.captureId),
+  uniqueIndex("capture_guestpass_links_pass_unique").on(table.guestpassPassRef),
+]);
+
 /** C1: um registro por evento de atendimento recebido (eventId único; (atendimento, revisão) único). Só adiciona. Sem nome nem telefone. */
 export const attendanceRecords = mysqlTable("attendance_records", {
   id: int("id").autoincrement().primaryKey(),
