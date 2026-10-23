@@ -1,0 +1,61 @@
+{
+  "_note": "F2.1 PROPOSTA de contrato CRM -> Recovery (aditivo, NAO travado em consumers.lock.json). Dados 100% sinteticos. Suite -> CRM -> re-pin antes de ligar NON_BUYER_DELIVERY_ENABLED.",
+  "contractVersion": 1,
+  "eligible": {
+    "eventName": "crm.non_buyer.eligible.v1",
+    "method": "POST",
+    "path": "/non-buyer/eligible",
+    "auth": "Authorization: Bearer <RECOVERY_NON_BUYER_KEY>; idempotency-key = eventId",
+    "valid": [
+      {
+        "name": "ramo closed, sem motivo",
+        "event": {
+          "eventId": "crm-nb-12-eligible-1", "source": "crm", "occurredAt": "2026-10-21T15:00:00.000Z",
+          "project": { "externalKey": "syn-project-1", "name": "Empreendimento Sintetico", "timezone": "America/Recife" },
+          "coupleCode": "CP-SYN00001", "coupleId": "crm-capture-12", "encounterDate": "2026-10-21", "dedupeKey": "CP-SYN00001:2026-10-21",
+          "eligibleAt": "2026-10-21T15:00:00.000Z", "lastEncounterAt": "2026-10-21T14:00:00.000Z", "branch": "closed", "reasonCode": null, "consentVersion": null, "channels": [],
+          "contact": { "name": "Casal Sintetico Um", "phone": "11999990001" }
+        }
+      },
+      {
+        "name": "ramo no_tour com motivo e canais",
+        "event": {
+          "eventId": "crm-nb-13-eligible-3", "source": "crm", "occurredAt": "2026-10-22T02:30:00.000Z",
+          "project": { "externalKey": "syn-project-1", "name": "Empreendimento Sintetico", "timezone": "America/Recife" },
+          "coupleCode": "CP-SYN00002", "coupleId": "crm-capture-13", "encounterDate": "2026-10-21", "dedupeKey": "CP-SYN00002:2026-10-21",
+          "eligibleAt": "2026-10-22T02:30:00.000Z", "lastEncounterAt": "2026-10-22T02:00:00.000Z", "branch": "no_tour", "reasonCode": "syn_motive", "consentVersion": "v4", "channels": ["whatsapp", "phone"],
+          "contact": { "name": "Casal Sintetico Dois", "phone": null }
+        }
+      }
+    ],
+    "invalid": [
+      { "name": "campo extra (CPF)", "mutate": { "contact": { "name": "X", "phone": null, "cpf": "000" } } },
+      { "name": "dedupeKey diferente de coupleCode:encounterDate", "mutate": { "dedupeKey": "CP-SYN00001:2026-10-22" } },
+      { "name": "source errado", "mutate": { "source": "recovery" } },
+      { "name": "eventId de revogacao no corpo de elegivel", "mutate": { "eventId": "crm-nb-12-revoked-2" } },
+      { "name": "data do encontro sem formato", "mutate": { "encounterDate": "21/10/2026" } },
+      { "name": "branch desconhecido", "mutate": { "branch": "other" } }
+    ]
+  },
+  "revoked": {
+    "eventName": "crm.non_buyer.eligibility_revoked.v1",
+    "method": "POST",
+    "path": "/non-buyer/eligibility-revoked",
+    "auth": "Authorization: Bearer <RECOVERY_NON_BUYER_KEY>; idempotency-key = eventId",
+    "valid": [
+      { "name": "opt_out", "event": { "eventId": "crm-nb-12-revoked-2", "source": "crm", "coupleCode": "CP-SYN00001", "encounterDate": "2026-10-21", "dedupeKey": "CP-SYN00001:2026-10-21", "revokedAt": "2026-10-21T16:00:00.000Z", "reason": "opt_out" } },
+      { "name": "sale_in_progress", "event": { "eventId": "crm-nb-13-revoked-4", "source": "crm", "coupleCode": "CP-SYN00002", "encounterDate": "2026-10-21", "dedupeKey": "CP-SYN00002:2026-10-21", "revokedAt": "2026-10-22T03:00:00.000Z", "reason": "sale_in_progress" } }
+    ],
+    "invalid": [
+      { "name": "motivo fora do catalogo", "mutate": { "reason": "because" } },
+      { "name": "campo extra (nome)", "mutate": { "name": "Casal" } },
+      { "name": "eventId de elegibilidade", "mutate": { "eventId": "crm-nb-12-eligible-1" } }
+    ]
+  },
+  "responses": {
+    "200": "replay idempotente (mesmo eventId ou mesma dedupeKey ja aberta)",
+    "201": "aceito",
+    "4xx com {code: ^[A-Z0-9_]+$}": "recusa terminal do conteudo (exceto 408/425/429): o CRM marca rejected e nao reenvia",
+    "401/403/404/429/5xx/rede": "o CRM tenta de novo com backoff (5 s dobrando, teto 10 min)"
+  }
+}

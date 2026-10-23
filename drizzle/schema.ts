@@ -8,6 +8,7 @@ import {
   int,
   mysqlEnum,
   mysqlTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -542,6 +543,31 @@ export const nonBuyerEligibilityState = mysqlTable("non_buyer_eligibility_state"
 }, table => [
   uniqueIndex("non_buyer_eligibility_state_capture_unique").on(table.captureId),
   index("non_buyer_eligibility_state_customer_idx").on(table.customerId),
+]);
+
+/** F2.1 (fatia 5): livro de entrega dos eventos non_buyer.* ao Recovery, um por eventId. Sem PII (o corpo com contato é montado no envio). PROPOSTA 0089: só existe depois do GO. */
+export const nonBuyerDeliveries = mysqlTable("non_buyer_deliveries", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  eventId: varchar("eventId", { length: 120 }).notNull(),
+  captureId: int("captureId").notNull().references(() => captureRecords.id),
+  seq: int("seq").notNull(),
+  kind: mysqlEnum("kind", ["eligible", "revoked"]).notNull(),
+  status: mysqlEnum("status", ["pending", "delivered", "superseded", "suppressed", "rejected"]).default("pending").notNull(),
+  reason: varchar("reason", { length: 60 }),
+  attempts: int("attempts").default(0).notNull(),
+  nextAttemptAt: timestamp("nextAttemptAt", { fsp: 3 }),
+  lastHttpStatus: smallint("lastHttpStatus"),
+  deliveredAt: timestamp("deliveredAt", { fsp: 3 }),
+  /** Identidade ENTREGUE do elegível (preenchida só quando delivered): o revogado reusa estes valores, não o estado atual da ficha. Código pseudônimo, sem nome nem telefone. */
+  coupleCode: varchar("coupleCode", { length: 64 }),
+  encounterDate: varchar("encounterDate", { length: 10 }),
+  dedupeKey: varchar("dedupeKey", { length: 140 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("non_buyer_deliveries_event_unique").on(table.eventId),
+  index("non_buyer_deliveries_due_idx").on(table.status, table.nextAttemptAt),
+  index("non_buyer_deliveries_capture_idx").on(table.captureId, table.kind, table.status),
 ]);
 
 /** Lista editável e VERSIONADA dos indicadores oficiais do CRM (nome e descrição exibidos; a fórmula continua no código). Append-only: a versão vigente é a maior por código. PROPOSTA 0081. */

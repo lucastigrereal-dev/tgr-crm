@@ -27,6 +27,8 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startNonBuyerDeliveryJob, type NonBuyerDeliveryJob } from "../nonBuyerDeliveryJob";
+import { isAllowedDeliveryEndpoint } from "../nonBuyerDelivery";
 import { startPrivacyErasureJob, type PrivacyErasureJob } from "../privacyErasureJob";
 import { isAllowedFeedEndpoint } from "../privacyErasureFeed";
 import { startRescueQueueJob, type RescueQueueJob } from "../rescueQueueJob";
@@ -67,6 +69,7 @@ async function startServer() {
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
   let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
+  let nonBuyerDeliveryJob: NonBuyerDeliveryJob | undefined;
   let privacyErasureJob: PrivacyErasureJob | undefined;
   let rescueQueueJob: RescueQueueJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
@@ -185,6 +188,7 @@ async function startServer() {
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
     nonBuyerReconciliationJob?.stop();
+    nonBuyerDeliveryJob?.stop();
     privacyErasureJob?.stop();
     rescueQueueJob?.stop();
     orphanBlobSweepJob?.stop();
@@ -232,6 +236,15 @@ async function startServer() {
         onError: error => logger.error("Non-buyer eligibility reconciliation failed", { error: error instanceof Error ? error.message : "unknown_error" }),
         onRun: result => { if (result.changed > 0) logger.info("Non-buyer eligibility reconciled", { ...result }); },
       });
+    }
+    // F2.1: DESLIGADA por padrão. Entrega non_buyer.* ao Recovery; precisa da migration PROPOSED_0089, da elegibilidade ligada, de endpoint https e de chave. Sem configuração completa não inicia.
+    if (ENV.nonBuyerDeliveryEnabled) {
+      if (ENV.recoveryEligibilityEnabled && isAllowedDeliveryEndpoint(ENV.nonBuyerDeliveryEndpoint) && ENV.nonBuyerDeliveryKey) {
+        nonBuyerDeliveryJob = startNonBuyerDeliveryJob({ endpoint: ENV.nonBuyerDeliveryEndpoint, key: ENV.nonBuyerDeliveryKey }, {
+          onError: error => logger.error("Non-buyer delivery failed", { error: error instanceof Error ? error.name : "unknown_error" }),
+          onRun: result => { if (result.delivered + result.rejected + result.retried > 0) logger.info("Non-buyer delivery", { ...result }); },
+        });
+      } else logger.warn("NON_BUYER_DELIVERY_ENABLED is on but RECOVERY_ELIGIBILITY_ENABLED, endpoint or key is missing or invalid; job not started");
     }
     // F2.10: DESLIGADA por padrão. Exclusão LGPD propagada do GuestPass (pull + recibo); precisa da migration PROPOSED_0088 e de endpoint https, chave e segredo. Sem configuração completa não inicia.
     if (ENV.privacyErasurePropagationEnabled) {
