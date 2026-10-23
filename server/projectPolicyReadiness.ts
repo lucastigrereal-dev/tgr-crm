@@ -16,7 +16,7 @@ export type ReadinessCheck = {
   key: "commission_policy" | "commission_rates" | "sale_terms_policy" | "cancellation_policy" | "contract_documents" | "inventory" | "project_mapping";
   severity: ReadinessSeverity;
   ok: boolean;
-  /** Código estável: o mesmo que o motor grava/recusa quando a regra falta (`incomplete_project_policy`, `SALE_TERMS_POLICY_MISSING`, `SALE_TERMS_POLICY_AMBIGUOUS`). */
+  /** Código estável: `incomplete_project_policy`, `SALE_TERMS_POLICY_MISSING` e `SALE_TERMS_POLICY_AMBIGUOUS` são os que o motor grava/recusa; `SALE_TERMS_POLICY_INVALID` é só do checklist (no receptor, `parseSaleTermsPolicy` lança ZodError e cai na falha genérica, sem este código). */
   code: string | null;
   label: string;
   detail: string;
