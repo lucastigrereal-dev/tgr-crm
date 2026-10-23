@@ -54,7 +54,15 @@ describe("F1.12: checklist de política do projeto antes do 1º dia", () => {
   it.each([["missing", "SALE_TERMS_POLICY_MISSING"], ["ambiguous", "SALE_TERMS_POLICY_AMBIGUOUS"], ["invalid", "SALE_TERMS_POLICY_INVALID"]] as const)("condições da venda %s bloqueiam (%s)", (state, code) => {
     const result = evaluateProjectReadiness(base({ saleTerms: state }));
     expect(result.ready).toBe(false);
-    expect(result.checks.find(item => item.key === "sale_terms_policy")).toMatchObject({ severity: "blocking", ok: false, code });
+    expect(result.checks.find(item => item.key === "sale_terms_policy")).toMatchObject({ severity: "blocking", ok: false, code, engineCode: state !== "invalid" });
+  });
+
+  it("SALE_TERMS_POLICY_INVALID não é código do motor: engineCode=false só nele; os códigos reais do motor vêm com true", () => {
+    const find = (saleTerms: "missing" | "ambiguous" | "invalid") => evaluateProjectReadiness(base({ saleTerms })).checks.find(item => item.key === "sale_terms_policy")!;
+    expect(find("invalid").engineCode).toBe(false);
+    expect(find("missing").engineCode).toBe(true);
+    expect(find("ambiguous").engineCode).toBe(true);
+    expect(evaluateProjectReadiness(base()).checks.every(item => item.code === null ? !item.engineCode : true)).toBe(true);
   });
 
   it("distrato, documentos, estoque, chave do projeto e percentuais em 0% só avisam: não travam o dia 1", () => {
