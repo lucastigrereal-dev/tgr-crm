@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS `privacy_erasure_events` (
 	`fulfilledAt` timestamp,
 	`receivedAt` timestamp NOT NULL DEFAULT (now()),
 	`processedAt` timestamp,
+	`claimedAt` timestamp(3),
 	CONSTRAINT `privacy_erasure_events_id` PRIMARY KEY(`id`),
 	CONSTRAINT `privacy_erasure_events_event_unique` UNIQUE(`eventId`),
 	INDEX `privacy_erasure_events_status_idx` (`status`,`id`)

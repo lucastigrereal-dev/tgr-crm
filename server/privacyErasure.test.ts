@@ -1,9 +1,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ENV } from "./_core/env";
 import { cpfHmac, erasureEventSchema } from "./privacyErasure";
-import { isAllowedFeedEndpoint } from "./privacyErasureFeed";
+import { isAllowedFeedEndpoint, runErasureSync } from "./privacyErasureFeed";
 import { domainEventDefinition } from "../shared/domainEvents";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -30,6 +30,17 @@ describe("F2.10: exclusão LGPD propagada, regras puras", () => {
     expect(isAllowedFeedEndpoint("http://127.0.0.1:9/x")).toBe(true);
     expect(isAllowedFeedEndpoint("http://guestpass.exemplo.test/x")).toBe(false);
     expect(isAllowedFeedEndpoint("")).toBe(false);
+  });
+});
+
+describe("F2.10: 401/403/429 do feed interrompem a rodada inteira", () => {
+  it.each([[401, "unauthorized"], [403, "unauthorized"], [429, "rate_limited"]] as const)("GET %i: nenhum POST de recibo é tentado (o banco nem é consultado)", async (status, stopped) => {
+    const calls: Array<{ url: string; method: string }> = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => { calls.push({ url: String(url), method: init?.method ?? "GET" }); return new Response("{}", { status }); });
+    const out = await runErasureSync({} as never, { endpoint: "https://guestpass.exemplo.test/api/erasures", key: "k", hmacSecret: SECRET, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(out.stopped).toBe(stopped);
+    expect(calls).toEqual([{ url: expect.stringContaining("/api/erasures?limit="), method: "GET" }]);
+    expect(calls.filter(call => call.method === "POST")).toHaveLength(0);
   });
 });
 

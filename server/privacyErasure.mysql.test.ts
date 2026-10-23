@@ -88,6 +88,38 @@ describe.skipIf(!integrationUrl)("exclusão LGPD propagada do GuestPass, lado CR
     expect((await db.select().from(domainEvents)).filter(e => e.idempotencyKey === `privacy-erasure:${ev.eventId}`)).toHaveLength(1);
   });
 
+  it("POSSE antes de anonimizar: várias rodadas simultâneas do mesmo eventId produzem UMA anonimização, UM recibo 'done' e a mesma resposta para todas", async () => {
+    const a = await seed("claim");
+    const ev = event(a.cpf);
+    const results = await Promise.all(Array.from({ length: 8 }, () => processErasureEvent(db, ev, { hmacSecret: SECRET })));
+    for (const r of results) expect(r).toMatchObject({ status: "done", receipt: { status: "done" } });
+    expect(results.filter(r => !r.replay).length).toBeLessThanOrEqual(1);
+    const [row] = await db.select().from(privacyErasureEvents).where(eq(privacyErasureEvents.eventId, ev.eventId));
+    expect(row).toMatchObject({ status: "done", customersMatched: 1, customersAnonymized: 1, claimedAt: null });
+    const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "customer"), eq(auditLogs.entityId, String(a.customerId)), eq(auditLogs.action, "anonymized")));
+    expect(audits).toHaveLength(1);
+  });
+
+  it("posse expirada (rodada que caiu no meio) é retomada; posse vigente de outra rodada faz esta esperar e devolver o resultado gravado", async () => {
+    const a = await seed("lease");
+    const ev = event(a.cpf);
+    // evento recebido, com posse de uma rodada que caiu há 10 minutos
+    await db.insert(privacyErasureEvents).values({ eventId: ev.eventId, mode: "minimal", cpfHmac: ev.subjectRefs.cpfHmac, claimedAt: new Date(Date.now() - 10 * 60_000) });
+    expect(await processErasureEvent(db, ev, { hmacSecret: SECRET })).toMatchObject({ status: "done", receipt: { status: "done" } });
+    expect((await customerOf(a.customerId)).anonymizedAt).toBeInstanceOf(Date);
+    // posse vigente de outra rodada: esta espera; quando a outra grava o resultado, devolve-o sem anonimizar
+    const b = await seed("lease2");
+    const ev2 = event(b.cpf);
+    await db.insert(privacyErasureEvents).values({ eventId: ev2.eventId, mode: "minimal", cpfHmac: ev2.subjectRefs.cpfHmac, claimedAt: new Date() });
+    const waiting = processErasureEvent(db, ev2, { hmacSecret: SECRET });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect((await customerOf(b.customerId)).anonymizedAt).toBeNull();
+    await db.update(privacyErasureEvents).set({ status: "done", processedAt: new Date(), claimedAt: null }).where(eq(privacyErasureEvents.eventId, ev2.eventId));
+    await db.insert(privacyErasureReceipts).values({ eventId: ev2.eventId, system: "crm", status: "done" });
+    expect(await waiting).toMatchObject({ replay: true, status: "done", receipt: { status: "done" } });
+    expect((await customerOf(b.customerId)).anonymizedAt).toBeNull();
+  });
+
   it("titular que o CRM não tem: recibo 'nothing_to_erase' e nada muda", async () => {
     const bystander = await seed("by");
     const result = await processErasureEvent(db, event("99999999999"), { hmacSecret: SECRET });

@@ -4,7 +4,7 @@ Fonte: `docs/design/ERASURE_PROPAGADA.md` do GuestPass (PR GuestPass #35, só de
 
 ## Fluxo
 1. O job (a cada 15 min, só com flag ligada e endpoint https, chave e segredo configurados) puxa `GET <GUESTPASS_PRIVACY_BRIDGE_ENDPOINT>?limit=&after=` do GuestPass.
-2. Cada evento `privacy.erasure.requested.v1` é validado (schema estrito do desenho) e gravado em `privacy_erasure_events` por `eventId` (idempotente, também em paralelo).
+2. Cada evento `privacy.erasure.requested.v1` é validado (schema estrito do desenho) e gravado em `privacy_erasure_events` por `eventId` (idempotente, também em paralelo). Antes de anonimizar a rodada toma a POSSE do evento (`claimedAt`, lease de 2 min, compare-and-set); rodadas simultâneas esperam e devolvem o resultado gravado, e uma posse expirada (processo que caiu) é retomada. Assim o recibo não depende de escalonamento.
 3. O CRM grava o evento INTERNO `privacy.erasure.requested` (payload só `eventId` e `mode`; fora das pontes Financial e Relationship) como ponto de fan-out para Sales, Recovery, Relationship e Financial.
 4. O titular é achado por `HMAC-SHA256(CPF só dígitos, GUESTPASS_PRIVACY_BRIDGE_HMAC_SECRET)`; o CPF em claro nunca viaja nem é logado. Varredura por id em lotes (exclusão é rara; sem coluna nova indexada).
 5. Cada cliente achado é anonimizado pela MESMA função do pedido de exclusão da ficha (`applyCustomerAnonymization`): ficam nome, CPF, códigos e datas das fichas e o voucher (data do brinde). Guarda legal (contrato, reserva, documento, lista de espera, ficha VENDEU) impede; nada é apagado nesse caso.
@@ -13,7 +13,7 @@ Fonte: `docs/design/ERASURE_PROPAGADA.md` do GuestPass (PR GuestPass #35, só de
 ## Regras de segurança
 - `mode: full` e qualquer `keep` diferente de nome/CPF/data do brinde NÃO apagam nada: evento `needs_human`, recibo `failed` com o motivo (decisão em aberto no desenho: segunda confirmação do admin).
 - O HMAC é apagado do evento quando termina (`done`/`nothing_to_erase`); fica só se precisa de decisão humana.
-- Sem PII em log, evento, recibo ou trilha (testes varrem). 401/429 interrompem a rodada.
+- Sem PII em log, evento, recibo ou trilha (testes varrem). 401/403/429 interrompem a rodada inteira: não há POST de recibo depois deles (os pendentes saem na próxima rodada).
 - O CRM só anonimiza dado do CRM. Eventos já entregues a outros sistemas não são recolhidos.
 
 ## Premissas a confirmar com o GuestPass antes de ligar

@@ -591,6 +591,8 @@ export const privacyErasureEvents = mysqlTable("privacy_erasure_events", {
   fulfilledAt: timestamp("fulfilledAt"),
   receivedAt: timestamp("receivedAt").defaultNow().notNull(),
   processedAt: timestamp("processedAt"),
+  /** Posse (lease) da rodada que está processando o evento; nulo = livre. Impede duas rodadas de anonimizar o mesmo evento ao mesmo tempo. */
+  claimedAt: timestamp("claimedAt", { fsp: 3 }),
 }, table => [uniqueIndex("privacy_erasure_events_event_unique").on(table.eventId), index("privacy_erasure_events_status_idx").on(table.status, table.id)]);
 
 /** F2.10: recibo por sistema (crm, sales, recovery, relationship, financial). deliveredAt nulo = ainda não chegou ao GuestPass. PROPOSTA 0088. */

@@ -59,6 +59,8 @@ export async function runErasureSync(db: Db, config: ErasureFeedConfig): Promise
     if (!cursor) { out.stopped = "done"; break; }
     if (page === (config.maxPages ?? 5) - 1) out.stopped = "max_pages";
   }
+  // 401/403 e 429 INTERROMPEM a rodada (desenho): sem chamadas autenticadas que já se sabe que falham e sem ignorar o backoff do GuestPass. Os recibos pendentes saem na próxima rodada.
+  if (out.stopped === "unauthorized" || out.stopped === "rate_limited") return out;
   // Recibos do CRM ainda não entregues (inclui os de rodadas anteriores que falharam).
   const pending = await db.select().from(privacyErasureReceipts).where(and(eq(privacyErasureReceipts.system, "crm"), isNull(privacyErasureReceipts.deliveredAt))).orderBy(asc(privacyErasureReceipts.id)).limit(100);
   for (const receipt of pending) {

@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { and, asc, eq, gt, isNotNull } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 import { captureRecords, customers, privacyErasureEvents, privacyErasureReceipts } from "../drizzle/schema";
 import { applyCustomerAnonymization, erasureBlockers } from "./captureErasure";
@@ -75,6 +75,12 @@ async function anonymizeOne(db: Db, customerId: number, now: Date): Promise<Cust
   }));
 }
 
+/** Posse (lease) do evento enquanto uma rodada o processa; expirada, outra rodada pode retomar (processo que caiu no meio). */
+export const CLAIM_LEASE_MS = 2 * 60_000;
+const CLAIM_POLL_MS = 50;
+const affectedRows = (result: unknown) => Number(((Array.isArray(result) ? result[0] : result) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 export type ErasureResult = { eventId: string; replay: boolean; status: "done" | "partial" | "nothing_to_erase" | "needs_human"; receipt: { system: "crm"; status: ReceiptStatus; detail: string | null } };
 
 const decide = (input: { mode: "minimal" | "full"; keep: string[]; matched: number; anonymized: number; blocked: number; blockers: string[] }): { status: ErasureResult["status"]; receipt: ReceiptStatus; detail: string | null } => {
@@ -113,23 +119,44 @@ export async function processErasureEvent(db: Db, raw: unknown, options: { hmacS
     } catch (error) { if (!isDuplicateKeyError(error)) throw error; /* corrida com outra rodada: segue e processa como replay abaixo */ }
   }
 
+  // POSSE antes de anonimizar: sem ela, duas rodadas do mesmo eventId anonimizariam e a que viu "já anonimizado" poderia gravar nothing_to_erase (recibo dependente de escalonamento).
+  // A perdedora espera a vencedora terminar e devolve o resultado gravado (replay); se a vencedora cair, o lease expira e esta retoma.
+  for (;;) {
+    const at = new Date();
+    const claimed = affectedRows(await db.update(privacyErasureEvents).set({ claimedAt: at })
+      .where(and(eq(privacyErasureEvents.eventId, event.eventId), isNull(privacyErasureEvents.processedAt), or(isNull(privacyErasureEvents.claimedAt), lt(privacyErasureEvents.claimedAt, new Date(at.getTime() - CLAIM_LEASE_MS))))));
+    if (claimed === 1) break;
+    const [current] = await db.select({ processedAt: privacyErasureEvents.processedAt, status: privacyErasureEvents.status }).from(privacyErasureEvents).where(eq(privacyErasureEvents.eventId, event.eventId)).limit(1);
+    if (current?.processedAt) {
+      const [done] = await db.select().from(privacyErasureReceipts).where(and(eq(privacyErasureReceipts.eventId, event.eventId), eq(privacyErasureReceipts.system, "crm"))).limit(1);
+      return { eventId: event.eventId, replay: true, status: current.status as ErasureResult["status"], receipt: { system: "crm", status: (done?.status ?? "failed") as ReceiptStatus, detail: done?.detail ?? null } };
+    }
+    await sleep(CLAIM_POLL_MS);
+  }
+
   let matched: number[] = [];
   let anonymized = 0; let blocked = 0; const blockers: string[] = [];
-  const legalMinimumAgreed = ["name", "cpf", "benefitDate"].every(item => event.keep.includes(item as never));
-  if (event.mode === "minimal" && legalMinimumAgreed) {
-    matched = await findCustomersByCpfHmac(db, event.subjectRefs.cpfHmac, options.hmacSecret);
-    for (const customerId of matched) {
-      const outcome = await anonymizeOne(db, customerId, now);
-      if (outcome.kind === "anonymized") anonymized++;
-      else if (outcome.kind === "blocked") { blocked++; blockers.push(...outcome.blockers); }
+  try {
+    const legalMinimumAgreed = ["name", "cpf", "benefitDate"].every(item => event.keep.includes(item as never));
+    if (event.mode === "minimal" && legalMinimumAgreed) {
+      matched = await findCustomersByCpfHmac(db, event.subjectRefs.cpfHmac, options.hmacSecret);
+      for (const customerId of matched) {
+        const outcome = await anonymizeOne(db, customerId, now);
+        if (outcome.kind === "anonymized") anonymized++;
+        else if (outcome.kind === "blocked") { blocked++; blockers.push(...outcome.blockers); }
+      }
     }
+  } catch (error) {
+    // Falha no meio: devolve a posse para a próxima rodada retomar (anonimização é idempotente por cliente).
+    await db.update(privacyErasureEvents).set({ claimedAt: null }).where(and(eq(privacyErasureEvents.eventId, event.eventId), isNull(privacyErasureEvents.processedAt))).catch(() => null);
+    throw error;
   }
   const verdict = decide({ mode: event.mode, keep: event.keep, matched: matched.length, anonymized, blocked, blockers });
   const finished = verdict.status === "done" || verdict.status === "nothing_to_erase";
   await db.transaction(async tx => {
     const [row] = await tx.select({ id: privacyErasureEvents.id, processedAt: privacyErasureEvents.processedAt }).from(privacyErasureEvents).where(eq(privacyErasureEvents.eventId, event.eventId)).limit(1).for("update");
     if (!row || row.processedAt) return;
-    await tx.update(privacyErasureEvents).set({ status: verdict.status, customersMatched: matched.length, customersAnonymized: anonymized, detail: verdict.detail?.slice(0, 200) ?? null, processedAt: now, ...(finished ? { cpfHmac: null } : {}) }).where(eq(privacyErasureEvents.id, row.id));
+    await tx.update(privacyErasureEvents).set({ status: verdict.status, customersMatched: matched.length, customersAnonymized: anonymized, detail: verdict.detail?.slice(0, 200) ?? null, processedAt: now, claimedAt: null, ...(finished ? { cpfHmac: null } : {}) }).where(eq(privacyErasureEvents.id, row.id));
     await tx.insert(privacyErasureReceipts).values({ eventId: event.eventId, system: "crm", status: verdict.receipt, detail: verdict.detail?.slice(0, 200) ?? null, receiptAt: now }).onDuplicateKeyUpdate({ set: { eventId: event.eventId } });
     await txAudit(tx, { actorUserId: null, entityType: "privacy_erasure", entityId: row.id, action: `processed_${verdict.status}`, summary: `Exclusão propagada: ${matched.length} cliente(s) achado(s), ${anonymized} anonimizado(s), ${blocked} com guarda legal. Recibo do CRM: ${verdict.receipt}.` });
   });
