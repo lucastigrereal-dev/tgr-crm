@@ -25,6 +25,9 @@ Estado: NADA aqui foi ligado e nenhuma migration PROPOSTA foi aplicada. Todas as
 | `PERMISSION_OVERRIDES_ENABLED` | 0085 | nenhum | admin técnico (fora da tela) |
 | `SALE_VALIDATED_QUOTAS_COUNT_ENABLED` | nenhuma | Sales precisa aceitar `quotasCount` (Suite faz o re-pin do contrato) | Lucas, depois da Suite |
 | `NON_BUYER_DELIVERY_ENABLED` | 0089 (depois da 0080) | `RECOVERY_ELIGIBILITY_ENABLED` ligada; Suite publica o contrato `crm.non_buyer.*.v1` e o Recovery o receptor (Suite->CRM->re-pin) | Lucas (GO), fora da tela de flags |
+| `PRIVACY_ERASURE_PROPAGATION_ENABLED` | 0088 | GuestPass publica o feed `/api/integrations/privacy/erasures` (ainda não existe) e `GUESTPASS_PRIVACY_BRIDGE_*` configurados | Lucas (GO) e advogado, fora da tela de flags |
+| `RESCUE_QUEUE_ENABLED` | 0086 | nenhum: MODO SOMBRA, só registra casos e eventos internos; nunca cancela contrato | Lucas (GO), fora da tela de flags |
+| `AUTO_CANCELLATION_ENABLED` | (F4) | RESERVADA: o distrato automático real não existe; nenhum código age com ela | ninguém, por ora |
 | `INVENTORY_HOLD_AT_FORMALIZATION` | nenhuma | Só depois de existir entrega de `contract.inventory_lost` ao Sales/Financial OU distrato automático | Lucas |
 
 `COMMISSION_V2_RELEASED` continua travada e não passa por tela nenhuma.
@@ -32,6 +35,7 @@ Estado: NADA aqui foi ligado e nenhuma migration PROPOSTA foi aplicada. Todas as
 ## Coisas que precisam estar escritas
 
 - **Só os horários de um casal sem ficha vão para DEAD.** O receptor de tempos (`encounter-times`) recusa código de casal sem ficha com `422 UNKNOWN_COUPLE_CODE` (não retentável; a entrega do Sales termina em DEAD). Os atendimentos (`encounter.attendance_recorded.v1`) NÃO: o receptor cria/atualiza `couple_registry` e aceita o casal sem ficha, desde que o projeto resolva um resort. A decisão de ligar o registro do casal à ficha (ATT-2 / CRM-2) é do Lucas e está **pendente**.
+- **`coupleCode` no evento de venda liga o reaproveitamento da ficha POR CÓDIGO, sem flag no CRM.** Quando o Sales/Suite passar a enviar `coupleCode` em `sale.ready_for_contract.v1` (Suite #157/#158), a venda passa a se juntar à ficha que já tem o código: troca o cliente da venda pelo da ficha e promove a oportunidade `new` da recepção para `won`. `SALE_BRIDGE_REUSE_CAPTURE_ENABLED` NÃO controla isso (ela só controla o reaproveitamento por visita recente de 36 h). Portanto a ordem de deploy fica amarrada: o CRM com este PR precisa estar no ar e validado ANTES de a Suite emitir o campo; para segurar o comportamento, não faça o deploy do emissor da Suite. Se a Suite emitir antes, o efeito é imediato.
 - **Ligar `RECOVERY_ELIGIBILITY_ENABLED` só grava eventos internos.** Nada chega ao Recovery: a entrega externa (fatia 5) não existe e exige contrato novo com a Suite. Ligar não "avisa" ninguém.
 - **Várias instâncias: a mudança pela tela recarrega só o processo que atendeu o clique.** Flags que não pedem reinício (`restartRequired: false`) mudam na hora apenas nesse processo; as demais instâncias só enxergam depois de reiniciar. As flags de receptor/endpoint (lidas no boot) sempre pedem reinício.
 - **A tela de flags exige a 0084 aplicada e `FEATURE_FLAG_OVERRIDES_ENABLED` ligada** (por quem tem acesso ao servidor). A aba de permissões é separada: exige a 0085 e `PERMISSION_OVERRIDES_ENABLED`. Sem a tabela da aba, ela mostra aviso de indisponível e nada é salvo.

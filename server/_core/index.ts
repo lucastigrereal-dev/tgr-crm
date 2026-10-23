@@ -18,6 +18,7 @@ import { registerSalesCommandBridge } from "../salesCommandBridge";
 import { registerRecoveryOptOutGate, registerRecoveryOptOutReceiver } from "../recoveryOptOutReceiver";
 import { registerAttendanceGate, registerAttendanceReceiver } from "../attendanceReceiver";
 import { registerEncounterTimesReceiver } from "../encounterTimesReceiver";
+import { registerUnknownCoupleWatch } from "../unlinkedCouples";
 import { registerNqReadEndpoint } from "../nqReadEndpoint";
 import { ENV } from "./env";
 import { startRelationshipBridgePump, startSalesCancellationBridgePump, type RelationshipBridgePump, type SalesCancellationBridgePump } from "../relationshipBridge";
@@ -28,6 +29,9 @@ import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
 import { startNonBuyerDeliveryJob, type NonBuyerDeliveryJob } from "../nonBuyerDeliveryJob";
 import { isAllowedDeliveryEndpoint } from "../nonBuyerDelivery";
+import { startPrivacyErasureJob, type PrivacyErasureJob } from "../privacyErasureJob";
+import { isAllowedFeedEndpoint } from "../privacyErasureFeed";
+import { startRescueQueueJob, type RescueQueueJob } from "../rescueQueueJob";
 import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "../nonBuyerReconciliationJob";
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
 import { getDb } from "../db";
@@ -66,6 +70,8 @@ async function startServer() {
   let holdExpiryJob: HoldExpiryJob | undefined;
   let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
   let nonBuyerDeliveryJob: NonBuyerDeliveryJob | undefined;
+  let privacyErasureJob: PrivacyErasureJob | undefined;
+  let rescueQueueJob: RescueQueueJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   // Item 6: sobrescritas persistidas das flags da allow-list valem ANTES de registrar rotas e jobs (mestre FEATURE_FLAG_OVERRIDES_ENABLED desligado = nada acontece).
@@ -92,6 +98,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "12mb", extended: true, parameterLimit: 100 }));
   registerHealthRoutes(app);
   registerSalesCommandBridge(app, ENV.salesCommandIntegrationKey);
+  registerUnknownCoupleWatch(app, ENV.encounterTimesReceiverEnabled); // F1.4: 422 por casal sem ficha vira alerta no painel (antes do receptor; não o altera)
   registerEncounterTimesReceiver(app, ENV.salesCommandIntegrationKey, ENV.encounterTimesReceiverEnabled);
   registerAttendanceReceiver(app, ENV.salesCommandIntegrationKey, ENV.attendanceReceiverEnabled);
   registerRecoveryOptOutReceiver(app, ENV.recoveryIntegrationKey, ENV.recoveryEligibilityEnabled);
@@ -182,6 +189,8 @@ async function startServer() {
     holdExpiryJob?.stop();
     nonBuyerReconciliationJob?.stop();
     nonBuyerDeliveryJob?.stop();
+    privacyErasureJob?.stop();
+    rescueQueueJob?.stop();
     orphanBlobSweepJob?.stop();
     gatewayRecoveryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
@@ -236,6 +245,22 @@ async function startServer() {
           onRun: result => { if (result.delivered + result.rejected + result.retried > 0) logger.info("Non-buyer delivery", { ...result }); },
         });
       } else logger.warn("NON_BUYER_DELIVERY_ENABLED is on but RECOVERY_ELIGIBILITY_ENABLED, endpoint or key is missing or invalid; job not started");
+    }
+    // F2.10: DESLIGADA por padrão. Exclusão LGPD propagada do GuestPass (pull + recibo); precisa da migration PROPOSED_0088 e de endpoint https, chave e segredo. Sem configuração completa não inicia.
+    if (ENV.privacyErasurePropagationEnabled) {
+      if (isAllowedFeedEndpoint(ENV.privacyErasureEndpoint) && ENV.privacyErasureKey && ENV.privacyErasureHmacSecret) {
+        privacyErasureJob = startPrivacyErasureJob({ endpoint: ENV.privacyErasureEndpoint, key: ENV.privacyErasureKey, hmacSecret: ENV.privacyErasureHmacSecret }, {
+          onError: error => logger.error("Privacy erasure sync failed", { error: error instanceof Error ? error.name : "unknown_error" }),
+          onRun: result => { if (result.received + result.receiptsDelivered + result.receiptsFailed > 0) logger.info("Privacy erasure sync", { ...result }); },
+        });
+      } else logger.warn("PRIVACY_ERASURE_PROPAGATION_ENABLED is on but endpoint, key or HMAC secret is missing or invalid; job not started");
+    }
+    // F3.1: DESLIGADA por padrão. MODO SOMBRA do resgate/distrato: só registra casos e eventos internos (precisa da migration PROPOSED_0086); nunca cancela contrato.
+    if (ENV.rescueQueueEnabled) {
+      rescueQueueJob = startRescueQueueJob({
+        onError: error => logger.error("Rescue queue sweep failed", { error: error instanceof Error ? error.message : "unknown_error" }),
+        onRun: result => { if (result.opened + result.rescued + result.cancelled + result.due + result.wouldRun + result.manualReview + result.errors > 0) logger.info("Rescue queue sweep", { ...result }); },
+      });
     }
     // CRM-A10: só lê o Asaas e reconcilia intenções de emissão pendentes; sem Asaas configurado não faz nada.
     if (ENV.gatewayRecoveryEnabled) {

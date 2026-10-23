@@ -57,6 +57,12 @@ export const domainEventCatalog = {
   "sales.command.sale.ingested": { aggregateType: "contract", description: "Venda confirmada no Sales Command formalizada em oportunidade, proposta, contrato, parcelas e estoque no CRM." },
   "commercial.inventory.bootstrapped": { aggregateType: "resort", description: "Estoque comercial de cotas materializado para o empreendimento." },
   "contract.inventory_lost": { aggregateType: "contract", description: "INTERNO (CRM-INV): a reserva da cota venceu antes da conferência de comprovante e documentação; a cota voltou ao estoque. Sem entrega externa (Sales/Financial ainda não consomem)." },
+  "privacy.erasure.requested": { aggregateType: "privacy_erasure_event", description: "INTERNO (F2.10): pedido de exclusão LGPD propagado do GuestPass recebido pelo CRM; ponto de fan-out para os demais sistemas por contrato futuro. Sem PII (só eventId e modo). Sem entrega externa." },
+  "contract.rescue.opened": { aggregateType: "contract_rescue_case", description: "INTERNO (F3.1, modo sombra): caso de resgate aberto por parcela vencida e não paga. Sem entrega externa." },
+  "contract.rescue.attempted": { aggregateType: "contract_rescue_case", description: "INTERNO (F3.1): tentativa de resgate registrada pelo pós-vendas. Sem entrega externa." },
+  "contract.rescue.due_soon": { aggregateType: "contract_rescue_case", description: "INTERNO (F3.1): o prazo do resgate entrou na janela de alerta. Sem entrega externa." },
+  "contract.rescue.resolved": { aggregateType: "contract_rescue_case", description: "INTERNO (F3.1): caso de resgate encerrado (resgatado, dispensado ou contrato distratado). Sem entrega externa." },
+  "contract.auto_cancellation.would_run": { aggregateType: "contract_rescue_case", description: "INTERNO (F3.1, ensaio): o distrato automático TERIA sido pedido para este caso. Só registro; nada foi cancelado. Sem entrega externa." },
   "commercial.fraction.status.changed": { aggregateType: "commercial_fraction", description: "Status comercial da cota alterado com trilha auditável." },
 } as const;
 

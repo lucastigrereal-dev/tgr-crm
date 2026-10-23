@@ -18,6 +18,7 @@ import { addendaRouter } from "./routers/addenda";
 import { permissionOverridesRouter } from "./routers/permissionOverrides";
 import { featureFlagsRouter } from "./routers/featureFlags";
 import { commissionRoleMapRouter } from "./routers/commissionRoleMap";
+import { rescueRouter } from "./routers/rescue";
 import { officialIndicatorsRouter } from "./routers/officialIndicators";
 import { financialProjectMapRouter } from "./routers/financialProjectMap";
 import { importsRouter } from "./routers/imports";
@@ -28,6 +29,7 @@ import { integrationsRouter } from "./routers/integrations";
 import { auditTrailRouter } from "./routers/auditTrail";
 import { aiRouter } from "./routers/ai";
 import { capturesRouter } from "./routers/captures";
+import { guestpassRouter } from "./routers/guestpass";
 import { captureSheetRouter } from "./routers/captureSheet";
 import { projectSettingsRouter } from "./routers/projectSettings";
 import { commercialPoliciesRouter } from "./routers/commercialPolicies";
@@ -95,6 +97,7 @@ export const appRouter = router({
   addenda: addendaRouter,
   officialIndicators: officialIndicatorsRouter,
   commissionRoleMap: commissionRoleMapRouter,
+  rescue: rescueRouter,
   featureFlags: featureFlagsRouter,
   permissionOverrides: permissionOverridesRouter,
   financialProjectMap: financialProjectMapRouter,
@@ -105,6 +108,7 @@ export const appRouter = router({
   ai: aiRouter,
   captures: capturesRouter,
   captureSheet: captureSheetRouter,
+  guestpass: guestpassRouter,
   projectSettings: projectSettingsRouter,
   commercialPolicies: commercialPoliciesRouter,
   policyRegistry: policyRegistryRouter,

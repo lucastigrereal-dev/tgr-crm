@@ -40,6 +40,9 @@ export const capabilityMatrix = {
   "sale.validate": ["admin", "finance"],
   // Leitura dos portões da venda (inclui nota de conferência do pagamento e referência de documento): só gerência e financeiro.
   "sale.validation.view": ["admin", "finance"],
+  // F3.1 (modo sombra): fila de resgate do pós-vendas (papel service + admin) e configuração dos prazos/tetos/liga-desliga (só admin).
+  "rescue.work": ["admin", "service"],
+  "rescue.configure": ["admin"],
   "document.read": ["admin", "seller", "finance", "service"],
   "document.sign": ["admin"],
   "export.pii": ["admin", "finance"],
