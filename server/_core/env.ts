@@ -26,6 +26,11 @@ export const ENV = {
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",
+  // F2.10: exclusão LGPD propagada do GuestPass (feed por pull + recibo). DESLIGADA por padrão. Tabelas são PROPOSTA 0088. Anonimiza só dado do CRM, mantendo nome/CPF/data do brinde.
+  privacyErasurePropagationEnabled: process.env.PRIVACY_ERASURE_PROPAGATION_ENABLED === "true",
+  privacyErasureEndpoint: process.env.GUESTPASS_PRIVACY_BRIDGE_ENDPOINT ?? "",
+  privacyErasureKey: process.env.GUESTPASS_PRIVACY_BRIDGE_KEY ?? "",
+  privacyErasureHmacSecret: process.env.GUESTPASS_PRIVACY_BRIDGE_HMAC_SECRET ?? "",
   // CRM-A07: varredura de blob órfão no armazenamento local. DESLIGADA por padrão; ligada sem DELETE só relata (ensaio).
   gatewayRecoveryEnabled: process.env.GATEWAY_RECOVERY_ENABLED !== "false",
   gatewayRecoveryIntervalMinutes: Math.max(1, Math.min(24 * 60, Math.trunc(Number(process.env.GATEWAY_RECOVERY_INTERVAL_MINUTES ?? 5)) || 5)),

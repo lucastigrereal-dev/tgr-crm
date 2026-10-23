@@ -26,6 +26,8 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startPrivacyErasureJob, type PrivacyErasureJob } from "../privacyErasureJob";
+import { isAllowedFeedEndpoint } from "../privacyErasureFeed";
 import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "../nonBuyerReconciliationJob";
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
 import { getDb } from "../db";
@@ -63,6 +65,7 @@ async function startServer() {
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
   let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
+  let privacyErasureJob: PrivacyErasureJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
   // Item 6: sobrescritas persistidas das flags da allow-list valem ANTES de registrar rotas e jobs (mestre FEATURE_FLAG_OVERRIDES_ENABLED desligado = nada acontece).
@@ -178,6 +181,7 @@ async function startServer() {
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
     nonBuyerReconciliationJob?.stop();
+    privacyErasureJob?.stop();
     orphanBlobSweepJob?.stop();
     gatewayRecoveryJob?.stop();
     logger.info("Graceful shutdown requested", { signal });
@@ -223,6 +227,15 @@ async function startServer() {
         onError: error => logger.error("Non-buyer eligibility reconciliation failed", { error: error instanceof Error ? error.message : "unknown_error" }),
         onRun: result => { if (result.changed > 0) logger.info("Non-buyer eligibility reconciled", { ...result }); },
       });
+    }
+    // F2.10: DESLIGADA por padrão. Exclusão LGPD propagada do GuestPass (pull + recibo); precisa da migration PROPOSED_0088 e de endpoint https, chave e segredo. Sem configuração completa não inicia.
+    if (ENV.privacyErasurePropagationEnabled) {
+      if (isAllowedFeedEndpoint(ENV.privacyErasureEndpoint) && ENV.privacyErasureKey && ENV.privacyErasureHmacSecret) {
+        privacyErasureJob = startPrivacyErasureJob({ endpoint: ENV.privacyErasureEndpoint, key: ENV.privacyErasureKey, hmacSecret: ENV.privacyErasureHmacSecret }, {
+          onError: error => logger.error("Privacy erasure sync failed", { error: error instanceof Error ? error.name : "unknown_error" }),
+          onRun: result => { if (result.received + result.receiptsDelivered + result.receiptsFailed > 0) logger.info("Privacy erasure sync", { ...result }); },
+        });
+      } else logger.warn("PRIVACY_ERASURE_PROPAGATION_ENABLED is on but endpoint, key or HMAC secret is missing or invalid; job not started");
     }
     // CRM-A10: só lê o Asaas e reconcilia intenções de emissão pendentes; sem Asaas configurado não faz nada.
     if (ENV.gatewayRecoveryEnabled) {

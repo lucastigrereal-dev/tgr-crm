@@ -574,6 +574,36 @@ export const rolePermissionOverrides = mysqlTable("role_permission_overrides", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("role_permission_overrides_key_idx").on(table.permKey, table.id)]);
 
+/** F2.10: pedido de exclusão LGPD vindo do GuestPass (feed por pull), uma linha por eventId. Sem PII em claro (cpfHmac some ao terminar). PROPOSTA 0088. */
+export const privacyErasureEvents = mysqlTable("privacy_erasure_events", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  eventId: varchar("eventId", { length: 120 }).notNull(),
+  source: mysqlEnum("source", ["guestpass"]).default("guestpass").notNull(),
+  externalRef: varchar("externalRef", { length: 40 }),
+  externalRequestId: int("externalRequestId"),
+  mode: mysqlEnum("mode", ["minimal", "full"]).notNull(),
+  cpfHmac: varchar("cpfHmac", { length: 64 }),
+  status: mysqlEnum("status", ["received", "done", "partial", "nothing_to_erase", "needs_human"]).default("received").notNull(),
+  customersMatched: int("customersMatched").default(0).notNull(),
+  customersAnonymized: int("customersAnonymized").default(0).notNull(),
+  detail: varchar("detail", { length: 200 }),
+  requestedAt: timestamp("requestedAt"),
+  fulfilledAt: timestamp("fulfilledAt"),
+  receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+  processedAt: timestamp("processedAt"),
+}, table => [uniqueIndex("privacy_erasure_events_event_unique").on(table.eventId), index("privacy_erasure_events_status_idx").on(table.status, table.id)]);
+
+/** F2.10: recibo por sistema (crm, sales, recovery, relationship, financial). deliveredAt nulo = ainda não chegou ao GuestPass. PROPOSTA 0088. */
+export const privacyErasureReceipts = mysqlTable("privacy_erasure_receipts", {
+  id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
+  eventId: varchar("eventId", { length: 120 }).notNull(),
+  system: mysqlEnum("system", ["crm", "sales", "recovery", "relationship", "financial"]).notNull(),
+  status: mysqlEnum("status", ["done", "partial", "failed", "nothing_to_erase"]).notNull(),
+  detail: varchar("detail", { length: 200 }),
+  receiptAt: timestamp("receiptAt").defaultNow().notNull(),
+  deliveredAt: timestamp("deliveredAt"),
+}, table => [uniqueIndex("privacy_erasure_receipts_event_system_unique").on(table.eventId, table.system), index("privacy_erasure_receipts_pending_idx").on(table.system, table.deliveredAt)]);
+
 /** Limites provisórios e configuráveis da ficha (casal qualificado, termo de ciência). Nada aqui é regra homologada. */
 /** Catálogo de motivos padronizados (NT de perfil, tempo, consultor e mesa; qualificação). Lista provisória até o Lucas mandar a final. */
 export const captureMotives = mysqlTable("capture_motives", {

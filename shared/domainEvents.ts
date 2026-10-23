@@ -57,6 +57,7 @@ export const domainEventCatalog = {
   "sales.command.sale.ingested": { aggregateType: "contract", description: "Venda confirmada no Sales Command formalizada em oportunidade, proposta, contrato, parcelas e estoque no CRM." },
   "commercial.inventory.bootstrapped": { aggregateType: "resort", description: "Estoque comercial de cotas materializado para o empreendimento." },
   "contract.inventory_lost": { aggregateType: "contract", description: "INTERNO (CRM-INV): a reserva da cota venceu antes da conferência de comprovante e documentação; a cota voltou ao estoque. Sem entrega externa (Sales/Financial ainda não consomem)." },
+  "privacy.erasure.requested": { aggregateType: "privacy_erasure_event", description: "INTERNO (F2.10): pedido de exclusão LGPD propagado do GuestPass recebido pelo CRM; ponto de fan-out para os demais sistemas por contrato futuro. Sem PII (só eventId e modo). Sem entrega externa." },
   "commercial.fraction.status.changed": { aggregateType: "commercial_fraction", description: "Status comercial da cota alterado com trilha auditável." },
 } as const;
 

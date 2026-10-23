@@ -15,6 +15,8 @@ export const allowedPayloadFields: Record<DomainEventName, readonly string[]> = 
   "non_buyer.eligible": ["eventId", "captureId", "customerId", "seq", "branch"], "non_buyer.eligibility_revoked": ["eventId", "captureId", "customerId", "seq", "reason"],
   // CRM-INV (INTERNO, sem entrega externa): só ids e instante, nunca nome nem telefone.
   "contract.inventory_lost": ["contractId", "customerId", "lostAt"],
+  // F2.10 (INTERNO): só o eventId e o modo; nunca CPF, nome, HMAC ou texto livre.
+  "privacy.erasure.requested": ["eventId", "mode"],
   "commercial.fraction.status.changed": ["fractionId", "status", "proposalId", "contractId", "holdId", "expiresAt", "reason"],
 };
 
