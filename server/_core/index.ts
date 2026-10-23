@@ -27,6 +27,8 @@ import { resolveBridgeConfig } from "../bridgeConfig";
 import { startFinancialBridgePump, type FinancialBridgePump } from "../financialBridge";
 import { startPointsExpiryJob, type PointsExpiryJob } from "../pointsExpiryJob";
 import { startHoldExpiryJob, type HoldExpiryJob } from "../holdExpiryJob";
+import { startPrivacyErasureJob, type PrivacyErasureJob } from "../privacyErasureJob";
+import { isAllowedFeedEndpoint } from "../privacyErasureFeed";
 import { startRescueQueueJob, type RescueQueueJob } from "../rescueQueueJob";
 import { startNonBuyerReconciliationJob, type NonBuyerReconciliationJob } from "../nonBuyerReconciliationJob";
 import { startGatewayRecoveryJob, type GatewayRecoveryJob } from "../gatewayIssueRecovery";
@@ -65,6 +67,7 @@ async function startServer() {
   let pointsExpiryJob: PointsExpiryJob | undefined;
   let holdExpiryJob: HoldExpiryJob | undefined;
   let nonBuyerReconciliationJob: NonBuyerReconciliationJob | undefined;
+  let privacyErasureJob: PrivacyErasureJob | undefined;
   let rescueQueueJob: RescueQueueJob | undefined;
   let orphanBlobSweepJob: OrphanBlobSweepJob | undefined;
   let gatewayRecoveryJob: GatewayRecoveryJob | undefined;
@@ -182,6 +185,7 @@ async function startServer() {
     pointsExpiryJob?.stop();
     holdExpiryJob?.stop();
     nonBuyerReconciliationJob?.stop();
+    privacyErasureJob?.stop();
     rescueQueueJob?.stop();
     orphanBlobSweepJob?.stop();
     gatewayRecoveryJob?.stop();
@@ -228,6 +232,15 @@ async function startServer() {
         onError: error => logger.error("Non-buyer eligibility reconciliation failed", { error: error instanceof Error ? error.message : "unknown_error" }),
         onRun: result => { if (result.changed > 0) logger.info("Non-buyer eligibility reconciled", { ...result }); },
       });
+    }
+    // F2.10: DESLIGADA por padrão. Exclusão LGPD propagada do GuestPass (pull + recibo); precisa da migration PROPOSED_0088 e de endpoint https, chave e segredo. Sem configuração completa não inicia.
+    if (ENV.privacyErasurePropagationEnabled) {
+      if (isAllowedFeedEndpoint(ENV.privacyErasureEndpoint) && ENV.privacyErasureKey && ENV.privacyErasureHmacSecret) {
+        privacyErasureJob = startPrivacyErasureJob({ endpoint: ENV.privacyErasureEndpoint, key: ENV.privacyErasureKey, hmacSecret: ENV.privacyErasureHmacSecret }, {
+          onError: error => logger.error("Privacy erasure sync failed", { error: error instanceof Error ? error.name : "unknown_error" }),
+          onRun: result => { if (result.received + result.receiptsDelivered + result.receiptsFailed > 0) logger.info("Privacy erasure sync", { ...result }); },
+        });
+      } else logger.warn("PRIVACY_ERASURE_PROPAGATION_ENABLED is on but endpoint, key or HMAC secret is missing or invalid; job not started");
     }
     // F3.1: DESLIGADA por padrão. MODO SOMBRA do resgate/distrato: só registra casos e eventos internos (precisa da migration PROPOSED_0086); nunca cancela contrato.
     if (ENV.rescueQueueEnabled) {

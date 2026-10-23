@@ -26,6 +26,11 @@ export const ENV = {
   recoveryEligibilityEnabled: process.env.RECOVERY_ELIGIBILITY_ENABLED === "true",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",
+  // F2.10: exclusão LGPD propagada do GuestPass (feed por pull + recibo). DESLIGADA por padrão. Tabelas são PROPOSTA 0088. Anonimiza só dado do CRM, mantendo nome/CPF/data do brinde.
+  privacyErasurePropagationEnabled: process.env.PRIVACY_ERASURE_PROPAGATION_ENABLED === "true",
+  privacyErasureEndpoint: process.env.GUESTPASS_PRIVACY_BRIDGE_ENDPOINT ?? "",
+  privacyErasureKey: process.env.GUESTPASS_PRIVACY_BRIDGE_KEY ?? "",
+  privacyErasureHmacSecret: process.env.GUESTPASS_PRIVACY_BRIDGE_HMAC_SECRET ?? "",
   // F3.1 (MODO SOMBRA): fila de resgate do pós-vendas e registro do que o distrato automático FARIA. DESLIGADA por padrão. Tabelas são PROPOSTA 0086. Nunca cancela contrato.
   rescueQueueEnabled: process.env.RESCUE_QUEUE_ENABLED === "true",
   // F3.1: RESERVADA para o distrato automático real (F4). Nesta fatia NENHUM código a lê para agir: o caminho automático não existe. Nasce false.

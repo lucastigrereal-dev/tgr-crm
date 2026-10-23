@@ -96,6 +96,21 @@ export async function scrubSecondaryCopies(tx: Tx, customerId: number, captureId
   for (const voucher of voucherRows) await tx.update(auditLogs).set({ summary: `Voucher ${voucher.code} cancelado.` }).where(and(eq(auditLogs.entityType, "voucher"), eq(auditLogs.entityId, String(voucher.id)), eq(auditLogs.action, "cancelled")));
 }
 
+/**
+ * Limpeza do cliente e de tudo que é dele no CRM, na transação do chamador (que já travou o cliente e as fichas e conferiu a guarda legal): ficam nome e CPF do cliente,
+ * código e datas das fichas e o voucher (data do brinde). Usada pelo pedido de exclusão da ficha e pela exclusão propagada do GuestPass (F2.10): uma regra só do que é apagado.
+ */
+export async function applyCustomerAnonymization(tx: Tx, customerId: number, sheetIds: number[], now: Date) {
+  if (sheetIds.length) await tx.update(captureRecords).set({ ...CAPTURE_ERASED_PATCH, anonymizedAt: now }).where(inArray(captureRecords.id, sheetIds));
+  await tx.update(customers).set({ ...CUSTOMER_ERASED_PATCH, anonymizedAt: now }).where(eq(customers.id, customerId));
+  await tx.delete(customerContacts).where(eq(customerContacts.customerId, customerId));
+  await tx.update(customerInteractions).set({ subject: null, content: ERASED_TEXT }).where(eq(customerInteractions.customerId, customerId));
+  await tx.update(opportunities).set({ title: "Oportunidade anonimizada", lossReason: null }).where(eq(opportunities.customerId, customerId));
+  await tx.update(tasks).set({ description: null }).where(eq(tasks.customerId, customerId));
+  await tx.update(vouchers).set({ redeemNote: null, cancelReason: null }).where(eq(vouchers.customerId, customerId));
+  await scrubSecondaryCopies(tx, customerId, sheetIds);
+}
+
 async function lockedCaptureByCode(tx: Tx, code: string) {
   const [capture] = await tx.select().from(captureRecords).where(eq(captureRecords.coupleCode, code)).limit(1).for("update");
   if (!capture) throw new TRPCError({ code: "NOT_FOUND", message: "Nenhuma ficha com este código." });
@@ -143,14 +158,7 @@ export async function completeErasure(db: Db, input: { requestId: number; confir
     const giftDate = gift?.at ? new Date(gift.at as string | Date) : earliestSheet;
     const now = new Date();
 
-    await tx.update(captureRecords).set({ ...CAPTURE_ERASED_PATCH, anonymizedAt: now }).where(inArray(captureRecords.id, sheets.map(row => row.id)));
-    await tx.update(customers).set({ ...CUSTOMER_ERASED_PATCH, anonymizedAt: now }).where(eq(customers.id, customer.id));
-    await tx.delete(customerContacts).where(eq(customerContacts.customerId, customer.id));
-    await tx.update(customerInteractions).set({ subject: null, content: ERASED_TEXT }).where(eq(customerInteractions.customerId, customer.id));
-    await tx.update(opportunities).set({ title: "Oportunidade anonimizada", lossReason: null }).where(eq(opportunities.customerId, customer.id));
-    await tx.update(tasks).set({ description: null }).where(eq(tasks.customerId, customer.id));
-    await tx.update(vouchers).set({ redeemNote: null, cancelReason: null }).where(eq(vouchers.customerId, customer.id));
-    await scrubSecondaryCopies(tx, customer.id, sheets.map(row => row.id));
+    await applyCustomerAnonymization(tx, customer.id, sheets.map(row => row.id), now);
     await tx.update(captureErasureRequests).set({ status: "completed", decidedByUserId: input.actorUserId, decidedAt: now, giftDate, sheetsAnonymized: sheets.length }).where(eq(captureErasureRequests.id, request.id));
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "capture", entityId: capture.id, action: "erasure_completed", summary: `Ficha ${capture.id}: pedido ${request.id} cumprido. ${sheets.length} ficha(s) do cliente ${customer.id} anonimizada(s); ficam só nome, CPF e a data do brinde.` });
     await txAudit(tx, { actorUserId: input.actorUserId, entityType: "customer", entityId: customer.id, action: "anonymized", summary: `Cliente ${customer.id} anonimizado a pedido do titular (pedido ${request.id}).` });
