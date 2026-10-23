@@ -40,8 +40,14 @@ describe("configuração", () => {
     expect(resolveGuestpassConfig()).toEqual({ enabled: true, configured: false });
     vi.stubEnv("GUESTPASS_CRM_READ_KEY", KEY);
     expect(resolveGuestpassConfig()).toMatchObject({ enabled: true, configured: true, baseUrl: "https://gp.example.test", timeoutMs: 5000 });
-    vi.stubEnv("GUESTPASS_CRM_BASE_URL", "ftp://x");
-    expect(resolveGuestpassConfig()).toEqual({ enabled: true, configured: false });
+    for (const bad of ["ftp://x", "http://gp.example.test", "http://10.0.0.5:8080", "http://gp.localhost.evil.test"]) {
+      vi.stubEnv("GUESTPASS_CRM_BASE_URL", bad);
+      expect(resolveGuestpassConfig()).toEqual({ enabled: true, configured: false });
+    }
+    for (const ok of ["http://127.0.0.1:4010", "http://localhost:4010/api"]) {
+      vi.stubEnv("GUESTPASS_CRM_BASE_URL", ok);
+      expect(resolveGuestpassConfig()).toMatchObject({ enabled: true, configured: true });
+    }
   });
   it("normaliza o Nº do passe e recusa fora do padrão", () => {
     expect(normalizePassRef(" gp-0a1b2c3d ")).toBe("GP-0A1B2C3D");

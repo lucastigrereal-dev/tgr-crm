@@ -18,7 +18,8 @@ export function resolveGuestpassConfig(): GuestpassConfig {
   let baseUrl = "";
   try {
     const url = new URL(raw);
-    if (url.protocol === "https:" || url.protocol === "http:") baseUrl = url.origin + url.pathname.replace(/\/+$/, "");
+    // A chave de ponte viaja como Bearer: só https, ou http em localhost/127.0.0.1 (teste e desenvolvimento), igual a isAllowedFeedEndpoint (#123) e isAllowedDeliveryEndpoint (#124).
+    if (url.protocol === "https:" || (url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost"))) baseUrl = url.origin + url.pathname.replace(/\/+$/, "");
   } catch { /* base inválida = não configurado */ }
   if (!key || !baseUrl) return { enabled: true, configured: false };
   const timeout = Number(process.env.GUESTPASS_CRM_TIMEOUT_MS);
