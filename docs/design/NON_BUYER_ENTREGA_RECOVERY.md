@@ -8,7 +8,8 @@ Estado: PROPOSTA de contrato + implementação atrás de `NON_BUYER_DELIVERY_ENA
 3. Por ficha, em ordem de `seq`: só o estado vigente vale (evento com `seq` abaixo da projeção = `superseded`, não enviado).
 4. Elegível: REVALIDAÇÃO NA ENTREGA. O predicado é recalculado com o opt-out lido; se o casal foi anonimizado, fez opt-out, tem exclusão pendente ou comprou, NÃO envia (`suppressed/revalidated_ineligible`) e a reavaliação emite o revogado.
 5. Revogado só é enviado se um elegível da ficha foi entregue (`never_delivered` caso contrário): o Recovery não recebe revogação de quem nunca recebeu.
-6. Corpo montado no envio. Nome e telefone vêm do cliente naquele instante e vão SÓ no corpo HTTP (nunca em `domain_events`, no livro nem em log; log só tem eventId e status).
+6. Concorrência: cada linha é reivindicada por lease (compare-and-set em `nextAttemptAt`) antes de ser processada; settle/retry só valem se a linha continua sendo do worker. Revogado espera (sem gastar tentativa) enquanto houver elegível anterior da ficha ainda pendente. O corpo é validado contra o contrato antes do POST; se violar, a linha vira `rejected/LOCAL_CONTRACT_VIOLATION` sem envio.
+7. Corpo montado no envio. Nome e telefone vêm do cliente naquele instante e vão SÓ no corpo HTTP (nunca em `domain_events`, no livro nem em log; log só tem eventId e status).
 
 ## Contrato (v1, aditivo)
 `POST {RECOVERY_NON_BUYER_ENDPOINT}/non-buyer/eligible` e `/non-buyer/eligibility-revoked`; `Authorization: Bearer <RECOVERY_NON_BUYER_KEY>` (chave própria); `idempotency-key: <eventId>`.
@@ -18,7 +19,7 @@ Elegível (`crm.non_buyer.eligible.v1`): `eventId`, `source:"crm"`, `occurredAt`
 Revogado (`crm.non_buyer.eligibility_revoked.v1`): `eventId`, `source`, `coupleCode`, `encounterDate`, `dedupeKey`, `revokedAt`, `reason` (`opt_out|anonymized|erasure|sale_in_progress|attendance_not_finished`). Sem PII. Acrescenta `attendance_not_finished` à lista do desenho §4.2 (é um motivo que o CRM já produz); a Suite decide se mantém.
 
 ### Chave de dedupe do Recovery
-`dedupeKey = coupleCode + ":" + encounterDate`. O mesmo casal no mesmo dia de atendimento é UM caso no Recovery, mesmo que o CRM reemita (novo `seq`/`eventId` depois de revogar e voltar a ser elegível). `encounterDate` = data civil, no fuso do projeto (`financial_project_map.timezone` se houver, senão `America/Recife`), de `presentationEndedAt` (ramo closed) ou `ntRecordedAt` (ramo no_tour), com `checkedInAt`/`occurredAt` só como reserva. Elegível e revogado da mesma ficha carregam a MESMA `dedupeKey`.
+`dedupeKey = coupleCode + ":" + encounterDate`. O mesmo casal no mesmo dia de atendimento é UM caso no Recovery, mesmo que o CRM reemita (novo `seq`/`eventId` depois de revogar e voltar a ser elegível). `encounterDate` = data civil, no fuso do projeto (`financial_project_map.timezone` se houver, senão `America/Recife`), de `presentationEndedAt` (ramo closed) ou `ntRecordedAt` (ramo no_tour), com `checkedInAt`/`occurredAt` só como reserva. Elegível e revogado da mesma ficha carregam a MESMA `dedupeKey`: o livro grava a identidade ENTREGUE do elegível (`coupleCode`, `encounterDate`, `dedupeKey`; código pseudônimo, sem nome/telefone) e o revogado a repete, mesmo se o admin trocar o `coupleCode` ou o fuso do projeto depois da entrega (o Recovery só casa o opt-out pela chave que recebeu).
 
 ### Respostas e reentrega
 2xx = entregue (200 = replay). 4xx com `{code: ^[A-Z0-9_]+$}` exceto 408/425/429 = recusa terminal (`rejected`, sem reenvio, sem DLQ silenciosa: fica no livro). Todo o resto (401/403/404/429, 5xx, rede, 4xx sem code) = nova tentativa com backoff persistido (5 s dobrando, teto 10 min). Sem `coupleCode` ou sem projeto (`resorts.externalKey` ou mapa ativo): espera com backoff, não envia.

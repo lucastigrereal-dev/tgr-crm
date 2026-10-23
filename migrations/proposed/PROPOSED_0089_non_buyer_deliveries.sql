@@ -1,6 +1,6 @@
 -- PROPOSTA (NAO APLICADA, nao esta no journal do drizzle). Precisa de GO do Opus antes de virar migration real. Depende da PROPOSED_0080 (non_buyer_eligibility_state) ja aplicada.
 -- F2.1 (fatia 5 do desenho ETAPA2_I): livro de ENTREGA dos eventos non_buyer.* ao Recovery. Uma linha por evento interno (eventId = idempotencyKey de domain_events).
--- Aditiva (so CREATE TABLE IF NOT EXISTS), sem backfill, sem tocar tabela existente. Sem PII: o corpo com nome/telefone e montado na hora do envio e nunca gravado aqui.
+-- Aditiva (so CREATE TABLE IF NOT EXISTS), sem backfill, sem tocar tabela existente. Sem nome nem telefone: o corpo com contato e montado na hora do envio e nunca gravado aqui. Guarda so a IDENTIDADE ENTREGUE do elegivel (coupleCode, encounterDate, dedupeKey; codigo pseudonimo) para o revogado repeti-la mesmo se o admin trocar o coupleCode ou o fuso depois.
 -- Tudo atras de NON_BUYER_DELIVERY_ENABLED=false (e RECOVERY_ELIGIBILITY_ENABLED).
 -- Rollback: DROP TABLE non_buyer_deliveries;
 CREATE TABLE IF NOT EXISTS `non_buyer_deliveries` (
@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS `non_buyer_deliveries` (
 	`nextAttemptAt` timestamp(3),
 	`lastHttpStatus` smallint,
 	`deliveredAt` timestamp(3),
+	`coupleCode` varchar(64),
+	`encounterDate` varchar(10),
+	`dedupeKey` varchar(140),
 	`createdAt` timestamp NOT NULL DEFAULT (now()),
 	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
 	CONSTRAINT `non_buyer_deliveries_id` PRIMARY KEY(`id`),

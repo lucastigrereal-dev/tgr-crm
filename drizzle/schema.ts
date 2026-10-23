@@ -541,6 +541,10 @@ export const nonBuyerDeliveries = mysqlTable("non_buyer_deliveries", {
   nextAttemptAt: timestamp("nextAttemptAt", { fsp: 3 }),
   lastHttpStatus: smallint("lastHttpStatus"),
   deliveredAt: timestamp("deliveredAt", { fsp: 3 }),
+  /** Identidade ENTREGUE do elegível (preenchida só quando delivered): o revogado reusa estes valores, não o estado atual da ficha. Código pseudônimo, sem nome nem telefone. */
+  coupleCode: varchar("coupleCode", { length: 64 }),
+  encounterDate: varchar("encounterDate", { length: 10 }),
+  dedupeKey: varchar("dedupeKey", { length: 140 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [

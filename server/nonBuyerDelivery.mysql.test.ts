@@ -107,11 +107,11 @@ describe.skipIf(!integrationUrl)("entrega de não-comprador ao Recovery em MySQL
       eventId: `crm-nb-${c.captureId}-eligible-1`, coupleCode: c.code, encounterDate: "2026-10-21", dedupeKey: `${c.code}:2026-10-21`, branch: "closed",
       project: { externalKey: `syn-proj-${runId}`, timezone: "America/Recife" }, contact: { name: c.name, phone: c.phone },
     });
-    expect(await rowOf(`crm-nb-${c.captureId}-eligible-1`)).toMatchObject({ status: "delivered", attempts: 1, lastHttpStatus: 201 });
+    expect(await rowOf(`crm-nb-${c.captureId}-eligible-1`)).toMatchObject({ status: "delivered", attempts: 1, lastHttpStatus: 201, coupleCode: c.code, encounterDate: "2026-10-21", dedupeKey: `${c.code}:2026-10-21` });
     // PII: nem o evento interno, nem o livro, nem os logs
     const events = await db.select().from(domainEvents).where(eq(domainEvents.idempotencyKey, `crm-nb-${c.captureId}-eligible-1`));
     expect(events[0]!.payload).not.toContain(c.name);
-    expect(JSON.stringify(await db.select().from(nonBuyerDeliveries).where(eq(nonBuyerDeliveries.captureId, c.captureId)))).not.toMatch(new RegExp(`${c.name}|${c.phone}|${c.code}`));
+    expect(JSON.stringify(await db.select().from(nonBuyerDeliveries).where(eq(nonBuyerDeliveries.captureId, c.captureId)))).not.toMatch(new RegExp(`${c.name}|${c.phone}`));
     expect(logs.join("\n")).not.toMatch(new RegExp(`${c.name}|${c.phone}|${c.code}|${KEY}`));
     hits = [];
     expect(await run()).toMatchObject({ delivered: 0, discovered: 0 });
@@ -148,6 +148,54 @@ describe.skipIf(!integrationUrl)("entrega de não-comprador ao Recovery em MySQL
     expect(body).toMatchObject({ eventId: `crm-nb-${c.captureId}-revoked-2`, reason: "opt_out", coupleCode: c.code });
     expect(body.dedupeKey).toBe(eligible.dedupeKey);
     expect(JSON.stringify(hits[0]!.body)).not.toMatch(new RegExp(`${c.name}|${c.phone}`));
+  });
+
+  it("IDENTIDADE ENTREGUE: o revogado leva o coupleCode/encounterDate/dedupeKey que o Recovery recebeu, mesmo se o admin trocou o código e a data de encontro depois", async () => {
+    const c = await couple();
+    await reevaluate(c.captureId);
+    await run();
+    const eligible = eligibleBodySchema.parse(hits[0]!.body);
+    // o admin troca o código da ficha e a data do encontro muda (outro dia civil) depois da entrega
+    await db.update(captureRecords).set({ coupleCode: `TROCADO-${c.code}`, presentationEndedAt: new Date("2026-10-25T14:00:00Z") }).where(eq(captureRecords.id, c.captureId));
+    await db.insert(customerContactOptouts).values({ customerId: c.customerId, coupleCode: `TROCADO-${c.code}`, optedOutAt: new Date(), source: "recovery", eventId: `syn-optout-id-${c.captureId}-${runId}` });
+    await reevaluate(c.captureId); // revoked 2
+    hits = [];
+    expect(await run()).toMatchObject({ delivered: 1 });
+    const body = revokedBodySchema.parse(hits[0]!.body);
+    expect(body).toMatchObject({ coupleCode: c.code, encounterDate: "2026-10-21", dedupeKey: eligible.dedupeKey });
+    expect(JSON.stringify(hits[0]!.body)).not.toContain("TROCADO");
+  });
+
+  it("CONCORRÊNCIA: dois workers sobre a mesma linha pendente enviam UMA vez e só um liquida", async () => {
+    const c = await couple();
+    await reevaluate(c.captureId);
+    respond = () => ({ status: 201 });
+    const [a, b] = await Promise.all([run(), run()]);
+    expect(hits).toHaveLength(1);
+    expect(a.delivered + b.delivered).toBe(1);
+    expect(await rowOf(`crm-nb-${c.captureId}-eligible-1`)).toMatchObject({ status: "delivered", attempts: 1 });
+  });
+
+  it("CONCORRÊNCIA: revogado não é suprimido como never_delivered enquanto um elegível anterior da ficha ainda está na fila/em curso em outro worker", async () => {
+    const c = await couple();
+    await reevaluate(c.captureId); // eligible 1
+    await db.insert(customerContactOptouts).values({ customerId: c.customerId, coupleCode: c.code, optedOutAt: new Date(), source: "recovery", eventId: `syn-optout-cc-${c.captureId}-${runId}` });
+    await reevaluate(c.captureId); // revoked 2
+    // o elegível está com lease de outro worker (em curso): fora da fila vencida
+    await db.insert(nonBuyerDeliveries).values({ eventId: `crm-nb-${c.captureId}-eligible-1`, captureId: c.captureId, seq: 1, kind: "eligible", nextAttemptAt: new Date(Date.now() + 120_000) });
+    await run();
+    expect(hits).toHaveLength(0);
+    expect(await rowOf(`crm-nb-${c.captureId}-revoked-2`)).toMatchObject({ status: "pending", attempts: 0 });
+    expect(await rowOf(`crm-nb-${c.captureId}-eligible-1`)).toMatchObject({ status: "pending" });
+  });
+
+  it("corpo fora do contrato (contato sem nome) não é enviado: rejected local LOCAL_CONTRACT_VIOLATION", async () => {
+    const c = await couple();
+    await db.update(customers).set({ fullName: " " }).where(eq(customers.id, c.customerId));
+    await reevaluate(c.captureId);
+    expect(await run()).toMatchObject({ rejected: 1, delivered: 0 });
+    expect(hits).toHaveLength(0);
+    expect(await rowOf(`crm-nb-${c.captureId}-eligible-1`)).toMatchObject({ status: "rejected", reason: "LOCAL_CONTRACT_VIOLATION", attempts: 1 });
   });
 
   it("evento velho com um mais novo na ficha é superseded e não é enviado (só o estado vigente vale)", async () => {
