@@ -28,7 +28,7 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     [{ id: adminId }] = await db.insert(users).values({ openId: `oi-admin-${runId}`, name: "Admin SYN", role: "admin" }).$returningId();
     [{ id: customerId }] = await db.insert(customers).values({ fullName: `SYN Indicadores ${runId}`, email: `syn.oi.${runId}@example.test`, status: "active" }).$returningId();
   });
-  // Cada teste parte do padrão (sem configuração gravada): iniciados, inclusive em andamento.
+  // Cada teste parte do padrão (sem configuração gravada): só atendimento com desfecho (decisão do Lucas, 25/10, 6B).
   beforeEach(async () => { await db.delete(captureSheetSettings).where(eq(captureSheetSettings.key, INCLUDE_IN_PROGRESS_KEY)); });
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
@@ -77,15 +77,13 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
   it("configuração: só admin liga 'em andamento no denominador'; muda o resultado e deixa trilha", async () => {
     const resortId = await newResort("C");
     await attend(resortId); await attend(resortId, { presentationStatus: "presented" });
-    expect((await query(resortId)).attendances).toBe(2); // padrão: iniciados, inclusive em andamento
-    await (await caller()).setConfig({ includeInProgress: false });
-    expect((await query(resortId)).attendances).toBe(1);
+    expect((await query(resortId)).attendances).toBe(1); // padrão (6B): o em andamento, sem desfecho, fica fora
     await expect((await caller("finance")).setConfig({ includeInProgress: true })).rejects.toThrow();
     await (await caller()).setConfig({ includeInProgress: true });
     try {
       expect((await query(resortId)).attendances).toBe(2);
       expect((await (await caller("finance")).config()).includeInProgress).toBe(true);
-    } finally { await (await caller()).setConfig({ includeInProgress: true }); }
+    } finally { await (await caller()).setConfig({ includeInProgress: false }); }
     const trail = await db.select().from(auditLogs).where(eq(auditLogs.entityType, "official_indicators"));
     expect(trail.length).toBeGreaterThanOrEqual(2);
   });
@@ -116,7 +114,7 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     expect(await query(resortId)).toMatchObject({ attendances: 1 });
   });
 
-  it("M-A01-03: padrão conta iniciados (inclusive em andamento) e o resultado da sala fica separado de venda validada", async () => {
+  it("M-A01-03: padrão (6B) conta só atendimento com desfecho e o resultado da sala fica separado de venda validada", async () => {
     const resortId = await newResort("F");
     const mk = async (label: string) => (await db.insert(customers).values({ fullName: `SYN OI F${label} ${runId}`, email: `syn.oi.f${label}.${runId}@example.test`, status: "active" }).$returningId())[0]!.id;
     await db.insert(captureRecords).values({ customerId: await mk("v"), resortId, checkedInAt: day(5), presentationStatus: "closed", commercialOutcome: "vendeu" } as never);
@@ -125,8 +123,8 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     await db.insert(captureRecords).values({ customerId: await mk("e"), resortId, checkedInAt: day(6), presentationStatus: "closed" } as never);
     await db.insert(captureRecords).values({ customerId: await mk("a"), resortId, checkedInAt: day(7), presentationStatus: "presented" } as never);
     const result = await query(resortId);
-    expect(result.attendances).toBe(5);
-    expect(result.denominator).toMatchObject({ includeInProgress: true });
+    expect(result.attendances).toBe(4); // o 5º ainda está na mesa, sem desfecho: não conta no dia
+    expect(result.denominator).toMatchObject({ includeInProgress: false, inProgressExcluded: 1 });
     // VENDEU de sala não é venda validada: sem validação do CRM, o numerador é 0.
     expect(result).toMatchObject({ validatedSales: 0, utilizationPct: 0 });
     expect(result.outcomes).toEqual({ started: 5, vendeu: 1, caiuEmMesa: 1, naoTour: 1, encerradoSemVenda: 1, emAndamento: 1 });
@@ -201,5 +199,25 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     await db.insert(captureRecords).values({ customerId: customerOf.get(resortId)!, resortId, checkedInAt: day(10), presentationStatus: "presented" } as never);
     await validatedSale(resortId, "L1", 1, day(12));
     expect((await query(resortId)).outcomes).toMatchObject({ started: 1, encerradoSemVenda: 0, emAndamento: 1 });
+  });
+
+  it("6B (Lucas, 25/10): atendimento ainda na mesa não conta no dia e entra quando tem desfecho (VENDEU, CAIU EM MESA, NT, não comprou)", async () => {
+    const resortId = await newResort("M");
+    const mk = async (label: string) => (await db.insert(customers).values({ fullName: `SYN OI M${label} ${runId}`, email: `syn.oi.m${label}.${runId}@example.test`, status: "active" }).$returningId())[0]!.id;
+    const ids: number[] = [];
+    for (const label of ["a", "b", "c", "d"]) {
+      const [row] = await db.insert(captureRecords).values({ customerId: await mk(label), resortId, checkedInAt: day(8), presentationStatus: "presented" } as never).$returningId();
+      ids.push(row.id);
+    }
+    expect(await query(resortId)).toMatchObject({ attendances: 0, utilizationPct: 0 });
+    expect((await query(resortId)).denominator).toMatchObject({ includeInProgress: false, inProgressExcluded: 4 });
+    const outcomes = [
+      { commercialOutcome: "vendeu", presentationStatus: "closed" }, { commercialOutcome: "caiu_em_mesa", presentationStatus: "closed" },
+      { ntKind: "tempo", presentationStatus: "no_tour" }, { presentationStatus: "closed" },
+    ];
+    for (const [i, change] of outcomes.entries()) {
+      await db.update(captureRecords).set(change as never).where(eq(captureRecords.id, ids[i]!));
+      expect((await query(resortId)).attendances).toBe(i + 1);
+    }
   });
 });

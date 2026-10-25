@@ -10,7 +10,7 @@ Duas dimensões, nunca misturadas:
 | Estado | Entra no denominador (iniciados)? | Entra no numerador? | Observação |
 |---|---|---|---|
 | Agendado sem check-in (não comparecimento) | não | não | Sem check-in não há atendimento iniciado |
-| Check-in, em andamento | sim (padrão) | não | Admin pode tirar do denominador (provisório) |
+| Check-in, em andamento (sem desfecho) | não (decisão do Lucas, 25/10) | não | Entra no denominador quando tiver desfecho; admin pode incluí-lo (configurável) |
 | NT (perfil / tempo / consultor) | sim | não | Conta à parte (`outcomes.naoTour`); não é não venda |
 | Tour feito, ficha encerrada sem venda | sim | não | `outcomes.encerradoSemVenda` |
 | CAIU EM MESA | sim | não | Não é venda; supera VENDEU; fração só volta no distrato executado |
