@@ -6,7 +6,7 @@ Estado: documento + ferramenta existente (`scripts/pilot-users.mjs`). SEM CI DO 
 
 | Pessoa na bateria | Onde entra | Papel no CRM | Observação |
 |---|---|---|---|
-| Recepção | Sales Command | sem login no CRM | Localiza/cadastra/confere/check-in; não vincula código nem reprocessa tempos (decisão 25/10) |
+| Recepção | Sales Command (e CRM, papel `service`, se a flag ligar) | sem login no CRM por padrão | Localiza/cadastra/confere/check-in; não vincula código nem reprocessa tempos (decisão 25/10). Cadastro de casal sem ficha também é dela (decisão 25/10, 2B): no CRM só com `RECEPTION_CAPTURE_CREATE_ENABLED` ligada (papel `service` abre a Captação) |
 | Consultor (liner) / fechador (closer) | Sales Command | `seller` quando precisa ler contrato | Sem baixa, sem auditoria |
 | Gerente de sala | Sales Command + CRM | `seller` (gerente de vendas) | Ação `capture.couple_code.link` (admin + seller) |
 | Administrativo | CRM | `admin` | Único que confere comprovante, valida venda e baixa |

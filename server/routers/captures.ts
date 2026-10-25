@@ -8,7 +8,7 @@ import { auditLogs, captureMotives, captureRecords, commercialProjectSettings, c
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { anonymizedCustomerError } from "../customerAnonymization";
 import { router } from "../_core/trpc";
-import { internalProcedure, receptionProcedure, salesProcedure } from "./access";
+import { captureCreateProcedure, isReceptionCaptureCreateEnabled, internalProcedure, receptionProcedure, salesProcedure } from "./access";
 import { isCaptureVisitRuleEnabled, visitRuleViolation } from "../captureVisitRule";
 import { assertCaptureInRoomView, captorNameOf, resolveNtMotive, roomVisibilityCutoff, roomVisibleCondition } from "./captureSheet";
 import { canOpenArchivedSheet } from "../captureSheetDomain";
@@ -243,9 +243,9 @@ export const capturesRouter = router({
   }),
 
   /** F1.6: a tela da recepção consulta a regra para avisar antes de enviar (a regra de verdade é a do servidor, em `create`). */
-  visitRule: internalProcedure.query(() => ({ requireDateOrPasserby: isCaptureVisitRuleEnabled() })),
+  visitRule: internalProcedure.query(() => ({ requireDateOrPasserby: isCaptureVisitRuleEnabled(), receptionCreate: isReceptionCaptureCreateEnabled() })),
 
-  create: salesProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
+  create: captureCreateProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
     if (isCaptureVisitRuleEnabled()) {
       const violation = visitRuleViolation(input);
       if (violation) throw new TRPCError({ code: "BAD_REQUEST", message: violation });
