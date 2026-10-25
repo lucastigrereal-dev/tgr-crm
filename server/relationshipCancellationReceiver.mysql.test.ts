@@ -49,6 +49,7 @@ describe.skipIf(!integrationUrl)("receptor de pedido de cancelamento do Relation
     const scratchUrl = new URL(integrationUrl!);
     scratchUrl.pathname = `/${scratchName}`;
     process.env.DATABASE_URL = scratchUrl.toString();
+    process.env.RELATIONSHIP_CANCELLATION_INBOX_ENABLED = "true";
     const { registerRelationshipCancellationGate, registerRelationshipCancellationReceiver, RELATIONSHIP_CANCELLATION_PATH } = await import("./relationshipCancellationReceiver");
     pool = mysql.createPool({ uri: scratchUrl.toString(), connectionLimit: 8 });
     db = drizzle({ client: pool });
@@ -161,6 +162,29 @@ describe.skipIf(!integrationUrl)("receptor de pedido de cancelamento do Relation
     const b = await api.openCancellationFromInbox({ protocol: second.protocol });
     expect(b).toMatchObject({ cancellationRequestId: a.cancellationRequestId, reused: true });
     expect(await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, contractId))).toHaveLength(1);
+  });
+
+  it("duas aberturas SIMULTÂNEAS de protocolos do mesmo contrato geram UM distrato só (trava do contrato antes da leitura)", async () => {
+    const contractId = await newContract();
+    const api = await contractsApi();
+    const first = await (await post(body(contractId))).json() as { protocol: string };
+    const second = await (await post(body(contractId))).json() as { protocol: string };
+    const [a, b] = await Promise.all([api.openCancellationFromInbox({ protocol: first.protocol }), api.openCancellationFromInbox({ protocol: second.protocol })]);
+    expect(b.cancellationRequestId).toBe(a.cancellationRequestId);
+    expect(await db.select().from(contractCancellationRequests).where(eq(contractCancellationRequests.contractId, contractId))).toHaveLength(1);
+  });
+
+  it("caixa desligada: listar e abrir pela equipe recusam sem tocar no banco; ator só aceita id opaco (sem nome/e-mail)", async () => {
+    const contractId = await newContract();
+    const api = await contractsApi();
+    const ack = await (await post(body(contractId))).json() as { protocol: string };
+    process.env.RELATIONSHIP_CANCELLATION_INBOX_ENABLED = "false";
+    try {
+      await expect(api.listCancellationInbox({})).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      await expect(api.openCancellationFromInbox({ protocol: ack.protocol })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    } finally { process.env.RELATIONSHIP_CANCELLATION_INBOX_ENABLED = "true"; }
+    expect((await post(body(contractId, { actor: "Maria Silva" }))).status).toBe(400);
+    expect((await post(body(contractId, { actor: "maria@exemplo.com" }))).status).toBe(400);
   });
 
   it("0090 inteira com as FKs: filho sem pai é recusado (errno 1452)", async () => {

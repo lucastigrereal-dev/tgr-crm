@@ -25,7 +25,7 @@ export const relationshipCancellationSchema = z.strictObject({
   requestId: opaque(120),
   contractId: z.number().int().positive(),
   reasonCode: z.enum(CANCELLATION_REASON_CODES),
-  actor: opaque(120),
+  actor: z.string().trim().regex(/^[A-Za-z0-9:_.-]{1,120}$/),
   requestedAt: instant,
   source: z.literal("relationship"),
 });

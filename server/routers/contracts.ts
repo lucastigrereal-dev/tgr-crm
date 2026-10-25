@@ -26,6 +26,7 @@ import { assertContractGenerationAllowed } from "../saleOrderGate";
 import { isContractDocumentCategory } from "../saleValidation";
 
 /** Núcleo do pedido de distrato (valida, simula, grava e emite). Usado por `requestCancellation` e por `openCancellationFromInbox`. Não aprova, não executa, não toca a cota. */
+const assertCancellationInboxEnabled = () => { if (process.env.RELATIONSHIP_CANCELLATION_INBOX_ENABLED !== "true") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Caixa de cancelamento do Relationship desligada." }); };
 async function createCancellationRequestTx(tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<typeof getDb>>>["transaction"]>[0]>[0], input: { contractId: number; reason: string; userId: number }) {
   const contract = (await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
   if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
@@ -237,6 +238,7 @@ export const contractsRouter = router({
   /** M-A09-01a: pedidos recebidos do Relationship (caixa com protocolo). Só leitura; o pedido ainda NÃO é um distrato. */
   listCancellationInbox: contractsProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(50) }).default({ limit: 50 })).query(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.request");
+    assertCancellationInboxEnabled();
     const db = await getDb(); if (!db) return [];
     return db.select({ id: cancellationRequestInbox.id, protocol: cancellationRequestInbox.protocol, requestId: cancellationRequestInbox.requestId, contractId: cancellationRequestInbox.contractId, reasonCode: cancellationRequestInbox.reasonCode, requestedAt: cancellationRequestInbox.requestedAt, createdAt: cancellationRequestInbox.createdAt, cancellationRequestId: cancellationRequestInbox.cancellationRequestId, requestStatus: contractCancellationRequests.status })
       .from(cancellationRequestInbox).leftJoin(contractCancellationRequests, eq(cancellationRequestInbox.cancellationRequestId, contractCancellationRequests.id)).orderBy(desc(cancellationRequestInbox.id)).limit(input.limit);
@@ -244,11 +246,14 @@ export const contractsRouter = router({
   /** M-A09-01a: a equipe do CRM abre o distrato a partir do pedido do Relationship. Idempotente: se já há distrato aberto/ligado, liga e NÃO duplica. Não aprova nem executa. */
   openCancellationFromInbox: contractsProcedure.input(z.object({ protocol: z.string().uuid() })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.request");
+    assertCancellationInboxEnabled();
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     return db.transaction(async tx => {
       const item = (await tx.select().from(cancellationRequestInbox).where(eq(cancellationRequestInbox.protocol, input.protocol)).limit(1).for("update"))[0];
       if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Protocolo não encontrado." });
       if (item.cancellationRequestId) return { cancellationRequestId: item.cancellationRequestId, reused: true };
+      // Trava o contrato ANTES de ler o distrato aberto: a leitura sem trava abriria o snapshot do REPEATABLE READ e não veria o pedido que outra transação acabou de confirmar.
+      await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, item.contractId)).limit(1).for("update");
       const open = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, item.contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))).limit(1))[0];
       let requestId: number; let reused = false;
       if (open) { requestId = open.id; reused = true; }
