@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { captureRecords, commercialPolicyVersions, commercialProjectSettings, contractDocuments, contracts, customers, installments, opportunities, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
+import { captureRecords, commercialPolicyVersions, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, installments, opportunities, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // CRM-F1 + D2=B em MySQL real: a política de comissão é escolhida por vigência (data do VENDEU, o fato original; não a da parcela paga nem a de hoje), atrás de flag; legado intacto com a flag desligada. Dados SYN-.
@@ -136,6 +136,15 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       const rows = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract));
       expect(rows.length).toBeGreaterThan(0);
       expect(rows.every(row => row.policyVersion === "vigente-f1")).toBe(true);
+      // M-A08-02: o evento leva a versão (campo opcional) e aposentar a versão depois NÃO mexe no que já foi lançado.
+      const events = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.created"), inArray(domainEvents.aggregateId, rows.map(row => row.id))));
+      expect(events).toHaveLength(rows.length);
+      events.forEach(event => expect(JSON.parse(String(event.payload))).toMatchObject({ policyVersion: "vigente-f1" }));
+      const policiesApi = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const [version] = await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, resort), eq(commercialPolicyVersions.version, "vigente-f1")));
+      await policiesApi.retire({ id: version!.id } as never);
+      const after = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract));
+      expect(after.map(row => [row.id, row.policyVersion, row.amount, row.rate, row.status])).toEqual(rows.map(row => [row.id, row.policyVersion, row.amount, row.rate, row.status]));
     });
 
     async function seedPaid(label: string, resort: number, paidAts: string[], vendeuAt?: string) {

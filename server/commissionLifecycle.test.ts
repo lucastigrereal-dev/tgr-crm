@@ -45,3 +45,25 @@ describe("M-A08-02: arredondamento em centavos", () => {
     parts.forEach(v => expect(toCents(v) / 100).toBe(v));
   });
 });
+
+describe("M-A08-02: o arredondamento novo não muda valores que já fechavam", () => {
+  it("em grade de bases de 2 casas e taxas usuais, só difere do cálculo antigo onde o antigo errava a metade do centavo", () => {
+    const oldRound = (v: number) => Math.round(v * 100) / 100;
+    const rates = [0.01, 0.02, 0.05, 0.1, 0.15, 0.165, 0.0191];
+    let compared = 0; const changed: { base: number; rate: number; before: number; after: number }[] = [];
+    for (let baseCents = 100; baseCents <= 2_000_000; baseCents += 997) {
+      const base = baseCents / 100;
+      for (const rate of rates) {
+        compared += 1;
+        const before = oldRound(base * rate), after = roundMoney(base * rate);
+        if (before !== after) changed.push({ base, rate, before, after });
+        // o novo é sempre o centavo mais próximo do valor exato
+        expect(Math.abs(after - base * rate)).toBeLessThanOrEqual(0.0050001);
+      }
+    }
+    expect(compared).toBeGreaterThan(10_000);
+    // Quando difere, é exatamente 1 centavo (meio centavo que o float antigo arredondava para baixo).
+    changed.forEach(row => expect(Number((row.after - row.before).toFixed(2))).toBe(0.01));
+    console.info(`M-A08-02 grade: ${compared} casos, ${changed.length} mudam`, JSON.stringify(changed.slice(0, 5)));
+  });
+});
