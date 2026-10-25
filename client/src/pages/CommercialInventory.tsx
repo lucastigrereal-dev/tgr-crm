@@ -55,6 +55,8 @@ export default function CommercialInventory() {
     },
     onError: error => toast.error(error.message),
   });
+  const holdPolicy = trpc.inventory.holdPolicy.useQuery();
+  const negotiationHolds = holdPolicy.data?.negotiationHoldsEnabled === true;
   const hold = trpc.inventory.createHold.useMutation({
     onSuccess: async data => {
       toast.success(data.reused ? `Hold #${data.holdId} reaproveitado.` : `Hold #${data.holdId} criado.`);
@@ -103,8 +105,8 @@ export default function CommercialInventory() {
       <div className="grid gap-3 md:grid-cols-[1fr_180px_140px_120px]">
         <Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar cota ou UH" />
         <Select value={status} onValueChange={value => setStatus(value as typeof status)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Todos status</SelectItem>{Object.entries(statusLabels).map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
-        <Input value={proposalId} onChange={event => setProposalId(event.target.value)} inputMode="numeric" placeholder="ID proposta p/ hold" />
-        <Input value={ttlMinutes} onChange={event => setTtlMinutes(event.target.value)} inputMode="numeric" placeholder="TTL min" />
+        {negotiationHolds ? <Input value={proposalId} onChange={event => setProposalId(event.target.value)} inputMode="numeric" placeholder="ID proposta p/ hold" /> : <span />}
+        {negotiationHolds ? <Input value={ttlMinutes} onChange={event => setTtlMinutes(event.target.value)} inputMode="numeric" placeholder="TTL min" /> : <span />}
       </div>
 
       {list.data?.truncated ? <p className="rounded-xl border border-[#ead8ad] bg-[#fff9e9] p-3 text-xs text-[#71531a]">Exibindo apenas o primeiro recorte do estoque. Refine o filtro para operar com segurança.</p> : null}
@@ -120,7 +122,7 @@ export default function CommercialInventory() {
             <td className="px-4 py-3">{fraction.currentContractId ? `#${fraction.currentContractId}` : "—"}</td>
             <td className="px-4 py-3">{fraction.heldUntil ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(fraction.heldUntil)) : "—"}</td>
             <td className="px-4 py-3"><div className="flex justify-end gap-2">
-              {fraction.status === "available" ? <Button size="sm" variant="outline" disabled={hold.isPending} onClick={() => createHold(fraction.id)}><Clock3 className="mr-1.5 h-3.5 w-3.5" />Hold</Button> : null}
+              {fraction.status === "available" && negotiationHolds ? <Button size="sm" variant="outline" disabled={hold.isPending} onClick={() => createHold(fraction.id)}><Clock3 className="mr-1.5 h-3.5 w-3.5" />Hold</Button> : null}
               {fraction.status === "available" ? <Button size="sm" variant="outline" disabled={block.isPending} onClick={() => { const reason = window.prompt("Motivo do bloqueio desta cota?"); if (reason?.trim()) block.mutate({ fractionId: fraction.id, reason: reason.trim() }); }}><LockKeyhole className="mr-1.5 h-3.5 w-3.5" />Bloquear</Button> : null}
               {fraction.status === "blocked" ? <Button size="sm" variant="outline" disabled={unblock.isPending} onClick={() => unblock.mutate({ fractionId: fraction.id })}><ShieldOff className="mr-1.5 h-3.5 w-3.5" />Desbloquear</Button> : null}
             </div></td>

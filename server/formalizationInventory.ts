@@ -12,6 +12,11 @@ import { txAudit, txEvent, type Tx } from "./txOutbox";
  */
 export const isInventoryHoldAtFormalizationEnabled = () => process.env.INVENTORY_HOLD_AT_FORMALIZATION === "true";
 export const DEFAULT_FORMALIZATION_HOLD_HOURS = 48;
+/**
+ * Regra de negócio (Lucas): proposta e Gaveta NÃO reservam cota; a proteção do estoque nasce só na formalização (hold `formalization`).
+ * O hold manual de negociação (`inventory.createHold`, purpose='negotiation' da migration 0074) fica DESLIGADO por padrão; INVENTORY_NEGOTIATION_HOLDS=true religa o legado.
+ */
+export const isNegotiationHoldEnabled = () => process.env.INVENTORY_NEGOTIATION_HOLDS === "true";
 export const stockHoldPolicySchema = z.strictObject({ ttlHours: z.number().min(1).max(720) });
 
 export async function formalizationHoldExpiry(tx: Pick<Tx, "select">, resortId: number | null, now: Date) {

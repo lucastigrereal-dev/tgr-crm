@@ -26,6 +26,7 @@ describe.skipIf(!integrationUrl)("hold expirado em MySQL real", () => {
   beforeAll(async () => {
     validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
     process.env.DATABASE_URL = integrationUrl;
+    process.env.INVENTORY_NEGOTIATION_HOLDS = "true"; // legado de hold de negociação, desligado por padrão
     ({ inventoryRouter } = await import("./routers/inventory"));
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });

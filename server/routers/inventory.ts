@@ -10,6 +10,7 @@ import {
   units,
 } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
+import { isNegotiationHoldEnabled } from "../formalizationInventory";
 import { sweepExpiredHolds as sweepExpiredHoldsNow } from "../holdSweep";
 import { router } from "../_core/trpc";
 import { adminProcedure, internalProcedure, salesProcedure } from "./access";
@@ -27,6 +28,8 @@ function isExpired(value: Date | string | null | undefined, now: Date) {
 }
 
 export const inventoryRouter = router({
+  holdPolicy: internalProcedure.query(() => ({ negotiationHoldsEnabled: isNegotiationHoldEnabled() })),
+
   summary: internalProcedure.input(z.object({ resortId: z.number().int().positive() })).query(async ({ input }) => {
     const db = await getDb();
     if (!db) return { total: 0, available: 0, held: 0, sold: 0, blocked: 0, expiredHolds: 0 };
@@ -132,6 +135,7 @@ export const inventoryRouter = router({
     proposalId: z.number().int().positive().optional().nullable(),
     ttlMinutes: z.number().int().min(5).max(240).default(30),
   })).mutation(async ({ ctx, input }) => {
+    if (!isNegotiationHoldEnabled()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Proposta e negociação não reservam cota: a reserva nasce só na formalização do contrato." });
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const now = new Date();
