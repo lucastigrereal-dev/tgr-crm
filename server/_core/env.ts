@@ -28,6 +28,9 @@ export const ENV = {
   nonBuyerDeliveryEnabled: process.env.NON_BUYER_DELIVERY_ENABLED === "true",
   nonBuyerDeliveryEndpoint: process.env.RECOVERY_NON_BUYER_ENDPOINT ?? "",
   nonBuyerDeliveryKey: process.env.RECOVERY_NON_BUYER_KEY ?? "",
+  // M-A09-01a: caixa de pedidos de cancelamento do Relationship (receptor + ACK com protocolo). DESLIGADA por padrão; par flag+chave obrigatório (sem chave a rota responde 404). Tabela é PROPOSTA 0090.
+  relationshipCancellationInboxEnabled: process.env.RELATIONSHIP_CANCELLATION_INBOX_ENABLED === "true",
+  relationshipInboundKey: process.env.RELATIONSHIP_INBOUND_KEY ?? "",
   // C1: receptor encounter.attendance_recorded.v1 (registro canônico do casal). DESLIGADO por padrão.
   attendanceReceiverEnabled: process.env.ATTENDANCE_RECEIVER_ENABLED === "true",
   // F2.10: exclusão LGPD propagada do GuestPass (feed por pull + recibo). DESLIGADA por padrão. Tabelas são PROPOSTA 0088. Anonimiza só dado do CRM, mantendo nome/CPF/data do brinde.
