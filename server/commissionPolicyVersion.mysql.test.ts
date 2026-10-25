@@ -6,7 +6,7 @@ import mysql from "mysql2/promise";
 import { captureRecords, commercialPolicyVersions, commercialProjectSettings, contractDocuments, contracts, customers, installments, opportunities, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
-// CRM-F1 em MySQL real: a política de comissão é escolhida por vigência (data da parcela), atrás de flag; legado intacto com a flag desligada. Dados SYN-.
+// CRM-F1 + D2=B em MySQL real: a política de comissão é escolhida por vigência (data do VENDEU, o fato original; não a da parcela paga nem a de hoje), atrás de flag; legado intacto com a flag desligada. Dados SYN-.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
 const runId = randomUUID().slice(0, 8);
 const policy = (rate: number) => JSON.stringify({ linerRate: rate, closerRate: rate, ftbRate: 0, cancellationDeadlineDay: 7, expectedPaymentDay: 25, eligiblePaymentMethods: ["pix", "boleto"], basis: "eligible_receipt" });
@@ -50,7 +50,7 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
     beforeAll(() => { process.env.COMMISSION_POLICY_VERSIONING_ENABLED = "true"; });
     afterAll(() => { delete process.env.COMMISSION_POLICY_VERSIONING_ENABLED; });
 
-    it("escolhe a versão por effectiveAt <= data da parcela < retiredAt; antes de qualquer versão vale o legado", async () => {
+    it("escolhe a versão por effectiveAt <= data (âncora) < retiredAt; antes de qualquer versão vale o legado", async () => {
       const resort = await newResort("on", policy(0.01));
       await addVersion(resort, "v1", policy(0.02), "2026-02-01T00:00:00Z", "2026-04-01T00:00:00Z");
       await addVersion(resort, "v2", policy(0.03), "2026-04-01T00:00:00Z");
@@ -118,13 +118,13 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       expect(rows.every(row => row.policyVersion === "vigente-f1")).toBe(true);
     });
 
-    async function seedPaid(label: string, resort: number, paidAts: string[]) {
+    async function seedPaid(label: string, resort: number, paidAts: string[], vendeuAt?: string) {
       const liner = (await db.insert(users).values({ openId: `f1-l-${label}-${runId}`, name: "Liner", role: "seller" }).$returningId())[0]!.id;
       const closer = (await db.insert(users).values({ openId: `f1-c-${label}-${runId}`, name: "Closer", role: "seller" }).$returningId())[0]!.id;
       const customer = (await db.insert(customers).values({ fullName: `SYN F1 ${label} ${runId}`, status: "active" }).$returningId())[0]!.id;
       const opp = (await db.insert(opportunities).values({ customerId: customer, title: `Opp ${label}`, sellerId: closer } as never).$returningId())[0]!.id;
       const proposal = (await db.insert(proposals).values({ opportunityId: opp, reference: `P-F1-${label}-${runId}`, productDescription: "Semana", totalAmount: "10000.00", downPaymentAmount: "2000.00", installmentCount: 3 }).$returningId())[0]!.id;
-      await db.insert(captureRecords).values({ customerId: customer, resortId: resort, opportunityId: opp, linerId: liner, closerId: closer } as never);
+      await db.insert(captureRecords).values({ customerId: customer, resortId: resort, opportunityId: opp, linerId: liner, closerId: closer, ...(vendeuAt ? { commercialOutcome: "vendeu", commercialOutcomeAt: new Date(vendeuAt) } : {}) } as never);
       const contract = (await db.insert(contracts).values({ number: `F1-${label}-${runId}`, customerId: customer, proposalId: proposal, status: "pending_signature", totalAmount: "10000.00", signedAt: new Date() }).$returningId())[0]!.id;
       await db.insert(contractDocuments).values({ contractId: contract, category: "Contrato assinado", filename: "c.pdf", storageKey: `contracts/f1-${label}-${runId}.pdf`, signed: true, signedArtifact: true });
       const ids: number[] = [];
@@ -133,25 +133,29 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
     }
     const validate = async (contract: number) => { await svc.confirmPayment(adminId, { contractId: contract, note: "conferido" }); await svc.validateSale(adminId, { contractId: contract }); };
 
-    it("P1-2: parcelas já pagas em vigências diferentes recebem taxa e policyVersion cada uma pela sua data", async () => {
+    it("D2=B: a versão da política é a da data do VENDEU para TODAS as parcelas, mesmo pagas depois de a política mudar", async () => {
       const resort = await newResort("perinst", null);
       await addVersion(resort, "jan", policy(0.02), "2026-01-01T00:00:00Z", "2026-04-01T00:00:00Z");
       await addVersion(resort, "abr", policy(0.03), "2026-04-01T00:00:00Z");
-      const { contract, ids } = await seedPaid("perinst", resort, ["2026-02-10T12:00:00Z", "2026-05-10T12:00:00Z"]);
-      await validate(contract);
-      const rows = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract));
-      const versionOf = (installmentId: number) => [...new Set(rows.filter(row => row.sourceInstallmentId === installmentId).map(row => row.policyVersion))];
-      expect(versionOf(ids[0]!)).toEqual(["jan"]);
-      expect(versionOf(ids[1]!)).toEqual(["abr"]);
-      const amountOf = (installmentId: number) => rows.filter(row => row.sourceInstallmentId === installmentId && row.commissionRole === "liner").map(row => Number(row.amount))[0];
-      expect(amountOf(ids[1]!)! / amountOf(ids[0]!)!).toBeCloseTo(1.5, 1);
+      const early = await seedPaid("perinst", resort, ["2026-02-10T12:00:00Z", "2026-05-10T12:00:00Z"], "2026-02-05T12:00:00Z");
+      await validate(early.contract);
+      const late = await seedPaid("perinst2", resort, ["2026-05-12T12:00:00Z"], "2026-05-01T12:00:00Z");
+      await validate(late.contract);
+      const rowsOf = (contract: number) => db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract));
+      const earlyRows = await rowsOf(early.contract);
+      expect(earlyRows.length).toBeGreaterThan(0);
+      expect([...new Set(earlyRows.map(row => row.policyVersion))]).toEqual(["jan"]); // a parcela paga em maio NÃO muda para "abr"
+      const lateRows = await rowsOf(late.contract);
+      expect([...new Set(lateRows.map(row => row.policyVersion))]).toEqual(["abr"]);
+      const linerOf = (rows: typeof earlyRows, installmentId: number) => rows.filter(row => row.sourceInstallmentId === installmentId && row.commissionRole === "liner").map(row => Number(row.amount))[0];
+      expect(linerOf(earlyRows, early.ids[1]!)).toBe(linerOf(earlyRows, early.ids[0]!));
     });
 
-    it("P1-3: reprocesso usa a política da data da parcela em todas as checagens (taxa zero da época não gera comissão com a taxa de hoje)", async () => {
+    it("D2=B: reprocesso usa a política do VENDEU (taxa zero da época não gera comissão com a taxa de hoje, mesmo pago depois)", async () => {
       const resort = await newResort("reproc", null);
       await addVersion(resort, "epoca-zero", policy(0), "2026-01-01T00:00:00Z", "2026-04-01T00:00:00Z");
       await addVersion(resort, "hoje", policy(0.05), "2026-04-01T00:00:00Z");
-      const { contract, ids } = await seedPaid("reproc", resort, ["2026-02-10T12:00:00Z"]);
+      const { contract, ids } = await seedPaid("reproc", resort, ["2026-05-10T12:00:00Z"], "2026-02-05T12:00:00Z");
       await validate(contract);
       expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract))).toHaveLength(0);
       const { recordZeroRateSkip, reprocessSkippedCommissions } = svc;
@@ -162,17 +166,39 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract))).toHaveLength(0);
     });
 
-    it("P1-3: versão da época ilegível bloqueia o reprocesso mesmo com a política de hoje válida", async () => {
+    it("D2=B: versão do VENDEU ilegível bloqueia o reprocesso mesmo com a política de hoje válida", async () => {
       const resort = await newResort("reproc2", null);
       await addVersion(resort, "epoca-quebrada", "{x", "2026-01-01T00:00:00Z", "2026-04-01T00:00:00Z");
       await addVersion(resort, "hoje", policy(0.05), "2026-04-01T00:00:00Z");
-      const { contract, ids } = await seedPaid("reproc2", resort, ["2026-02-10T12:00:00Z"]);
+      const { contract, ids } = await seedPaid("reproc2", resort, ["2026-05-10T12:00:00Z"], "2026-02-05T12:00:00Z");
       await validate(contract);
       await db.transaction(tx => svc.recordZeroRateSkip(tx as never, { installmentId: ids[0]!, contractId: contract, resortId: resort, roles: ["liner"], actorUserId: adminId, source: "sale_validation" }));
       await db.update(contracts).set({ status: "active" }).where(eq(contracts.id, contract));
       const summary = await svc.reprocessSkippedCommissions(db as never, { contractId: contract, actorUserId: adminId });
       expect(summary.created).toBe(0);
       expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract))).toHaveLength(0);
+    });
+
+    it("D2=B: âncora = VENDEU da ficha; sem VENDEU, a criação do contrato (nunca 'agora' quando o contrato existe)", async () => {
+      const { commissionPolicyAnchor } = await import("./commissionPolicyVersion");
+      const vendeu = new Date("2026-02-05T12:00:00Z"); const created = new Date("2026-03-01T00:00:00Z");
+      expect(commissionPolicyAnchor({ commercialOutcome: "vendeu", commercialOutcomeAt: vendeu }, { createdAt: created })).toEqual(vendeu);
+      expect(commissionPolicyAnchor({ commercialOutcome: "caiu_em_mesa", commercialOutcomeAt: vendeu }, { createdAt: created })).toEqual(created);
+      expect(commissionPolicyAnchor(null, { createdAt: created })).toEqual(created);
+      const now = new Date("2026-10-25T00:00:00Z");
+      expect(commissionPolicyAnchor(null, null, now)).toEqual(now);
+    });
+
+    it("D2=B: modo de cancelamento de comissão PAGA usa a política do VENDEU, não a vigente no dia do distrato", async () => {
+      process.env.COMMISSION_CANCEL_POLICY_ENABLED = "true";
+      try {
+        const { paidCommissionCancellationMode } = await import("./commissionPolicyVersion");
+        const resort = await newResort("cancelmode", null);
+        await addVersion(resort, "v-none", JSON.stringify({ ...JSON.parse(policy(0.02)), onPaidCommissionCancellation: "none" }), "2026-01-01T00:00:00Z", "2026-04-01T00:00:00Z");
+        await addVersion(resort, "v-review", JSON.stringify({ ...JSON.parse(policy(0.02)), onPaidCommissionCancellation: "manual_review" }), "2026-04-01T00:00:00Z");
+        expect(await paidCommissionCancellationMode(db as never, resort, new Date("2026-02-05T12:00:00Z"))).toBe("none");
+        expect(await paidCommissionCancellationMode(db as never, resort, new Date("2026-10-25T00:00:00Z"))).toBe("manual_review");
+      } finally { delete process.env.COMMISSION_CANCEL_POLICY_ENABLED; }
     });
   });
 });

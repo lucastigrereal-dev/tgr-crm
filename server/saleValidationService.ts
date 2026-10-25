@@ -13,7 +13,7 @@ import { evaluateSaleValidationGates, gatesNotAfter, isContractDocumentCategory,
 import { createHash } from "node:crypto";
 import { conferralsBeforeGeneration, saleOrderGateState } from "./saleOrderGate";
 import { isInventoryHoldAtFormalizationEnabled, settleFormalizationInventory } from "./formalizationInventory";
-import { isCommissionPolicyVersioningEnabled, resolveCommissionPolicy } from "./commissionPolicyVersion";
+import { commissionPolicyAnchor, isCommissionPolicyVersioningEnabled, resolveCommissionPolicy } from "./commissionPolicyVersion";
 import { isSegregationEnabled } from "./saleValidatorAccess";
 import { syncRevenueQualityForContract } from "./revenueQualitySync";
 import { txAudit, txEvent, type Tx } from "./txOutbox";
@@ -150,7 +150,8 @@ async function loadCommissionContext(tx: Reader, contractId: number) {
   const opportunity = proposal?.opportunityId ? ((await tx.select().from(opportunities).where(eq(opportunities.id, proposal.opportunityId)).limit(1))[0] ?? null) : null;
   const capture = opportunity?.id ? ((await tx.select().from(captureRecords).where(eq(captureRecords.opportunityId, opportunity.id)).orderBy(desc(captureRecords.createdAt)).limit(1))[0] ?? null) : null;
   const context = { contract, proposal, opportunity, capture };
-  const resolved = await resolveCommissionPolicy(tx, capture?.resortId, new Date());
+  // D2=B: a versão da política é a da data do VENDEU (fato original), igual para todas as parcelas do contrato.
+  const resolved = await resolveCommissionPolicy(tx, capture?.resortId, commissionPolicyAnchor(capture, contract));
   return { context, policy: resolved.policy, resortId: capture?.resortId ?? null };
 }
 
@@ -186,8 +187,8 @@ export async function releaseCommissionsForValidatedContract(tx: Tx, input: { co
   const validated = await isSaleValidated(tx, input.contractId);
   const versioned = isCommissionPolicyVersioningEnabled();
   for (const installment of paid) {
-    // CRM-F1: com versionamento, cada parcela usa a política vigente na SUA data de pagamento (taxa, portão e policyVersion por parcela).
-    const policy = versioned ? (await resolveCommissionPolicy(tx, resortId, installment.paidAt ?? new Date())).policy : loaded.policy;
+    // D2=B: a política é a da data do VENDEU (resolvida uma vez em loadCommissionContext), não a da data de cada parcela paga.
+    const policy = loaded.policy;
     const reason = commissionBlockReason(context.contract.status, policy, validated);
     if (reason || !policy) {
       const why = reason ?? "incomplete_project_policy";
@@ -258,8 +259,8 @@ export async function reprocessSkippedCommissions(db: Db, input: { contractId?: 
       for (const installment of paid) {
         const existing = await tx.select({ id: salesCommissions.id }).from(salesCommissions).where(eq(salesCommissions.sourceInstallmentId, installment.id)).limit(1);
         if (existing.length) { summary.alreadyCommissioned += 1; continue; }
-        // CRM-F1: a vigência é a da data da parcela paga, não a de hoje: política efetiva primeiro, e só ela decide portão e taxa zero.
-        const effective = versioned ? (await resolveCommissionPolicy(tx, loaded.resortId, installment.paidAt ?? new Date())).policy : loaded.policy;
+        // D2=B: a vigência é a da data do VENDEU (política do fato original), não a da parcela nem a de hoje.
+        const effective = loaded.policy;
         if (!effective || (versioned && commissionBlockReason(locked!.status, effective, validated) !== null)) { summary.ineligible += 1; continue; }
         if (zeroRateSkippedRoles(loaded.context.capture, effective)) { summary.stillZeroRate += 1; continue; }
         const facts = await insertInstallmentCommissions(tx, { installment, context: { ...loaded.context, contract: { ...loaded.context.contract, status: locked!.status } }, policy: effective as CompleteCommissionPolicy, paymentMethod: normalizePaymentMethod(installment.paymentMethod), compensatedAt: installment.paidAt ?? new Date(), paidAsOf: installment.paidAt });

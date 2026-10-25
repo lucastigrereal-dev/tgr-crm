@@ -49,7 +49,7 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
   const perInstallmentPolicy = JSON.stringify({ ...JSON.parse(v2Policy), payoutSchedule: { mode: "per_installment" } });
 
   /** Venda validada e ativa: entrada de R$ 1.000 dividida em parcelas, 2 frações vendidas (2 cotas), captador, consultor (liner) e fechador (closer) distintos. */
-  async function seedSale(label: string, installmentAmounts = ["1000.00"], policyJson = v2Policy) {
+  async function seedSale(label: string, installmentAmounts = ["1000.00"], policyJson = v2Policy, adminValidated = true) {
     const [promoter] = await db.insert(users).values({ openId: `v2-promoter-${label}-${runId}`, name: "Captador", role: "seller" }).$returningId();
     const [liner] = await db.insert(users).values({ openId: `v2-liner-${label}-${runId}`, name: "Consultor", role: "seller" }).$returningId();
     const [closer] = await db.insert(users).values({ openId: `v2-closer-${label}-${runId}`, name: "Fechador", role: "seller" }).$returningId();
@@ -70,8 +70,10 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
       const [inst] = await db.insert(installments).values({ contractId: contract.id, sequence: index + 1, dueDate: new Date("2026-10-10T12:00:00Z"), amount, status: "open", paidAmount: "0.00" }).$returningId();
       ids.push(inst.id);
     }
-    await svc.confirmPayment(adminId, { contractId: contract.id, note: "conferido" });
-    await svc.validateSale(adminId, { contractId: contract.id });
+    if (adminValidated) {
+      await svc.confirmPayment(adminId, { contractId: contract.id, note: "conferido" });
+      await svc.validateSale(adminId, { contractId: contract.id });
+    }
     await db.update(contracts).set({ status: "active" }).where(eq(contracts.id, contract.id));
     return { contractId: contract.id, resortId: resort.id, installmentIds: ids, users: { promoter: promoter.id, liner: liner.id, closer: closer.id } };
   }
@@ -182,6 +184,15 @@ describe.skipIf(!integrationUrl)("CRM-A13: comissão V2 por parcela, travada por
     expect(first.map(row => [row.commissionRole, row.amount]).sort()).toEqual([["closer", "100.00"], ["liner", "100.00"], ["promoter", "800.00"]]);
     await caller.markInstallmentPaid({ id: installmentIds[2]!, paymentMethod: "pix" });
     expect(await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId))).toHaveLength(3);
+  });
+  it("M-A08-02 negativo: entrada INTEIRA paga SEM validação do administrativo = nenhuma comissão; a validação depois libera (V2 liberado)", async () => {
+    process.env.COMMISSION_V2_RELEASED = "true";
+    const { contractId, installmentIds } = await seedSale("sem-validacao", ["500.00", "500.00", "3000.00"], v2Policy, false);
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    const rows = () => db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId));
+    await caller.markInstallmentPaid({ id: installmentIds[0]!, paymentMethod: "pix" });
+    await caller.markInstallmentPaid({ id: installmentIds[1]!, paymentMethod: "pix" });
+    expect(await rows()).toHaveLength(0);
   });
   it("F2 Codex P1: baixar o SALDO primeiro não libera nada; método inelegível não libera; a baixa elegível da ENTRADA libera (V2 liberado)", async () => {
     process.env.COMMISSION_V2_RELEASED = "true";
