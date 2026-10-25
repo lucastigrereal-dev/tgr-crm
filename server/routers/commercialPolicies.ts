@@ -56,7 +56,8 @@ export const commercialPoliciesRouter = router({
     }
     if (input.policyType === "commission") {
       // M-A08-02: janelas de vigência nunca se sobrepõem. A nova versão tem que começar DEPOIS de toda versão de comissão ainda aberta do empreendimento; empate ou inversão deixaria a versão do VENDEU ambígua.
-      const startsAt = input.effectiveAt ?? new Date();
+      // A coluna guarda segundos inteiros: compara pelo segundo cheio para o empate não escapar por causa dos milissegundos.
+      const startsAt = new Date(Math.floor((input.effectiveAt ?? new Date()).getTime() / 1000) * 1000);
       const overlapping = (await db.select({ id: commercialPolicyVersions.id, version: commercialPolicyVersions.version }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, "commission"), isNull(commercialPolicyVersions.retiredAt), gte(commercialPolicyVersions.effectiveAt, startsAt))).limit(1))[0];
       if (overlapping) throw new TRPCError({ code: "CONFLICT", message: `A vigência se sobrepõe à versão ${overlapping.version}. Use uma data posterior à dela ou aposente a versão antes.` });
     }

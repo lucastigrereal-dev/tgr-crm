@@ -105,8 +105,9 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
     it("Opus: commercialPolicies.create MATERIALIZA releaseOn=entry_total no JSON gravado (full_upfront sem releaseOn); explícito e per_installment ficam como estão", async () => {
       const resort = await newResort("materializa", null);
       const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      let step = 0; // vigências nunca se sobrepõem (M-A08-02): cada versão começa depois da anterior
       const stored = async (version: string, extra: object) => {
-        const { id } = await api.create({ resortId: resort, policyType: "commission", version, policy: { ...JSON.parse(policy(0.02)), ...extra } } as never);
+        const { id } = await api.create({ resortId: resort, policyType: "commission", version, policy: { ...JSON.parse(policy(0.02)), ...extra }, effectiveAt: new Date(Date.now() + 3_600_000 * ++step) } as never);
         return JSON.parse((await db.select().from(commercialPolicyVersions).where(eq(commercialPolicyVersions.id, id)))[0]!.policyJson);
       };
       expect((await stored("m-sem", {})).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });

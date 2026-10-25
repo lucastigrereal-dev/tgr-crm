@@ -64,7 +64,7 @@ describe("commercial policies router", () => {
   });
 
   it("normaliza corrida da unique key da versão como conflito", async () => {
-    const fixture = createDb([[{ id: 2 }], []], { code: "ER_DUP_ENTRY", errno: 1062 });
+    const fixture = createDb([[{ id: 2 }], [], []], { code: "ER_DUP_ENTRY", errno: 1062 });
     dbMocks.getDb.mockResolvedValue(fixture.db);
     await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: validCommission })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();
