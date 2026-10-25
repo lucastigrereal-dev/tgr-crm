@@ -1012,6 +1012,30 @@ export const contractCancellationRequests = mysqlTable("contract_cancellation_re
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [index("cancellation_requests_contract_status_idx").on(table.contractId, table.status), index("cancellation_requests_status_idx").on(table.status, table.createdAt)]);
 
+/**
+ * M-A09-01a: caixa de entrada dos pedidos de cancelamento do Relationship (o `protocol` é o ACK persistido). PROPOSTA 0090: migrations/proposed/PROPOSED_0090_cancellation_request_inbox.sql
+ * (a tabela só existe depois do GO; o receptor fica atrás de RELATIONSHIP_CANCELLATION_INBOX_ENABLED=false). O pedido não cria distrato nem libera cota.
+ */
+export const cancellationRequestInbox = mysqlTable("cancellation_request_inbox", {
+  id: int("id").autoincrement().primaryKey(),
+  protocol: varchar("protocol", { length: 36 }).notNull(),
+  eventId: varchar("eventId", { length: 120 }).notNull(),
+  requestId: varchar("requestId", { length: 120 }).notNull(),
+  payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+  contractId: int("contractId").notNull().references(() => contracts.id),
+  reasonCode: varchar("reasonCode", { length: 40 }).notNull(),
+  actor: varchar("actor", { length: 120 }).notNull(),
+  requestedAt: timestamp("requestedAt", { fsp: 3 }).notNull(),
+  cancellationRequestId: int("cancellationRequestId").references(() => contractCancellationRequests.id),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("cancellation_request_inbox_protocol_unique").on(table.protocol),
+  uniqueIndex("cancellation_request_inbox_event_unique").on(table.eventId),
+  uniqueIndex("cancellation_request_inbox_request_unique").on(table.requestId),
+  index("cancellation_request_inbox_contract_idx").on(table.contractId),
+]);
+
 export const commercialFractions = mysqlTable(
   "commercial_fractions",
   {

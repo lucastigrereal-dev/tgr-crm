@@ -3,7 +3,7 @@ import { holdFractionForFormalization, isInventoryHoldAtFormalizationEnabled } f
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
-import { billingRecords, captureRecords, commercialFractionHistory, commercialFractionHolds, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, financialTransactions, financialTransfers, installments, opportunities, ownershipEntitlements, proposals, salesCommissions, users } from "../../drizzle/schema";
+import { billingRecords, cancellationRequestInbox, captureRecords, commercialFractionHistory, commercialFractionHolds, commercialFractions, commercialProjectSettings, contractCancellationRequests, contractDocuments, contracts, customers, financialTransactions, financialTransfers, installments, opportunities, ownershipEntitlements, proposals, salesCommissions, users } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { storagePut } from "../storage";
@@ -24,6 +24,28 @@ import { eligibilityHook } from "../nonBuyerEligibilityService";
 import { recordInstallmentsScheduled } from "../installmentScheduledFacts";
 import { assertContractGenerationAllowed } from "../saleOrderGate";
 import { isContractDocumentCategory } from "../saleValidation";
+
+/** Núcleo do pedido de distrato (valida, simula, grava e emite). Usado por `requestCancellation` e por `openCancellationFromInbox`. Não aprova, não executa, não toca a cota. */
+const assertCancellationInboxEnabled = () => { if (process.env.RELATIONSHIP_CANCELLATION_INBOX_ENABLED !== "true") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Caixa de cancelamento do Relationship desligada." }); };
+async function createCancellationRequestTx(tx: Parameters<Parameters<NonNullable<Awaited<ReturnType<typeof getDb>>>["transaction"]>[0]>[0], input: { contractId: number; reason: string; userId: number }) {
+  const contract = (await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
+  if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
+  if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
+  const existingRequest = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, input.contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))).limit(1))[0];
+  if (existingRequest) throw new TRPCError({ code: "CONFLICT", message: "Já existe um distrato aguardando decisão ou execução para este contrato." });
+  const paid = await tx.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360);
+  const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
+  const context = await tx.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
+  const resortId = contract.resortId ?? context[0]?.capture?.resortId;
+  const settings = resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
+  const simulation = simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) });
+  const created = await tx.insert(contractCancellationRequests).values({ contractId: input.contractId, reason: input.reason, simulationSnapshot: JSON.stringify(simulation), requestedByUserId: input.userId }).$returningId();
+  const id = created[0]?.id;
+  if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível solicitar o distrato." });
+  await txAudit(tx, { actorUserId: input.userId, entityType: "contract_cancellation_request", entityId: id, action: "requested", summary: `Distrato solicitado para contrato ${input.contractId}.` });
+  await txEvent(tx, { eventName: "contract.cancellation.requested", aggregateType: "contract_cancellation_request", aggregateId: id, actorUserId: input.userId, payload: { contractId: input.contractId, paidAmount: simulation.paidAmount } });
+  return { id, simulation };
+}
 
 export const contractsRouter = router({
   list: contractsProcedure.input(z.object({ status: z.enum(["draft", "pending_signature", "active", "overdue", "cancelled", "closed"]).optional(), limit: z.number().int().min(1).max(500).default(100) }).optional()).query(async ({ input }) => {
@@ -211,26 +233,35 @@ export const contractsRouter = router({
   requestCancellation: contractsProcedure.input(z.object({ contractId: z.number().int().positive(), reason: z.string().trim().min(3).max(2000) })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.request");
     const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const requested = await db.transaction(async tx => {
-      const contract = (await tx.select().from(contracts).where(eq(contracts.id, input.contractId)).limit(1).for("update"))[0];
-      if (!contract) throw new TRPCError({ code: "NOT_FOUND", message: "Contrato não encontrado." });
-      if (contract.status === "cancelled") throw new TRPCError({ code: "CONFLICT", message: "Contrato já está cancelado." });
-      const existingRequest = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, input.contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))).limit(1))[0];
-      if (existingRequest) throw new TRPCError({ code: "CONFLICT", message: "Já existe um distrato aguardando decisão ou execução para este contrato." });
-      const paid = await tx.select().from(installments).where(eq(installments.contractId, input.contractId)).limit(360);
-      const paidAmount = paid.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
-      const context = await tx.select({ capture: captureRecords }).from(contracts).leftJoin(proposals, eq(contracts.proposalId, proposals.id)).leftJoin(opportunities, eq(proposals.opportunityId, opportunities.id)).leftJoin(captureRecords, eq(captureRecords.opportunityId, opportunities.id)).where(eq(contracts.id, input.contractId)).limit(1);
-      const resortId = contract.resortId ?? context[0]?.capture?.resortId;
-      const settings = resortId ? (await tx.select().from(commercialProjectSettings).where(eq(commercialProjectSettings.resortId, resortId)).limit(1))[0] : null;
-      const simulation = simulateCancellation({ contractAmount: Number(contract.totalAmount), paidAmount, policy: parseCancellationPolicy(settings?.cancellationPolicy) });
-      const created = await tx.insert(contractCancellationRequests).values({ contractId: input.contractId, reason: input.reason, simulationSnapshot: JSON.stringify(simulation), requestedByUserId: ctx.user.id }).$returningId();
-      const id = created[0]?.id;
-      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível solicitar o distrato." });
-      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_cancellation_request", entityId: id, action: "requested", summary: `Distrato solicitado para contrato ${input.contractId}.` });
-      await txEvent(tx, { eventName: "contract.cancellation.requested", aggregateType: "contract_cancellation_request", aggregateId: id, actorUserId: ctx.user.id, payload: { contractId: input.contractId, paidAmount: simulation.paidAmount } });
-      return { id, simulation };
+    return db.transaction(tx => createCancellationRequestTx(tx, { contractId: input.contractId, reason: input.reason, userId: ctx.user.id }));
+  }),
+  /** M-A09-01a: pedidos recebidos do Relationship (caixa com protocolo). Só leitura; o pedido ainda NÃO é um distrato. */
+  listCancellationInbox: contractsProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(50) }).default({ limit: 50 })).query(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "contract.cancel.request");
+    assertCancellationInboxEnabled();
+    const db = await getDb(); if (!db) return [];
+    return db.select({ id: cancellationRequestInbox.id, protocol: cancellationRequestInbox.protocol, requestId: cancellationRequestInbox.requestId, contractId: cancellationRequestInbox.contractId, reasonCode: cancellationRequestInbox.reasonCode, requestedAt: cancellationRequestInbox.requestedAt, createdAt: cancellationRequestInbox.createdAt, cancellationRequestId: cancellationRequestInbox.cancellationRequestId, requestStatus: contractCancellationRequests.status })
+      .from(cancellationRequestInbox).leftJoin(contractCancellationRequests, eq(cancellationRequestInbox.cancellationRequestId, contractCancellationRequests.id)).orderBy(desc(cancellationRequestInbox.id)).limit(input.limit);
+  }),
+  /** M-A09-01a: a equipe do CRM abre o distrato a partir do pedido do Relationship. Idempotente: se já há distrato aberto/ligado, liga e NÃO duplica. Não aprova nem executa. */
+  openCancellationFromInbox: contractsProcedure.input(z.object({ protocol: z.string().uuid() })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "contract.cancel.request");
+    assertCancellationInboxEnabled();
+    const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+    return db.transaction(async tx => {
+      const item = (await tx.select().from(cancellationRequestInbox).where(eq(cancellationRequestInbox.protocol, input.protocol)).limit(1).for("update"))[0];
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Protocolo não encontrado." });
+      if (item.cancellationRequestId) return { cancellationRequestId: item.cancellationRequestId, reused: true };
+      // Trava o contrato ANTES de ler o distrato aberto: a leitura sem trava abriria o snapshot do REPEATABLE READ e não veria o pedido que outra transação acabou de confirmar.
+      await tx.select({ id: contracts.id }).from(contracts).where(eq(contracts.id, item.contractId)).limit(1).for("update");
+      const open = (await tx.select({ id: contractCancellationRequests.id }).from(contractCancellationRequests).where(and(eq(contractCancellationRequests.contractId, item.contractId), inArray(contractCancellationRequests.status, ["requested", "approved"]))).limit(1))[0];
+      let requestId: number; let reused = false;
+      if (open) { requestId = open.id; reused = true; }
+      else requestId = (await createCancellationRequestTx(tx, { contractId: item.contractId, reason: `Pedido do Relationship (protocolo ${item.protocol}, motivo ${item.reasonCode}).`, userId: ctx.user.id })).id;
+      await tx.update(cancellationRequestInbox).set({ cancellationRequestId: requestId }).where(eq(cancellationRequestInbox.id, item.id));
+      await txAudit(tx, { actorUserId: ctx.user.id, entityType: "contract_cancellation_request", entityId: requestId, action: "linked_to_relationship_request", summary: `Distrato ligado ao pedido do Relationship (protocolo ${item.protocol}).` });
+      return { cancellationRequestId: requestId, reused };
     });
-    return requested;
   }),
   decideCancellation: contractsProcedure.input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approved", "rejected"]), notes: z.string().trim().max(2000).optional() })).mutation(async ({ ctx, input }) => {
     assertCapability(ctx.user.role, "contract.cancel.decide");
