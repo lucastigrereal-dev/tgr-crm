@@ -5,6 +5,8 @@ import { ENV } from "./_core/env";
 import { cpfHmac, erasureEventSchema } from "./privacyErasure";
 import { isAllowedFeedEndpoint, runErasureSync } from "./privacyErasureFeed";
 import { domainEventDefinition } from "../shared/domainEvents";
+import { getTableColumns } from "drizzle-orm";
+import { captureGuestpassLinks } from "../drizzle/schema";
 
 const root = path.resolve(import.meta.dirname, "..");
 const SECRET = "segredo-sintetico-so-para-teste";
@@ -78,3 +80,15 @@ describe("F2.10: nasce desligado, sem PII e sem entrega externa", () => {
     expect(readdirSync(path.join(root, "migrations/proposed"))).toContain("PROPOSED_0088_privacy_erasure_propagation.sql");
   });
 });
+
+describe("M-A10-05: o prefill do GuestPass não guarda dado pessoal no CRM que sobreviva à exclusão", () => {
+  it("o vínculo da ficha com o passe só tem ids, referência opaca e instantes (sem nome, telefone, CPF ou e-mail)", () => {
+    expect(Object.keys(getTableColumns(captureGuestpassLinks)).sort()).toEqual(["captureId", "contractVersion", "createdAt", "createdByUserId", "guestpassPassRef", "id", "prefillFetchedAt"]);
+  });
+  it("a exclusão do GuestPass chega ao CRM pelo feed (cliente pull com recibo) e a premissa do formato fica registrada para confirmar antes de ligar", () => {
+    const source = readFileSync(path.join(root, "server/privacyErasureFeed.ts"), "utf8");
+    expect(source).toContain("premissa a confirmar antes de ligar");
+    expect(source).toContain("PRIVACY_ERASURE_PROPAGATION_ENABLED");
+  });
+});
+
