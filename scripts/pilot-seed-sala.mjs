@@ -21,7 +21,7 @@ const url = process.env.DATABASE_URL;
 if (!url) fail("Informe DATABASE_URL.");
 const projectName = (opt("--project-name", "Piloto da sala") ?? "").trim();
 if (projectName.length < 3 || projectName.length > 180) fail("--project-name deve ter de 3 a 180 caracteres e igualar o nome do projeto no Sales.");
-const unitCount = intOpt("--units", 1, 1, 50);
+const unitCount = intOpt("--units", 1, 1, 60);
 const quotasPerUnit = intOpt("--quotas", 10, 1, 104);
 const balanceInstallments = intOpt("--balance-installments", 12, 1, 360);
 const POLICY_VERSION = "SYN-PILOTO-SALA-1";

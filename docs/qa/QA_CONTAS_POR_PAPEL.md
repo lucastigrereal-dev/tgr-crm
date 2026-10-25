@@ -24,3 +24,15 @@ node scripts/pilot-users.mjs --out <pasta-fora-do-repo> \
 - Cada conta recebe senha própria e aleatória, gravada só em `crm-credentials.local.txt` (modo 600, fora do Git). Nenhum teste compartilha senha nem usa o admin geral.
 - O script recusa `--out` dentro do repositório. As contas reais ficam com o Lucas (mesmo script, nomes reais).
 - Cada conta entra só com o próprio login; a prova de que cada papel só alcança o que lhe cabe é a matriz de capacidades (`server/rbacCaptureMatrix.test.ts`).
+
+# Fixtures da bateria no CRM (M-QA-05)
+
+Só preparo, só em banco descartável e dados sintéticos. Cadastro do casal, check-in, resultado e venda ficam para a interface (nada de venda por fixture).
+
+```
+DATABASE_URL=<banco descartável> node scripts/pilot-seed-sala.mjs --project-name "QA <RUN_ID>" --units 60 --quotas 52
+```
+
+- Cria o empreendimento com o nome do projeto do Sales, 60 UH sintéticas (SYN-UH-xx) × 52 cotas disponíveis e a política `sale_terms` do QA. Rodar de novo não duplica (teste `server/pilotSeedSala.mysql.test.ts`).
+- RUN_ID no nome do projeto marca o lote como QA; o consentimento QA (marcado) e os meios de pagamento sintéticos (pix, boleto) ficam fora deste script: o consentimento nasce no GuestPass, e os meios entram na baixa da parcela.
+- Contas por papel: seção acima.

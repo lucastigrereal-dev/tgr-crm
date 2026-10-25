@@ -89,4 +89,18 @@ describe.skipIf(!integrationUrl)("seed do piloto da sala em MySQL real", () => {
     expect(scheduled.map(payload => payload.installmentId).sort()).toEqual(open.map(row => row.id).sort());
     expect(scheduled[0]).toMatchObject({ installmentId: expect.any(Number), customerId: expect.any(Number), amount: expect.stringMatching(/^\d+\.\d{2}$/), dueDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
   });
+
+  // M-QA-05: estoque opcional da bateria (60 UH x 52 cotas). Só prepara estoque e política; cadastro, check-in e venda ficam para a interface.
+  it("M-QA-05: estoque de 60 UH x 52 cotas, tudo disponível, nenhum cliente criado, e rodar de novo não duplica", async () => {
+    const qaProject = `SYN QA bateria ${runId}`;
+    const run = () => spawnSync(process.execPath, ["scripts/pilot-seed-sala.mjs", "--project-name", qaProject, "--units", "60", "--quotas", "52"], {
+      cwd: process.cwd(), encoding: "utf8", timeout: 120_000, env: { ...process.env, DATABASE_URL: integrationUrl },
+    });
+    const first = run();
+    expect(first.status).toBe(0);
+    expect(JSON.parse(first.stdout)).toMatchObject({ project: qaProject, units: 60, fractions: 3120, available: 3120, saleTermsPolicies: 1 });
+    const again = run();
+    expect(again.status).toBe(0);
+    expect(JSON.parse(again.stdout)).toMatchObject({ units: 60, fractions: 3120, available: 3120, saleTermsPolicies: 1 });
+  });
 });
