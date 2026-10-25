@@ -2,7 +2,7 @@
  * CRM-D1: indicadores OFICIAIS do CRM (provisórios, editáveis por admin).
  * aproveitamento = vendas validadas / atendimentos; eficiência = cotas vendidas por 100 atendimentos.
  * Numeradores só do CRM (venda validada = sale_validations.validatedAt, contrato não cancelado; nunca stage "won" manual).
- * Denominador (padrão, recomendação 14/10 e 20/10, aceite pendente de ratificação do Lucas): atendimentos INICIADOS (check-in no período), inclusive em andamento; configurável.
+ * Denominador (decisão do Lucas, 25/10, 6B): atendimento com check-in no período E desfecho registrado; ainda na mesa, sem desfecho, fica fora do dia e entra quando tiver desfecho. Configurável pelo admin (provisório).
  * Coorte pelo dia de início do atendimento no fuso do projeto; o resultado da sala (VENDEU, CAIU EM MESA, NT) nunca é venda validada.
  */
 export const OFFICIAL_INDICATORS_DEFINITION_VERSION = "provisorio-1";

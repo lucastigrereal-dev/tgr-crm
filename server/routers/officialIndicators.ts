@@ -21,8 +21,8 @@ const range = z.object({ from: realDay, to: realDay, resortId: z.number().int().
 async function requireDb() { const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." }); return db; }
 async function includeInProgress(db: Awaited<ReturnType<typeof requireDb>>) {
   const [row] = await db.select().from(captureSheetSettings).where(eq(captureSheetSettings.key, INCLUDE_IN_PROGRESS_KEY)).limit(1);
-  // Sem registro = padrão recomendado (iniciados, inclusive em andamento); só um "0" gravado pelo admin tira o em andamento.
-  return row ? row.value === "1" : true;
+  // Decisão do Lucas (25/10, 6B): atendimento ainda na mesa, sem desfecho, NÃO conta no aproveitamento do dia. Sem registro = fora; só um "1" gravado pelo admin o inclui.
+  return row?.value === "1";
 }
 
 function requireCatalogFlag() {
@@ -140,7 +140,7 @@ export const officialIndicatorsRouter = router({
       cohort: { basisCode: "check_in_start", basis: "dia de início do atendimento (check-in) no fuso do projeto", timezone: tz, ...computeOfficialIndicators({ attendances: attendance.attendances, validatedSales: cohortSales, soldQuotas: cohortQuotas }) },
       outcomes,
       definitionVersion: OFFICIAL_INDICATORS_DEFINITION_VERSION, provisional: true,
-      denominator: { definition: "atendimentos iniciados: casal com check-in da recepção no período (dia civil no fuso do projeto); em andamento entra no padrão, e o admin pode tirá-lo (provisório, aceite pendente de ratificação do Lucas)", includeInProgress: withInProgress, inProgressExcluded: attendance.inProgressExcluded, inProgressTotal: attendance.inProgressTotal },
+      denominator: { definition: "atendimentos com desfecho: casal com check-in da recepção no período (dia civil no fuso do projeto) e desfecho registrado (VENDEU, CAIU EM MESA, NT, não comprou/ficha encerrada ou venda validada); em andamento só entra depois do desfecho (decisão do Lucas, 25/10)", includeInProgress: withInProgress, inProgressExcluded: attendance.inProgressExcluded, inProgressTotal: attendance.inProgressTotal },
       numerator: { definition: "venda validada pelo CRM (sale_validations.validatedAt) no período, contrato não cancelado; cota = fração vendida do contrato (mínimo 1 por venda)", manualWonIgnored: true },
       range: { from: input.from, to: input.to },
     };
