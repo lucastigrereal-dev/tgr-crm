@@ -118,6 +118,22 @@ describe.skipIf(!integrationUrl)("entrega de não-comprador ao Recovery em MySQL
     expect(hits).toHaveLength(0);
   });
 
+  it("M-A02-03 (lado CRM): opt-out recebido do Recovery pelo receptor real cancela o elegível pendente, persiste e resiste a reenvio do elegível antigo", async () => {
+    const c = await couple();
+    await reevaluate(c.captureId); // elegível pendente na fila
+    const { recordRecoveryOptOut } = await import("./recoveryOptOutReceiver");
+    const optOut = { eventId: `syn-recovery-optout-${c.captureId}-${runId}`, coupleCode: c.code, optedOutAt: new Date().toISOString(), source: "recovery" as const };
+    expect(await recordRecoveryOptOut(db as never, optOut)).toMatchObject({ replay: false, customerId: c.customerId });
+    expect(await recordRecoveryOptOut(db as never, optOut)).toMatchObject({ replay: true }); // replay não duplica
+    expect(await run()).toMatchObject({ delivered: 0, suppressed: 1 });
+    expect(hits).toHaveLength(0);
+    expect(await rowOf(`crm-nb-${c.captureId}-eligible-1`)).toMatchObject({ status: "suppressed", reason: "revalidated_ineligible" });
+    const optouts = await db.select().from(customerContactOptouts).where(eq(customerContactOptouts.customerId, c.customerId));
+    expect(optouts).toHaveLength(1);
+    await run(); // rodadas seguintes: o elegível antigo nunca sai
+    expect(hits).toHaveLength(0);
+  });
+
   it("REVALIDAÇÃO NA ENTREGA: opt-out gravado depois do evento e antes do envio => NÃO envia, suprime e o revogado também não vai (nunca foi entregue)", async () => {
     const c = await couple();
     await reevaluate(c.captureId); // eligible 1 gravado
