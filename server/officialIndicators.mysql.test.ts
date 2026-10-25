@@ -160,4 +160,24 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     expect(await query(resortId)).toMatchObject({ attendances: 1 });
     expect(await (await caller()).get({ from: "2026-11-01", to: "2026-11-30", resortId })).toMatchObject({ attendances: 1 });
   });
+
+  it("M-A07-05 / QA-02, QA-04: 5 vendas com 8 cotas (1+2+1+3+1); depois do cancelamento do grupo de 2 e do distrato do grupo de 3 ficam 3 grupos ativos e 5 cotas encerradas", async () => {
+    const resortId = await newResort("I");
+    for (let i = 0; i < 5; i += 1) await attend(resortId, { customerId: (await db.insert(customers).values({ fullName: `SYN OI I${i} ${runId}`, email: `syn.oi.i${i}.${runId}@example.test`, status: "active" }).$returningId())[0]!.id });
+    const contractIds: number[] = [];
+    for (const [i, quotas] of [1, 2, 1, 3, 1].entries()) contractIds.push(await validatedSale(resortId, `I${i}`, quotas, day(12)));
+    // Vínculo venda → contrato → frações: a venda é o contrato, e cada contrato carrega as suas cotas (não se soma 8 vendas).
+    for (const [i, id] of contractIds.entries()) {
+      const rows = await db.select().from(commercialFractions).where(eq(commercialFractions.currentContractId, id));
+      expect(rows.length).toBe([1, 2, 1, 3, 1][i]);
+    }
+    expect(await query(resortId)).toMatchObject({ validatedSales: 5, soldQuotas: 8 });
+    // Cancelamento do grupo de 2 e distrato executado do grupo de 3: contratos cancelados saem; no distrato executado as cotas voltam ao estoque.
+    await db.update(contracts).set({ status: "cancelled" } as never).where(eq(contracts.id, contractIds[1]!));
+    await db.update(contracts).set({ status: "cancelled" } as never).where(eq(contracts.id, contractIds[3]!));
+    await db.update(commercialFractions).set({ status: "available", currentContractId: null } as never).where(eq(commercialFractions.currentContractId, contractIds[3]!));
+    const after = await query(resortId);
+    expect(after).toMatchObject({ validatedSales: 3, soldQuotas: 3 }); // 3 grupos ativos de 1 cota; 2 + 3 = 5 cotas encerradas
+    expect(8 - after.soldQuotas).toBe(5);
+  });
 });
