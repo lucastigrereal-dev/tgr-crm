@@ -21,3 +21,13 @@ Estado: provado no container contra o código do CRM (SEM CI DO GITHUB). O lado 
 ## Prova
 
 `server/installmentSettlementOutbox.mysql.test.ts`: comprovante não liquida; 4 baixas simultâneas = 1 lançamento e 1 evento; reprocesso dos fatos 3× não duplica.
+
+## Comissão: versão da política, centavos e vigência (M-A08-02, D2=B)
+
+- **Quem calcula:** o CRM. O Financial só registra `commission.created` como recebido e não recalcula nada.
+- **Qual versão vale:** a política em vigor na data do VENDEU (`commissionPolicyAnchor`: `commercialOutcomeAt` da ficha; sem VENDEU, a criação do contrato). Não é a data da parcela paga, nem a da validação, nem `now`. Isso vale também para o cancelamento de comissão já paga.
+- **Pagamento:** a versão não autoriza pagar. Segue exigindo validação oficial do adm e entrada inteira.
+- **Payload:** `commission.created` ganhou o campo OPCIONAL `policyVersion` (código da versão, ou `"legacy"` para a configuração antiga do empreendimento). Comissão manual não envia o campo. Quem ignora campos desconhecidos continua funcionando.
+- **Centavos:** o valor é calculado e arredondado em centavos inteiros, metade para cima (`toCents`, com `toPrecision(15)` para tirar o ruído de float: `1.005` vira 1,01). O payload sempre traz `amount` com no máximo 2 casas.
+- **Vigência:** uma versão de comissão nunca é editada (só aposentada). Uma versão nova tem de começar DEPOIS de toda versão de comissão ainda aberta do empreendimento; empate ou data anterior é recusado (`CONFLICT`). A vigência retroativa continua recusada.
+- **Taxas:** vêm só da política versionada do empreendimento (padrão 0%, sem taxa fixa no código). O 16,5% da comercializadora (Five) é configuração a ratificar e não gera lançamento.

@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { captureRecords, commercialPolicyVersions, commercialProjectSettings, contractDocuments, contracts, customers, installments, opportunities, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
+import { captureRecords, commercialPolicyVersions, commercialProjectSettings, contractDocuments, contracts, customers, domainEvents, installments, opportunities, proposals, resorts, salesCommissions, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // CRM-F1 + D2=B em MySQL real: a política de comissão é escolhida por vigência (data do VENDEU, o fato original; não a da parcela paga nem a de hoje), atrás de flag; legado intacto com a flag desligada. Dados SYN-.
@@ -66,6 +66,34 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       expect(await resolve(resort, "2026-03-01T00:00:00Z")).toMatchObject({ policy: null, version: "quebrada", source: "versioned" });
     });
 
+    it("M-A08-02: janela sobreposta é recusada; versão posterior à última passa; aposentada libera a data", async () => {
+      const resort = await newResort("overlap", null);
+      const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const day = 86_400_000;
+      const t1 = new Date(Date.now() + 10 * day);
+      const first = await api.create({ resortId: resort, policyType: "commission", version: "ov-1", policy: JSON.parse(policy(0.02)), effectiveAt: t1 } as never);
+      // mesma data, ou data anterior à última versão aberta: ambíguo, recusa
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "ov-2", policy: JSON.parse(policy(0.03)), effectiveAt: t1 } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "ov-3", policy: JSON.parse(policy(0.03)), effectiveAt: new Date(t1.getTime() - day) } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      // depois da última versão: ok (a nova sucede a anterior na data dela)
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "ov-4", policy: JSON.parse(policy(0.03)), effectiveAt: new Date(t1.getTime() + day) } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+      // outro empreendimento não é afetado; versão aposentada deixa de contar
+      const other = await newResort("overlap2", null);
+      const keep = await api.create({ resortId: other, policyType: "commission", version: "ov-1", policy: JSON.parse(policy(0.02)), effectiveAt: t1 } as never);
+      await expect(api.create({ resortId: other, policyType: "commission", version: "ov-1b", policy: JSON.parse(policy(0.04)), effectiveAt: t1 } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      await api.retire({ id: keep.id } as never);
+      await expect(api.create({ resortId: other, policyType: "commission", version: "ov-1b", policy: JSON.parse(policy(0.04)), effectiveAt: t1 } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+    });
+
+    it("M-A08-02 (Codex P2): dois admins criando a mesma vigência ao mesmo tempo, só um passa", async () => {
+      const resort = await newResort("overlap-race", null);
+      const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const at = new Date(Date.now() + 5 * 86_400_000);
+      const results = await Promise.allSettled(["race-a", "race-b", "race-c", "race-d"].map(version => api.create({ resortId: resort, policyType: "commission", version, policy: JSON.parse(policy(0.02)), effectiveAt: at } as never)));
+      expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+      results.filter(result => result.status === "rejected").forEach(result => expect((result as PromiseRejectedResult).reason).toMatchObject({ code: "CONFLICT" }));
+    });
+
     it("Opus: vigência retroativa é recusada para commission e stock_hold; futura e atual passam", async () => {
       const resort = await newResort("retro", null);
       const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
@@ -86,8 +114,9 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
     it("Opus: commercialPolicies.create MATERIALIZA releaseOn=entry_total no JSON gravado (full_upfront sem releaseOn); explícito e per_installment ficam como estão", async () => {
       const resort = await newResort("materializa", null);
       const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      let step = 0; // vigências nunca se sobrepõem (M-A08-02): cada versão começa depois da anterior
       const stored = async (version: string, extra: object) => {
-        const { id } = await api.create({ resortId: resort, policyType: "commission", version, policy: { ...JSON.parse(policy(0.02)), ...extra } } as never);
+        const { id } = await api.create({ resortId: resort, policyType: "commission", version, policy: { ...JSON.parse(policy(0.02)), ...extra }, effectiveAt: new Date(Date.now() + 3_600_000 * ++step) } as never);
         return JSON.parse((await db.select().from(commercialPolicyVersions).where(eq(commercialPolicyVersions.id, id)))[0]!.policyJson);
       };
       expect((await stored("m-sem", {})).payoutSchedule).toEqual({ mode: "full_upfront", releaseOn: "entry_total" });
@@ -116,6 +145,15 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       const rows = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract));
       expect(rows.length).toBeGreaterThan(0);
       expect(rows.every(row => row.policyVersion === "vigente-f1")).toBe(true);
+      // M-A08-02: o evento leva a versão (campo opcional) e aposentar a versão depois NÃO mexe no que já foi lançado.
+      const events = await db.select().from(domainEvents).where(and(eq(domainEvents.eventName, "commission.created"), inArray(domainEvents.aggregateId, rows.map(row => row.id))));
+      expect(events).toHaveLength(rows.length);
+      events.forEach(event => expect(JSON.parse(String(event.payload))).toMatchObject({ policyVersion: "vigente-f1" }));
+      const policiesApi = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const [version] = await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, resort), eq(commercialPolicyVersions.version, "vigente-f1")));
+      await policiesApi.retire({ id: version!.id } as never);
+      const after = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contract));
+      expect(after.map(row => [row.id, row.policyVersion, row.amount, row.rate, row.status])).toEqual(rows.map(row => [row.id, row.policyVersion, row.amount, row.rate, row.status]));
     });
 
     async function seedPaid(label: string, resort: number, paidAts: string[], vendeuAt?: string) {

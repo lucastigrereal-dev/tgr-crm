@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { borderoSummary, commissionAssignments, commissionDates, commissionStatus, releasedCommission, totalCommission } from "./commissionLifecycle";
+import { borderoSummary, commissionAssignments, commissionDates, commissionStatus, releasedCommission, roundMoney, toCents, totalCommission } from "./commissionLifecycle";
 
 describe("commission lifecycle", () => {
   it("calcula regra por papel e libera a comissão na proporção da entrada", () => { expect(totalCommission(100_000, "liner", 0.0191)).toBe(1910); expect(totalCommission(100_000, "closer", 0.0151)).toBe(1510); expect(totalCommission(100_000, "ftb", 0.0342)).toBe(3420); expect(releasedCommission(2_000, 8_000, 1_000)).toBe(250); });
@@ -27,5 +27,43 @@ describe("issue #38 (1): proração com teto", () => {
   });
   it("sem acumulado informado mantém o comportamento antigo", () => {
     expect(releasedCommission(2_000, 8_000, 1_000)).toBe(250);
+  });
+});
+
+describe("M-A08-02: arredondamento em centavos", () => {
+  it("metade para cima em centavos inteiros, sem o ruído de float", () => {
+    expect(toCents(1.005)).toBe(101); // 1.005 * 100 = 100.49999999999999 em float
+    expect(toCents(0.1 + 0.2)).toBe(30);
+    expect(roundMoney(1000.01 * 0.1)).toBe(100);
+    expect(roundMoney(1000.01 * 0.15)).toBe(150);
+    expect(roundMoney(2.675)).toBe(2.68);
+    expect(roundMoney(0)).toBe(0);
+  });
+  it("proporção da entrada nunca passa do total devido, com centavos exatos", () => {
+    const total = roundMoney(1000.01 * 0.1);
+    const parts = [333.33, 333.33, 333.34].map(amount => releasedCommission(amount, 1000, total, 0));
+    parts.forEach(v => expect(toCents(v) / 100).toBe(v));
+  });
+});
+
+describe("M-A08-02: o arredondamento novo não muda valores que já fechavam", () => {
+  it("em grade de bases de 2 casas e taxas usuais, só difere do cálculo antigo onde o antigo errava a metade do centavo", () => {
+    const oldRound = (v: number) => Math.round(v * 100) / 100;
+    const rates = [0.01, 0.02, 0.05, 0.1, 0.15, 0.165, 0.0191];
+    let compared = 0; const changed: { base: number; rate: number; before: number; after: number }[] = [];
+    for (let baseCents = 100; baseCents <= 2_000_000; baseCents += 997) {
+      const base = baseCents / 100;
+      for (const rate of rates) {
+        compared += 1;
+        const before = oldRound(base * rate), after = roundMoney(base * rate);
+        if (before !== after) changed.push({ base, rate, before, after });
+        // o novo é sempre o centavo mais próximo do valor exato
+        expect(Math.abs(after - base * rate)).toBeLessThanOrEqual(0.0050001);
+      }
+    }
+    expect(compared).toBeGreaterThan(10_000);
+    // Quando difere, é exatamente 1 centavo (meio centavo que o float antigo arredondava para baixo).
+    changed.forEach(row => expect(Number((row.after - row.before).toFixed(2))).toBe(0.01));
+    console.info(`M-A08-02 grade: ${compared} casos, ${changed.length} mudam`, JSON.stringify(changed.slice(0, 5)));
   });
 });

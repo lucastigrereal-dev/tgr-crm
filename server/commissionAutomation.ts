@@ -3,6 +3,7 @@ import {
   commissionDates,
   commissionStatus,
   releasedCommission,
+  roundMoney,
   type PaymentMethod,
 } from "./commissionLifecycle";
 
@@ -52,7 +53,7 @@ export function buildInstallmentCommissions(input: {
 
   const rows = payable.map((assignee) => {
     const rate = rateOf(assignee.role);
-    const total = Math.round(base * rate * 100) / 100;
+    const total = roundMoney(base * rate);
     const amount = releasedCommission(
       input.installmentAmount,
       input.entryTotal,

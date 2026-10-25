@@ -165,7 +165,7 @@ export async function recordZeroRateSkip(tx: Tx, input: { installmentId: number;
 async function recordCreatedCommissions(tx: Tx, facts: Awaited<ReturnType<typeof insertInstallmentCommissions>>, actorUserId: number | null, summarySuffix: string) {
   for (const commission of facts) {
     await txAudit(tx, { actorUserId, entityType: "sales_commission", entityId: commission.id, action: "created", summary: `Comissão automática ${commission.commissionRole} de ${commission.amount.toFixed(2)} criada ${summarySuffix}.`, idempotencyKey: `commission-created:${commission.id}` });
-    await txEvent(tx, { eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate }, idempotencyKey: `commission-created:${commission.id}` });
+    await txEvent(tx, { eventName: "commission.created", aggregateType: "sales_commission", aggregateId: commission.id, actorUserId, payload: { sellerId: commission.sellerId, campaignId: commission.campaignId, opportunityId: commission.opportunityId, contractId: commission.contractId, sourceInstallmentId: commission.sourceInstallmentId, commissionRole: commission.commissionRole, amount: commission.amount, rate: commission.rate, ...(commission.policyVersion ? { policyVersion: commission.policyVersion } : {}) }, idempotencyKey: `commission-created:${commission.id}` });
   }
 }
 

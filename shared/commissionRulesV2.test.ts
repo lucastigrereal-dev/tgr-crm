@@ -54,3 +54,13 @@ describe("regras de comissão V2 (rascunho da Five)", () => {
     }
   });
 });
+
+describe("M-A08-02: valores do captador vêm da política, nunca de literal no código", () => {
+  it("trocar o valor na política muda o valor pago", () => {
+    const rules = (amountCents: number) => ({ schema: "tgr.commission-rules.v2", machineFeeBps: 0, roles: { captador: { kind: "fixed_per_quota", amountCents } } });
+    const sale = { quotas: 3, entryCents: 100_000 };
+    const line = (amountCents: number) => computeCommissionV2(rules(amountCents), sale).lines.find(l => l.role === "captador")?.amountCents;
+    expect(line(40_000)).toBe(120_000);
+    expect(line(50_000)).toBe(150_000);
+  });
+});

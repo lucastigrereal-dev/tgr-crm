@@ -10,7 +10,7 @@ function context(): TrpcContext {
 }
 function chain<T>(value: T) {
   const promise = Promise.resolve(value) as Promise<T> & Record<string, () => unknown>;
-  promise.from = () => promise; promise.where = () => promise; promise.orderBy = () => promise; promise.limit = () => promise;
+  promise.from = () => promise; promise.where = () => promise; promise.orderBy = () => promise; promise.limit = () => promise; promise.for = () => promise;
   return promise;
 }
 
@@ -27,7 +27,8 @@ describe("commercial policies router", () => {
       return [{ id: 12 }];
     });
     const values = vi.fn(() => ({ $returningId: returning }));
-    return { db: { select, insert: vi.fn(() => ({ values })) }, values };
+    const db = { select, insert: vi.fn(() => ({ values })), transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)) };
+    return { db, values };
   }
 
   it("lista política vigente e cria versão com auditoria", async () => {
@@ -37,7 +38,8 @@ describe("commercial policies router", () => {
       .mockImplementationOnce(() => chain([]));
     const returning = vi.fn().mockResolvedValue([{ id: 12 }]);
     const values = vi.fn(() => ({ $returningId: returning }));
-    dbMocks.getDb.mockResolvedValue({ select, insert: vi.fn(() => ({ values })) });
+    const dbObj = { select, insert: vi.fn(() => ({ values })), transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbObj)) };
+    dbMocks.getDb.mockResolvedValue(dbObj);
     const caller = appRouter.createCaller(context());
     const rows = await caller.commercialPolicies.list({ resortId: 2, policyType: "commission" });
     const created = await caller.commercialPolicies.create({ resortId: 2, policyType: "revenue_quality", version: "v1", policy: { maturityDays: 90 } });
@@ -56,7 +58,7 @@ describe("commercial policies router", () => {
   });
 
   it("rejeita versão duplicada antes do insert", async () => {
-    const fixture = createDb([[{ id: 2 }], [{ id: 15 }]]);
+    const fixture = createDb([[{ id: 2 }], [{ id: 2 }], [], [{ id: 15 }]]);
     dbMocks.getDb.mockResolvedValue(fixture.db);
     await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: validCommission })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(fixture.values).not.toHaveBeenCalled();
@@ -64,7 +66,7 @@ describe("commercial policies router", () => {
   });
 
   it("normaliza corrida da unique key da versão como conflito", async () => {
-    const fixture = createDb([[{ id: 2 }], []], { code: "ER_DUP_ENTRY", errno: 1062 });
+    const fixture = createDb([[{ id: 2 }], [{ id: 2 }], [], []], { code: "ER_DUP_ENTRY", errno: 1062 });
     dbMocks.getDb.mockResolvedValue(fixture.db);
     await expect(appRouter.createCaller(context()).commercialPolicies.create({ resortId: 2, policyType: "commission", version: "v1", policy: validCommission })).rejects.toMatchObject({ code: "CONFLICT" });
     expect(dbMocks.recordAudit).not.toHaveBeenCalled();

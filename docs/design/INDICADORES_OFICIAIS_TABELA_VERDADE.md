@@ -18,5 +18,7 @@ Duas dimensões, nunca misturadas:
 | Venda validada pelo CRM (contrato não cancelado) | sim | sim | Numerador = `sale_validations.validatedAt` |
 | Contrato cancelado / distratado | n/a | sai do numerador | Cotas voltam só no distrato executado |
 
+Observação: uma venda validada sem desfecho de sala conta no denominador (assim o aproveitamento nunca passa de 100%), mas aparece como `emAndamento` na quebra por desfecho. A diferença é intencional desde o #130.
+
 Numerador e cotas: 5 VENDEU de sala podem ser 8 cotas; vendas = contratos validados, nunca cotas nem resultados de sala.
 Período e fuso: dia civil do check-in no fuso do projeto (`FINANCIAL_PROJECT_TIMEZONE`, padrão America/Recife; sem horário de verão, igual a America/Fortaleza). Resposta traz `cohort` (por início do atendimento) e as colunas por data da validação lado a lado.
