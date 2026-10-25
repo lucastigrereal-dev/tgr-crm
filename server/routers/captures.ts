@@ -40,6 +40,17 @@ async function findCaptureCreateReplay(db: NonNullable<Awaited<ReturnType<typeof
   try { const parsed = JSON.parse(row.summary) as CaptureCreateResult; return typeof parsed.captureId === "number" ? { ...parsed, replayed: true } : null; } catch { return null; }
 }
 
+/** Campos que atribuem comissão ou julgamento comercial: a recepção (service) não os define na ficha. */
+export function receptionCreateViolation(input: { promoterId?: number | null; qualifierId?: number | null; campaignId?: number | null; qualificationStatus?: string; createOpportunity?: boolean }) {
+  const blocked: string[] = [];
+  if (input.promoterId != null) blocked.push("captador");
+  if (input.qualifierId != null) blocked.push("qualificador");
+  if (input.campaignId != null) blocked.push("campanha");
+  if (input.qualificationStatus && input.qualificationStatus !== "pending") blocked.push("qualificação");
+  if (input.createOpportunity === true) blocked.push("abrir oportunidade");
+  return blocked.length ? `A recepção só registra o casal; ${blocked.join(", ")} é definido pela sala de vendas.` : null;
+}
+
 const captureInput = z.object({
   clientRequestId: z.string().uuid().optional(),
   customerId: z.number().int().positive().optional(),
@@ -100,7 +111,8 @@ const captureInput = z.object({
   socialNetworks: optionalText,
   giftDescription: optionalShort,
   notes: optionalText,
-  createOpportunity: z.boolean().default(true),
+  // Omitido: a sala abre oportunidade (como sempre); a recepção, nunca (ver `receptionCreateViolation`).
+  createOpportunity: z.boolean().optional(),
 }).refine(input => Boolean(input.customerId || input.customer), { message: "Informe um associado existente ou os dados do novo titular." });
 
 function nullIfBlank(value?: string | null) { return value?.trim() ? value.trim() : null; }
@@ -246,6 +258,11 @@ export const capturesRouter = router({
   visitRule: internalProcedure.query(() => ({ requireDateOrPasserby: isCaptureVisitRuleEnabled(), receptionCreate: isReceptionCaptureCreateEnabled() })),
 
   create: captureCreateProcedure.input(captureInput).mutation(async ({ ctx, input }) => {
+    // Decisão 25/10 (2B): a recepção só REGISTRA o casal. Quem ganha o captador (R$ por cota), a campanha e a qualificação, e se abre oportunidade, é a sala.
+    if (ctx.user.role === "service") {
+      const violation = receptionCreateViolation(input);
+      if (violation) throw new TRPCError({ code: "FORBIDDEN", message: violation });
+    }
     if (isCaptureVisitRuleEnabled()) {
       const violation = visitRuleViolation(input);
       if (violation) throw new TRPCError({ code: "BAD_REQUEST", message: violation });
@@ -300,7 +317,7 @@ export const capturesRouter = router({
       }
       if (!customerId) throw new TRPCError({ code: "BAD_REQUEST", message: "Associado inválido para captação." });
       let opportunityId: number | null = null;
-      if (input.createOpportunity) {
+      if (input.createOpportunity ?? ctx.user.role !== "service") {
         const opportunity = await tx.insert(opportunities).values({ customerId, sellerId: clean(input.closerId) ?? clean(input.linerId), campaignId: clean(input.campaignId), title: `Captação · ${customerName}`, stage: input.qualificationStatus === "qualified" ? "qualified" : "new", source: nullIfBlank(input.captureLocation) ?? "captação", expectedAmount: "0.00", probability: input.qualificationStatus === "qualified" ? 30 : 10 }).$returningId();
         opportunityId = opportunity[0]?.id ?? null;
         if (!opportunityId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar a oportunidade da captação." });
