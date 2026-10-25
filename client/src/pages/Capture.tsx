@@ -67,16 +67,17 @@ export default function Capture() {
   });
   const syncOffline = async () => {
     if (!navigator.onLine) return;
-    let synced = 0;
+    let synced = 0; let alreadySent = 0;
     // Sincroniza pelo cliente "puro" (sem o onSuccess do formulário): enviar fichas guardadas não pode apagar a ficha que o captador está digitando agora.
     for (const item of await listOfflineCaptures()) {
-      try { await markOfflineCaptureSyncing(item.id); await utils.client.captures.create.mutate({ ...item.payload, clientRequestId: item.id } as never); await removeOfflineCapture(item.id); synced += 1; }
+      try { await markOfflineCaptureSyncing(item.id); const sent = await utils.client.captures.create.mutate({ ...item.payload, clientRequestId: item.id } as never); await removeOfflineCapture(item.id); synced += 1; if ((sent as { replayed?: boolean }).replayed) alreadySent += 1; }
       catch (error) {
         if (isNetworkFailure(error)) { await markOfflineCapturePending(item.id); break; }
         await markOfflineCaptureFailed(item.id, error instanceof Error ? error.message : "Falha ao sincronizar");
       }
     }
     await refreshOfflineQueue();
+    if (alreadySent) toast.warning(`${alreadySent} ficha(s) já tinham sido enviadas antes (a resposta tinha se perdido). Se você corrigiu algo nelas offline, confira e edite a ficha no sistema.`);
     if (synced) { toast.success(`${synced} ficha(s) guardada(s) no aparelho foram enviadas.`); utils.captures.list.invalidate(); }
   };
   useEffect(() => { void refreshOfflineQueue(); const online = () => void syncOffline(); window.addEventListener("online", online); return () => window.removeEventListener("online", online); }, []);
@@ -86,7 +87,7 @@ export default function Capture() {
     // F1.6: com a regra ligada no servidor, ficha sem data de visita precisa estar marcada como passante (o servidor também confere).
     if (visitRule.data?.requireDateOrPasserby && !form.scheduledAt && !form.isPasserby) { toast.error("Informe a data da visita ou marque \"É passante\"."); return; }
     if (!navigator.onLine) { if (reviewingOfflineId) await updateOfflineCapture(reviewingOfflineId, currentPayload); else await enqueueOfflineCapture(currentPayload); await refreshOfflineQueue(); setReviewingOfflineId(null); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
-    if (reviewingOfflineId) { try { await create.mutateAsync({ ...currentPayload, clientRequestId: reviewingOfflineId } as never); await removeOfflineCapture(reviewingOfflineId); await refreshOfflineQueue(); setReviewingOfflineId(null); } catch (error) { await markOfflineCaptureFailed(reviewingOfflineId, error instanceof Error ? error.message : "Falha ao reenviar ficha revisada"); await refreshOfflineQueue(); } return; }
+    if (reviewingOfflineId) { try { const sent = await create.mutateAsync({ ...currentPayload, clientRequestId: reviewingOfflineId } as never); if ((sent as { replayed?: boolean }).replayed) toast.warning("Esta ficha já tinha sido enviada antes: a correção não foi aplicada. Abra a ficha no sistema e edite lá."); await removeOfflineCapture(reviewingOfflineId); await refreshOfflineQueue(); setReviewingOfflineId(null); } catch (error) { await markOfflineCaptureFailed(reviewingOfflineId, error instanceof Error ? error.message : "Falha ao reenviar ficha revisada"); await refreshOfflineQueue(); } return; }
     create.mutate({ ...currentPayload, clientRequestId: requestIdRef.current } as never);
   };
   const reviewOffline = (item: CaptureOfflineItem) => {

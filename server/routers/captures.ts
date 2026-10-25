@@ -32,10 +32,12 @@ const optionalShort = z.string().trim().max(255).optional().nullable();
  */
 const captureCreateKey = (clientRequestId: string) => `capture-create:${clientRequestId.toLowerCase()}`;
 type CaptureCreateResult = { captureId: number; customerId: number; opportunityId: number | null; taskId: number | null };
-async function findCaptureCreateReplay(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, key: string): Promise<CaptureCreateResult | null> {
-  const [row] = await db.select({ entityId: auditLogs.entityId, summary: auditLogs.summary }).from(auditLogs).where(eq(auditLogs.idempotencyKey, key)).limit(1);
+async function findCaptureCreateReplay(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, key: string, actorUserId: number): Promise<(CaptureCreateResult & { replayed: true }) | null> {
+  const [row] = await db.select({ actorUserId: auditLogs.actorUserId, summary: auditLogs.summary }).from(auditLogs).where(eq(auditLogs.idempotencyKey, key)).limit(1);
   if (!row?.summary) return null;
-  try { const parsed = JSON.parse(row.summary) as CaptureCreateResult; return typeof parsed.captureId === "number" ? parsed : null; } catch { return null; }
+  // O UUID é do aparelho de quem digitou a ficha: outro usuário com o mesmo id não recebe os ids da ficha alheia.
+  if (row.actorUserId !== actorUserId) throw new TRPCError({ code: "CONFLICT", message: "Esta ficha já foi enviada por outro usuário." });
+  try { const parsed = JSON.parse(row.summary) as CaptureCreateResult; return typeof parsed.captureId === "number" ? { ...parsed, replayed: true } : null; } catch { return null; }
 }
 
 const captureInput = z.object({
@@ -251,7 +253,7 @@ export const capturesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
     const idempotencyKey = input.clientRequestId ? captureCreateKey(input.clientRequestId) : null;
-    if (idempotencyKey) { const replay = await findCaptureCreateReplay(db, idempotencyKey); if (replay) return replay; }
+    if (idempotencyKey) { const replay = await findCaptureCreateReplay(db, idempotencyKey, ctx.user.id); if (replay) return replay; }
     let result: CaptureCreateResult & Record<string, unknown>;
     try { result = await db.transaction(async tx => {
       if (idempotencyKey) await tx.insert(auditLogs).values({ actorUserId: ctx.user.id, entityType: "capture", entityId: "pending", action: "create_idempotency", idempotencyKey });
@@ -328,7 +330,7 @@ export const capturesRouter = router({
       if (idempotencyKey) await tx.update(auditLogs).set({ entityId: String(captureId), summary: JSON.stringify(created) }).where(eq(auditLogs.idempotencyKey, idempotencyKey));
       return created;
     }); } catch (error) {
-      if (idempotencyKey && isDuplicateKeyError(error)) { const replay = await findCaptureCreateReplay(db, idempotencyKey); if (replay) return replay; }
+      if (idempotencyKey && isDuplicateKeyError(error)) { const replay = await findCaptureCreateReplay(db, idempotencyKey, ctx.user.id); if (replay) return replay; }
       throw error;
     }
     await recordAudit(ctx.user.id, "capture", result.captureId, "created", `Ficha de captação criada para associado ${result.customerId}.`);

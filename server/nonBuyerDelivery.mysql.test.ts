@@ -293,6 +293,23 @@ describe.skipIf(!integrationUrl)("entrega de não-comprador ao Recovery em MySQL
     expect(hits).toHaveLength(0);
   });
 
+  it("M-A02-07 P2: REVOGADO nunca vira dead; passado o teto segue pendente no backoff e o alerta sai UMA vez", async () => {
+    const a = await couple();
+    await reevaluate(a.captureId);
+    await run(); // elegível entregue
+    await db.insert(customerContactOptouts).values({ customerId: a.customerId, coupleCode: a.code, optedOutAt: new Date(), source: "recovery", eventId: `syn-stuck-${a.captureId}-${runId}` });
+    await reevaluate(a.captureId); // revoked 2 (opt_out)
+    respond = () => ({ status: 503, json: {} });
+    let clock = Date.now();
+    const tick = () => { clock += 3_600_000; return new Date(clock); };
+    for (let i = 0; i < 6; i++) expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ dead: 0 });
+    expect(await rowOf(`crm-nb-${a.captureId}-revoked-2`)).toMatchObject({ status: "pending", attempts: 6 });
+    const alerts = await db.select().from(auditLogs).where(and(eq(auditLogs.action, "non_buyer_revocation_stuck"), eq(auditLogs.entityId, `crm-nb-${a.captureId}-revoked-2`)));
+    expect(alerts).toHaveLength(1);
+    respond = () => ({ status: 201 });
+    expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ delivered: 1 }); // quando o Recovery volta, a revogação vai
+  });
+
   it("sem coupleCode ou sem projeto não envia (espera, com backoff) e não vaza nada", async () => {
     const noCode = await couple({ coupleCode: null });
     const noProject = await couple({ resortId: null });

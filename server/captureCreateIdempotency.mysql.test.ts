@@ -36,7 +36,7 @@ describe.skipIf(!integrationUrl)("criação idempotente da ficha (fila offline) 
     const clientRequestId = randomUUID();
     const first = await caller().captures.create({ ...payload("reenvio"), clientRequestId } as never);
     const again = await caller().captures.create({ ...payload("reenvio"), clientRequestId } as never);
-    expect(again).toEqual(first);
+    expect(again).toEqual({ ...first, replayed: true });
     expect(await capturesOf(first.customerId)).toHaveLength(1);
     const keyed = await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `capture-create:${clientRequestId}`));
     expect(keyed).toHaveLength(1);
@@ -69,6 +69,14 @@ describe.skipIf(!integrationUrl)("criação idempotente da ficha (fila offline) 
     expect(await db.select().from(auditLogs).where(eq(auditLogs.idempotencyKey, `capture-create:${clientRequestId}`))).toHaveLength(0);
     const fixed = await caller().captures.create({ ...payload("falha"), clientRequestId } as never);
     expect(fixed.captureId).toBeGreaterThan(0);
+  });
+
+  it("o replay é do DONO: outro usuário com o mesmo UUID recebe CONFLICT e não vê os ids da ficha alheia", async () => {
+    const clientRequestId = randomUUID();
+    await caller().captures.create({ ...payload("dono"), clientRequestId } as never);
+    const [{ id: otherId }] = await db.insert(users).values({ openId: `capidem2-${runId}`, name: "Outro captador", role: "seller" }).$returningId();
+    const other = appRouter.createCaller({ user: { id: otherId, role: "seller" } } as never);
+    await expect(other.captures.create({ ...payload("dono"), clientRequestId } as never)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
   it("clientRequestId que não é UUID é recusado (nada de chave livre)", async () => {

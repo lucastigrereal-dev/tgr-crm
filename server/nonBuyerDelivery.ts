@@ -20,7 +20,7 @@ type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
  * - REVALIDAÇÃO NA ENTREGA: logo antes de enviar "elegível", o predicado é recalculado; se o casal foi anonimizado, fez opt-out ou comprou entre a gravação e a entrega, NÃO envia, marca
  *   `suppressed` e a reavaliação emite o revogado correspondente.
  * - SÓ O ESTADO VIGENTE VALE: evento cujo `seq` ficou abaixo da projeção é `superseded` (o mais novo da ficha carrega a verdade). Revogado só é enviado se um elegível dessa ficha foi entregue.
- * - Falha (rede, 5xx, 401/403/404, 429) tenta de novo com backoff persistido, COM TETO de tentativas (NON_BUYER_DELIVERY_MAX_ATTEMPTS, padrão 30 ≈ 4h): esgotado vira `dead` (terminal, auditado em audit_logs
+ * - Falha (rede, 5xx, 401/403/404, 429) tenta de novo com backoff persistido, COM TETO de tentativas (NON_BUYER_DELIVERY_MAX_ATTEMPTS, padrão 30 ≈ 4h): esgotado vira `dead` só para o ELEGÍVEL (terminal, auditado em audit_logs
  *   `non_buyer_delivery_dead` + log de erro) e exige ação do operador; recusa 4xx com `code` (exceto 408/425/429) é terminal (`rejected`). Replay no Recovery é idempotente por eventId + chave de dedupe.
  * - Nada do corpo, do contato, da resposta ou do coupleCode vai a log: só eventId e status HTTP.
  */
@@ -115,7 +115,7 @@ export async function runNonBuyerDelivery(db: Db, config: DeliveryConfig): Promi
   const maxAttempts = config.maxAttempts ?? maxAttemptsFromEnv();
   const retry = async (row: Row, lease: Date, reason: string, httpStatus: number | null) => {
     const attempts = row.attempts + 1;
-    if (attempts >= maxAttempts) {
+    if (attempts >= maxAttempts && row.kind === "eligible") {
       // Teto esgotado: estado terminal visível (nunca reenvio infinito). A trilha de auditoria é o alerta para o operador.
       const dead = affected(await db.update(nonBuyerDeliveries).set({ status: "dead", attempts, reason: `DEAD_${reason}`.slice(0, 60), lastHttpStatus: httpStatus, nextAttemptAt: null }).where(owned(row, lease))) === 1;
       if (dead) {
@@ -124,6 +124,12 @@ export async function runNonBuyerDelivery(db: Db, config: DeliveryConfig): Promi
         await txAudit(db as never, { actorUserId: null, entityType: "non_buyer_delivery", entityId: row.eventId, action: "non_buyer_delivery_dead", summary: `Entrega ${row.eventId} esgotou ${attempts} tentativas (${reason}); ação do operador necessária.` }).catch(() => logger.error("Non-buyer delivery dead audit failed", { eventId: row.eventId }));
       }
       return;
+    }
+    // REVOGADO NUNCA MORRE: se ele virasse `dead` depois de um elegível entregue, o Recovery continuaria com o casal elegível (opt-out, exclusão LGPD = contato indevido).
+    // Passado o teto ele segue tentando no backoff máximo e o alerta sai UMA vez (auditoria idempotente + log).
+    if (attempts >= maxAttempts && row.kind === "revoked" && attempts === maxAttempts) {
+      logger.error("Non-buyer REVOCATION undelivered past retry cap; keeps retrying", { eventId: row.eventId, attempts, lastHttpStatus: httpStatus });
+      await txAudit(db as never, { actorUserId: null, entityType: "non_buyer_delivery", entityId: row.eventId, action: "non_buyer_revocation_stuck", summary: `Revogação ${row.eventId} não entregue após ${attempts} tentativas (${reason}); segue tentando. Ação do operador necessária.`, idempotencyKey: `nb-revocation-stuck:${row.eventId}` }).catch(() => logger.error("Non-buyer revocation alert audit failed", { eventId: row.eventId }));
     }
     const ok = affected(await db.update(nonBuyerDeliveries).set({ attempts, reason, lastHttpStatus: httpStatus, nextAttemptAt: new Date(now().getTime() + backoffMs(attempts)) }).where(owned(row, lease))) === 1;
     if (ok) out.retried++;
