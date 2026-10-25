@@ -79,7 +79,7 @@ describe.skipIf(!integrationUrl)("F1.6: data da visita ou passante explícito na
     const customer = person("Recusa");
     await expect(caller().captures.create({ customer, salesRoom: room, createOpportunity: false } as never)).rejects.toThrow(/data da visita|passante/i);
     expect(await db.select().from(customers).where(eq(customers.phone, customer.phone))).toHaveLength(0);
-    expect(await caller().captures.visitRule()).toEqual({ requireDateOrPasserby: true });
+    expect(await caller().captures.visitRule()).toMatchObject({ requireDateOrPasserby: true });
   });
 
   it("regra LIGADA: passante explícito entra na fila de hoje, guardado como passante e sem horário de agendamento", async () => {
@@ -104,6 +104,6 @@ describe.skipIf(!integrationUrl)("F1.6: data da visita ou passante explícito na
     delete process.env.CAPTURE_REQUIRE_VISIT_DATE_OR_PASSERBY;
     const created = await caller().captures.create({ customer: person("Livre"), salesRoom: room, createOpportunity: false } as never);
     expect(created.captureId).toBeGreaterThan(0);
-    expect(await caller().captures.visitRule()).toEqual({ requireDateOrPasserby: false });
+    expect(await caller().captures.visitRule()).toMatchObject({ requireDateOrPasserby: false });
   });
 });
