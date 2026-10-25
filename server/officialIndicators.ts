@@ -40,7 +40,7 @@ export function classifyOutcomes(facts: AttendanceFact[], from: Date, to: Date) 
     if (fact.commercialOutcome === "caiu_em_mesa") out.caiuEmMesa += 1;
     else if (fact.commercialOutcome === "vendeu") out.vendeu += 1;
     else if (fact.ntKind || fact.presentationStatus === "no_tour") out.naoTour += 1;
-    else if (fact.presentationStatus === "closed" || fact.hasValidatedSale) out.encerradoSemVenda += 1;
+    else if (fact.presentationStatus === "closed") out.encerradoSemVenda += 1; // só o estado de sala gravado: venda validada do CRM não reclassifica o desfecho da sala
     else out.emAndamento += 1;
   }
   return out;

@@ -180,4 +180,26 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     expect(after).toMatchObject({ validatedSales: 3, soldQuotas: 3 }); // 3 grupos ativos de 1 cota; 2 + 3 = 5 cotas encerradas
     expect(8 - after.soldQuotas).toBe(5);
   });
+
+  it("Codex P2 #130: check-in de outro empreendimento não leva a venda para outro mês de coorte", async () => {
+    const resortA = await newResort("J");
+    const resortB = await newResort("K");
+    const customer = customerOf.get(resortA)!;
+    await db.insert(captureRecords).values({ customerId: customer, resortId: resortA, checkedInAt: day(20), presentationStatus: "closed" } as never);
+    await db.insert(captureRecords).values({ customerId: customer, resortId: resortB, checkedInAt: new Date(Date.UTC(2026, 10, 5, 15, 0, 0)), presentationStatus: "closed" } as never);
+    const [c] = await db.insert(contracts).values({ number: `OI-J-${runId}`, customerId: customer, resortId: resortA, usageModel: "fixed_week", status: "active", totalAmount: "1000.00" } as never).$returningId();
+    await db.insert(saleValidations).values({ contractId: c.id, validatedAt: new Date(Date.UTC(2026, 10, 9, 15, 0, 0)) } as never);
+    const oct = async (resortId?: number) => (await caller()).get({ from: "2026-10-01", to: "2026-10-31", resortId });
+    const nov = async (resortId?: number) => (await caller()).get({ from: "2026-11-01", to: "2026-11-30", resortId });
+    expect((await oct(resortA)).cohort.validatedSales).toBe(1);
+    expect((await oct()).cohort.validatedSales).toBeGreaterThanOrEqual(1); // sem filtro a venda continua em outubro (empreendimento A)
+    expect((await nov(resortA)).cohort.validatedSales).toBe(0);
+  });
+
+  it("Codex P2 #130: venda validada sem resultado de sala não vira 'encerrado sem venda'", async () => {
+    const resortId = await newResort("L");
+    await db.insert(captureRecords).values({ customerId: customerOf.get(resortId)!, resortId, checkedInAt: day(10), presentationStatus: "presented" } as never);
+    await validatedSale(resortId, "L1", 1, day(12));
+    expect((await query(resortId)).outcomes).toMatchObject({ started: 1, encerradoSemVenda: 0, emAndamento: 1 });
+  });
 });

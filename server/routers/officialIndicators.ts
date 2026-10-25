@@ -112,17 +112,19 @@ export const officialIndicatorsRouter = router({
     // Coorte pelo início do atendimento: cada venda validada (qualquer data) cai no mês do check-in a que pertence, uma vez só.
     let cohortSales = 0, cohortQuotas = 0;
     if (customerIds.length) {
-      const allCheckIns = await db.select({ customerId: captureRecords.customerId, checkedInAt: captureRecords.checkedInAt }).from(captureRecords)
+      const allCheckIns = await db.select({ customerId: captureRecords.customerId, resortId: captureRecords.resortId, checkedInAt: captureRecords.checkedInAt }).from(captureRecords)
         .where(and(inArray(captureRecords.customerId, customerIds), isNotNull(captureRecords.checkedInAt), input.resortId ? eq(captureRecords.resortId, input.resortId) : undefined));
-      const checkInsByCustomer = new Map<number, Date[]>();
-      for (const row of allCheckIns) if (row.checkedInAt) checkInsByCustomer.set(row.customerId, [...(checkInsByCustomer.get(row.customerId) ?? []), row.checkedInAt]);
-      const cohortCandidates = await db.select({ contractId: saleValidations.contractId, customerId: contracts.customerId, validatedAt: saleValidations.validatedAt }).from(saleValidations)
+      const checkInsByCustomer = new Map<number, { at: Date; resortId: number | null }[]>();
+      for (const row of allCheckIns) if (row.checkedInAt) checkInsByCustomer.set(row.customerId, [...(checkInsByCustomer.get(row.customerId) ?? []), { at: row.checkedInAt, resortId: row.resortId ?? null }]);
+      const cohortCandidates = await db.select({ contractId: saleValidations.contractId, customerId: contracts.customerId, resortId: contracts.resortId, validatedAt: saleValidations.validatedAt }).from(saleValidations)
         .innerJoin(contracts, eq(contracts.id, saleValidations.contractId))
         .where(and(inArray(contracts.customerId, customerIds), isNotNull(saleValidations.validatedAt), ne(contracts.status, "cancelled"), input.resortId ? eq(contracts.resortId, input.resortId) : undefined)).limit(MAX_ROWS + 1);
       if (cohortCandidates.length > MAX_ROWS) throw new TRPCError({ code: "BAD_REQUEST", message: "Período grande demais; reduza o intervalo." });
       const cohortContractIds = new Set<number>();
       for (const row of cohortCandidates) {
-        const startedAt = row.validatedAt ? attributeSaleToCheckIn(checkInsByCustomer.get(row.customerId) ?? [], row.validatedAt) : null;
+        // Mesmo empreendimento: o check-in de outro empreendimento não pode levar a venda de um contrato para outro mês (com ou sem o filtro de projeto).
+        const sameResort = (checkInsByCustomer.get(row.customerId) ?? []).filter(item => row.resortId == null || item.resortId == null || item.resortId === row.resortId).map(item => item.at);
+        const startedAt = row.validatedAt ? attributeSaleToCheckIn(sameResort, row.validatedAt) : null;
         if (startedAt && startedAt >= from && startedAt < to) cohortContractIds.add(row.contractId);
       }
       cohortSales = cohortContractIds.size;
@@ -135,7 +137,7 @@ export const officialIndicatorsRouter = router({
     }
     return {
       ...computeOfficialIndicators({ attendances: attendance.attendances, validatedSales: contractIds.length, soldQuotas }),
-      cohort: { basis: "dia de início do atendimento (check-in) no fuso do projeto", timezone: tz, ...computeOfficialIndicators({ attendances: attendance.attendances, validatedSales: cohortSales, soldQuotas: cohortQuotas }) },
+      cohort: { basisCode: "check_in_start", basis: "dia de início do atendimento (check-in) no fuso do projeto", timezone: tz, ...computeOfficialIndicators({ attendances: attendance.attendances, validatedSales: cohortSales, soldQuotas: cohortQuotas }) },
       outcomes,
       definitionVersion: OFFICIAL_INDICATORS_DEFINITION_VERSION, provisional: true,
       denominator: { definition: "atendimentos iniciados: casal com check-in da recepção no período (dia civil no fuso do projeto); em andamento entra no padrão, e o admin pode tirá-lo (provisório, aceite pendente de ratificação do Lucas)", includeInProgress: withInProgress, inProgressExcluded: attendance.inProgressExcluded, inProgressTotal: attendance.inProgressTotal },
