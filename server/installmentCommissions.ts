@@ -10,7 +10,7 @@ import { resolveContractCommissionRoleMap } from "./commissionRoleMapSnapshot";
 import { computeCommissionV2, type CommissionRulesV2 } from "../shared/commissionRulesV2";
 import { DEFAULT_PAYOUT_MODE, DEFAULT_RELEASE_ON } from "../shared/projectPolicySchemas";
 import { buildInstallmentCommissions, buildInstallmentCommissionsV2, canCommissionBecomeDue, commissionRoleRate, entryInstallmentIds, isEntryFullyPaid, type CommissionRoleV2Mapped } from "./commissionAutomation";
-import { commissionAssignments, type PaymentMethod } from "./commissionLifecycle";
+import { commissionAssignments, roundMoney, type PaymentMethod } from "./commissionLifecycle";
 import type { getDb } from "./db";
 import type { parseCompleteCommissionPolicy } from "./projectPolicy";
 
@@ -77,7 +77,7 @@ export const normalizePaymentMethod = (raw: string | null | undefined): PaymentM
 /** Pagamento posterior ao da parcela de referência: (paidAt, id) maior. Sem paidAt (legado) conta como já pago. */
 const paidAfter = (row: { id: number; paidAt: Date | null }, referenceId: number, at: Date) => row.id !== referenceId && row.paidAt != null && (row.paidAt.getTime() > at.getTime() || (row.paidAt.getTime() === at.getTime() && row.id > referenceId));
 
-export type CreatedCommissionFact = { id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number };
+export type CreatedCommissionFact = { id: number; sellerId: number; campaignId: number | null; opportunityId: number | null; contractId: number; sourceInstallmentId: number; commissionRole: string; amount: number; rate: number; /** M-A08-02: versão da política (escolhida pela data do VENDEU) que originou o valor; "legacy" = configuração antiga do empreendimento. */ policyVersion?: string | null };
 
 export type InstallmentCommissionContext = {
   contract: { id: number; status: string; totalAmount: string | number };
@@ -110,7 +110,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   // Issue #38 (1): acumulado automático (de parcela, não cancelado; lançamentos manuais ficam de fora) por papel no contrato, para limitar a proração ao total devido.
   const alreadyReleased: Partial<Record<"liner" | "closer" | "ftb" | "promoter", number>> = {};
   const previous = await tx.select({ role: salesCommissions.commissionRole, amount: salesCommissions.amount, ruleVersion: salesCommissions.ruleVersion }).from(salesCommissions).where(and(eq(salesCommissions.contractId, installment.contractId), ne(salesCommissions.status, "cancelled"), isNotNull(salesCommissions.sourceInstallmentId))).orderBy(asc(salesCommissions.id));
-  previous.forEach(row => { alreadyReleased[row.role] = Math.round(((alreadyReleased[row.role] ?? 0) + Number(row.amount)) * 100) / 100; });
+  previous.forEach(row => { alreadyReleased[row.role] = roundMoney((alreadyReleased[row.role] ?? 0) + Number(row.amount)); });
   const calendar = { cancellationDeadlineDay: policy.cancellationDeadlineDay, expectedPaymentDay: policy.expectedPaymentDay };
   const entryTotal = Number(context.proposal.downPaymentAmount);
   const v2Rows = async () => {
@@ -163,7 +163,7 @@ export async function insertInstallmentCommissions(tx: CommissionWriter, input: 
   const values = rows.map(row => ({ ...row, ruleVersion: useV2 ? "v2" : "v1", policyVersion: commissionPolicyVersionOf(policy), contractId: installment.contractId, opportunityId: context.opportunity?.id ?? null, campaignId: context.capture?.campaignId ?? null, baseAmount: row.baseAmount.toFixed(2), rate: row.rate.toFixed(2), amount: row.amount.toFixed(2), lifecycleStatus: row.lifecycleStatus, paymentMethod: row.paymentMethod }));
   const inserted = await tx.insert(salesCommissions).values(values).$returningId();
   const facts: CreatedCommissionFact[] = [];
-  inserted.forEach((row, index) => { const value = values[index]; if (value && row?.id) facts.push({ id: row.id, sellerId: value.sellerId, campaignId: value.campaignId, opportunityId: value.opportunityId, contractId: value.contractId, sourceInstallmentId: value.sourceInstallmentId, commissionRole: value.commissionRole, amount: Number(value.amount), rate: Number(value.rate) });  });
+  inserted.forEach((row, index) => { const value = values[index]; if (value && row?.id) facts.push({ id: row.id, sellerId: value.sellerId, campaignId: value.campaignId, opportunityId: value.opportunityId, contractId: value.contractId, sourceInstallmentId: value.sourceInstallmentId, commissionRole: value.commissionRole, amount: Number(value.amount), rate: Number(value.rate), policyVersion: value.policyVersion ?? null });  });
   return facts;
 }
 

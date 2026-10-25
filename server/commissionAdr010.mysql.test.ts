@@ -99,6 +99,10 @@ describe.skipIf(!integrationUrl)("ADR-010 comissão 0% e fila de estorno em MySQ
     expect(await auditsFor("installment", installmentIds[0], "commission_skipped_reprocessed")).toHaveLength(1);
     for (const row of rows) {
       expect(await eventsFor("commission.created", row.id)).toHaveLength(1);
+      // M-A08-02: a versão da política (legado aqui) vai no evento, campo opcional; o valor segue com 2 casas exatas.
+      const payload = JSON.parse(String((await eventsFor("commission.created", row.id))[0].payload));
+      expect(payload).toMatchObject({ policyVersion: "legacy", amount: Number(row.amount) });
+      expect(Math.round(payload.amount * 100) / 100).toBe(payload.amount);
       expect(await auditsFor("sales_commission", row.id, "created")).toHaveLength(1);
     }
     expect(await auditsFor("contract", contractId, "commission_skipped_reprocess_run")).toHaveLength(2);

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { commercialPolicyVersions, resorts } from "../../drizzle/schema";
@@ -53,6 +53,12 @@ export const commercialPoliciesRouter = router({
     if (input.policyType === "sale_terms") {
       const parsed = saleTermsPolicySchema.safeParse(input.policy);
       if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: "Política de formalização inválida. Informe usageModel, balanceInstallmentCount e balanceCadenceMonths." });
+    }
+    if (input.policyType === "commission") {
+      // M-A08-02: janelas de vigência nunca se sobrepõem. A nova versão tem que começar DEPOIS de toda versão de comissão ainda aberta do empreendimento; empate ou inversão deixaria a versão do VENDEU ambígua.
+      const startsAt = input.effectiveAt ?? new Date();
+      const overlapping = (await db.select({ id: commercialPolicyVersions.id, version: commercialPolicyVersions.version }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, "commission"), isNull(commercialPolicyVersions.retiredAt), gte(commercialPolicyVersions.effectiveAt, startsAt))).limit(1))[0];
+      if (overlapping) throw new TRPCError({ code: "CONFLICT", message: `A vigência se sobrepõe à versão ${overlapping.version}. Use uma data posterior à dela ou aposente a versão antes.` });
     }
         const duplicate = (await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, input.policyType), eq(commercialPolicyVersions.version, input.version))).limit(1))[0];
     if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma versão com esse código para o empreendimento e tipo de política." });

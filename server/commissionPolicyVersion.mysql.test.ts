@@ -66,6 +66,25 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       expect(await resolve(resort, "2026-03-01T00:00:00Z")).toMatchObject({ policy: null, version: "quebrada", source: "versioned" });
     });
 
+    it("M-A08-02: janela sobreposta é recusada; versão posterior à última passa; aposentada libera a data", async () => {
+      const resort = await newResort("overlap", null);
+      const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const day = 86_400_000;
+      const t1 = new Date(Date.now() + 10 * day);
+      const first = await api.create({ resortId: resort, policyType: "commission", version: "ov-1", policy: JSON.parse(policy(0.02)), effectiveAt: t1 } as never);
+      // mesma data, ou data anterior à última versão aberta: ambíguo, recusa
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "ov-2", policy: JSON.parse(policy(0.03)), effectiveAt: t1 } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "ov-3", policy: JSON.parse(policy(0.03)), effectiveAt: new Date(t1.getTime() - day) } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      // depois da última versão: ok (a nova sucede a anterior na data dela)
+      await expect(api.create({ resortId: resort, policyType: "commission", version: "ov-4", policy: JSON.parse(policy(0.03)), effectiveAt: new Date(t1.getTime() + day) } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+      // outro empreendimento não é afetado; versão aposentada deixa de contar
+      const other = await newResort("overlap2", null);
+      const keep = await api.create({ resortId: other, policyType: "commission", version: "ov-1", policy: JSON.parse(policy(0.02)), effectiveAt: t1 } as never);
+      await expect(api.create({ resortId: other, policyType: "commission", version: "ov-1b", policy: JSON.parse(policy(0.04)), effectiveAt: t1 } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+      await api.retire({ id: keep.id } as never);
+      await expect(api.create({ resortId: other, policyType: "commission", version: "ov-1b", policy: JSON.parse(policy(0.04)), effectiveAt: t1 } as never)).resolves.toMatchObject({ id: expect.any(Number) });
+    });
+
     it("Opus: vigência retroativa é recusada para commission e stock_hold; futura e atual passam", async () => {
       const resort = await newResort("retro", null);
       const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);

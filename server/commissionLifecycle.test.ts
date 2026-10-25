@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { borderoSummary, commissionAssignments, commissionDates, commissionStatus, releasedCommission, totalCommission } from "./commissionLifecycle";
+import { borderoSummary, commissionAssignments, commissionDates, commissionStatus, releasedCommission, roundMoney, toCents, totalCommission } from "./commissionLifecycle";
 
 describe("commission lifecycle", () => {
   it("calcula regra por papel e libera a comissão na proporção da entrada", () => { expect(totalCommission(100_000, "liner", 0.0191)).toBe(1910); expect(totalCommission(100_000, "closer", 0.0151)).toBe(1510); expect(totalCommission(100_000, "ftb", 0.0342)).toBe(3420); expect(releasedCommission(2_000, 8_000, 1_000)).toBe(250); });
@@ -27,5 +27,21 @@ describe("issue #38 (1): proração com teto", () => {
   });
   it("sem acumulado informado mantém o comportamento antigo", () => {
     expect(releasedCommission(2_000, 8_000, 1_000)).toBe(250);
+  });
+});
+
+describe("M-A08-02: arredondamento em centavos", () => {
+  it("metade para cima em centavos inteiros, sem o ruído de float", () => {
+    expect(toCents(1.005)).toBe(101); // 1.005 * 100 = 100.49999999999999 em float
+    expect(toCents(0.1 + 0.2)).toBe(30);
+    expect(roundMoney(1000.01 * 0.1)).toBe(100);
+    expect(roundMoney(1000.01 * 0.15)).toBe(150);
+    expect(roundMoney(2.675)).toBe(2.68);
+    expect(roundMoney(0)).toBe(0);
+  });
+  it("proporção da entrada nunca passa do total devido, com centavos exatos", () => {
+    const total = roundMoney(1000.01 * 0.1);
+    const parts = [333.33, 333.33, 333.34].map(amount => releasedCommission(amount, 1000, total, 0));
+    parts.forEach(v => expect(toCents(v) / 100).toBe(v));
   });
 });
