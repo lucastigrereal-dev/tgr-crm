@@ -4,10 +4,10 @@ import http from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { captureMotives, captureRecords, customerContactOptouts, customers, domainEvents, nonBuyerDeliveries, resorts } from "../drizzle/schema";
+import { auditLogs, captureMotives, captureRecords, customerContactOptouts, customers, domainEvents, nonBuyerDeliveries, resorts } from "../drizzle/schema";
 import { eligibleBodySchema, revokedBodySchema } from "../shared/nonBuyerDeliveryContract";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
@@ -49,7 +49,7 @@ describe.skipIf(!integrationUrl)("entrega de não-comprador ao Recovery em MySQL
     scratchName = `${database.replace(/_test$/i, "")}_dl${runId}_test`;
     admin = mysql.createPool({ uri: integrationUrl, connectionLimit: 1 });
     await admin.query(`CREATE DATABASE \`${scratchName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    for (const table of ["customers", "capture_records", "domain_events", "contracts", "opportunities", "proposals", "capture_erasure_requests", "resorts", "financial_project_map", "capture_motives"]) await admin.query(`CREATE TABLE \`${scratchName}\`.\`${table}\` LIKE \`${database}\`.\`${table}\``);
+    for (const table of ["customers", "capture_records", "domain_events", "contracts", "opportunities", "proposals", "capture_erasure_requests", "resorts", "financial_project_map", "capture_motives", "audit_logs"]) await admin.query(`CREATE TABLE \`${scratchName}\`.\`${table}\` LIKE \`${database}\`.\`${table}\``);
     const scratchUrl = new URL(integrationUrl!);
     scratchUrl.pathname = `/${scratchName}`;
     process.env.DATABASE_URL = scratchUrl.toString();
@@ -249,6 +249,65 @@ describe.skipIf(!integrationUrl)("entrega de não-comprador ao Recovery em MySQL
     respond = () => ({ status: 429, json: { code: "RATE_LIMITED" } });
     expect(await run()).toMatchObject({ rejected: 0, retried: 1 });
     expect(await rowOf(`crm-nb-${b.captureId}-eligible-1`)).toMatchObject({ status: "pending" });
+  });
+
+  it("M-A02-06 anti-laço: opt-out do Recovery gera UM revoked(opt_out); outro opt-out do mesmo cliente não gera novo evento e o CRM nunca devolve opt-out", async () => {
+    const { recordRecoveryOptOut } = await import("./recoveryOptOutReceiver");
+    const c = await couple();
+    await reevaluate(c.captureId);
+    await run(); // elegível entregue ao Recovery
+    const optOut = (n: number) => ({ eventId: `syn-loop-${c.captureId}-${n}-${runId}`, coupleCode: c.code, optedOutAt: "2026-10-21T15:00:00.000Z", source: "recovery" as const });
+    expect(await recordRecoveryOptOut(db as never, optOut(1))).toMatchObject({ replay: false });
+    const first = await reevaluate(c.captureId); // revoked(opt_out) seq 2
+    expect(first).toMatchObject({ changed: true, eligible: false, seq: 2 });
+    hits = [];
+    expect(await run()).toMatchObject({ delivered: 1 });
+    expect(hits.map(hit => hit.url)).toEqual(["/non-buyer/eligibility-revoked"]);
+    // O Recovery repete o opt-out (mesmo evento = replay) e manda outro evento do mesmo cliente: nada novo sai do CRM.
+    expect(await recordRecoveryOptOut(db as never, optOut(1))).toMatchObject({ replay: true });
+    expect(await recordRecoveryOptOut(db as never, optOut(2))).toMatchObject({ replay: false });
+    expect(await reevaluate(c.captureId)).toMatchObject({ changed: false, eligible: false, seq: 2 });
+    hits = [];
+    expect(await run()).toMatchObject({ discovered: 0, delivered: 0, retried: 0 });
+    expect(hits).toHaveLength(0);
+    const events = await db.select().from(domainEvents).where(eq(domainEvents.aggregateId, String(c.captureId)));
+    expect(events.map(e => e.eventName).sort()).toEqual(["non_buyer.eligibility_revoked", "non_buyer.eligible"]);
+    expect(await db.select().from(customerContactOptouts).where(eq(customerContactOptouts.customerId, c.customerId))).toHaveLength(2); // só os 2 recebidos; o CRM não gera opt-out
+  });
+
+  it("M-A02-07: 404 do Recovery repete com backoff até o TETO e vira dead (terminal, auditado, sem reenvio)", async () => {
+    const a = await couple();
+    await reevaluate(a.captureId);
+    respond = () => ({ status: 404, json: {} });
+    let clock = Date.now();
+    const tick = () => { clock += 3_600_000; return new Date(clock); };
+    expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ retried: 1, dead: 0 });
+    expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ retried: 1, dead: 0 });
+    expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ retried: 0, dead: 1 });
+    const row = await rowOf(`crm-nb-${a.captureId}-eligible-1`);
+    expect(row).toMatchObject({ status: "dead", attempts: 3, lastHttpStatus: 404, reason: "DEAD_http_404" });
+    const audit = await db.select().from(auditLogs).where(and(eq(auditLogs.action, "non_buyer_delivery_dead"), eq(auditLogs.entityId, `crm-nb-${a.captureId}-eligible-1`)));
+    expect(audit).toHaveLength(1);
+    hits = [];
+    expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ dead: 0, retried: 0, delivered: 0 });
+    expect(hits).toHaveLength(0);
+  });
+
+  it("M-A02-07 P2: REVOGADO nunca vira dead; passado o teto segue pendente no backoff e o alerta sai UMA vez", async () => {
+    const a = await couple();
+    await reevaluate(a.captureId);
+    await run(); // elegível entregue
+    await db.insert(customerContactOptouts).values({ customerId: a.customerId, coupleCode: a.code, optedOutAt: new Date(), source: "recovery", eventId: `syn-stuck-${a.captureId}-${runId}` });
+    await reevaluate(a.captureId); // revoked 2 (opt_out)
+    respond = () => ({ status: 503, json: {} });
+    let clock = Date.now();
+    const tick = () => { clock += 3_600_000; return new Date(clock); };
+    for (let i = 0; i < 6; i++) expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ dead: 0 });
+    expect(await rowOf(`crm-nb-${a.captureId}-revoked-2`)).toMatchObject({ status: "pending", attempts: 6 });
+    const alerts = await db.select().from(auditLogs).where(and(eq(auditLogs.action, "non_buyer_revocation_stuck"), eq(auditLogs.entityId, `crm-nb-${a.captureId}-revoked-2`)));
+    expect(alerts).toHaveLength(1);
+    respond = () => ({ status: 201 });
+    expect(await run({ maxAttempts: 3, now: tick })).toMatchObject({ delivered: 1 }); // quando o Recovery volta, a revogação vai
   });
 
   it("sem coupleCode ou sem projeto não envia (espera, com backoff) e não vaza nada", async () => {

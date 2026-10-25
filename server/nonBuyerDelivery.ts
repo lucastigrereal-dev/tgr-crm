@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, isNull, lt, lte, ne, or, sql } from "drizz
 import { captureMotives, captureRecords, customers, domainEvents, financialProjectMap, nonBuyerDeliveries, nonBuyerEligibilityState, resorts } from "../drizzle/schema";
 import type { getDb } from "./db";
 import { logger } from "./logger";
+import { txAudit } from "./txOutbox";
 import { evaluateNonBuyerEligibility, loadEligibilityFacts } from "./nonBuyerEligibility";
 import { reevaluateCapture } from "./nonBuyerEligibilityService";
 import { eligibleBodySchema, revokedBodySchema } from "../shared/nonBuyerDeliveryContract";
@@ -19,20 +20,23 @@ type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
  * - REVALIDAÇÃO NA ENTREGA: logo antes de enviar "elegível", o predicado é recalculado; se o casal foi anonimizado, fez opt-out ou comprou entre a gravação e a entrega, NÃO envia, marca
  *   `suppressed` e a reavaliação emite o revogado correspondente.
  * - SÓ O ESTADO VIGENTE VALE: evento cujo `seq` ficou abaixo da projeção é `superseded` (o mais novo da ficha carrega a verdade). Revogado só é enviado se um elegível dessa ficha foi entregue.
- * - Falha (rede, 5xx, 401/403/404, 429) tenta de novo com backoff persistido; recusa 4xx com `code` (exceto 408/425/429) é terminal (`rejected`). Replay no Recovery é idempotente por eventId + chave de dedupe.
+ * - Falha (rede, 5xx, 401/403/404, 429) tenta de novo com backoff persistido, COM TETO de tentativas (NON_BUYER_DELIVERY_MAX_ATTEMPTS, padrão 30 ≈ 4h): esgotado vira `dead` só para o ELEGÍVEL (terminal, auditado em audit_logs
+ *   `non_buyer_delivery_dead` + log de erro) e exige ação do operador; recusa 4xx com `code` (exceto 408/425/429) é terminal (`rejected`). Replay no Recovery é idempotente por eventId + chave de dedupe.
  * - Nada do corpo, do contato, da resposta ou do coupleCode vai a log: só eventId e status HTTP.
  */
 export const DELIVERY_EVENT_NAMES = ["non_buyer.eligible", "non_buyer.eligibility_revoked"] as const;
 export const RETRY_BASE_MS = 5_000;
 export const RETRY_CAP_MS = 10 * 60_000;
 /** Arrendamento (lease) da linha enquanto um worker a processa: outro processo não a enxerga como vencida até o lease expirar. */
+export const DEFAULT_MAX_ATTEMPTS = 30;
+export const maxAttemptsFromEnv = () => { const n = Number(process.env.NON_BUYER_DELIVERY_MAX_ATTEMPTS); return Number.isInteger(n) && n >= 1 && n <= 1000 ? n : DEFAULT_MAX_ATTEMPTS; };
 export const LEASE_MS = 2 * 60_000;
 export const DEFAULT_TIMEZONE = "America/Recife";
 const EVENT_ID = /^crm-nb-(\d+)-(eligible|revoked)-(\d+)$/;
 const CODED = /^[A-Z0-9_]{1,80}$/;
 
-export type DeliveryConfig = { endpoint: string; key: string; fetchImpl?: typeof fetch; timeoutMs?: number; batch?: number; now?: () => Date };
-export type DeliveryOutcome = { discovered: number; delivered: number; superseded: number; suppressed: number; rejected: number; retried: number };
+export type DeliveryConfig = { endpoint: string; key: string; fetchImpl?: typeof fetch; timeoutMs?: number; batch?: number; now?: () => Date; maxAttempts?: number };
+export type DeliveryOutcome = { discovered: number; delivered: number; superseded: number; suppressed: number; rejected: number; retried: number; dead: number };
 
 export const backoffMs = (attempts: number) => Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_CAP_MS);
 
@@ -90,7 +94,7 @@ async function discover(db: Db, limit: number) {
 type Row = typeof nonBuyerDeliveries.$inferSelect;
 
 export async function runNonBuyerDelivery(db: Db, config: DeliveryConfig): Promise<DeliveryOutcome> {
-  const out: DeliveryOutcome = { discovered: 0, delivered: 0, superseded: 0, suppressed: 0, rejected: 0, retried: 0 };
+  const out: DeliveryOutcome = { discovered: 0, delivered: 0, superseded: 0, suppressed: 0, rejected: 0, retried: 0, dead: 0 };
   if (!isAllowedDeliveryEndpoint(config.endpoint) || !config.key) return out;
   const now = () => (config.now ?? (() => new Date()))();
   out.discovered = await discover(db, 200);
@@ -108,8 +112,25 @@ export async function runNonBuyerDelivery(db: Db, config: DeliveryConfig): Promi
   /** Devolve true só se a linha ainda era deste worker; false = outro processo assumiu e nada é gravado nem contado. */
   const settle = async (row: Row, lease: Date, status: Row["status"], reason: string | null, extra: Partial<Row> = {}) =>
     affected(await db.update(nonBuyerDeliveries).set({ status, reason, nextAttemptAt: null, ...extra }).where(owned(row, lease))) === 1;
+  const maxAttempts = config.maxAttempts ?? maxAttemptsFromEnv();
   const retry = async (row: Row, lease: Date, reason: string, httpStatus: number | null) => {
     const attempts = row.attempts + 1;
+    if (attempts >= maxAttempts && row.kind === "eligible") {
+      // Teto esgotado: estado terminal visível (nunca reenvio infinito). A trilha de auditoria é o alerta para o operador.
+      const dead = affected(await db.update(nonBuyerDeliveries).set({ status: "dead", attempts, reason: `DEAD_${reason}`.slice(0, 60), lastHttpStatus: httpStatus, nextAttemptAt: null }).where(owned(row, lease))) === 1;
+      if (dead) {
+        out.dead++;
+        logger.error("Non-buyer delivery dead after retry cap", { eventId: row.eventId, attempts, lastHttpStatus: httpStatus });
+        await txAudit(db as never, { actorUserId: null, entityType: "non_buyer_delivery", entityId: row.eventId, action: "non_buyer_delivery_dead", summary: `Entrega ${row.eventId} esgotou ${attempts} tentativas (${reason}); ação do operador necessária.` }).catch(() => logger.error("Non-buyer delivery dead audit failed", { eventId: row.eventId }));
+      }
+      return;
+    }
+    // REVOGADO NUNCA MORRE: se ele virasse `dead` depois de um elegível entregue, o Recovery continuaria com o casal elegível (opt-out, exclusão LGPD = contato indevido).
+    // Passado o teto ele segue tentando no backoff máximo e o alerta sai UMA vez (auditoria idempotente + log).
+    if (attempts >= maxAttempts && row.kind === "revoked" && attempts === maxAttempts) {
+      logger.error("Non-buyer REVOCATION undelivered past retry cap; keeps retrying", { eventId: row.eventId, attempts, lastHttpStatus: httpStatus });
+      await txAudit(db as never, { actorUserId: null, entityType: "non_buyer_delivery", entityId: row.eventId, action: "non_buyer_revocation_stuck", summary: `Revogação ${row.eventId} não entregue após ${attempts} tentativas (${reason}); segue tentando. Ação do operador necessária.`, idempotencyKey: `nb-revocation-stuck:${row.eventId}` }).catch(() => logger.error("Non-buyer revocation alert audit failed", { eventId: row.eventId }));
+    }
     const ok = affected(await db.update(nonBuyerDeliveries).set({ attempts, reason, lastHttpStatus: httpStatus, nextAttemptAt: new Date(now().getTime() + backoffMs(attempts)) }).where(owned(row, lease))) === 1;
     if (ok) out.retried++;
   };

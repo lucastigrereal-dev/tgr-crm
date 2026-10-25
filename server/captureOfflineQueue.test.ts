@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { captureDedupeKey, enqueueOfflineCapture, listOfflineCaptures, markOfflineCaptureFailed, markOfflineCaptureSyncing, removeOfflineCapture, updateOfflineCapture } from "../client/src/lib/captureOfflineQueue";
+import { captureDedupeKey, enqueueOfflineCapture, listOfflineCaptures, isNetworkFailure, markOfflineCaptureFailed, markOfflineCapturePending, markOfflineCaptureSyncing, removeOfflineCapture, updateOfflineCapture } from "../client/src/lib/captureOfflineQueue";
 
 describe("capture offline queue", () => {
   beforeEach(async () => {
@@ -44,5 +44,33 @@ describe("capture offline queue", () => {
     expect((revised.payload.customer as { fullName: string }).fullName).toBe("Casal corrigido");
     expect(revised.syncStatus).toBe("pending");
     expect(revised.lastError).toBeUndefined();
+  });
+
+  it("falha de REDE no meio do envio devolve a ficha a pendente (sem conflito, sem gastar tentativa) e ela segue na fila", async () => {
+    const item = await enqueueOfflineCapture({ customer: { fullName: "Casal sinal caiu" }, resortId: 4 });
+    await markOfflineCaptureSyncing(item.id);
+    expect(isNetworkFailure(new TypeError("Failed to fetch"), true)).toBe(true);
+    expect(isNetworkFailure(new Error("qualquer"), false)).toBe(true);
+    expect(isNetworkFailure(new Error("Telefone já associado a outra ficha"), true)).toBe(false);
+    await markOfflineCapturePending(item.id);
+    const [back] = await listOfflineCaptures();
+    expect(back).toMatchObject({ id: item.id, syncStatus: "pending", attempts: 0 });
+    expect(back.lastError).toBeUndefined();
+  });
+
+  it("a ficha guardada sobrevive a 'reabrir' o app: o id local (usado como clientRequestId) não muda entre leituras", async () => {
+    const item = await enqueueOfflineCapture({ customer: { fullName: "Casal reabertura" }, resortId: 5 });
+    const [first] = await listOfflineCaptures();
+    const [second] = await listOfflineCaptures();
+    expect(first.id).toBe(item.id);
+    expect(second.id).toBe(item.id);
+    expect(item.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it("guardar a ficha no aparelho preserva o id da ficha em edição (resposta perdida online + sinal caiu = o servidor reconhece a mesma ficha)", async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    const item = await enqueueOfflineCapture({ customer: { fullName: "Casal id preservado" }, resortId: 6 }, id);
+    expect(item.id).toBe(id);
+    expect((await listOfflineCaptures())[0]!.id).toBe(id);
   });
 });

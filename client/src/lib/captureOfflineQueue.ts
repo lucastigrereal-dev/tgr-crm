@@ -42,9 +42,10 @@ export async function listOfflineCaptures(): Promise<CaptureOfflineItem[]> {
   });
 }
 
-export async function enqueueOfflineCapture(payload: CaptureOfflinePayload): Promise<CaptureOfflineItem> {
+/** `id` = o clientRequestId da ficha em edição: se um envio online já gravou e a resposta se perdeu, a fila reenvia com o MESMO id e o servidor devolve a mesma ficha em vez de duplicar. */
+export async function enqueueOfflineCapture(payload: CaptureOfflinePayload, id: string = crypto.randomUUID()): Promise<CaptureOfflineItem> {
   const database = await openDatabase();
-  const item: CaptureOfflineItem = { id: crypto.randomUUID(), dedupeKey: captureDedupeKey(payload), payload, createdAt: new Date().toISOString(), attempts: 0, syncStatus: "pending" };
+  const item: CaptureOfflineItem = { id, dedupeKey: captureDedupeKey(payload), payload, createdAt: new Date().toISOString(), attempts: 0, syncStatus: "pending" };
   return await new Promise((resolve, reject) => {
     const store = database.transaction(STORE, "readwrite").objectStore(STORE);
     const indexRequest = store.index("dedupeKey").get(item.dedupeKey);
@@ -110,6 +111,29 @@ export async function updateOfflineCapture(id: string, payload: CaptureOfflinePa
       const current = getRequest.result as CaptureOfflineItem | undefined;
       if (!current) return resolve();
       const request = store.put({ ...current, payload, dedupeKey: captureDedupeKey(payload), syncStatus: "pending", lastError: undefined });
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    };
+  });
+}
+
+/** Falha de REDE (sinal caiu no meio do envio) não é conflito da ficha: ela volta a "pending" e tenta de novo quando o sinal voltar, sem gastar tentativa. */
+export function isNetworkFailure(error: unknown, online: boolean = typeof navigator === "undefined" ? true : navigator.onLine) {
+  if (!online) return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /failed to fetch|networkerror|network request failed|load failed|fetch failed|network error/i.test(message);
+}
+
+export async function markOfflineCapturePending(id: string) {
+  const database = await openDatabase();
+  return await new Promise<void>((resolve, reject) => {
+    const store = database.transaction(STORE, "readwrite").objectStore(STORE);
+    const getRequest = store.get(id);
+    getRequest.onerror = () => reject(getRequest.error);
+    getRequest.onsuccess = () => {
+      const current = getRequest.result as CaptureOfflineItem | undefined;
+      if (!current) return resolve();
+      const request = store.put({ ...current, syncStatus: "pending", lastError: undefined });
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     };

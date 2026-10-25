@@ -4,7 +4,7 @@ import { DEFAULT_NQ_SETTINGS } from "../captureSheetDomain";
 import { and, desc, eq, gte, inArray, isNull, like, lt, lte, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { captureMotives, captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
+import { auditLogs, captureMotives, captureRecords, commercialProjectSettings, customers, opportunities, resorts, salesCampaigns, tasks, users } from "../../drizzle/schema";
 import { getDb, recordAudit, recordDomainEvent } from "../db";
 import { anonymizedCustomerError } from "../customerAnonymization";
 import { router } from "../_core/trpc";
@@ -17,7 +17,7 @@ import { buildCaptureProfileAnalytics, getProfileCompleteness, type CaptureProfi
 import { getProjectCaptureReadiness } from "../projectPolicy";
 import { activeRoomStatuses, assertReceptionAction, canTransitionPresentationStatus, filterReceptionQueue, tourDurationMinutes } from "../salesRoomDomain";
 import { publishSalesRoomEvent } from "../realtime";
-import { affectedRows } from "../mysqlErrors";
+import { affectedRows, isDuplicateKeyError } from "../mysqlErrors";
 import { canonicalizeMasterData } from "../masterData";
 import { isGuestpassPrefillEnabled, normalizePassRef } from "../guestpassConfig";
 import { GuestpassLinkConflict, linkGuestpassToCapture, sanitizeFetchedAt } from "../guestpassPrefill";
@@ -25,7 +25,23 @@ import { GuestpassLinkConflict, linkGuestpassToCapture, sanitizeFetchedAt } from
 const optionalText = z.string().trim().max(5000).optional().nullable();
 const optionalShort = z.string().trim().max(255).optional().nullable();
 
+/**
+ * M-A15-02: ficha criada no celular sem sinal. O aparelho gera um UUID por ficha (`clientRequestId`, o mesmo id da fila local) e o reenvia igual a cada tentativa:
+ * se a 1ª tentativa gravou mas a resposta se perdeu, repetir devolve a MESMA ficha em vez de criar outra. A trava é a linha de audit_logs com chave única
+ * (`capture-create:<uuid>`), inserida no começo da transação: uma tentativa concorrente espera o commit da primeira e então cai no erro de chave duplicada.
+ */
+const captureCreateKey = (clientRequestId: string) => `capture-create:${clientRequestId.toLowerCase()}`;
+type CaptureCreateResult = { captureId: number; customerId: number; opportunityId: number | null; taskId: number | null };
+async function findCaptureCreateReplay(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, key: string, actorUserId: number): Promise<(CaptureCreateResult & { replayed: true }) | null> {
+  const [row] = await db.select({ actorUserId: auditLogs.actorUserId, summary: auditLogs.summary }).from(auditLogs).where(eq(auditLogs.idempotencyKey, key)).limit(1);
+  if (!row?.summary) return null;
+  // O UUID é do aparelho de quem digitou a ficha: outro usuário com o mesmo id não recebe os ids da ficha alheia.
+  if (row.actorUserId !== actorUserId) throw new TRPCError({ code: "CONFLICT", message: "Esta ficha já foi enviada por outro usuário." });
+  try { const parsed = JSON.parse(row.summary) as CaptureCreateResult; return typeof parsed.captureId === "number" ? { ...parsed, replayed: true } : null; } catch { return null; }
+}
+
 const captureInput = z.object({
+  clientRequestId: z.string().uuid().optional(),
   customerId: z.number().int().positive().optional(),
   customer: z.object({
     fullName: z.string().trim().min(3).max(255),
@@ -236,7 +252,11 @@ export const capturesRouter = router({
     }
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
-    const result = await db.transaction(async tx => {
+    const idempotencyKey = input.clientRequestId ? captureCreateKey(input.clientRequestId) : null;
+    if (idempotencyKey) { const replay = await findCaptureCreateReplay(db, idempotencyKey, ctx.user.id); if (replay) return replay; }
+    let result: CaptureCreateResult & Record<string, unknown>;
+    try { result = await db.transaction(async tx => {
+      if (idempotencyKey) await tx.insert(auditLogs).values({ actorUserId: ctx.user.id, entityType: "capture", entityId: "pending", action: "create_idempotency", idempotencyKey });
       // Campos com dicionário: só valores da lista, gravados com a grafia dela.
       Object.assign(input, await canonicalizeMasterData(tx, input));
       const [campaignRows, resortRows] = await Promise.all([
@@ -306,8 +326,13 @@ export const capturesRouter = router({
         taskId = scheduledTask[0]?.id ?? null;
         if (!taskId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível criar o acompanhamento da captação." });
       }
-      return { captureId, customerId, opportunityId, taskId };
-    });
+      const created = { captureId, customerId, opportunityId, taskId };
+      if (idempotencyKey) await tx.update(auditLogs).set({ entityId: String(captureId), summary: JSON.stringify(created) }).where(eq(auditLogs.idempotencyKey, idempotencyKey));
+      return created;
+    }); } catch (error) {
+      if (idempotencyKey && isDuplicateKeyError(error)) { const replay = await findCaptureCreateReplay(db, idempotencyKey, ctx.user.id); if (replay) return replay; }
+      throw error;
+    }
     await recordAudit(ctx.user.id, "capture", result.captureId, "created", `Ficha de captação criada para associado ${result.customerId}.`);
     if (result.taskId) await recordAudit(ctx.user.id, "task", result.taskId, "created", `Acompanhamento de captação criado para ficha ${result.captureId}.`);
     await recordDomainEvent({ eventName: "capture.created", aggregateType: "capture", aggregateId: result.captureId, actorUserId: ctx.user.id, payload: { customerId: result.customerId, campaignId: input.campaignId ?? null, qualificationStatus: input.qualificationStatus } });
