@@ -42,9 +42,10 @@ export async function listOfflineCaptures(): Promise<CaptureOfflineItem[]> {
   });
 }
 
-export async function enqueueOfflineCapture(payload: CaptureOfflinePayload): Promise<CaptureOfflineItem> {
+/** `id` = o clientRequestId da ficha em edição: se um envio online já gravou e a resposta se perdeu, a fila reenvia com o MESMO id e o servidor devolve a mesma ficha em vez de duplicar. */
+export async function enqueueOfflineCapture(payload: CaptureOfflinePayload, id: string = crypto.randomUUID()): Promise<CaptureOfflineItem> {
   const database = await openDatabase();
-  const item: CaptureOfflineItem = { id: crypto.randomUUID(), dedupeKey: captureDedupeKey(payload), payload, createdAt: new Date().toISOString(), attempts: 0, syncStatus: "pending" };
+  const item: CaptureOfflineItem = { id, dedupeKey: captureDedupeKey(payload), payload, createdAt: new Date().toISOString(), attempts: 0, syncStatus: "pending" };
   return await new Promise((resolve, reject) => {
     const store = database.transaction(STORE, "readwrite").objectStore(STORE);
     const indexRequest = store.index("dedupeKey").get(item.dedupeKey);

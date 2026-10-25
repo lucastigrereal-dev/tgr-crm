@@ -66,4 +66,11 @@ describe("capture offline queue", () => {
     expect(second.id).toBe(item.id);
     expect(item.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
+
+  it("guardar a ficha no aparelho preserva o id da ficha em edição (resposta perdida online + sinal caiu = o servidor reconhece a mesma ficha)", async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    const item = await enqueueOfflineCapture({ customer: { fullName: "Casal id preservado" }, resortId: 6 }, id);
+    expect(item.id).toBe(id);
+    expect((await listOfflineCaptures())[0]!.id).toBe(id);
+  });
 });

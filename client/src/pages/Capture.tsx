@@ -15,7 +15,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 import { masterDataFields } from "@shared/masterData";
-import { CaptureOfflineItem, CaptureOfflinePayload, enqueueOfflineCapture, listOfflineCaptures, isNetworkFailure, markOfflineCaptureFailed, markOfflineCapturePending, markOfflineCaptureSyncing, removeOfflineCapture, updateOfflineCapture } from "@/lib/captureOfflineQueue";
+import { captureDedupeKey, CaptureOfflineItem, CaptureOfflinePayload, enqueueOfflineCapture, listOfflineCaptures, isNetworkFailure, markOfflineCaptureFailed, markOfflineCapturePending, markOfflineCaptureSyncing, removeOfflineCapture, updateOfflineCapture } from "@/lib/captureOfflineQueue";
 
 const statusLabels = { captured: "Captada", scheduled: "Agendada", checked_in: "Check-in", presented: "Apresentada", no_tour: "No tour", closed: "Encerrada" } as const;
 const statusTone = { captured: "bg-[#f4efe2] text-[#8a6b2d]", scheduled: "bg-[#e6eef5] text-[#315d7e]", checked_in: "bg-[#e5efe4] text-[#285043]", presented: "bg-[#ece8f6] text-[#5c477b]", no_tour: "bg-[#f8e3e0] text-[#9e4037]", closed: "bg-[#ebe8e1] text-[#52615c]" } as const;
@@ -43,11 +43,13 @@ export default function Capture() {
   const [guestpassFetchedAt, setGuestpassFetchedAt] = useState<string | null>(null);
   const [reviewingOfflineId, setReviewingOfflineId] = useState<string | null>(null);
   // M-A15-02: id estável da ficha em edição; reenviar a mesma ficha (resposta perdida) não cria outra no servidor. Troca só depois do sucesso.
-  const requestIdRef = useRef(crypto.randomUUID());
+  const requestIdRef = useRef({ id: crypto.randomUUID(), key: "" });
+  // O id só vale para a MESMA ficha (mesma chave nome|telefone|empreendimento|horário): se o captador trocou de casal depois de um envio sem resposta, nasce um id novo, senão o servidor devolveria a ficha antiga e a nova se perderia.
+  const requestIdFor = (current: CaptureOfflinePayload) => { const key = captureDedupeKey(current); if (requestIdRef.current.key && requestIdRef.current.key !== key) requestIdRef.current = { id: crypto.randomUUID(), key }; else requestIdRef.current.key = key; return requestIdRef.current.id; };
   const refreshOfflineQueue = async () => setOfflineItems(await listOfflineCaptures());
   const visitRule = trpc.captures.visitRule.useQuery(undefined, { staleTime: 5 * 60_000, retry: false });
   const create = trpc.captures.create.useMutation({
-    onSuccess: result => { requestIdRef.current = crypto.randomUUID(); toast.success(`Ficha criada. Associado #${result.customerId} e oportunidade ${result.opportunityId ? "aberta" : "não criada"}.`); setForm(blank()); setGuestpassRef(null); setGuestpassFetchedAt(null); utils.captures.list.invalidate(); },
+    onSuccess: result => { requestIdRef.current = { id: crypto.randomUUID(), key: "" }; toast.success(`Ficha criada. Associado #${result.customerId} e oportunidade ${result.opportunityId ? "aberta" : "não criada"}.`); setForm(blank()); setGuestpassRef(null); setGuestpassFetchedAt(null); utils.captures.list.invalidate(); },
     onError: error => toast.error(error.message),
   });
   const updateStatus = trpc.captures.updateStatus.useMutation({ onSuccess: () => utils.captures.list.invalidate(), onError: error => toast.error(error.message) });
@@ -86,9 +88,9 @@ export default function Capture() {
     const currentPayload = payload();
     // F1.6: com a regra ligada no servidor, ficha sem data de visita precisa estar marcada como passante (o servidor também confere).
     if (visitRule.data?.requireDateOrPasserby && !form.scheduledAt && !form.isPasserby) { toast.error("Informe a data da visita ou marque \"É passante\"."); return; }
-    if (!navigator.onLine) { if (reviewingOfflineId) await updateOfflineCapture(reviewingOfflineId, currentPayload); else await enqueueOfflineCapture(currentPayload); await refreshOfflineQueue(); setReviewingOfflineId(null); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
+    if (!navigator.onLine) { if (reviewingOfflineId) await updateOfflineCapture(reviewingOfflineId, currentPayload); else { await enqueueOfflineCapture(currentPayload, requestIdFor(currentPayload)); requestIdRef.current = { id: crypto.randomUUID(), key: "" }; } await refreshOfflineQueue(); setReviewingOfflineId(null); setForm(blank()); toast.info("Sem conexão: ficha guardada neste aparelho e enviada quando a internet voltar."); return; }
     if (reviewingOfflineId) { try { const sent = await create.mutateAsync({ ...currentPayload, clientRequestId: reviewingOfflineId } as never); if ((sent as { replayed?: boolean }).replayed) toast.warning("Esta ficha já tinha sido enviada antes: a correção não foi aplicada. Abra a ficha no sistema e edite lá."); await removeOfflineCapture(reviewingOfflineId); await refreshOfflineQueue(); setReviewingOfflineId(null); } catch (error) { await markOfflineCaptureFailed(reviewingOfflineId, error instanceof Error ? error.message : "Falha ao reenviar ficha revisada"); await refreshOfflineQueue(); } return; }
-    create.mutate({ ...currentPayload, clientRequestId: requestIdRef.current } as never);
+    create.mutate({ ...currentPayload, clientRequestId: requestIdFor(currentPayload) } as never);
   };
   const reviewOffline = (item: CaptureOfflineItem) => {
     const source = item.payload as Record<string, unknown>;
