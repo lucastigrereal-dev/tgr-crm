@@ -46,10 +46,17 @@ describe.skipIf(!integrationUrl)("migrations propostas do CRM: ordem de aplicaç
     expect(((await pool.query("SHOW TABLES"))[0] as unknown[]).length).toBe(tablesAfter.length);
   });
 
-  it("reaplicar uma proposta falha com erro claro e não altera o esquema", async () => {
+  it("reaplicar 0078 falha com erro claro; reaplicar 0089 (IF NOT EXISTS) passa em silêncio; o esquema não muda", async () => {
     const before = JSON.stringify((await pool.query("SHOW TABLES"))[0]);
     const alter = files.find(name => name.startsWith("PROPOSED_0078_"))!;
     await expect((async () => { for (const statement of statementsOf(alter)) await pool.query(statement); })()).rejects.toMatchObject({ code: expect.stringMatching(/^ER_(DUP_FIELDNAME|DUP_KEYNAME|FK_DUP_NAME|DUP_FIELD)/) });
+    expect(JSON.stringify((await pool.query("SHOW TABLES"))[0])).toBe(before);
+  });
+
+  it("reaplicar 0089 (CREATE TABLE IF NOT EXISTS) passa sem erro e não muda o esquema: sucesso no retry não prova que nunca foi aplicada", async () => {
+    const before = JSON.stringify((await pool.query("SHOW TABLES"))[0]);
+    const file = files.find(name => name.startsWith("PROPOSED_0089_"))!;
+    for (const statement of statementsOf(file)) await pool.query(statement);
     expect(JSON.stringify((await pool.query("SHOW TABLES"))[0])).toBe(before);
   });
 });

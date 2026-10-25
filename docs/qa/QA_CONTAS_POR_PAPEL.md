@@ -36,3 +36,5 @@ DATABASE_URL=<banco descartável> node scripts/pilot-seed-sala.mjs --project-nam
 - Cria o empreendimento com o nome do projeto do Sales, 60 UH sintéticas (SYN-UH-xx) × 52 cotas disponíveis e a política `sale_terms` do QA. Rodar de novo não duplica (teste `server/pilotSeedSala.mysql.test.ts`).
 - RUN_ID no nome do projeto marca o lote como QA; o consentimento QA (marcado) e os meios de pagamento sintéticos (pix, boleto) ficam fora deste script: o consentimento nasce no GuestPass, e os meios entram na baixa da parcela.
 - Contas por papel: seção acima.
+
+Aviso: `pilot-seed-sala.mjs` não tem trava de banco isolado (também semeia o piloto de propósito). A rodada de 60 × 52 com nome "QA ..." só roda em banco descartável; nunca aponte `DATABASE_URL` para o banco do piloto ou de produção.
