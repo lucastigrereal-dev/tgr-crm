@@ -115,3 +115,26 @@ export async function updateOfflineCapture(id: string, payload: CaptureOfflinePa
     };
   });
 }
+
+/** Falha de REDE (sinal caiu no meio do envio) não é conflito da ficha: ela volta a "pending" e tenta de novo quando o sinal voltar, sem gastar tentativa. */
+export function isNetworkFailure(error: unknown, online: boolean = typeof navigator === "undefined" ? true : navigator.onLine) {
+  if (!online) return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /failed to fetch|networkerror|network request failed|load failed|fetch failed|network error/i.test(message);
+}
+
+export async function markOfflineCapturePending(id: string) {
+  const database = await openDatabase();
+  return await new Promise<void>((resolve, reject) => {
+    const store = database.transaction(STORE, "readwrite").objectStore(STORE);
+    const getRequest = store.get(id);
+    getRequest.onerror = () => reject(getRequest.error);
+    getRequest.onsuccess = () => {
+      const current = getRequest.result as CaptureOfflineItem | undefined;
+      if (!current) return resolve();
+      const request = store.put({ ...current, syncStatus: "pending", lastError: undefined });
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    };
+  });
+}
