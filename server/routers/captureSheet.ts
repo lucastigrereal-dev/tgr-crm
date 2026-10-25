@@ -146,7 +146,8 @@ async function captureByCode(rawCode: string) {
 
 export const captureSheetRouter = router({
   /** Liga a ficha ao código do casal do Sales Command (o do QR impresso). Trocar o código é auditado. */
-  setCoupleCode: salesProcedure.input(z.object({ captureId: z.number().int().positive(), coupleCode: z.string().max(64) })).mutation(async ({ ctx, input }) => {
+  setCoupleCode: internalProcedure.input(z.object({ captureId: z.number().int().positive(), coupleCode: z.string().max(64) })).mutation(async ({ ctx, input }) => {
+    assertCapability(ctx.user.role, "capture.couple_code.link", "Seu perfil não pode ligar o código do casal à ficha.");
     const code = normalizeCoupleCode(input.coupleCode);
     if (!isCoupleCode(code)) throw new TRPCError({ code: "BAD_REQUEST", message: "Código inválido: use de 4 a 64 letras, números, - ou _ (nunca CPF ou telefone)." });
     const db = await requireDb();

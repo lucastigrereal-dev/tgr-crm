@@ -19,7 +19,7 @@ function makeDb() {
     return [];
   };
   const tx = {
-    select: () => ({ from: (t: object) => { const name = getTableName(t as never); const chain: any = { where: () => chain, limit: () => chain, for: () => chain, then: (res: (v: unknown) => void) => res(rowsFor(name)) }; return chain; } }),
+    select: () => ({ from: (t: object) => { const name = getTableName(t as never); const chain: any = { where: () => chain, limit: () => chain, for: () => chain, leftJoin: () => chain, orderBy: () => chain, then: (res: (v: unknown) => void) => res(rowsFor(name)) }; return chain; } }),
     update: (t: object) => ({ set: (values: Record<string, unknown>) => ({ where: async () => { if (getTableName(t as never) === "sales_commissions") commissionUpdates.push(values); return [{ affectedRows: 1 }]; } }) }),
     insert: (t: unknown) => ({ values: (values: Record<string, unknown>) => { inserted.push({ table: t, values }); return { $returningId: async () => [], onDuplicateKeyUpdate: async () => undefined }; } }),
   };

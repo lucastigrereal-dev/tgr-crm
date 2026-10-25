@@ -1,4 +1,4 @@
-import { paidCommissionCancellationMode } from "../commissionPolicyVersion";
+import { isCommissionPolicyVersioningEnabled, loadCommissionPolicyAnchor, paidCommissionCancellationMode } from "../commissionPolicyVersion";
 import { holdFractionForFormalization, isInventoryHoldAtFormalizationEnabled } from "../formalizationInventory";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
@@ -298,7 +298,8 @@ export const contractsRouter = router({
       const currentPaidAmount = schedule.reduce((sum, item) => sum + Number(item.paidAmount ?? (item.status === "paid" ? item.amount : 0)), 0);
       if (simulation.paidAmount !== undefined && Math.abs(currentPaidAmount - Number(simulation.paidAmount)) > 0.005) throw new TRPCError({ code: "CONFLICT", message: "As parcelas pagas mudaram desde a aprovação do distrato. Solicite uma nova simulação antes de executar." });
       // CRM-F3: o que fazer com comissão JÁ PAGA no distrato é política (onPaidCommissionCancellation), nunca estorno automático. Desligado (padrão) = fila manual, como no ADR-010.
-      const paidMode = await paidCommissionCancellationMode(tx, contract.resortId);
+      const policyAnchor = isCommissionPolicyVersioningEnabled() ? await loadCommissionPolicyAnchor(tx, contract.id) : { anchor: new Date(), resortId: null };
+      const paidMode = await paidCommissionCancellationMode(tx, contract.resortId ?? policyAnchor.resortId, policyAnchor.anchor);
       const reviewIds = paidMode === "manual_review" ? impact.manualReviewCommissionIds : [];
       const notedIds = paidMode === "none" ? impact.manualReviewCommissionIds : [];
       const settlementDate = new Date();

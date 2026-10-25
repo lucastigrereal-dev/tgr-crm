@@ -48,6 +48,9 @@ export const capabilityMatrix = {
   "export.pii": ["admin", "finance"],
   // Ficha arquivada (casal que não comprou saiu da vista da sala): quem ainda abre. Era ARCHIVED_SHEET_ROLES fixo; agora capacidade editável (item 4).
   "sheet.archived.open": ["admin", "finance"],
+  // M-A03-01/M-A12-02: LIGAR o código do casal à ficha (1ª ligação). Padrão = o que já vale (admin+seller). Trocar um código já ligado continua só do admin (fixo no servidor).
+  // Alçada de produto ainda em aberto com o Lucas (gerente de sala x recepção): editável pela tela de permissões, sem código novo.
+  "capture.couple_code.link": ["admin", "seller"],
 } as const satisfies Record<string, readonly InternalPermissionRole[]>;
 
 export type Capability = keyof typeof capabilityMatrix;
@@ -75,6 +78,7 @@ export const INTERNAL_ROLES = ["admin", "seller", "finance", "service"] as const
 /**
  * Ligadas ao servidor: `export.pii` (captureSheet.export, assertCapability), `sheet.archived.open` (canOpenArchivedSheet), `document.read` (storageAccess.authorizeStorageRead:
  * leitura de documento de cliente/contrato) e `commission.view` (commissionsProcedure: scorecards e overview; conceder a um papel sem escopo próprio mostra TODAS, como o finance).
+ * `capture.couple_code.link` (captureSheet.setCoupleCode, 1ª ligação) é FIXA em admin+vendedor, de propósito: decisão de 25/10 = a recepção NÃO vincula o código do casal, e as telas (FichaSala, UnlinkedCouplesPanel) decidem pelo papel; se o Lucas mudar a regra, torne-a editável JUNTO com as telas.
  */
 export const EDITABLE_CAPABILITIES = ["export.pii", "sheet.archived.open", "document.read", "commission.view"] as const satisfies readonly Capability[];
 
