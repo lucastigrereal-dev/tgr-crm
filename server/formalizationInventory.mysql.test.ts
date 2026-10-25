@@ -24,6 +24,7 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
   beforeAll(async () => {
     validateIsolatedE2EDatabase(integrationUrl, previousEnv.DATABASE_URL);
     process.env.DATABASE_URL = integrationUrl;
+    process.env.INVENTORY_NEGOTIATION_HOLDS = "true"; // legado de hold de negociação, desligado por padrão
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 8 });
     db = drizzle({ client: pool });
     adminId = (await db.insert(users).values({ openId: `e1-admin-${runId}`, name: "SYN admin", role: "admin" }).$returningId())[0]!.id;
@@ -84,6 +85,29 @@ describe.skipIf(!integrationUrl)("E1: reserva da cota na formalização", () => 
       expect(outcomes.every(item => item.status === "rejected")).toBe(true);
       expect((await fraction(f))).toMatchObject({ status: "held", currentContractId: first });
       expect((await holds(f)).filter(item => item.status === "active")).toHaveLength(1);
+    });
+
+    it("última fração com duas sessões ao mesmo tempo: só uma formalização vence (M-A07-02)", async () => {
+      const f = await newFraction();
+      const outcomes = await Promise.allSettled([createContract("last-a", f), createContract("last-b", f)]);
+      expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
+      expect(outcomes.filter(item => item.status === "rejected")).toHaveLength(1);
+      const winner = (outcomes.find(item => item.status === "fulfilled") as PromiseFulfilledResult<number>).value;
+      expect(await fraction(f)).toMatchObject({ status: "held", currentContractId: winner });
+      expect((await holds(f)).filter(item => item.status === "active")).toHaveLength(1);
+    });
+
+    it("negociação não reserva: sem contrato não há hold, e createHold vem recusado quando o legado está desligado (M-A07-01)", async () => {
+      const f = await newFraction();
+      expect(await holds(f)).toHaveLength(0);
+      const before = process.env.INVENTORY_NEGOTIATION_HOLDS;
+      process.env.INVENTORY_NEGOTIATION_HOLDS = "false";
+      try {
+        const api = (await import("./routers/inventory")).inventoryRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+        await expect(api.createHold({ fractionId: f } as never)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      } finally { process.env.INVENTORY_NEGOTIATION_HOLDS = before; }
+      expect(await holds(f)).toHaveLength(0);
+      expect((await fraction(f)).status).toBe("available");
     });
 
     it("hold vencido na segunda conferência: cota volta ao estoque, tarefa ao administrativo, INVENTORY_HELD_EXPIRED, validação recusada", async () => {

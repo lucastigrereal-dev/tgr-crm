@@ -21,7 +21,17 @@ function query(rows: unknown[]) {
 }
 
 describe("estoque comercial de cotas", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); process.env.INVENTORY_NEGOTIATION_HOLDS = "true"; });
+
+  it("hold de negociação vem DESLIGADO por padrão: proposta/Gaveta não reservam cota", async () => {
+    delete process.env.INVENTORY_NEGOTIATION_HOLDS;
+    const caller = inventoryRouter.createCaller({ user: { id: 7, role: "admin" } } as never);
+    await expect(caller.createHold({ fractionId: 41, proposalId: 9, ttlMinutes: 30 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(dbMocks.getDb).not.toHaveBeenCalled();
+    await expect(caller.holdPolicy()).resolves.toEqual({ negotiationHoldsEnabled: false });
+    process.env.INVENTORY_NEGOTIATION_HOLDS = "true";
+    await expect(caller.holdPolicy()).resolves.toEqual({ negotiationHoldsEnabled: true });
+  });
 
   it("materializa 10 cotas por UH sem duplicar códigos existentes", async () => {
     const inserted: unknown[][] = [];
