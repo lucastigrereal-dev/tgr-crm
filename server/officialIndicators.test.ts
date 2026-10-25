@@ -38,4 +38,14 @@ describe("indicadores oficiais do CRM (D1, provisório)", () => {
     expect(attributeSaleToCheckIn([b], new Date("2026-10-01T12:00:00Z"))).toBeNull();
     expect(attributeSaleToCheckIn([], new Date("2026-10-01T12:00:00Z"))).toBeNull();
   });
+
+  it("M-A01-04: não comparecimento (agendado sem check-in), NT e não venda são três coisas; passante com check-in conta como atendimento", () => {
+    const noShow = fact({ checkedInAt: null, presentationStatus: "scheduled" });
+    const nt = fact({ presentationStatus: "no_tour", ntKind: "perfil" });
+    const noSale = fact({ presentationStatus: "closed" }); // tour feito, sem venda
+    const passerby = fact({ presentationStatus: "presented" }); // chegada direta, ainda em andamento
+    const result = classifyOutcomes([noShow, nt, noSale, passerby], from, to);
+    expect(result).toEqual({ started: 3, vendeu: 0, caiuEmMesa: 0, naoTour: 1, encerradoSemVenda: 1, emAndamento: 1 });
+    expect(classifyAttendances([noShow, nt, noSale, passerby], from, to, true).attendances).toBe(3); // o não comparecimento nunca entra
+  });
 });
