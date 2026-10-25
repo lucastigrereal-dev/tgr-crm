@@ -23,6 +23,7 @@ export const commissionPolicyVersionOf = (policy: object | null | undefined) => 
  * Decisão D2=B (Lucas, 25/10): a VERSÃO da política de comissão é escolhida pela data do VENDEU (aceite comercial na sala), e não pela data da parcela paga nem por "hoje".
  * Isso NÃO autoriza pagar: o pagamento continua exigindo validação oficial do administrativo + entrada inteira (commissionBlockReason / isEntryFullyPaid).
  * Sem VENDEU registrado (venda importada ou fora da sala), a âncora é a criação do contrato (o fato original); só em último caso, agora.
+ * Ficha que depois deixou de ser VENDEU (ex.: virou CAIU EM MESA) também cai na criação do contrato: o contrato existe, então é o fato original que sobrou.
  */
 export function commissionPolicyAnchor(capture: { commercialOutcome?: string | null; commercialOutcomeAt?: Date | null } | null | undefined, contract: { createdAt?: Date | null } | null | undefined, now: Date = new Date()): Date {
   if (capture?.commercialOutcome === "vendeu" && capture.commercialOutcomeAt) return capture.commercialOutcomeAt;

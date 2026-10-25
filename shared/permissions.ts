@@ -77,9 +77,10 @@ export function canCapability(role: InternalPermissionRole | "user", capability:
 export const INTERNAL_ROLES = ["admin", "seller", "finance", "service"] as const satisfies readonly InternalPermissionRole[];
 /**
  * Ligadas ao servidor: `export.pii` (captureSheet.export, assertCapability), `sheet.archived.open` (canOpenArchivedSheet), `document.read` (storageAccess.authorizeStorageRead:
- * leitura de documento de cliente/contrato) e `commission.view` (commissionsProcedure: scorecards e overview; conceder a um papel sem escopo próprio mostra TODAS, como o finance) e `capture.couple_code.link` (captureSheet.setCoupleCode, 1ª ligação).
+ * leitura de documento de cliente/contrato) e `commission.view` (commissionsProcedure: scorecards e overview; conceder a um papel sem escopo próprio mostra TODAS, como o finance).
+ * `capture.couple_code.link` (captureSheet.setCoupleCode, 1ª ligação) é FIXA em admin+vendedor, de propósito: decisão de 25/10 = a recepção NÃO vincula o código do casal, e as telas (FichaSala, UnlinkedCouplesPanel) decidem pelo papel; se o Lucas mudar a regra, torne-a editável JUNTO com as telas.
  */
-export const EDITABLE_CAPABILITIES = ["export.pii", "sheet.archived.open", "document.read", "commission.view", "capture.couple_code.link"] as const satisfies readonly Capability[];
+export const EDITABLE_CAPABILITIES = ["export.pii", "sheet.archived.open", "document.read", "commission.view"] as const satisfies readonly Capability[];
 
 export type PermissionOverrides = { capabilities: Partial<Record<Capability, readonly InternalPermissionRole[]>> };
 let overrides: PermissionOverrides = { capabilities: {} };

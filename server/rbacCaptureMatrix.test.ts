@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
+import { sanitizePermissionOverrides } from "../shared/permissions";
 import type { TrpcContext } from "./_core/context";
 
 // M-A12-01/M-A12-02: matriz persona x ação da SALA (captação, ficha, check-in, resultado) exercitada nos routers reais, sem banco. A prova é na API, não no menu.
@@ -34,7 +35,7 @@ const ACTIONS: Array<{ name: string; allowed: Role[]; call: (c: Caller) => Promi
   { name: "captures.list", allowed: SALA, call: c => c.captures.list({}) },
   { name: "captures.updateStatus", allowed: SALA, call: c => c.captures.updateStatus({ id: 1, presentationStatus: "closed" } as never) },
   { name: "captures.recordCommercialOutcome", allowed: SALA, call: c => c.captures.recordCommercialOutcome({ id: 1, outcome: "vendeu" } as never) },
-  // Ficha: ligar o código (capacidade capture.couple_code.link; padrão admin+seller), registrar NT e editar extras; recepção imprime, coleta e vê pendentes.
+  // Ficha: ligar o código (capacidade capture.couple_code.link, FIXA em admin+seller), registrar NT e editar extras; recepção imprime, coleta e vê pendentes.
   { name: "captureSheet.setCoupleCode", allowed: SALA, call: c => c.captureSheet.setCoupleCode({ captureId: 1, coupleCode: "SYN-RBAC-1" }) },
   { name: "captureSheet.unlinked", allowed: SALA_E_RECEPCAO, call: c => c.captureSheet.unlinked() },
   { name: "captureSheet.recordPrint", allowed: SALA_E_RECEPCAO, call: c => c.captureSheet.recordPrint({ code: "SYN-RBAC-1" }) },
@@ -73,5 +74,10 @@ describe("matriz RBAC persona x ação da sala (routers reais, sem banco)", () =
       if (name === "contracts.openCancellationFromInbox") { expect(await outcome(call), name).not.toBe("FORBIDDEN"); continue; } // pedir distrato é amplo (ADR-002); decidir/executar não
       expect(await outcome(call), name).toBe("FORBIDDEN");
     }
+  });
+
+  it("override de permissão NÃO consegue dar à recepção o direito de ligar o código do casal (decisão 25/10: recepção não vincula; as telas decidem pelo papel)", () => {
+    const sanitized = sanitizePermissionOverrides({ capabilities: { "capture.couple_code.link": ["admin", "seller", "service"] } });
+    expect(Object.keys(sanitized.capabilities)).not.toContain("capture.couple_code.link");
   });
 });
