@@ -25,13 +25,14 @@ const TODOS_INTERNOS: Role[] = ["admin", "seller", "finance", "service"];
 
 // Gabarito (fixado aqui de propósito: mudar a guarda de uma ação sem mudar este teste deve quebrar).
 const ACTIONS: Array<{ name: string; allowed: Role[]; call: (c: Caller) => Promise<unknown> }> = [
-  // Recepção (service) localiza fila, faz check-in, atribui mesa e marca NT; cadastrar o casal e registrar resultado comercial ficam com a sala (admin/seller).
+  // Recepção (service) localiza fila, faz check-in, atribui mesa e marca NT; registrar resultado comercial fica com a sala (admin/seller). Cadastrar o casal (captures.create) é da sala e, com RECEPTION_CAPTURE_CREATE_ENABLED ligada (decisão 25/10, 2B), também da recepção.
   { name: "captures.receptionQueue", allowed: SALA_E_RECEPCAO, call: c => c.captures.receptionQueue({}) },
   { name: "captures.checkIn", allowed: SALA_E_RECEPCAO, call: c => c.captures.checkIn({ id: 1 }) },
   { name: "captures.assignRoom", allowed: SALA_E_RECEPCAO, call: c => c.captures.assignRoom({ id: 1, salesTable: "M1" } as never) },
   { name: "captures.startPresentation", allowed: SALA_E_RECEPCAO, call: c => c.captures.startPresentation({ id: 1 }) },
   { name: "captures.endPresentation", allowed: SALA_E_RECEPCAO, call: c => c.captures.endPresentation({ id: 1 }) },
   { name: "captures.markNoTour", allowed: SALA_E_RECEPCAO, call: c => c.captures.markNoTour({ id: 1, reason: "SYN sem tour" } as never) },
+  { name: "captures.create", allowed: SALA, call: c => c.captures.create({ customer: { fullName: "SYN Casal RBAC" } } as never) },
   { name: "captures.list", allowed: SALA, call: c => c.captures.list({}) },
   { name: "captures.updateStatus", allowed: SALA, call: c => c.captures.updateStatus({ id: 1, presentationStatus: "closed" } as never) },
   { name: "captures.recordCommercialOutcome", allowed: SALA, call: c => c.captures.recordCommercialOutcome({ id: 1, outcome: "vendeu" } as never) },
@@ -79,5 +80,24 @@ describe("matriz RBAC persona x ação da sala (routers reais, sem banco)", () =
   it("override de permissão NÃO consegue dar à recepção o direito de ligar o código do casal (decisão 25/10: recepção não vincula; as telas decidem pelo papel)", () => {
     const sanitized = sanitizePermissionOverrides({ capabilities: { "capture.couple_code.link": ["admin", "seller", "service"] } });
     expect(Object.keys(sanitized.capabilities)).not.toContain("capture.couple_code.link");
+  });
+});
+
+describe("M-A12-02 (decisão 25/10, 2B): recepção também cadastra casal sem ficha, atrás de flag", () => {
+  const create = (role: Role) => outcome(callerFor(role).captures.create({ customer: { fullName: "SYN Casal sem ficha" } } as never));
+  it("flag desligada (padrão): recepção (service) segue FORBIDDEN no cadastro", async () => {
+    delete process.env.RECEPTION_CAPTURE_CREATE_ENABLED;
+    expect(await create("service")).toBe("FORBIDDEN");
+  });
+  it("flag ligada: recepção passa do RBAC; financeiro e usuário comum seguem FORBIDDEN; vincular o código segue só da sala", async () => {
+    process.env.RECEPTION_CAPTURE_CREATE_ENABLED = "true";
+    try {
+      expect(await create("service")).not.toBe("FORBIDDEN");
+      expect(await create("admin")).not.toBe("FORBIDDEN");
+      expect(await create("seller")).not.toBe("FORBIDDEN");
+      expect(await create("finance")).toBe("FORBIDDEN");
+      expect(await create("user")).toBe("FORBIDDEN");
+      expect(await outcome(callerFor("service").captureSheet.setCoupleCode({ captureId: 1, coupleCode: "SYN-RBAC-2" }))).toBe("FORBIDDEN");
+    } finally { delete process.env.RECEPTION_CAPTURE_CREATE_ENABLED; }
   });
 });

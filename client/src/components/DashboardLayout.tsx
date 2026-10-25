@@ -183,6 +183,9 @@ function DashboardLayoutContent({
   // Item 4: sobrescritas de permissão (flag OFF no servidor = vazio = padrões de hoje). Aplicadas durante o render, antes de qualquer canOpenMenuPath abaixo.
   const permissionOverrides = trpc.permissionOverrides.effective.useQuery(undefined, { enabled: Boolean(user), retry: false, refetchOnWindowFocus: true });
   syncPermissionOverrides(permissionOverrides.data);
+  // Decisão 25/10 ("2B é a recepção mesmo"): com RECEPTION_CAPTURE_CREATE_ENABLED ligada no servidor, a recepção (service) abre a Captação para cadastrar casal sem ficha; desligada, a tela segue escondida.
+  const captureRule = trpc.captures.visitRule.useQuery(undefined, { enabled: user?.role === "service", staleTime: 5 * 60_000, retry: false });
+  const receptionOpens = (path: string) => user?.role === "service" && captureRule.data?.receptionCreate === true && (path === "/captacao" || path.startsWith("/captacao/"));
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === "collapsed";
@@ -260,7 +263,7 @@ function DashboardLayoutContent({
               <div key={group.label} className="px-3 pt-4 first:pt-2">
                 {!isCollapsed ? <p className="px-2 pb-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-white/35">{group.label}</p> : null}
                 <SidebarMenu className="gap-0">
-                  {group.items.filter(item => canOpenMenuPath(user?.role, item.path)).map(item => {
+                  {group.items.filter(item => (canOpenMenuPath(user?.role, item.path) || receptionOpens(item.path))).map(item => {
                     const isActive = matchesMenuPath(location, item.path);
                     return (
                       <SidebarMenuItem key={item.path}>
@@ -333,7 +336,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main id="conteudo-principal" tabIndex={-1} className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{canOpenMenuPath(user?.role, location) ? children : <div role="alert" className="mx-auto mt-16 max-w-md rounded-xl border border-[#e9e4da] bg-white p-6 text-center"><p className="font-serif text-xl text-[#1d2b2a]">Sem permissão para esta área</p><p className="mt-2 text-sm text-muted-foreground">Seu perfil não acessa esta tela. Se precisar, peça à administração.</p></div>}</main>
+        <main id="conteudo-principal" tabIndex={-1} className="min-h-screen flex-1 bg-[#f5f3ed] p-5 sm:p-8">{(canOpenMenuPath(user?.role, location) || receptionOpens(location)) ? children : <div role="alert" className="mx-auto mt-16 max-w-md rounded-xl border border-[#e9e4da] bg-white p-6 text-center"><p className="font-serif text-xl text-[#1d2b2a]">Sem permissão para esta área</p><p className="mt-2 text-sm text-muted-foreground">Seu perfil não acessa esta tela. Se precisar, peça à administração.</p></div>}</main>
       </SidebarInset>
     </>
   );
