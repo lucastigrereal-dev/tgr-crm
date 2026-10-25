@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS `non_buyer_deliveries` (
 	`captureId` int NOT NULL,
 	`seq` int NOT NULL,
 	`kind` enum('eligible','revoked') NOT NULL,
-	`status` enum('pending','delivered','superseded','suppressed','rejected') NOT NULL DEFAULT 'pending',
+	`status` enum('pending','delivered','superseded','suppressed','rejected','dead') NOT NULL DEFAULT 'pending',
 	`reason` varchar(60),
 	`attempts` int NOT NULL DEFAULT 0,
 	`nextAttemptAt` timestamp(3),

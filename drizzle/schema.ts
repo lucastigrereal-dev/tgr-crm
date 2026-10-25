@@ -552,7 +552,7 @@ export const nonBuyerDeliveries = mysqlTable("non_buyer_deliveries", {
   captureId: int("captureId").notNull().references(() => captureRecords.id),
   seq: int("seq").notNull(),
   kind: mysqlEnum("kind", ["eligible", "revoked"]).notNull(),
-  status: mysqlEnum("status", ["pending", "delivered", "superseded", "suppressed", "rejected"]).default("pending").notNull(),
+  status: mysqlEnum("status", ["pending", "delivered", "superseded", "suppressed", "rejected", "dead"]).default("pending").notNull(),
   reason: varchar("reason", { length: 60 }),
   attempts: int("attempts").default(0).notNull(),
   nextAttemptAt: timestamp("nextAttemptAt", { fsp: 3 }),
