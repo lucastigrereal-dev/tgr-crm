@@ -257,4 +257,14 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
     }
     expect(await snapshot(contractId, installmentId)).toEqual(before);
   });
+
+  // M-A04-01: tentar validar a venda antes dos portões deve falhar e não deixar rastro de venda validada nem de lançamento.
+  it("M-A04-01: validar antes da conferência do comprovante é recusado e a venda segue não validada", async () => {
+    const { contractId, installmentId } = await seedSale("gate-first", { validated: false });
+    await expect(svc.validateSale(adminId, { contractId })).rejects.toBeDefined();
+    const { saleValidations } = await import("../drizzle/schema");
+    const [validation] = await db.select().from(saleValidations).where(eq(saleValidations.contractId, contractId));
+    expect(validation?.validatedAt ?? null).toBeNull();
+    expect(await snapshot(contractId, installmentId)).toEqual(untouched);
+  });
 });
