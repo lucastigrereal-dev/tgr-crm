@@ -3,8 +3,8 @@ export type CommissionStatus = "expected" | "awaiting_customer_payment" | "closi
 export type PaymentMethod = "pix" | "debit" | "credit" | "boleto" | "cash" | "cheque" | "other";
 
 export function commissionAssignments(input: { linerId: number | null; closerId: number | null }) { if (input.linerId && input.linerId === input.closerId) return [{ userId: input.linerId, role: "ftb" as const }]; return [{ userId: input.linerId, role: "liner" as const }, { userId: input.closerId, role: "closer" as const }].filter((item): item is { userId: number; role: "liner" | "closer" } => Boolean(item.userId)); }
-/** Regra de arredondamento da comissão (M-A08-02): centavos inteiros, metade para cima. `toPrecision(12)` elimina o ruído de float (1.005*100 = 100.4999…) antes de arredondar. */
-export const toCents = (value: number) => Math.round(Number((value * 100).toPrecision(12)));
+/** Regra de arredondamento da comissão (M-A08-02): centavos inteiros, metade para cima. `toPrecision(15)` elimina o ruído de float (1.005*100 = 100.4999…) antes de arredondar. */
+export const toCents = (value: number) => Math.round(Number((value * 100).toPrecision(15)));
 const money = (value: number) => toCents(value) / 100;
 export const roundMoney = money;
 const endOfMonth = (date: Date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));

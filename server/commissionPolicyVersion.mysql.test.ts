@@ -85,6 +85,15 @@ describe.skipIf(!integrationUrl)("F1: política de comissão por vigência", () 
       await expect(api.create({ resortId: other, policyType: "commission", version: "ov-1b", policy: JSON.parse(policy(0.04)), effectiveAt: t1 } as never)).resolves.toMatchObject({ id: expect.any(Number) });
     });
 
+    it("M-A08-02 (Codex P2): dois admins criando a mesma vigência ao mesmo tempo, só um passa", async () => {
+      const resort = await newResort("overlap-race", null);
+      const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);
+      const at = new Date(Date.now() + 5 * 86_400_000);
+      const results = await Promise.allSettled(["race-a", "race-b", "race-c", "race-d"].map(version => api.create({ resortId: resort, policyType: "commission", version, policy: JSON.parse(policy(0.02)), effectiveAt: at } as never)));
+      expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+      results.filter(result => result.status === "rejected").forEach(result => expect((result as PromiseRejectedResult).reason).toMatchObject({ code: "CONFLICT" }));
+    });
+
     it("Opus: vigência retroativa é recusada para commission e stock_hold; futura e atual passam", async () => {
       const resort = await newResort("retro", null);
       const api = (await import("./routers/commercialPolicies")).commercialPoliciesRouter.createCaller({ user: { id: adminId, role: "admin" } } as never);

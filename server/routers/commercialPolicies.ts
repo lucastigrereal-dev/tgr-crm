@@ -54,22 +54,26 @@ export const commercialPoliciesRouter = router({
       const parsed = saleTermsPolicySchema.safeParse(input.policy);
       if (!parsed.success) throw new TRPCError({ code: "BAD_REQUEST", message: "Política de formalização inválida. Informe usageModel, balanceInstallmentCount e balanceCadenceMonths." });
     }
-    if (input.policyType === "commission") {
-      // M-A08-02: janelas de vigência nunca se sobrepõem. A nova versão tem que começar DEPOIS de toda versão de comissão ainda aberta do empreendimento; empate ou inversão deixaria a versão do VENDEU ambígua.
-      // A coluna guarda segundos inteiros: compara pelo segundo cheio para o empate não escapar por causa dos milissegundos.
-      const startsAt = new Date(Math.floor((input.effectiveAt ?? new Date()).getTime() / 1000) * 1000);
-      const overlapping = (await db.select({ id: commercialPolicyVersions.id, version: commercialPolicyVersions.version }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, "commission"), isNull(commercialPolicyVersions.retiredAt), gte(commercialPolicyVersions.effectiveAt, startsAt))).limit(1))[0];
-      if (overlapping) throw new TRPCError({ code: "CONFLICT", message: `A vigência se sobrepõe à versão ${overlapping.version}. Use uma data posterior à dela ou aposente a versão antes.` });
-    }
-        const duplicate = (await db.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, input.policyType), eq(commercialPolicyVersions.version, input.version))).limit(1))[0];
-    if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma versão com esse código para o empreendimento e tipo de política." });
-    let created;
-    try {
-      created = await db.insert(commercialPolicyVersions).values({ resortId: input.resortId, policyType: input.policyType, version: input.version, policyJson: JSON.stringify(input.policyType === "commission" ? materializeReleaseOn(input.policy) : input.policy), effectiveAt: input.effectiveAt ?? new Date(), approvedByUserId: ctx.user.id }).$returningId();
-    } catch (error) {
-      if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "A versão da política foi criada por outra operação." });
-      throw error;
-    }
+    // M-A08-02: janelas de vigência de comissão nunca se sobrepõem. A nova versão tem que começar DEPOIS de toda versão de comissão ainda aberta do empreendimento; empate ou inversão deixaria a versão do VENDEU ambígua.
+    // A checagem e o insert rodam na mesma transação, com a linha do empreendimento travada, para dois admins simultâneos não passarem juntos.
+    // A coluna guarda segundos inteiros: compara pelo segundo cheio para o empate não escapar por causa dos milissegundos.
+    const startsAt = new Date(Math.floor((input.effectiveAt ?? new Date()).getTime() / 1000) * 1000);
+    const insertVersion = async (tx: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select" | "insert">) => {
+      if (input.policyType === "commission") {
+        await tx.select({ id: resorts.id }).from(resorts).where(eq(resorts.id, input.resortId)).limit(1).for("update");
+        const overlapping = (await tx.select({ id: commercialPolicyVersions.id, version: commercialPolicyVersions.version }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, "commission"), isNull(commercialPolicyVersions.retiredAt), gte(commercialPolicyVersions.effectiveAt, startsAt))).limit(1))[0];
+        if (overlapping) throw new TRPCError({ code: "CONFLICT", message: `A vigência se sobrepõe à versão ${overlapping.version}. Use uma data posterior à dela ou aposente a versão antes.` });
+      }
+      const duplicate = (await tx.select({ id: commercialPolicyVersions.id }).from(commercialPolicyVersions).where(and(eq(commercialPolicyVersions.resortId, input.resortId), eq(commercialPolicyVersions.policyType, input.policyType), eq(commercialPolicyVersions.version, input.version))).limit(1))[0];
+      if (duplicate) throw new TRPCError({ code: "CONFLICT", message: "Já existe uma versão com esse código para o empreendimento e tipo de política." });
+      try {
+        return await tx.insert(commercialPolicyVersions).values({ resortId: input.resortId, policyType: input.policyType, version: input.version, policyJson: JSON.stringify(input.policyType === "commission" ? materializeReleaseOn(input.policy) : input.policy), effectiveAt: input.effectiveAt ?? new Date(), approvedByUserId: ctx.user.id }).$returningId();
+      } catch (error) {
+        if (isDuplicateKeyError(error)) throw new TRPCError({ code: "CONFLICT", message: "A versão da política foi criada por outra operação." });
+        throw error;
+      }
+    };
+    const created = input.policyType === "commission" ? await db.transaction(tx => insertVersion(tx)) : await insertVersion(db);
     const id = created[0]?.id;
     if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Não foi possível versionar a política comercial." });
     await recordAudit(ctx.user.id, "commercial_policy_version", id, "created", `Política ${input.policyType} ${input.version} criada para empreendimento ${input.resortId}.`);
