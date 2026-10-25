@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
+import { INCLUDE_IN_PROGRESS_KEY } from "./officialIndicators";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
-import { auditLogs, captureRecords, commercialFractions, contracts, customers, resorts, saleValidations, units, users } from "../drizzle/schema";
+import { auditLogs, captureRecords, captureSheetSettings, commercialFractions, contracts, customers, resorts, saleValidations, units, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
 // CRM-D1 em MySQL real: indicadores oficiais. Dados sintéticos (SYN-), resort próprio por teste para isolar o filtro.
@@ -27,6 +28,8 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     [{ id: adminId }] = await db.insert(users).values({ openId: `oi-admin-${runId}`, name: "Admin SYN", role: "admin" }).$returningId();
     [{ id: customerId }] = await db.insert(customers).values({ fullName: `SYN Indicadores ${runId}`, email: `syn.oi.${runId}@example.test`, status: "active" }).$returningId();
   });
+  // Cada teste parte do padrão (sem configuração gravada): iniciados, inclusive em andamento.
+  beforeEach(async () => { await db.delete(captureSheetSettings).where(eq(captureSheetSettings.key, INCLUDE_IN_PROGRESS_KEY)); });
   afterAll(async () => { process.env = previousEnv; await pool?.end(); });
 
   const customerOf = new Map<number, number>();
@@ -57,6 +60,7 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     await validatedSale(resortId, "A2", 1, day(15));
     await validatedSale(resortId, "A3", 1, day(16), "cancelled");
     await validatedSale(resortId, "A4", 1, new Date(Date.UTC(2026, 10, 3)));
+    await (await caller()).setConfig({ includeInProgress: false });
     const result = await query(resortId);
     expect(result).toMatchObject({ attendances: 10, validatedSales: 2, soldQuotas: 3, utilizationPct: 20, efficiencyPer100: 30, provisional: true });
     expect(result.denominator).toMatchObject({ includeInProgress: false, inProgressExcluded: 1 });
@@ -73,13 +77,15 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
   it("configuração: só admin liga 'em andamento no denominador'; muda o resultado e deixa trilha", async () => {
     const resortId = await newResort("C");
     await attend(resortId); await attend(resortId, { presentationStatus: "presented" });
+    expect((await query(resortId)).attendances).toBe(2); // padrão: iniciados, inclusive em andamento
+    await (await caller()).setConfig({ includeInProgress: false });
     expect((await query(resortId)).attendances).toBe(1);
     await expect((await caller("finance")).setConfig({ includeInProgress: true })).rejects.toThrow();
     await (await caller()).setConfig({ includeInProgress: true });
     try {
       expect((await query(resortId)).attendances).toBe(2);
       expect((await (await caller("finance")).config()).includeInProgress).toBe(true);
-    } finally { await (await caller()).setConfig({ includeInProgress: false }); }
+    } finally { await (await caller()).setConfig({ includeInProgress: true }); }
     const trail = await db.select().from(auditLogs).where(eq(auditLogs.entityType, "official_indicators"));
     expect(trail.length).toBeGreaterThanOrEqual(2);
   });
@@ -108,5 +114,92 @@ describe.skipIf(!integrationUrl)("D1: indicadores oficiais", () => {
     await attend(resortId, { checkedInAt: new Date(Date.UTC(2026, 10, 1, 2, 0, 0)) });
     await attend(resortId, { checkedInAt: new Date(Date.UTC(2026, 9, 1, 2, 0, 0)) });
     expect(await query(resortId)).toMatchObject({ attendances: 1 });
+  });
+
+  it("M-A01-03: padrão conta iniciados (inclusive em andamento) e o resultado da sala fica separado de venda validada", async () => {
+    const resortId = await newResort("F");
+    const mk = async (label: string) => (await db.insert(customers).values({ fullName: `SYN OI F${label} ${runId}`, email: `syn.oi.f${label}.${runId}@example.test`, status: "active" }).$returningId())[0]!.id;
+    await db.insert(captureRecords).values({ customerId: await mk("v"), resortId, checkedInAt: day(5), presentationStatus: "closed", commercialOutcome: "vendeu" } as never);
+    await db.insert(captureRecords).values({ customerId: await mk("c"), resortId, checkedInAt: day(5), presentationStatus: "closed", commercialOutcome: "caiu_em_mesa" } as never);
+    await db.insert(captureRecords).values({ customerId: await mk("n"), resortId, checkedInAt: day(6), presentationStatus: "no_tour", ntKind: "perfil" } as never);
+    await db.insert(captureRecords).values({ customerId: await mk("e"), resortId, checkedInAt: day(6), presentationStatus: "closed" } as never);
+    await db.insert(captureRecords).values({ customerId: await mk("a"), resortId, checkedInAt: day(7), presentationStatus: "presented" } as never);
+    const result = await query(resortId);
+    expect(result.attendances).toBe(5);
+    expect(result.denominator).toMatchObject({ includeInProgress: true });
+    // VENDEU de sala não é venda validada: sem validação do CRM, o numerador é 0.
+    expect(result).toMatchObject({ validatedSales: 0, utilizationPct: 0 });
+    expect(result.outcomes).toEqual({ started: 5, vendeu: 1, caiuEmMesa: 1, naoTour: 1, encerradoSemVenda: 1, emAndamento: 1 });
+  });
+
+  it("M-A01-03: validação tardia muda só o numerador do mês do check-in; o mesmo atendimento não conta duas vezes", async () => {
+    const resortId = await newResort("G");
+    const customer = customerOf.get(resortId)!;
+    await db.insert(captureRecords).values({ customerId: customer, resortId, checkedInAt: day(20), presentationStatus: "closed", commercialOutcome: "vendeu" } as never);
+    // Atendimento em outubro, validação em novembro (ajuste tardio): a venda pertence à coorte de outubro.
+    const lateValidated = new Date(Date.UTC(2026, 10, 9, 15, 0, 0));
+    await validatedSale(resortId, "G1", 3, lateValidated);
+    const october = await query(resortId);
+    expect(october).toMatchObject({ attendances: 1, validatedSales: 0, soldQuotas: 0 }); // por data de validação: nada em outubro
+    expect(october.cohort).toMatchObject({ attendances: 1, validatedSales: 1, soldQuotas: 3, utilizationPct: 100, efficiencyPer100: 300 });
+    const november = await (await caller()).get({ from: "2026-11-01", to: "2026-11-30", resortId });
+    expect(november).toMatchObject({ attendances: 0, validatedSales: 1, soldQuotas: 3 }); // coluna por data da validação
+    expect(november.cohort).toMatchObject({ attendances: 0, validatedSales: 0, soldQuotas: 0 }); // coorte de novembro não ganha a venda
+    // Segundo atendimento do mesmo casal em novembro, ANTES da validação: a venda passa para o último check-in, uma vez só.
+    await db.insert(captureRecords).values({ customerId: customer, resortId, checkedInAt: new Date(Date.UTC(2026, 10, 5, 15, 0, 0)), presentationStatus: "closed" } as never);
+    const october2 = await query(resortId);
+    const november2 = await (await caller()).get({ from: "2026-11-01", to: "2026-11-30", resortId });
+    expect(october2.cohort.validatedSales + november2.cohort.validatedSales).toBe(1);
+    expect(november2.cohort).toMatchObject({ validatedSales: 1, soldQuotas: 3 });
+  });
+
+  it("M-A01-03: virada de dia no fuso do projeto (23:30 local de 31/10 é outubro; 00:30 local de 1/11 é novembro)", async () => {
+    const resortId = await newResort("H");
+    await attend(resortId, { checkedInAt: new Date(Date.UTC(2026, 10, 1, 2, 30, 0)) }); // 23:30 de 31/10 em Recife/Fortaleza (UTC-3)
+    await attend(resortId, { checkedInAt: new Date(Date.UTC(2026, 10, 1, 3, 30, 0)) }); // 00:30 de 1/11
+    expect(await query(resortId)).toMatchObject({ attendances: 1 });
+    expect(await (await caller()).get({ from: "2026-11-01", to: "2026-11-30", resortId })).toMatchObject({ attendances: 1 });
+  });
+
+  it("M-A07-05 / QA-02, QA-04: 5 vendas com 8 cotas (1+2+1+3+1); depois do cancelamento do grupo de 2 e do distrato do grupo de 3 ficam 3 grupos ativos e 5 cotas encerradas", async () => {
+    const resortId = await newResort("I");
+    for (let i = 0; i < 5; i += 1) await attend(resortId, { customerId: (await db.insert(customers).values({ fullName: `SYN OI I${i} ${runId}`, email: `syn.oi.i${i}.${runId}@example.test`, status: "active" }).$returningId())[0]!.id });
+    const contractIds: number[] = [];
+    for (const [i, quotas] of [1, 2, 1, 3, 1].entries()) contractIds.push(await validatedSale(resortId, `I${i}`, quotas, day(12)));
+    // Vínculo venda → contrato → frações: a venda é o contrato, e cada contrato carrega as suas cotas (não se soma 8 vendas).
+    for (const [i, id] of contractIds.entries()) {
+      const rows = await db.select().from(commercialFractions).where(eq(commercialFractions.currentContractId, id));
+      expect(rows.length).toBe([1, 2, 1, 3, 1][i]);
+    }
+    expect(await query(resortId)).toMatchObject({ validatedSales: 5, soldQuotas: 8 });
+    // Cancelamento do grupo de 2 e distrato executado do grupo de 3: contratos cancelados saem; no distrato executado as cotas voltam ao estoque.
+    await db.update(contracts).set({ status: "cancelled" } as never).where(eq(contracts.id, contractIds[1]!));
+    await db.update(contracts).set({ status: "cancelled" } as never).where(eq(contracts.id, contractIds[3]!));
+    await db.update(commercialFractions).set({ status: "available", currentContractId: null } as never).where(eq(commercialFractions.currentContractId, contractIds[3]!));
+    const after = await query(resortId);
+    expect(after).toMatchObject({ validatedSales: 3, soldQuotas: 3 }); // 3 grupos ativos de 1 cota; 2 + 3 = 5 cotas encerradas
+    expect(8 - after.soldQuotas).toBe(5);
+  });
+
+  it("Codex P2 #130: check-in de outro empreendimento não leva a venda para outro mês de coorte", async () => {
+    const resortA = await newResort("J");
+    const resortB = await newResort("K");
+    const customer = customerOf.get(resortA)!;
+    await db.insert(captureRecords).values({ customerId: customer, resortId: resortA, checkedInAt: day(20), presentationStatus: "closed" } as never);
+    await db.insert(captureRecords).values({ customerId: customer, resortId: resortB, checkedInAt: new Date(Date.UTC(2026, 10, 5, 15, 0, 0)), presentationStatus: "closed" } as never);
+    const [c] = await db.insert(contracts).values({ number: `OI-J-${runId}`, customerId: customer, resortId: resortA, usageModel: "fixed_week", status: "active", totalAmount: "1000.00" } as never).$returningId();
+    await db.insert(saleValidations).values({ contractId: c.id, validatedAt: new Date(Date.UTC(2026, 10, 9, 15, 0, 0)) } as never);
+    const oct = async (resortId?: number) => (await caller()).get({ from: "2026-10-01", to: "2026-10-31", resortId });
+    const nov = async (resortId?: number) => (await caller()).get({ from: "2026-11-01", to: "2026-11-30", resortId });
+    expect((await oct(resortA)).cohort.validatedSales).toBe(1);
+    expect((await oct()).cohort.validatedSales).toBeGreaterThanOrEqual(1); // sem filtro a venda continua em outubro (empreendimento A)
+    expect((await nov(resortA)).cohort.validatedSales).toBe(0);
+  });
+
+  it("Codex P2 #130: venda validada sem resultado de sala não vira 'encerrado sem venda'", async () => {
+    const resortId = await newResort("L");
+    await db.insert(captureRecords).values({ customerId: customerOf.get(resortId)!, resortId, checkedInAt: day(10), presentationStatus: "presented" } as never);
+    await validatedSale(resortId, "L1", 1, day(12));
+    expect((await query(resortId)).outcomes).toMatchObject({ started: 1, encerradoSemVenda: 0, emAndamento: 1 });
   });
 });

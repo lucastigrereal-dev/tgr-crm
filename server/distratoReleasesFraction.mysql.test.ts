@@ -63,4 +63,38 @@ describe.skipIf(!integrationUrl)("distrato em MySQL real devolve a cota ao estoq
     expect((await db.select().from(commercialFractionHistory).where(eq(commercialFractionHistory.fractionId, mine.fractionId)))).toHaveLength(1);
   });
 
+  // M-A09-02 (QA-02/QA-04, D1=A): a fração só volta no distrato EXECUTADO; pedido, aprovação e recusa NUNCA a soltam, e o CAIU EM MESA não é venda mas não devolve cota sozinho.
+  it("M-A09-02: pedido e aprovação NÃO soltam a cota; recusa mantém; só a execução devolve (sold -> available uma vez)", async () => {
+    const s = await seed("ciclo");
+    await db.update(contractCancellationRequests).set({ status: "requested" }).where(eq(contractCancellationRequests.id, s.requestId));
+    expect(await fractionOf(s.fractionId)).toMatchObject({ status: "sold", currentContractId: s.contractId });
+    await expect(admin().executeCancellation({ requestId: s.requestId })).rejects.toMatchObject({ code: "CONFLICT" }); // não aprovado não executa
+    expect(await fractionOf(s.fractionId)).toMatchObject({ status: "sold", currentContractId: s.contractId });
+    await admin().decideCancellation({ requestId: s.requestId, decision: "approved" });
+    expect(await fractionOf(s.fractionId)).toMatchObject({ status: "sold", currentContractId: s.contractId }); // aprovado ainda NÃO solta
+    await admin().executeCancellation({ requestId: s.requestId });
+    expect(await fractionOf(s.fractionId)).toMatchObject({ status: "available", currentContractId: null });
+
+    const rejected = await seed("recusado");
+    await db.update(contractCancellationRequests).set({ status: "requested" }).where(eq(contractCancellationRequests.id, rejected.requestId));
+    await admin().decideCancellation({ requestId: rejected.requestId, decision: "rejected" });
+    await expect(admin().executeCancellation({ requestId: rejected.requestId })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await fractionOf(rejected.fractionId)).toMatchObject({ status: "sold", currentContractId: rejected.contractId });
+  });
+
+  it("M-A09-02: distrato de 3 cotas devolve as 3 de uma vez e só as do contrato (QA-04); a recepção não decide nem executa", async () => {
+    const s = await seed("tres");
+    const extra = [] as number[];
+    for (const n of [2, 3]) {
+      const [unit] = await db.insert(units).values({ resortId, code: `U-DFR-tres-${n}-${runId}` }).$returningId();
+      const [fraction] = await db.insert(commercialFractions).values({ resortId, unitId: unit.id, code: `F-DFR-tres-${n}-${runId}`, sequence: 1, status: "sold", currentContractId: s.contractId, listPrice: "5000.00" }).$returningId();
+      extra.push(fraction.id);
+    }
+    const reception = contractsRouter.createCaller({ user: { id: adminId, role: "service" } } as never);
+    await expect(reception.executeCancellation({ requestId: s.requestId })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(reception.decideCancellation({ requestId: s.requestId, decision: "approved" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const outcome = await admin().executeCancellation({ requestId: s.requestId });
+    expect([...(outcome as { returnedFractionIds: number[] }).returnedFractionIds].sort()).toEqual([s.fractionId, ...extra].sort());
+    for (const id of [s.fractionId, ...extra]) expect(await fractionOf(id)).toMatchObject({ status: "available", currentContractId: null });
+  });
 });

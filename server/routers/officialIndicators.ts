@@ -6,7 +6,7 @@ import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { txAudit } from "../txOutbox";
 import { isIndicatorCode, OFFICIAL_INDICATOR_CODES, resolveIndicatorCatalog } from "../officialIndicatorCatalog";
-import { classifyAttendances, computeOfficialIndicators, INCLUDE_IN_PROGRESS_KEY, OFFICIAL_INDICATORS_DEFINITION_VERSION, type AttendanceFact } from "../officialIndicators";
+import { attributeSaleToCheckIn, classifyAttendances, classifyOutcomes, computeOfficialIndicators, INCLUDE_IN_PROGRESS_KEY, OFFICIAL_INDICATORS_DEFINITION_VERSION, type AttendanceFact } from "../officialIndicators";
 import { withDeadlockRetry } from "../mysqlErrors";
 import { ENV } from "../_core/env";
 import { addCalendarDays, localDayStart } from "../captureSheetDomain";
@@ -21,7 +21,8 @@ const range = z.object({ from: realDay, to: realDay, resortId: z.number().int().
 async function requireDb() { const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." }); return db; }
 async function includeInProgress(db: Awaited<ReturnType<typeof requireDb>>) {
   const [row] = await db.select().from(captureSheetSettings).where(eq(captureSheetSettings.key, INCLUDE_IN_PROGRESS_KEY)).limit(1);
-  return row?.value === "1";
+  // Sem registro = padrão recomendado (iniciados, inclusive em andamento); só um "0" gravado pelo admin tira o em andamento.
+  return row ? row.value === "1" : true;
 }
 
 function requireCatalogFlag() {
@@ -92,6 +93,7 @@ export const officialIndicatorsRouter = router({
       hasValidatedSale: Boolean(row.checkedInAt && (validatedAtByCustomer.get(row.customerId) ?? []).some(at => at >= row.checkedInAt!)),
     }));
     const attendance = classifyAttendances(facts, from, to, withInProgress);
+    const outcomes = classifyOutcomes(facts, from, to);
 
     // Numeradores: só fatos do CRM. Venda validada no período, contrato não cancelado; cota = fração cujo contrato atual é o da venda (mínimo 1 por venda).
     const validated = await db.select({ contractId: saleValidations.contractId }).from(saleValidations)
@@ -106,10 +108,39 @@ export const officialIndicatorsRouter = router({
       const byContract = new Map(fractionCounts.map(row => [row.contractId, Number(row.quotas)]));
       soldQuotas = contractIds.reduce((sum, id) => sum + Math.max(1, byContract.get(id) ?? 0), 0);
     }
+
+    // Coorte pelo início do atendimento: cada venda validada (qualquer data) cai no mês do check-in a que pertence, uma vez só.
+    let cohortSales = 0, cohortQuotas = 0;
+    if (customerIds.length) {
+      const allCheckIns = await db.select({ customerId: captureRecords.customerId, resortId: captureRecords.resortId, checkedInAt: captureRecords.checkedInAt }).from(captureRecords)
+        .where(and(inArray(captureRecords.customerId, customerIds), isNotNull(captureRecords.checkedInAt), input.resortId ? eq(captureRecords.resortId, input.resortId) : undefined));
+      const checkInsByCustomer = new Map<number, { at: Date; resortId: number | null }[]>();
+      for (const row of allCheckIns) if (row.checkedInAt) checkInsByCustomer.set(row.customerId, [...(checkInsByCustomer.get(row.customerId) ?? []), { at: row.checkedInAt, resortId: row.resortId ?? null }]);
+      const cohortCandidates = await db.select({ contractId: saleValidations.contractId, customerId: contracts.customerId, resortId: contracts.resortId, validatedAt: saleValidations.validatedAt }).from(saleValidations)
+        .innerJoin(contracts, eq(contracts.id, saleValidations.contractId))
+        .where(and(inArray(contracts.customerId, customerIds), isNotNull(saleValidations.validatedAt), ne(contracts.status, "cancelled"), input.resortId ? eq(contracts.resortId, input.resortId) : undefined)).limit(MAX_ROWS + 1);
+      if (cohortCandidates.length > MAX_ROWS) throw new TRPCError({ code: "BAD_REQUEST", message: "Período grande demais; reduza o intervalo." });
+      const cohortContractIds = new Set<number>();
+      for (const row of cohortCandidates) {
+        // Mesmo empreendimento: o check-in de outro empreendimento não pode levar a venda de um contrato para outro mês (com ou sem o filtro de projeto).
+        const sameResort = (checkInsByCustomer.get(row.customerId) ?? []).filter(item => row.resortId == null || item.resortId == null || item.resortId === row.resortId).map(item => item.at);
+        const startedAt = row.validatedAt ? attributeSaleToCheckIn(sameResort, row.validatedAt) : null;
+        if (startedAt && startedAt >= from && startedAt < to) cohortContractIds.add(row.contractId);
+      }
+      cohortSales = cohortContractIds.size;
+      if (cohortSales) {
+        const counts = await db.select({ contractId: commercialFractions.currentContractId, quotas: sql<number>`COUNT(*)` }).from(commercialFractions)
+          .where(and(inArray(commercialFractions.currentContractId, Array.from(cohortContractIds)), eq(commercialFractions.status, "sold"))).groupBy(commercialFractions.currentContractId);
+        const byId = new Map(counts.map(row => [row.contractId, Number(row.quotas)]));
+        cohortQuotas = Array.from(cohortContractIds).reduce((sum, id) => sum + Math.max(1, byId.get(id) ?? 0), 0);
+      }
+    }
     return {
       ...computeOfficialIndicators({ attendances: attendance.attendances, validatedSales: contractIds.length, soldQuotas }),
+      cohort: { basisCode: "check_in_start", basis: "dia de início do atendimento (check-in) no fuso do projeto", timezone: tz, ...computeOfficialIndicators({ attendances: attendance.attendances, validatedSales: cohortSales, soldQuotas: cohortQuotas }) },
+      outcomes,
       definitionVersion: OFFICIAL_INDICATORS_DEFINITION_VERSION, provisional: true,
-      denominator: { definition: "casal com check-in da recepção no período e desfecho registrado (resultado comercial, não tour ou ficha encerrada)", includeInProgress: withInProgress, inProgressExcluded: attendance.inProgressExcluded, inProgressTotal: attendance.inProgressTotal },
+      denominator: { definition: "atendimentos iniciados: casal com check-in da recepção no período (dia civil no fuso do projeto); em andamento entra no padrão, e o admin pode tirá-lo (provisório, aceite pendente de ratificação do Lucas)", includeInProgress: withInProgress, inProgressExcluded: attendance.inProgressExcluded, inProgressTotal: attendance.inProgressTotal },
       numerator: { definition: "venda validada pelo CRM (sale_validations.validatedAt) no período, contrato não cancelado; cota = fração vendida do contrato (mínimo 1 por venda)", manualWonIgnored: true },
       range: { from: input.from, to: input.to },
     };

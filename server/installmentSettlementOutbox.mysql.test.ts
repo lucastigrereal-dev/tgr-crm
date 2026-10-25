@@ -221,4 +221,40 @@ describe.skipIf(!integrationUrl)("issue #43: fatos da baixa nascem com a baixa e
       expect(envelope.correlationId).toBe(`crm-fin-${row.id}`);
     }
   });
+
+  // M-A08-01: dicionário financeiro. Comprovante conferido NÃO liquida; baixa repetida/concorrente e reprocesso do fato não duplicam o lançamento
+  // (a chave natural é parcela + tipo do fato: installment-paid:<parcela>, commission-created:<comissão>; eventId novo nunca cria segundo lançamento).
+  it("M-A08-01: comprovante conferido não liquida a parcela (sem lançamento, sem installment.paid, sem comissão)", async () => {
+    const { contractId, installmentId } = await seedSale("proof-only", { validated: false });
+    await svc.confirmPayment(adminId, { contractId, note: "comprovante conferido" });
+    expect(await snapshot(contractId, installmentId)).toEqual(untouched);
+  });
+
+  it("M-A08-01: 4 baixas simultâneas da mesma parcela => 1 lançamento, 1 installment.paid e 1 commission.created por comissão", async () => {
+    const { contractId, installmentId } = await seedSale("concurrent-paid", { validated: true });
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    const results = await Promise.allSettled([1, 2, 3, 4].map(() => caller.markInstallmentPaid({ id: installmentId, paymentMethod: "pix" })));
+    expect(results.filter(r => r.status === "fulfilled" && !(r.value as { alreadyPaid: boolean }).alreadyPaid).length).toBe(1);
+    const after = await snapshot(contractId, installmentId);
+    expect(after).toMatchObject({ status: "paid", transactions: 1, paidEvents: 1, paidAudits: 1 });
+    expect(after.commissionEvents).toBe(after.commissions);
+  });
+
+  it("M-A08-01: reprocessar os fatos da baixa (mesma parcela, outra transação) não cria segundo evento nem segunda comissão-evento", async () => {
+    const { contractId, installmentId } = await seedSale("replay-facts", { validated: true });
+    const caller = financeRouter.createCaller({ user: { id: adminId, role: "finance" } } as never);
+    await caller.markInstallmentPaid({ id: installmentId, paymentMethod: "pix" });
+    const before = await snapshot(contractId, installmentId);
+    const { recordInstallmentSettlementFacts } = await import("./installmentSettlementFacts");
+    const [commission] = await db.select().from(salesCommissions).where(eq(salesCommissions.contractId, contractId)).limit(1);
+    for (let n = 0; n < 3; n += 1) {
+      await db.transaction(async tx => {
+        await recordInstallmentSettlementFacts(tx as never, {
+          installmentId, contractId, sequence: 1, amount: "1000.00", paidAmount: "1000.00", source: "manual", gatewayPaymentId: null, actorUserId: adminId, blockedReason: null,
+          createdCommissions: [{ id: commission.id, sellerId: commission.sellerId, campaignId: commission.campaignId ?? null, opportunityId: commission.opportunityId ?? null, contractId, sourceInstallmentId: installmentId, commissionRole: commission.commissionRole, amount: Number(commission.amount), rate: Number(commission.rate ?? 0) }],
+        });
+      });
+    }
+    expect(await snapshot(contractId, installmentId)).toEqual(before);
+  });
 });

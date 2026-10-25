@@ -2,7 +2,8 @@
  * CRM-D1: indicadores OFICIAIS do CRM (provisórios, editáveis por admin).
  * aproveitamento = vendas validadas / atendimentos; eficiência = cotas vendidas por 100 atendimentos.
  * Numeradores só do CRM (venda validada = sale_validations.validatedAt, contrato não cancelado; nunca stage "won" manual).
- * Denominador (padrão provisório): casal com check-in da recepção no período E desfecho registrado; em andamento fica fora (configurável).
+ * Denominador (padrão, recomendação 14/10 e 20/10, aceite pendente de ratificação do Lucas): atendimentos INICIADOS (check-in no período), inclusive em andamento; configurável.
+ * Coorte pelo dia de início do atendimento no fuso do projeto; o resultado da sala (VENDEU, CAIU EM MESA, NT) nunca é venda validada.
  */
 export const OFFICIAL_INDICATORS_DEFINITION_VERSION = "provisorio-1";
 export const INCLUDE_IN_PROGRESS_KEY = "official_indicators_include_in_progress";
@@ -19,6 +20,30 @@ export type AttendanceFact = {
 /** Desfecho registrado: resultado comercial, não tour (NT), ficha encerrada ou venda validada. */
 export function hasOutcome(fact: AttendanceFact) {
   return Boolean(fact.commercialOutcome || fact.ntKind || fact.hasValidatedSale || fact.presentationStatus === "closed" || fact.presentationStatus === "no_tour");
+}
+
+/**
+ * Coorte pelo início do atendimento (M-A01-03): a venda validada é atribuída ao ÚLTIMO check-in do casal que não é posterior
+ * à validação. Um atendimento não conta duas vezes e uma validação tardia muda só o numerador do mês do check-in.
+ */
+export function attributeSaleToCheckIn(checkIns: Date[], validatedAt: Date): Date | null {
+  let best: Date | null = null;
+  for (const at of checkIns) if (at <= validatedAt && (!best || at > best)) best = at;
+  return best;
+}
+
+/** Desfechos de sala dos atendimentos iniciados no período: VENDEU, CAIU EM MESA e NT são coisas separadas; nenhum deles é venda validada. */
+export function classifyOutcomes(facts: AttendanceFact[], from: Date, to: Date) {
+  const started = facts.filter(fact => fact.checkedInAt && fact.checkedInAt >= from && fact.checkedInAt < to);
+  const out = { started: started.length, vendeu: 0, caiuEmMesa: 0, naoTour: 0, encerradoSemVenda: 0, emAndamento: 0 };
+  for (const fact of started) {
+    if (fact.commercialOutcome === "caiu_em_mesa") out.caiuEmMesa += 1;
+    else if (fact.commercialOutcome === "vendeu") out.vendeu += 1;
+    else if (fact.ntKind || fact.presentationStatus === "no_tour") out.naoTour += 1;
+    else if (fact.presentationStatus === "closed") out.encerradoSemVenda += 1; // só o estado de sala gravado: venda validada do CRM não reclassifica o desfecho da sala
+    else out.emAndamento += 1;
+  }
+  return out;
 }
 
 export function classifyAttendances(facts: AttendanceFact[], from: Date, to: Date, includeInProgress: boolean) {
