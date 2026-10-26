@@ -11,7 +11,7 @@ Estado: **atrás de `CRM_GUESTPASS_PREFILL_ENABLED=false`**. A migration é **PR
 - UI em `Capture.tsx`: "Buscar passe" e preenchimento na hora (`GuestpassLookup.tsx`); só aparece com a flag ligada no servidor; preenche campo vazio, nunca sobrescreve o digitado.
 
 ## Contrato consumido (dono: tgr-guestpass)
-`guestpass.prefill.v1`, fixture copiada da Suite #148 em `docs/contracts/fixtures/guestpass_prefill_contract.json` e travada por hash no teste (`01580fcd...`, sem `_source`). Lista fechada de campos; qualquer campo proibido (cpf, renda, veículo, notas...) descarta a resposta inteira; o passe devolvido tem que ser o pedido; 404 é uniforme; 429 respeita `Retry-After`.
+`guestpass.prefill.v1`, fixture copiada da Suite #148 em `docs/contracts/fixtures/guestpass_prefill_contract.json` e travada por hash no teste (`c0405c3c...`, sem `_source`; atualizada em 26/10 para o GuestPass #47 / Suite #191, com `visitType`, `visitTime`, `couple.phone2` e `couple.titularAge`, mesma v1). Lista fechada de campos; qualquer campo proibido (cpf, renda, veículo, notas...) descarta a resposta inteira; o passe devolvido tem que ser o pedido; 404 é uniforme; 429 respeita `Retry-After`.
 
 ## Variáveis de ambiente (todas no `.env.example` e no compose)
 | Variável | Padrão | Nota |

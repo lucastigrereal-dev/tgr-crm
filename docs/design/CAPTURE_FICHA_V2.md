@@ -16,8 +16,13 @@ Tour direto = visita **de hoje, sem horário**. O CRM **não grava `scheduledAt`
 ## Flag desligada
 Qualquer campo novo (`visitMode`, `holderAge`, `partnerPhone`) é **recusado** (PRECONDITION_FAILED), nunca descartado em silêncio. Ficha sem campo novo segue idêntica. A fila offline usa o mesmo schema; o reenvio com o mesmo `clientRequestId` continua devolvendo a mesma ficha.
 
+## Tela e prefill (parte 2)
+- `captures.visitRule` devolve `fichaV2`; a tela `Capture.tsx` só mostra os campos novos (tipo de visita, idade do titular, 2º telefone) e só os envia com a flag ligada. Tour direto trava a data e hora do atendimento e não manda passante; agendamento exige data e hora.
+- Prefill (`guestpass.prefill.v1`, fixture travada por hash `c0405c3c…376c`, GuestPass #47 / Suite #191): o CRM valida em runtime `visitType` (TOUR_DIRETO|AGENDAMENTO), `visitTime` (HH:MM; tour direto com horário, ou horário sem data, descarta a resposta inteira), `couple.phone2` e `couple.titularAge` (inteiro 0–120, texto ou decimal descarta). CPF e `time` seguem proibidos. Ficha antiga (sem os campos novos) continua aceita.
+- No formulário, o prefill preenche tipo, 2º telefone, idade e data+hora (agendamento) só em campo vazio e só com a flag ligada; tour direto limpa a data e hora.
+
 ## Exclusão (LGPD)
 `applyCustomerAnonymization` (pedido de exclusão e exclusão propagada) zera `holderAge` das fichas apagadas e já apagava os contatos (2º telefone). Roda mesmo com a flag desligada depois; sem a 0091 aplicada a tabela não existe (errno 1146) e não há o que apagar.
 
 ## Não coberto
-Tela (`Capture.tsx`) ainda não tem os campos novos; o contrato `guestpass.prefill.v1` (Suite primeiro) não mudou. Para ligar: aplicar a 0091 (GO do dono do banco, com backup), depois a flag.
+Navegador real (Playwright) e GuestPass real. Para ligar: aplicar a 0091 (GO do dono do banco, com backup), depois a flag.
