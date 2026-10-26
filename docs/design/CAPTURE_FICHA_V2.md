@@ -16,5 +16,8 @@ Tour direto = visita **de hoje, sem horário**. O CRM **não grava `scheduledAt`
 ## Flag desligada
 Qualquer campo novo (`visitMode`, `holderAge`, `partnerPhone`) é **recusado** (PRECONDITION_FAILED), nunca descartado em silêncio. Ficha sem campo novo segue idêntica. A fila offline usa o mesmo schema; o reenvio com o mesmo `clientRequestId` continua devolvendo a mesma ficha.
 
+## Exclusão (LGPD)
+`applyCustomerAnonymization` (pedido de exclusão e exclusão propagada) zera `holderAge` das fichas apagadas e já apagava os contatos (2º telefone). Roda mesmo com a flag desligada depois; sem a 0091 aplicada a tabela não existe (errno 1146) e não há o que apagar.
+
 ## Não coberto
 Tela (`Capture.tsx`) ainda não tem os campos novos; o contrato `guestpass.prefill.v1` (Suite primeiro) não mudou. Para ligar: aplicar a 0091 (GO do dono do banco, com backup), depois a flag.

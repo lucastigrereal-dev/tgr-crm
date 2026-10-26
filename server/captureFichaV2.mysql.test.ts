@@ -7,6 +7,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { captureFichaV2, captureRecords, customerContacts, tasks, users } from "../drizzle/schema";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
+import { applyCustomerAnonymization } from "./captureErasure";
 
 // Ficha do captador v2 (26/10) em MySQL real + a 0091 PROPOSTA aplicada no banco descartável do teste. Dados sintéticos.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
@@ -103,4 +104,17 @@ describe.skipIf(!integrationUrl)("ficha do captador v2 (MySQL real)", () => {
     expect(await db.select().from(customerContacts).where(eq(customerContacts.customerId, a1.customerId))).toHaveLength(1);
     expect(await db.select().from(captureFichaV2).where(eq(captureFichaV2.captureId, a1.captureId))).toHaveLength(1);
   }));
+
+  it("exclusão (LGPD): a anonimização zera a idade do titular e apaga o 2º telefone, mesmo com a flag desligada depois; sem a tabela 0091 não quebra", async () => {
+    const result = await withFlag(async () => undefined).then(async () => {
+      process.env.CAPTURE_FICHA_V2_ENABLED = "true";
+      try { return await caller().captures.create(body({ visitMode: "tour_direto", holderAge: 63, partnerPhone: "84977776666" }) as never); } finally { delete process.env.CAPTURE_FICHA_V2_ENABLED; }
+    });
+    expect((await extras(result.captureId))?.holderAge).toBe(63);
+    await db.transaction(tx => applyCustomerAnonymization(tx as never, result.customerId, [result.captureId], new Date()));
+    expect(await extras(result.captureId)).toMatchObject({ visitMode: "tour_direto", holderAge: null });
+    expect(await db.select().from(customerContacts).where(eq(customerContacts.customerId, result.customerId))).toHaveLength(0);
+    await pool.query("DROP TABLE `capture_ficha_v2`"); // banco sem a 0091: nada a apagar e a anonimização não quebra
+    await expect(db.transaction(tx => applyCustomerAnonymization(tx as never, result.customerId, [result.captureId], new Date()))).resolves.toBeUndefined();
+  });
 });

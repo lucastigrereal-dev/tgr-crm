@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { captureFichaV2, customerContacts, customers } from "../drizzle/schema";
 
@@ -49,4 +49,14 @@ export async function saveFichaV2(tx: any, params: { captureId: number; customer
   const existing: Array<{ value: string }> = await tx.select({ value: customerContacts.value }).from(customerContacts).where(and(eq(customerContacts.customerId, customerId), eq(customerContacts.kind, "phone"), isNull(customerContacts.archivedAt)));
   if (existing.some(row => digits(row.value) === digits(phone))) return;
   await tx.insert(customerContacts).values({ customerId, kind: "phone", label: PARTNER_PHONE_LABEL, value: phone, isPreferred: false, createdByUserId: actorUserId });
+}
+
+/** Anonimização (LGPD): zera a idade do titular das fichas apagadas. Roda mesmo com a flag desligada depois; sem a 0091 aplicada (tabela inexistente, errno 1146) não há o que apagar. */
+export async function eraseFichaV2(tx: any, sheetIds: number[]) {
+  if (!sheetIds.length) return;
+  try { await tx.update(captureFichaV2).set({ holderAge: null }).where(inArray(captureFichaV2.captureId, sheetIds)); }
+  catch (error) {
+    const errno = (error as { errno?: number; cause?: { errno?: number } })?.errno ?? (error as { cause?: { errno?: number } })?.cause?.errno;
+    if (errno !== 1146) throw error;
+  }
 }
