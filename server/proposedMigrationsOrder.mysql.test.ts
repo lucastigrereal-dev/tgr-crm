@@ -7,7 +7,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { migrate } from "drizzle-orm/mysql2/migrator";
 import { validateIsolatedE2EDatabase } from "./e2eSafety";
 
-// M-A06-03: ordem única de aplicação das migrations PROPOSTAS do CRM (0078–0090) provada em banco DESCARTÁVEL criado só para este teste:
+// M-A06-03: ordem única de aplicação das migrations PROPOSTAS do CRM (0078–0091) provada em banco DESCARTÁVEL criado só para este teste:
 // journal do drizzle do zero (idempotente), depois as propostas em ordem numérica; reaplicar o journal não muda nada e reaplicar uma proposta falha
 // com erro claro sem corromper. Nenhuma migration vai a banco real.
 const integrationUrl = process.env.TGR_MYSQL_INTEGRATION_URL;
@@ -30,7 +30,7 @@ describe.skipIf(!integrationUrl)("migrations propostas do CRM: ordem de aplicaç
   });
   afterAll(async () => { await pool?.end(); await admin?.query(`DROP DATABASE IF EXISTS \`${scratch}\``); await admin?.end(); });
 
-  it("a lista das propostas é 0078..0090 sem buraco nem repetição", () => {
+  it("a lista das propostas é 0078..0091 sem buraco nem repetição", () => {
     const numbers = files.map(name => Number(name.slice(9, 13)));
     expect(numbers).toEqual(Array.from({ length: numbers.length }, (_, i) => 78 + i));
   });

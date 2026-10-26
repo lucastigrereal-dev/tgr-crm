@@ -2,7 +2,7 @@
 
 Estado: provado em banco DESCARTÁVEL (`server/proposedMigrationsOrder.mysql.test.ts`, SEM CI DO GITHUB). Nenhuma está aplicada em banco real; aplicar exige GO do Opus, backup e GO do Lucas, uma por vez.
 
-Ordem única: numérica, 0078 → 0090. O journal do drizzle (0000–0077) vem antes. Cada arquivo só tem dependência de tabelas do journal ou de propostas de número menor.
+Ordem única: numérica, 0078 → 0091. O journal do drizzle (0000–0077) vem antes. Cada arquivo só tem dependência de tabelas do journal ou de propostas de número menor.
 
 | # | Arquivo | Efeito | Se reaplicar |
 |---|---|---|---|
@@ -19,6 +19,7 @@ Ordem única: numérica, 0078 → 0090. O journal do drizzle (0000–0077) vem a
 | 0088 | privacy_erasure_propagation | feed de exclusão LGPD | passa em silêncio (CREATE TABLE IF NOT EXISTS) |
 | 0089 | non_buyer_deliveries | caixa de entrega ao Recovery (estado dead) | passa em silêncio (CREATE TABLE IF NOT EXISTS) |
 | 0090 | cancellation_request_inbox | caixa do pedido de cancelamento + ACK | passa em silêncio (CREATE TABLE IF NOT EXISTS) |
+| 0091 | capture_ficha_v2 | tipo de visita (tour direto/agendamento) e idade do titular da ficha do captador v2 (OFF) | passa em silêncio (CREATE TABLE IF NOT EXISTS) |
 
 - Aplicar do zero: journal + propostas em ordem passa sem erro. Reaplicar o journal não muda nada. Reaplicar NÃO é um sinal confiável: 0078 e o ALTER do 0086 falham com erro de duplicidade, mas as demais passam em silêncio (CREATE TABLE IF NOT EXISTS ou MODIFY idêntico). Um retry que passou não prova que a proposta nunca tinha sido aplicada; antes de aplicar, conferir o estado do banco (SHOW CREATE TABLE) e o backup.
 - Nunca `drizzle-kit push` em banco real. Uma migration por GO, com backup antes.
