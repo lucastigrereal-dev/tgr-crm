@@ -26,12 +26,14 @@ describe.skipIf(!integrationUrl)("ficha do captador v2 (MySQL real)", () => {
     ({ appRouter } = await import("./routers"));
     pool = mysql.createPool({ uri: integrationUrl, connectionLimit: 4 });
     db = drizzle({ client: pool });
+    await pool.query("DROP TABLE IF EXISTS `capture_ficha_v2`");
     const sql = readFileSync(path.resolve(import.meta.dirname, "../migrations/proposed/PROPOSED_0091_capture_ficha_v2.sql"), "utf8");
     expect(sql.match(/FOREIGN KEY/g)).toHaveLength(1);
     for (const statement of sql.split("--> statement-breakpoint")) await pool.query(statement.replace(/^--.*$/gm, "").trim());
     sellerId = (await db.insert(users).values({ openId: `fichav2-${runId}`, name: "Vendedor SYN", role: "seller" }).$returningId())[0]!.id;
   });
-  afterAll(async () => { process.env = previousEnv; await pool?.end(); });
+  // A 0091 é só PROPOSTA: some do banco compartilhado do teste ao final, para não aparecer como FK fora do snapshot no teste de drift.
+  afterAll(async () => { process.env = previousEnv; await pool?.query("DROP TABLE IF EXISTS `capture_ficha_v2`"); await pool?.end(); });
 
   const caller = () => appRouter.createCaller({ user: { id: sellerId, role: "seller" } } as never);
   const phone = () => `8497${String(++seq).padStart(3, "0")}${runId.replace(/\D/g, "").padEnd(4, "5").slice(0, 4)}`;
