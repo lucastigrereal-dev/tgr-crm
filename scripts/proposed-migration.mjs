@@ -99,14 +99,33 @@ export function verifyBackupManifest(manifestPath, now = new Date()) {
   const sha = createHash("sha256").update(readFileSync(manifest.sqlFile)).digest("hex").toUpperCase();
   if (sha !== String(manifest.sqlSha256).toUpperCase()) throw new Error("Hash do .sql do backup não confere com o manifest.");
   if (!(Number(manifest.verifiedTables) > 0)) throw new Error("Backup sem tabelas verificadas no restore drill.");
-  return { createdAt: manifest.createdAt, sqlFile: manifest.sqlFile, verifiedTables: Number(manifest.verifiedTables) };
+  const tables = Array.isArray(manifest.counts) ? manifest.counts.map(item => String(item.table)).sort() : [];
+  if (!tables.length) throw new Error("Manifest do backup sem a lista de tabelas (counts).");
+  return { createdAt: manifest.createdAt, sqlFile: manifest.sqlFile, verifiedTables: Number(manifest.verifiedTables), tables };
 }
 
-export function assertLocalDatabase(url) {
+/** O backup tem que ser DESTE banco: o conjunto de tabelas do manifest (o backup-pilot sempre despeja o tgr_crm_pilot) tem que ser o mesmo do banco que vai ser alterado. */
+export async function assertBackupMatchesDatabase(conn, db, backupInfo) {
+  const [rows] = await conn.query("SELECT TABLE_NAME AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME", [db]);
+  const live = rows.map(row => row.n).sort();
+  const same = live.length === backupInfo.tables.length && live.every((name, i) => name === backupInfo.tables[i]);
+  if (!same) {
+    const missingInBackup = live.filter(name => !backupInfo.tables.includes(name));
+    const extraInBackup = backupInfo.tables.filter(name => !live.includes(name));
+    throw new Error(`O backup não é deste banco (${db}): ${missingInBackup.length} tabela(s) do banco fora do backup${missingInBackup.length ? ` (${missingInBackup.slice(0, 3).join(", ")})` : ""}, ${extraInBackup.length} do backup fora do banco${extraInBackup.length ? ` (${extraInBackup.slice(0, 3).join(", ")})` : ""}. Faça um backup NOVO logo antes (um por migration).`);
+  }
+}
+
+export const PILOT_DATABASE = "tgr_crm_pilot";
+export const PILOT_PORT = "44326";
+
+/** `pilotOnly` (CLI): além de local, exige o banco e a porta do piloto, os únicos que o backup-pilot cobre. */
+export function assertLocalDatabase(url, { pilotOnly = false } = {}) {
   const parsed = new URL(url);
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname)) throw new Error(`Host ${parsed.hostname} recusado: só o banco local do piloto (127.0.0.1) por este runbook.`);
   const db = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
   if (!db) throw new Error("DATABASE_URL sem nome de banco.");
+  if (pilotOnly && (db !== PILOT_DATABASE || parsed.port !== PILOT_PORT)) throw new Error(`Alvo recusado (${db}:${parsed.port || "padrão"}): este runbook só altera ${PILOT_DATABASE} na porta ${PILOT_PORT}, o banco que o backup-pilot cobre.`);
   return db;
 }
 
@@ -121,6 +140,7 @@ function pickMigration(number) {
 export async function applyMigration(conn, db, number, { backup, go, logDir }) {
   if (!go || !String(go).trim()) throw new Error("Informe a referência do GO do Opus (--go).");
   const backupInfo = verifyBackupManifest(backup);
+  await assertBackupMatchesDatabase(conn, db, backupInfo);
   const item = pickMigration(number);
   const objects = parseObjects(readFileSync(item.path, "utf8"));
   const states = await statusAll(conn, db);
@@ -130,7 +150,7 @@ export async function applyMigration(conn, db, number, { backup, go, logDir }) {
   const earlier = states.filter(entry => entry.number < number && !entry.applied);
   if (earlier.length) throw new Error(`Ordem quebrada: faltam ${earlier.map(entry => entry.number).join(", ")} antes da ${number}.`);
   const before = await rowCounts(conn, db, objects.tables);
-  log(logDir, { event: "apply_start", number, db, go, backup: backupInfo });
+  log(logDir, { event: "apply_start", number, db, go, backup: { createdAt: backupInfo.createdAt, sqlFile: backupInfo.sqlFile, verifiedTables: backupInfo.verifiedTables } });
   let done = 0;
   try {
     for (const statement of objects.statements) { await conn.query(statement); done += 1; }
@@ -162,6 +182,7 @@ async function smokeCheck(conn, db, number, objects, before) {
 export async function rollbackMigration(conn, db, number, { backup, go, logDir }) {
   if (!go || !String(go).trim()) throw new Error("Informe a referência do GO do Opus (--go).");
   const backupInfo = verifyBackupManifest(backup);
+  await assertBackupMatchesDatabase(conn, db, backupInfo);
   const item = pickMigration(number);
   const objects = parseObjects(readFileSync(item.path, "utf8"));
   const states = await statusAll(conn, db);
@@ -169,6 +190,20 @@ export async function rollbackMigration(conn, db, number, { backup, go, logDir }
   if (later.length) throw new Error(`Desfaça primeiro as mais novas: ${later.map(entry => entry.number).join(", ")} (a volta é na ordem inversa).`);
   const mine = states.find(entry => entry.number === number);
   if (!mine.applied && !mine.partial) throw new Error(`Migration ${number} não está aplicada. Nada a desfazer.`);
+  // Escritores (o app) ficam de fora do começo da checagem até o fim do DDL: LOCK TABLES WRITE nas tabelas que a volta toca. Sem isso uma linha poderia entrar entre o "está vazia" e o DROP.
+  const touched = [...new Set([...objects.tables.filter(table => mine.present.includes(`tabela ${table}`)), ...objects.columns.map(item2 => item2.table), ...objects.enums.map(item2 => item2.table), ...objects.constraints.map(item2 => item2.table)])];
+  await conn.query("SET SESSION lock_wait_timeout = 30");
+  await conn.query(`LOCK TABLES ${touched.map(table => `${quote(table)} WRITE`).join(", ")}`);
+  let result;
+  try { result = await rollbackLocked(conn, db, number, { go, logDir, backupInfo, objects, mine }); }
+  finally { await conn.query("UNLOCK TABLES"); }
+  const after = (await statusAll(conn, db)).find(entry => entry.number === number);
+  if (after.present.length) throw new Error(`Volta incompleta: restou ${after.present.join(", ")}.`);
+  log(logDir, { event: "rollback_ok", number, steps: result.steps });
+  return result;
+}
+
+async function rollbackLocked(conn, db, number, { go, logDir, backupInfo, objects, mine }) {
   const blockers = [];
   for (const table of objects.tables) {
     if (!mine.present.includes(`tabela ${table}`)) continue;
@@ -190,7 +225,7 @@ export async function rollbackMigration(conn, db, number, { backup, go, logDir }
     }
   }
   if (blockers.length) { log(logDir, { event: "rollback_refused", number, blockers }); throw new Error(`Volta recusada (dado real não se apaga): ${blockers.join("; ")}. Chamar o Opus.`); }
-  log(logDir, { event: "rollback_start", number, db, go, backup: backupInfo });
+  log(logDir, { event: "rollback_start", number, db, go, backup: { createdAt: backupInfo.createdAt, sqlFile: backupInfo.sqlFile, verifiedTables: backupInfo.verifiedTables } });
   const steps = [];
   for (const item2 of objects.enums) steps.push(`ALTER TABLE ${quote(item2.table)} MODIFY COLUMN ${quote(item2.column)} ${item2.rollbackType}`);
   // FK antes do índice: o MySQL não deixa soltar o índice de que a FK depende.
@@ -198,9 +233,6 @@ export async function rollbackMigration(conn, db, number, { backup, go, logDir }
   for (const { table, column } of [...objects.columns].reverse()) if (mine.present.includes(`coluna ${table}.${column}`)) steps.push(`ALTER TABLE ${quote(table)} DROP COLUMN ${quote(column)}`);
   for (const table of [...objects.tables].reverse()) if (mine.present.includes(`tabela ${table}`)) steps.push(`DROP TABLE ${quote(table)}`);
   for (const step of steps) await conn.query(step);
-  const after = (await statusAll(conn, db)).find(entry => entry.number === number);
-  if (after.present.length) throw new Error(`Volta incompleta: restou ${after.present.join(", ")}.`);
-  log(logDir, { event: "rollback_ok", number, steps: steps.length });
   return { number, steps: steps.length };
 }
 
@@ -209,7 +241,7 @@ async function main() {
   const flag = name => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("Defina DATABASE_URL (banco do piloto em 127.0.0.1).");
-  const db = assertLocalDatabase(url);
+  const db = assertLocalDatabase(url, { pilotOnly: process.env.PROPOSED_MIGRATION_ANY_DB !== "1" });
   const conn = await mysql.createConnection({ uri: url });
   const logDir = flag("--log-dir") ?? path.resolve("tgr-crm-migration-logs");
   try {

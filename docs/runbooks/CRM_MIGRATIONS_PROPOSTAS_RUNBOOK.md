@@ -8,7 +8,7 @@ Estado: **PRONTO, NADA APLICADO**. SEM CI DO GITHUB. Autorização do Lucas (26/
 
 ## Travas do script (não dá para pular)
 1. Só conecta em `127.0.0.1`/`localhost` (o piloto expõe o MySQL em `127.0.0.1:44326`).
-2. `apply` e `rollback` exigem `--backup-manifest` com: arquivo existente, **até 60 min**, `.sql` presente com **hash conferido**, tabelas verificadas > 0.
+2. `apply` e `rollback` exigem `--backup-manifest` com: arquivo existente, **até 60 min**, `.sql` presente com **hash conferido**, tabelas verificadas > 0, e **o mesmo conjunto de tabelas do banco de destino** (backup de outro banco é recusado). Backup NOVO logo antes de CADA migration. O CLI só aceita o banco `tgr_crm_pilot` na porta 44326 local.
 3. Exigem `--go "<referência do GO do Opus>"` (vai para o log).
 4. **Uma por vez e em ordem**: a N só roda se todas as menores estão aplicadas; "aplicada pela metade" para tudo.
 5. **Fumaça depois de cada apply**: todos os objetos existem, tabelas novas nascem **vazias**, e a contagem de linhas de **todas as tabelas antigas é idêntica** à de antes.
@@ -26,6 +26,7 @@ Estado: **PRONTO, NADA APLICADO**. SEM CI DO GITHUB. Autorização do Lucas (26/
 
 ## Se der ruim
 - `apply` falhou: o script mostra o estado. Se ficou **PARCIAL**, `rollback N` (tabelas novas estão vazias) e **parar e chamar o Opus**. Se ficou "nada aplicado", parar e chamar o Opus.
+- **Antes de qualquer rollback: parar o app** (`docker compose stop app` em `infra/pilot`) e subir de novo depois (`docker compose start app`). O script também trava as tabelas tocadas (LOCK TABLES) durante a volta, mas sem o app parado o app pode falhar.
 - Fumaça reprovada ou app doente depois: `rollback N` com o mesmo manifest (ou outro novo), na ordem inversa se mais de uma foi aplicada.
 - Rollback recusado por dado: **não forçar**. Restaurar o dump do manifest só com GO do Opus e do Lucas (o dump é de antes da migration; qualquer dado novo depois dele se perde).
 

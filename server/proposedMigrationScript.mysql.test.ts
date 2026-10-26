@@ -21,12 +21,14 @@ describe.skipIf(!integrationUrl)("scripts/proposed-migration.mjs (MySQL real, ba
   const dir = mkdtempSync(path.join(tmpdir(), "runbook-"));
   const sqlFile = path.join(dir, "dump.sql");
   writeFileSync(sqlFile, "-- dump sintético");
-  const manifestFor = (overrides: Record<string, unknown> = {}) => {
+  // O manifest do backup-pilot lista as tabelas do banco despejado (counts); aqui vem do banco descartável, no momento da chamada.
+  const liveTables = async () => ((await conn.query("SELECT TABLE_NAME AS table_name FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'", [scratch]))[0] as Array<{ table_name: string }>).map(row => ({ table: row.table_name, source: 0, restored: 0 }));
+  const manifestFor = (overrides: Record<string, unknown> = {}, counts: unknown[] = []) => {
     const file = path.join(dir, `manifest-${randomUUID().slice(0, 6)}.json`);
-    writeFileSync(file, JSON.stringify({ createdAt: new Date().toISOString(), sqlFile, sqlSha256: createHash("sha256").update(readFileSync(sqlFile)).digest("hex").toUpperCase(), verifiedTables: 120, ...overrides }));
+    writeFileSync(file, JSON.stringify({ createdAt: new Date().toISOString(), sqlFile, counts, sqlSha256: createHash("sha256").update(readFileSync(sqlFile)).digest("hex").toUpperCase(), verifiedTables: 120, ...overrides }));
     return file;
   };
-  const opts = (extra: Record<string, unknown> = {}) => ({ backup: manifestFor(), go: "GO-OPUS-SINTETICO", logDir: dir, ...extra });
+  const opts = async (extra: Record<string, unknown> = {}) => ({ backup: manifestFor({}, await liveTables()), go: "GO-OPUS-SINTETICO", logDir: dir, ...extra });
   const numbers = listProposed().map((item: { number: string }) => item.number);
 
   beforeAll(async () => {
@@ -59,53 +61,62 @@ describe.skipIf(!integrationUrl)("scripts/proposed-migration.mjs (MySQL real, ba
     expect((await statusAll(conn, scratch)).every((entry: { applied: boolean }) => !entry.applied)).toBe(true);
   });
 
+  it("backup de outro banco (conjunto de tabelas diferente) = recusa e nada muda", async () => {
+    const outro = manifestFor({}, [{ table: "so_uma_tabela", source: 0, restored: 0 }]);
+    await expect(applyMigration(conn, scratch, "0078", { backup: outro, go: "GO", logDir: dir })).rejects.toThrow(/backup/i);
+    expect((await statusAll(conn, scratch)).every((entry: { applied: boolean }) => !entry.applied)).toBe(true);
+  });
+
   it("só aceita o banco local do piloto", () => {
     expect(assertLocalDatabase("mysql://u:p@127.0.0.1:44326/tgr_crm_pilot")).toBe("tgr_crm_pilot");
     expect(() => assertLocalDatabase("mysql://u:p@db.exemplo.com:3306/x")).toThrow(/recusado/);
+    expect(assertLocalDatabase("mysql://u:p@127.0.0.1:44326/tgr_crm_pilot", { pilotOnly: true })).toBe("tgr_crm_pilot");
+    expect(() => assertLocalDatabase("mysql://u:p@127.0.0.1:3306/tgr_crm_pilot", { pilotOnly: true })).toThrow();
+    expect(() => assertLocalDatabase("mysql://u:p@127.0.0.1:44326/outro_banco", { pilotOnly: true })).toThrow();
   });
 
   it("ordem: pular a 0078 é recusado", async () => {
-    await expect(applyMigration(conn, scratch, "0079", opts())).rejects.toThrow(/Ordem quebrada: faltam 0078/);
+    await expect(applyMigration(conn, scratch, "0079", await opts())).rejects.toThrow(/Ordem quebrada: faltam 0078/);
   });
 
   it("aplica 0078→0091 uma por vez, com fumaça (tabelas novas vazias, tabelas antigas intactas); reaplicar é recusado", async () => {
     for (const number of numbers) {
-      const smoke = await applyMigration(conn, scratch, number, opts());
+      const smoke = await applyMigration(conn, scratch, number, await opts());
       expect(smoke.number).toBe(number);
-      await expect(applyMigration(conn, scratch, number, opts())).rejects.toThrow(/já está aplicada/);
+      await expect(applyMigration(conn, scratch, number, await opts())).rejects.toThrow(/já está aplicada/);
     }
     expect((await statusAll(conn, scratch)).every((entry: { applied: boolean }) => entry.applied)).toBe(true);
   });
 
   it("volta na ordem inversa: a mais velha não sai antes da mais nova; volta e reaplica a 0091 e a 0082 (enum) sem sobra", async () => {
-    await expect(rollbackMigration(conn, scratch, "0090", opts())).rejects.toThrow(/Desfaça primeiro as mais novas: 0091/);
-    for (const number of ["0091", "0090", "0089", "0088", "0087", "0086", "0085", "0084", "0083", "0082"]) await rollbackMigration(conn, scratch, number, opts());
+    await expect(rollbackMigration(conn, scratch, "0090", await opts())).rejects.toThrow(/Desfaça primeiro as mais novas: 0091/);
+    for (const number of ["0091", "0090", "0089", "0088", "0087", "0086", "0085", "0084", "0083", "0082"]) await rollbackMigration(conn, scratch, number, await opts());
     const [rows] = await conn.query("SELECT COLUMN_TYPE AS t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'capture_motives' AND COLUMN_NAME = 'kind'", [scratch]) as any;
     expect(rows[0].t).not.toContain("recovery");
-    for (const number of ["0082", "0083", "0084", "0085", "0086", "0087", "0088", "0089", "0090", "0091"]) await applyMigration(conn, scratch, number, opts());
+    for (const number of ["0082", "0083", "0084", "0085", "0086", "0087", "0088", "0089", "0090", "0091"]) await applyMigration(conn, scratch, number, await opts());
     expect((await statusAll(conn, scratch)).every((entry: { applied: boolean }) => entry.applied)).toBe(true);
   });
 
   it("volta da 0078 (coluna + FK + índice) e reaplicação", async () => {
-    for (const number of [...numbers].reverse().filter(n => n !== "0078" && n >= "0079")) await rollbackMigration(conn, scratch, number, opts());
-    await rollbackMigration(conn, scratch, "0078", opts());
+    for (const number of [...numbers].reverse().filter(n => n !== "0078" && n >= "0079")) await rollbackMigration(conn, scratch, number, await opts());
+    await rollbackMigration(conn, scratch, "0078", await opts());
     const [cols] = await conn.query("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'installment_renegotiations' AND COLUMN_NAME = 'newInstallmentId'", [scratch]) as any;
     expect(cols).toHaveLength(0);
-    for (const number of numbers) await applyMigration(conn, scratch, number, opts());
+    for (const number of numbers) await applyMigration(conn, scratch, number, await opts());
   });
 
   it("dado real não se apaga: tabela nova com linha, ou enum 'recovery' em uso, recusa a volta", async () => {
     const [user] = await conn.query("INSERT INTO users (openId, name, role) VALUES (?, 'SYN', 'admin')", [`rb-${randomUUID().slice(0, 6)}`]) as any;
     await conn.query("INSERT INTO capture_motives (kind, code, label) VALUES ('recovery', 'syn', 'SYN motivo')");
     await conn.query("INSERT INTO feature_flag_overrides (flagKey, enabled, createdByUserId) VALUES ('SYN', 0, ?)", [user.insertId]);
-    await expect(rollbackMigration(conn, scratch, "0084", opts())).rejects.toThrow(/Desfaça primeiro as mais novas/);
-    for (const number of ["0091", "0090", "0089", "0088", "0087", "0086", "0085"]) await rollbackMigration(conn, scratch, number, opts());
-    await expect(rollbackMigration(conn, scratch, "0084", opts())).rejects.toThrow(/Volta recusada.*feature_flag_overrides tem 1 linha/);
+    await expect(rollbackMigration(conn, scratch, "0084", await opts())).rejects.toThrow(/Desfaça primeiro as mais novas/);
+    for (const number of ["0091", "0090", "0089", "0088", "0087", "0086", "0085"]) await rollbackMigration(conn, scratch, number, await opts());
+    await expect(rollbackMigration(conn, scratch, "0084", await opts())).rejects.toThrow(/Volta recusada.*feature_flag_overrides tem 1 linha/);
     await conn.query("DELETE FROM feature_flag_overrides");
-    await rollbackMigration(conn, scratch, "0084", opts());
-    await rollbackMigration(conn, scratch, "0083", opts());
-    await expect(rollbackMigration(conn, scratch, "0082", opts())).rejects.toThrow(/Volta recusada.*'recovery'/);
+    await rollbackMigration(conn, scratch, "0084", await opts());
+    await rollbackMigration(conn, scratch, "0083", await opts());
+    await expect(rollbackMigration(conn, scratch, "0082", await opts())).rejects.toThrow(/Volta recusada.*'recovery'/);
     await conn.query("DELETE FROM capture_motives WHERE kind = 'recovery'");
-    await rollbackMigration(conn, scratch, "0082", opts());
+    await rollbackMigration(conn, scratch, "0082", await opts());
   });
 });
