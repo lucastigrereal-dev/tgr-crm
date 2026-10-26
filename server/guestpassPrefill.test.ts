@@ -162,6 +162,17 @@ describe("preencher na hora: ficha v2 (cliente)", () => {
     const filled = applyGuestpassFields({ ...blank, scheduledAt: "2026-12-01T10:00" }, { ...base, visitMode: "tour_direto", visitTime: "" }, blank, true);
     expect(filled).toMatchObject({ visitMode: "tour_direto", scheduledAt: "" });
   });
+  it("modo já escolhido pela equipe vence o do passe: agendamento digitado não é apagado por passe de tour direto; tour retido não recebe data do passe", () => {
+    const typed = applyGuestpassFields({ ...blank, visitMode: "agendamento", scheduledAt: "2026-12-01T10:00" }, { ...base, visitMode: "tour_direto", visitTime: "" }, blank, true);
+    expect(typed).toMatchObject({ visitMode: "agendamento", scheduledAt: "2026-12-01T10:00" });
+    const tourKept = applyGuestpassFields({ ...blank, visitMode: "tour_direto" }, { ...base, visitMode: "agendamento", visitTime: "18:30" }, blank, true);
+    expect(tourKept).toMatchObject({ visitMode: "tour_direto", scheduledAt: "" });
+  });
+  it("tour direto (retido ou do passe) desliga o passante", () => {
+    const withPasserby = { ...blank, isPasserby: true };
+    expect(applyGuestpassFields(withPasserby, { ...base, visitMode: "tour_direto", visitTime: "" }, withPasserby, true)).toMatchObject({ visitMode: "tour_direto", isPasserby: false });
+    expect(applyGuestpassFields({ ...withPasserby, visitMode: "tour_direto" }, { ...base, visitMode: "agendamento", visitTime: "18:30" }, withPasserby, true)).toMatchObject({ isPasserby: false });
+  });
   it("sem horário no agendamento, data e hora ficam para a equipe", () => {
     expect(applyGuestpassFields(blank, { ...base, visitMode: "agendamento", visitTime: "" }, blank, true)).toMatchObject({ scheduledAt: "" });
   });

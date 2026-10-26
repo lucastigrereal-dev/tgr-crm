@@ -16,8 +16,12 @@ export function applyGuestpassFields<T extends Record<string, unknown>>(form: T,
     const isDefault = current === "" || current === String(blankForm[key] ?? "").trim();
     if (isDefault) next[key] = incoming;
   }
-  // Agendamento com data e horário do passe: preenche "data e hora" se estiver vazio. Tour direto não tem horário e não preenche.
-  if (fichaV2 && fields.visitMode !== "tour_direto" && fields.visitDate && fields.visitTime && !String(form.scheduledAt ?? "").trim()) next.scheduledAt = `${fields.visitDate}T${fields.visitTime}`;
-  if (fichaV2 && fields.visitMode === "tour_direto") next.scheduledAt = "";
+  if (fichaV2) {
+    // Reconcilia data e hora pelo modo que FICOU na ficha (o tipo já escolhido pela equipe não é trocado pelo passe):
+    // tour direto não tem horário nem passante; agendamento com data e horário do passe só preenche se estiver vazio e o passe também for agendamento.
+    const mode = String(next.visitMode ?? "");
+    if (mode === "tour_direto") { next.scheduledAt = ""; if ("isPasserby" in next) next.isPasserby = false; }
+    else if (fields.visitMode !== "tour_direto" && fields.visitDate && fields.visitTime && !String(form.scheduledAt ?? "").trim()) next.scheduledAt = `${fields.visitDate}T${fields.visitTime}`;
+  }
   return next as T;
 }

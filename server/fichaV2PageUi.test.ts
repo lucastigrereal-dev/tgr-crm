@@ -19,6 +19,9 @@ describe("Captação: ficha v2", () => {
     expect(page).toContain('fichaV2 && form.visitMode === "agendamento" && !form.scheduledAt');
     expect(page).toContain('!(fichaV2 && form.visitMode === "tour_direto")');
   });
+  it("tour direto nunca sai com passante marcado (a tela normaliza o envio)", () => {
+    expect(page).toContain('isPasserby: fichaV2 && form.visitMode === "tour_direto" ? false : form.isPasserby');
+  });
   it("campos: tipo de visita, idade do titular (0–120) e 2º telefone do cônjuge", () => {
     expect(fields).toContain('value="tour_direto"');
     expect(fields).toContain('value="agendamento"');
