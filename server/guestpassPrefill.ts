@@ -17,13 +17,19 @@ const prefillSchema = z.object({
   contractVersion: z.literal(1),
   guestPassId: z.string().regex(GUESTPASS_PASS_REF_PATTERN),
   status: z.enum(["confirmed", "show_qualified"]),
+  // Ficha v2 (contrato fechado em 26/10, mesma v1, campos opcionais): TOUR_DIRETO = visita de hoje SEM horário; AGENDAMENTO = data + horário HH:MM livre. Ficha antiga sem tipo = AGENDAMENTO.
+  visitType: z.enum(["TOUR_DIRETO", "AGENDAMENTO"]).nullish(),
   visitDate: z.string().date().nullish(),
+  visitTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullish(),
   origin: z.object({ captorId: text(80).nullish(), pointId: text(80).nullish(), channel: text(40).nullish() }).strict().partial().nullish(),
   couple: z.object({
-    primaryName: text(255), secondaryName: text(255).nullish(), phone: text(32), cityUf: text(120).nullish(), lodging: text(255).nullish(),
+    primaryName: text(255), secondaryName: text(255).nullish(), phone: text(32), phone2: text(32).nullish(), titularAge: z.number().int().min(0).max(120).nullish(), cityUf: text(120).nullish(), lodging: text(255).nullish(),
   }).strict(),
   guestPassConsentVersion: text(200).nullish(),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  // Horário só existe em agendamento e junto com a data: tour direto com horário, ou horário sem data, é resposta inválida (descartada inteira).
+  if (value.visitTime && (value.visitType === "TOUR_DIRETO" || !value.visitDate)) ctx.addIssue({ code: "custom", message: "visitTime fora de lugar" });
+});
 
 export type GuestpassPrefill = z.infer<typeof prefillSchema>;
 
@@ -82,6 +88,11 @@ export function prefillToFormFields(prefill: GuestpassPrefill) {
     lodgingLocation: prefill.couple.lodging ?? "",
     captureLocation: prefill.origin?.pointId ?? "",
     visitDate: prefill.visitDate ?? null,
+    // Ficha v2: só chegam se o GuestPass mandou (o formulário só os mostra com CAPTURE_FICHA_V2_ENABLED). Ficha sem tipo = agendamento.
+    visitMode: prefill.visitType === "TOUR_DIRETO" ? "tour_direto" as const : prefill.visitType === "AGENDAMENTO" ? "agendamento" as const : "",
+    visitTime: prefill.visitTime ?? "",
+    partnerPhone: prefill.couple.phone2 ?? "",
+    holderAge: prefill.couple.titularAge === null || prefill.couple.titularAge === undefined ? "" : String(prefill.couple.titularAge),
   };
 }
 

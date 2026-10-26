@@ -15,10 +15,10 @@ const KEY = "chave-ponte-sintetica";
 const reply = (status: number, body?: unknown, headers: Record<string, string> = {}) => vi.fn(async () => new Response(body === undefined ? null : JSON.stringify(body), { status, headers }));
 
 describe("fixture do contrato guestpass.prefill.v1 (travada por hash)", () => {
-  it("o conteúdo (sem _source) é o da Suite #148: mudou = o GuestPass muda primeiro, depois a Suite, depois aqui", () => {
+  it("o conteúdo (sem _source) é o do GuestPass #47 / Suite #191 (hash c0405c3c…): mudou = o GuestPass muda primeiro, depois a Suite, depois aqui", () => {
     const { _source, ...content } = fixture;
     expect(_source).toContain("tgr-guestpass");
-    expect(createHash("sha256").update(JSON.stringify(canonical(content))).digest("hex")).toBe("01580fcdd4169174e8629512914917e8709a0bc719ad5cb033484698b438aafa");
+    expect(createHash("sha256").update(JSON.stringify(canonical(content))).digest("hex")).toBe("c0405c3c58f520236596cb36bc616c2006e1ea05dad8553f583285b594db376c");
   });
   it("o exemplo da fixture é aceito, só tem as chaves da lista fechada e nenhuma proibida", async () => {
     vi.stubEnv("CRM_GUESTPASS_PREFILL_ENABLED", "true"); vi.stubEnv("GUESTPASS_CRM_BASE_URL", "https://gp.example.test"); vi.stubEnv("GUESTPASS_CRM_READ_KEY", KEY);
@@ -68,7 +68,7 @@ describe("consulta ao GuestPass", () => {
     expect(url).toBe(`https://gp.example.test${fixture.route.replace("{guestPassId}", PASS)}`);
     expect(init.method).toBe("GET");
     expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
-    if (result.kind === "ok") expect(prefillToFormFields(result.prefill)).toEqual({ fullName: "EXEMPLO Titular", partnerName: "EXEMPLO Acompanhante", phone: "8400000000", city: "Cidade Exemplo", state: "UF", lodgingLocation: "Hospedagem Exemplo", captureLocation: "PONTA-NEGRA", visitDate: "2026-10-02" });
+    if (result.kind === "ok") expect(prefillToFormFields(result.prefill)).toEqual({ fullName: "EXEMPLO Titular", partnerName: "EXEMPLO Acompanhante", phone: "8400000000", city: "Cidade Exemplo", state: "UF", lodgingLocation: "Hospedagem Exemplo", captureLocation: "PONTA-NEGRA", visitDate: "2026-10-02", visitMode: "agendamento", visitTime: "18:30", partnerPhone: "8400000001", holderAge: "34" });
   });
 
   it("flag desligada ou sem chave: não chama a rede", async () => {
@@ -104,6 +104,29 @@ describe("consulta ao GuestPass", () => {
     for (const bad of bads) expect((await fetchGuestpassPrefill(PASS, reply(200, bad) as never)).kind).toBe("invalid_response");
   });
 
+  it("ficha v2: visitType, visitTime HH:MM, phone2 e titularAge inteiro são validados em runtime; qualquer desvio descarta a resposta inteira", async () => {
+    const withCouple = (couple: Record<string, unknown>) => ({ ...fixture.example, couple: { ...fixture.example.couple, ...couple } });
+    const bads = [
+      { ...fixture.example, visitType: "PASSANTE" }, { ...fixture.example, visitType: "agendamento" },
+      ...["25:00", "9:30", "18:60", "18h30", "18:30:00", "", "noite"].map(visitTime => ({ ...fixture.example, visitTime })),
+      { ...fixture.example, visitType: "TOUR_DIRETO", visitTime: "18:30" }, // tour direto não tem horário
+      { ...fixture.example, visitDate: null, visitTime: "18:30" }, // horário sem data
+      withCouple({ titularAge: "34" }), withCouple({ titularAge: 34.5 }), withCouple({ titularAge: -1 }), withCouple({ titularAge: 121 }), withCouple({ phone2: "" }), withCouple({ phone2: 123 }),
+    ];
+    for (const bad of bads) expect((await fetchGuestpassPrefill(PASS, reply(200, bad) as never)).kind, JSON.stringify(bad).slice(0, 120)).toBe("invalid_response");
+  });
+  it("ficha v2: tour direto sem horário, agendamento sem horário e ficha antiga (sem os campos novos) são aceitos", async () => {
+    const tour = { ...fixture.example, visitType: "TOUR_DIRETO", visitTime: undefined, visitDate: "2026-10-26" };
+    const noTime = { ...fixture.example, visitTime: undefined };
+    const { visitType: _t, visitTime: _h, ...legacyTop } = fixture.example;
+    const { phone2: _p, titularAge: _a, ...legacyCouple } = fixture.example.couple;
+    for (const body of [tour, noTime, { ...legacyTop, couple: legacyCouple }]) expect((await fetchGuestpassPrefill(PASS, reply(200, body) as never)).kind).toBe("ok");
+    const result = await fetchGuestpassPrefill(PASS, reply(200, { ...legacyTop, couple: legacyCouple }) as never);
+    if (result.kind === "ok") expect(prefillToFormFields(result.prefill)).toMatchObject({ visitMode: "", visitTime: "", partnerPhone: "", holderAge: "" });
+    const tourResult = await fetchGuestpassPrefill(PASS, reply(200, tour) as never);
+    if (tourResult.kind === "ok") expect(prefillToFormFields(tourResult.prefill)).toMatchObject({ visitMode: "tour_direto", visitTime: "", visitDate: "2026-10-26" });
+  });
+
   it("nada do casal vai para o log, nem em sucesso nem em falha", async () => {
     const spies = (["log", "info", "warn", "error", "debug"] as const).map(name => vi.spyOn(console, name).mockImplementation(() => {}));
     await fetchGuestpassPrefill(PASS, reply(200, fixture.example) as never);
@@ -120,5 +143,37 @@ describe("preencher na hora (cliente)", () => {
   it("preenche campo vazio (e o UF padrão) e NÃO sobrescreve o que a equipe já digitou", () => {
     expect(applyGuestpassFields(blank, fields, blank)).toMatchObject({ fullName: "SYN Ana", state: "RN", phone: "84900000000" });
     expect(applyGuestpassFields({ ...blank, fullName: "Digitado na mão", city: "Parnamirim" }, fields, blank)).toMatchObject({ fullName: "Digitado na mão", city: "Parnamirim", partnerName: "SYN Bruno" });
+  });
+});
+
+describe("preencher na hora: ficha v2 (cliente)", () => {
+  const blank = { fullName: "", partnerName: "", phone: "", city: "", state: "SP", lodgingLocation: "", captureLocation: "", scheduledAt: "", visitMode: "", partnerPhone: "", holderAge: "" };
+  const base = { fullName: "SYN Ana", partnerName: "SYN Bruno", phone: "84900000000", city: "Natal", state: "RN", lodgingLocation: "", captureLocation: "", visitDate: "2026-11-02" };
+  it("com a flag desligada os campos novos não entram", () => {
+    const filled = applyGuestpassFields(blank, { ...base, visitMode: "agendamento", visitTime: "18:30", partnerPhone: "84911112222", holderAge: "41" }, blank);
+    expect(filled).toMatchObject({ visitMode: "", partnerPhone: "", holderAge: "", scheduledAt: "" });
+  });
+  it("com a flag ligada: agendamento preenche tipo, 2º telefone, idade e data+hora (se vazias), sem sobrescrever o digitado", () => {
+    const fields = { ...base, visitMode: "agendamento", visitTime: "18:30", partnerPhone: "84911112222", holderAge: "41" };
+    expect(applyGuestpassFields(blank, fields, blank, true)).toMatchObject({ visitMode: "agendamento", partnerPhone: "84911112222", holderAge: "41", scheduledAt: "2026-11-02T18:30" });
+    expect(applyGuestpassFields({ ...blank, holderAge: "50", scheduledAt: "2026-12-01T10:00" }, fields, blank, true)).toMatchObject({ holderAge: "50", scheduledAt: "2026-12-01T10:00" });
+  });
+  it("com a flag ligada: tour direto não tem horário e limpa a data e hora", () => {
+    const filled = applyGuestpassFields({ ...blank, scheduledAt: "2026-12-01T10:00" }, { ...base, visitMode: "tour_direto", visitTime: "" }, blank, true);
+    expect(filled).toMatchObject({ visitMode: "tour_direto", scheduledAt: "" });
+  });
+  it("modo já escolhido pela equipe vence o do passe: agendamento digitado não é apagado por passe de tour direto; tour retido não recebe data do passe", () => {
+    const typed = applyGuestpassFields({ ...blank, visitMode: "agendamento", scheduledAt: "2026-12-01T10:00" }, { ...base, visitMode: "tour_direto", visitTime: "" }, blank, true);
+    expect(typed).toMatchObject({ visitMode: "agendamento", scheduledAt: "2026-12-01T10:00" });
+    const tourKept = applyGuestpassFields({ ...blank, visitMode: "tour_direto" }, { ...base, visitMode: "agendamento", visitTime: "18:30" }, blank, true);
+    expect(tourKept).toMatchObject({ visitMode: "tour_direto", scheduledAt: "" });
+  });
+  it("tour direto (retido ou do passe) desliga o passante", () => {
+    const withPasserby = { ...blank, isPasserby: true };
+    expect(applyGuestpassFields(withPasserby, { ...base, visitMode: "tour_direto", visitTime: "" }, withPasserby, true)).toMatchObject({ visitMode: "tour_direto", isPasserby: false });
+    expect(applyGuestpassFields({ ...withPasserby, visitMode: "tour_direto" }, { ...base, visitMode: "agendamento", visitTime: "18:30" }, withPasserby, true)).toMatchObject({ isPasserby: false });
+  });
+  it("sem horário no agendamento, data e hora ficam para a equipe", () => {
+    expect(applyGuestpassFields(blank, { ...base, visitMode: "agendamento", visitTime: "" }, blank, true)).toMatchObject({ scheduledAt: "" });
   });
 });

@@ -1,5 +1,5 @@
 {
-  "_source": "tgr-guestpass main (2c2fc184589494a5a38ca1682ee5ce4509fe2331, branch kan-32/v5-consent-shown): tests/fixtures/guestpass_prefill_contract.json (cópia fiel; regenerar copiando de lá e rodar node scripts/verify-guestpass-fixture.mjs --guestpass <dir>). Dados SINTÉTICOS.",
+  "_source": "tgr-guestpass kan-32/v5-consent-shown (24673fb57d20bf8c93d9d6d6634f9b7492942dd2, PR #47): tests/fixtures/guestpass_prefill_contract.json (cópia fiel; regenerar copiando de lá). Dados SINTÉTICOS.",
   "contract": "guestpass.prefill.v1",
   "contractVersion": 1,
   "source": "docs/integration/GUESTPASS_PREFILL_CONTRACT.md (fatia 1 do desenho GuestPass -> CRM, 21/10/2026). Dono do contrato: tgr-guestpass.",
@@ -25,7 +25,9 @@
     "contractVersion",
     "guestPassId",
     "status",
+    "visitType",
     "visitDate",
+    "visitTime",
     "origin",
     "couple",
     "guestPassConsentVersion"
@@ -39,6 +41,8 @@
     "primaryName",
     "secondaryName",
     "phone",
+    "phone2",
+    "titularAge",
     "cityUf",
     "lodging"
   ],
@@ -87,7 +91,9 @@
     "contractVersion": 1,
     "guestPassId": "GP-0A1B2C3D4E",
     "status": "confirmed",
+    "visitType": "AGENDAMENTO",
     "visitDate": "2026-10-02",
+    "visitTime": "18:30",
     "origin": {
       "captorId": "cap-exemplo",
       "pointId": "PONTA-NEGRA",
@@ -97,9 +103,23 @@
       "primaryName": "EXEMPLO Titular",
       "secondaryName": "EXEMPLO Acompanhante",
       "phone": "8400000000",
+      "phone2": "8400000001",
+      "titularAge": 34,
       "cityUf": "Cidade Exemplo/UF",
       "lodging": "Hospedagem Exemplo"
     },
     "guestPassConsentVersion": "4-AGUARDA_APROVACAO_DONO_PRODUTO_2026-10-19"
+  },
+  "responseOptionalKeys": [
+    "visitTime"
+  ],
+  "visitTypes": [
+    "TOUR_DIRETO",
+    "AGENDAMENTO"
+  ],
+  "visitRules": {
+    "TOUR_DIRETO": "visitDate = o dia em que a ficha foi feita (hoje) e SEM visitTime",
+    "AGENDAMENTO": "visitDate = data marcada e visitTime = horário livre HH:MM quando informado",
+    "legacy": "ficha antiga sem tipo de visita sai como AGENDAMENTO"
   }
 }
