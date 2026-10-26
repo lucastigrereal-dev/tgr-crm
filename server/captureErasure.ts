@@ -1,3 +1,4 @@
+import { eraseFichaV2 } from "./captureFichaV2";
 import { TRPCError } from "@trpc/server";
 import { eligibilityHook } from "./nonBuyerEligibilityService";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -108,6 +109,7 @@ export async function applyCustomerAnonymization(tx: Tx, customerId: number, she
   await tx.update(opportunities).set({ title: "Oportunidade anonimizada", lossReason: null }).where(eq(opportunities.customerId, customerId));
   await tx.update(tasks).set({ description: null }).where(eq(tasks.customerId, customerId));
   await tx.update(vouchers).set({ redeemNote: null, cancelReason: null }).where(eq(vouchers.customerId, customerId));
+  await eraseFichaV2(tx, sheetIds);
   await scrubSecondaryCopies(tx, customerId, sheetIds);
 }
 

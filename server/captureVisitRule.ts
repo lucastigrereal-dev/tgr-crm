@@ -8,7 +8,8 @@ export const isCaptureVisitRuleEnabled = () => process.env.CAPTURE_REQUIRE_VISIT
 export const VISIT_RULE_MESSAGE = "Informe a data da visita ou marque \"É passante\": ficha sem data e sem passante fica fora da fila e dos indicadores.";
 
 /** Texto do erro quando a ficha não tem data de visita nem passante explícito; nulo quando está de acordo. */
-export function visitRuleViolation(input: { scheduledAt?: string | Date | null; isPasserby?: boolean | null }): string | null {
+export function visitRuleViolation(input: { scheduledAt?: string | Date | null; isPasserby?: boolean | null; visitMode?: string | null }): string | null {
   const hasDate = input.scheduledAt instanceof Date ? !Number.isNaN(input.scheduledAt.getTime()) : Boolean(input.scheduledAt && String(input.scheduledAt).trim());
-  return hasDate || input.isPasserby === true ? null : VISIT_RULE_MESSAGE;
+  // Ficha v2: tour direto é a visita de hoje, sem horário; vale como visita explícita (a flag da v2 é checada à parte).
+  return hasDate || input.isPasserby === true || input.visitMode === "tour_direto" ? null : VISIT_RULE_MESSAGE;
 }

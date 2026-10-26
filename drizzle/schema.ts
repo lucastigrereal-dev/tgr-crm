@@ -491,6 +491,18 @@ export const captureGuestpassLinks = mysqlTable("capture_guestpass_links", {
   uniqueIndex("capture_guestpass_links_pass_unique").on(table.guestpassPassRef),
 ]);
 
+/**
+ * Ficha do captador v2 (26/10): tipo de visita (tour direto = hoje, sem horário; agendamento) e idade do titular, que não tinham coluna. 1:1 com a ficha.
+ * PROPOSTA de migration: migrations/proposed/PROPOSED_0091_capture_ficha_v2.sql (a tabela só existe depois do GO; o uso fica atrás de CAPTURE_FICHA_V2_ENABLED, desligada).
+ */
+export const captureFichaV2 = mysqlTable("capture_ficha_v2", {
+  id: int("id").autoincrement().primaryKey(),
+  captureId: int("captureId").notNull().references(() => captureRecords.id),
+  visitMode: varchar("visitMode", { length: 16 }),
+  holderAge: int("holderAge"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("capture_ficha_v2_capture_unique").on(table.captureId)]);
+
 /** C1: um registro por evento de atendimento recebido (eventId único; (atendimento, revisão) único). Só adiciona. Sem nome nem telefone. */
 export const attendanceRecords = mysqlTable("attendance_records", {
   id: int("id").autoincrement().primaryKey(),
