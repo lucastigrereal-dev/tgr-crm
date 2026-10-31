@@ -567,6 +567,9 @@ export async function materializeSalesCommandSale(tx: any, event: SalesCommandSa
   };
 }
 
+// A sincronização é um upsert idempotente por fingerprint, mas rajadas de reenvio do mesmo saleId disputam as mesmas linhas do ledger e o InnoDB derruba uma delas por deadlock: repetir é seguro e evita 503 num replay que já está formalizado.
+const syncRevenueQualityWithRetry = (input: Parameters<typeof syncRevenueQualityForContract>[0]) => withDeadlockRetry(() => syncRevenueQualityForContract(input));
+
 async function handleSalesCommandSale(request: Request, response: Response, integrationKey: string) {
   const authorization = request.get("authorization") ?? "";
   const supplied = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
@@ -592,7 +595,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
     return;
   }
   if (already) {
-    await syncRevenueQualityForContract({ contractId: already.contractId, actorUserId: null, trigger: "replay Sales Command" });
+    await syncRevenueQualityWithRetry({ contractId: already.contractId, actorUserId: null, trigger: "replay Sales Command" });
     response.status(200).json({ accepted: true, replay: true, ...already, saleId: event.saleId });
     return;
   }
@@ -606,7 +609,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
       const raced = await findFormalization(db, event.saleId);
       if (raced?.inventoryLostAt) { response.status(422).json({ accepted: false, code: INVENTORY_HELD_EXPIRED_CODE, error: "A reserva da cota venceu antes da conferência; refaça a venda." }); return; }
       if (raced) {
-        await syncRevenueQualityForContract({ contractId: raced.contractId, actorUserId: null, trigger: "race replay Sales Command" });
+        await syncRevenueQualityWithRetry({ contractId: raced.contractId, actorUserId: null, trigger: "race replay Sales Command" });
         response.status(200).json({ accepted: true, replay: true, ...raced, saleId: event.saleId });
         return;
       }
@@ -621,7 +624,7 @@ async function handleSalesCommandSale(request: Request, response: Response, inte
   }
 
   // Depois de um deadlock repetido, a nova tentativa pode achar a venda já formalizada por uma requisição concorrente: é replay (200), não criação (201).
-  await syncRevenueQualityForContract({ contractId: result.contractId, actorUserId: null, trigger: result.replay ? "race replay Sales Command" : "formalização Sales Command" });
+  await syncRevenueQualityWithRetry({ contractId: result.contractId, actorUserId: null, trigger: result.replay ? "race replay Sales Command" : "formalização Sales Command" });
   response.status(result.replay ? 200 : 201).json({ accepted: true, ...result, saleId: event.saleId });
 }
 
